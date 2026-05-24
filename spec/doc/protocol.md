@@ -1,0 +1,415 @@
+# Rift Protocol Specification
+
+Status: v0.1-draft implementable contract.
+
+This document is the language-independent contract for Rift daemon implementations. It defines the security model, wire format, protocol invariants, message schemas, state machines, and conformance requirements that the C#/.NET and Dart daemon implementations must satisfy.
+
+Open ADRs in `spec/decisions/` still record decisions that must later be accepted or revised. This v0.1-draft profile intentionally defines concrete draft values so both daemon implementations can interoperate before those ADRs are finalized.
+
+## 1. v0.1-Draft Profile
+
+The v0.1-draft profile has these normative constants:
+
+| Field | Value |
+| --- | --- |
+| Protocol version | `0.1-draft` |
+| Peer transport framing | 4-byte unsigned big-endian length prefix followed by one UTF-8 JSON object |
+| Maximum encoded JSON frame size | 32 MiB |
+| Binary clipboard content | Base64 in JSON; payloads exceeding the frame limit fail with `PayloadTooLarge` |
+| Message IDs, operation IDs, offer IDs, event IDs | Lowercase RFC 4122 UUIDv4 strings |
+| Audit timestamps | RFC 3339 UTC |
+| Relative durations and expiries | Integer milliseconds, interpreted with local monotonic timers |
+
+Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame larger than 32 MiB MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
+
+## 2. Terminology and Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", and "MAY" are to be interpreted as described in RFC 2119 and RFC 8174 when written in uppercase.
+
+`Device` means one Rift-capable endpoint. `Peer` means another device observed or contacted by the local daemon. `Device identity` means the long-term Ed25519 keypair and values derived from its public key. `TLS identity` means the ECDSA P-256 keypair and self-signed certificate used for mutual TLS. `Trust store` means durable local state recording trusted, blocked, or revoked peer identities.
+
+`Operation` is the protocol-level term for a cross-device action flowing through the lifecycle in Section 10. Earlier project documents use `Intent`; implementations SHOULD avoid unqualified `Intent` names on Android to prevent confusion with `android.content.Intent`.
+
+## 3. Cryptographic Primitives and Identity Values
+
+Rift uses a dual-keypair model. Ed25519 provides stable device identity and fingerprint verification. ECDSA P-256 provides compatibility with standard TLS certificate authentication. The two identities are bound by embedding the Ed25519 public key in a custom extension of the ECDSA P-256 X.509 certificate.
+
+Private keys MUST be generated and stored by the daemon. Private keys MUST NOT leave the daemon process, be transmitted on the network, or be exposed through IPC APIs.
+
+### 3.1 Ed25519 Device Identity
+
+Each device has one long-term Ed25519 keypair representing its protocol identity. The Ed25519 public key is the root of trust for device ID derivation, human-verifiable pairing fingerprints, trust store lookup, post-handshake identity verification, revocation, and permanent rejection of revoked identities.
+
+In v0.1-draft, the device ID is derived as:
+
+1. take the exact raw 32-byte Ed25519 public key;
+2. compute SHA-256 over those 32 bytes;
+3. encode the digest as Base32 without padding;
+4. lowercase the Base32 string;
+5. take the first 32 characters;
+6. prefix with `rift-`.
+
+A valid device ID therefore matches `^rift-[a-z2-7]{32}$`. Any protocol message carrying a device ID MUST match the Ed25519 identity bound to the current TLS session.
+
+### 3.2 Pairing Fingerprint
+
+In v0.1-draft, the pairing fingerprint uses the same SHA-256 digest as device ID derivation, encoded as Base32 without padding, uppercased, truncated to 32 characters, and displayed as eight groups of four characters separated by hyphens.
+
+Example format: `ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567`.
+
+The fingerprint is derived from the full Ed25519 public key, not from a short random code. During pairing, both users or both local approval surfaces MUST compare and confirm the same fingerprint before a peer can enter the `trusted` state.
+
+### 3.3 Clipboard Hash
+
+Clipboard payload hashes are SHA-256 over the exact raw fetched bytes before Base64 encoding. The hash is represented as 64 lowercase hexadecimal characters. A receiver MUST verify both `byteSize` and `sha256` before accepting fetched content. A mismatch fails with `HashMismatch` and MUST be logged.
+
+### 3.4 ECDSA P-256 TLS Certificates
+
+Each device also has an ECDSA P-256 keypair used to create a self-signed X.509 certificate for mutual TLS. The certificate authenticates the TLS endpoint and carries the Ed25519 public key extension described in Section 3.5.
+
+Certificate lifetime, renewal behavior, and regeneration policy are implementation concerns, but renewal MUST preserve the same Ed25519 identity unless the device is intentionally reset and re-paired. The stored ECDSA certificate fingerprint is audit and diagnostic metadata, not the trust root. Certificate renewal is accepted when the Ed25519 public key matches the trusted identity and the extension is valid. Certificate fingerprint changes for trusted peers MUST be logged as certificate rotation events.
+
+### 3.5 Custom X.509 Extension for Ed25519 Public Key
+
+The ECDSA P-256 certificate MUST include exactly one custom non-critical X.509 extension carrying the device's Ed25519 public key.
+
+The v0.1-draft extension is:
+
+| Property | Value |
+| --- | --- |
+| OID | `2.25.293029629918709742181702189012786017422` |
+| Criticality | Non-critical |
+| X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes |
+| Expected payload shape | `04 20 <32 bytes>` |
+
+On receipt, an implementation MUST reject the session if the extension is absent, duplicated, critical, malformed, uses the wrong OID, has the wrong length, is oversized, contains unparsable DER, or does not decode to exactly one 32-byte Ed25519 public key. The Dart implementation's custom certificate parser MUST fail closed for all parse failures.
+
+## 4. Device Discovery: mDNS-SD
+
+Rift uses mDNS-SD for local peer discovery and advertisement. Discovery exists only to find candidate peers and connection endpoints. Discovery data is unauthenticated and MUST be treated as provisional.
+
+Discovery records MUST expose only minimal non-sensitive metadata needed to initiate a connection, such as service type, `minVersion`, `maxVersion`, transport endpoint, and a non-authoritative instance identifier. Discovery records MUST NOT expose trusted device names, icons, clipboard metadata, capability grants, or security state.
+
+Discovery version fields are hints only. The first encrypted peer message performs authoritative version negotiation.
+
+## 5. Transport Security and Session Bootstrap
+
+All peer protocol messages after discovery run inside an authenticated encrypted transport. No clipboard content, authenticated device information, capability grants, trust transitions, operation messages, or event-log content may be exchanged over plaintext peer transport.
+
+### 5.1 Mutual TLS Policy
+
+Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.2 with strong cipher suites is allowed where TLS 1.3-only enforcement is unavailable.
+
+Both peers MUST present certificates. A successful TLS handshake is necessary but not sufficient for trust. Trusted peers are accepted by Ed25519 public-key match, not by certificate chain trust alone.
+
+For pairing candidates, the TLS layer MAY provisionally accept a self-signed peer certificate only to complete the handshake and extract the Ed25519 extension. Before post-handshake Ed25519 verification succeeds, the peer may exchange only `session.hello`, `session.accept`, `session.reject`, and pairing messages.
+
+### 5.2 Post-Handshake Ed25519 Verification
+
+Immediately after TLS establishment, each peer MUST extract the Ed25519 public key from the custom certificate extension and derive the expected device ID and fingerprint inputs from that key.
+
+For trusted peers, the extracted Ed25519 public key MUST match the trust store entry for the claimed peer. For untrusted discovered peers, the extracted key MAY be used to create a pairing candidate but MUST NOT grant access to protected operations until pairing completes. For blocked or revoked peers, the session MUST be rejected.
+
+Every message carrying a device ID MUST be checked for consistency with the Ed25519 identity bound to the current TLS session. A peer that changes from one device ID in discovery to another authenticated identity MUST NOT inherit trust from the discovery identity. This invariant directly mitigates the device-ID mismatch class represented by CVE-2025-66270.
+
+## 6. Peer Message Envelope and Version Negotiation
+
+Every peer message is one JSON object using the common envelope:
+
+| Field | Required | Type | Notes |
+| --- | --- | --- | --- |
+| `rift` | Yes | string | Protocol version for this message, `0.1-draft` in this profile |
+| `type` | Yes | string | Message type from Section 7 |
+| `messageId` | Yes | UUIDv4 string | Unique message identifier |
+| `sourceDeviceId` | Yes | device ID string | MUST match the session's Ed25519 identity |
+| `payload` | Yes | object | Type-specific payload |
+| `destinationDeviceId` | No | device ID string | MUST match the receiving device when present |
+| `operationId` | No | UUIDv4 string | Required for operation-scoped messages |
+| `timestamp` | No | RFC 3339 UTC string | Audit timestamp only |
+| `requiredExtensions` | No | array of strings | Unknown values cause `ProtocolError` |
+
+Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` MUST cause `ProtocolError`. Implementations MUST reject missing required fields, wrong JSON types, malformed identifiers, or envelope/device identity mismatches with `MalformedMessage`, `Unauthorized`, or `ProtocolError` as applicable.
+
+Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, and `capabilities`. The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+
+## 7. Normative Peer Message Schemas
+
+All schemas below are the `payload` shape inside the envelope in Section 6. UUID, device ID, timestamp, duration, and hash fields use the formats defined in Sections 1 and 3.
+
+### 7.1 Session Messages
+
+`session.hello`:
+
+```json
+{
+  "supportedVersions": ["0.1-draft"],
+  "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "implementationId": "riftd-cs/0.1.0",
+  "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }]
+}
+```
+
+`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `capabilities` array of capability objects.
+
+`session.reject` payload fields: `failureReason` failure reason, optional `message` string.
+
+### 7.2 Capability Messages
+
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`.
+
+`capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
+
+`capability.selected` payload fields: `selectedCapabilities` array of capability objects.
+
+### 7.3 Pairing Messages
+
+`pairing.start` payload fields: `fingerprint` fingerprint string, `expiresInMs` duration, optional `displayName` string.
+
+`pairing.approve` payload fields: `fingerprint` fingerprint string, `approvedAt` RFC 3339 timestamp.
+
+`pairing.reject` payload fields: `failureReason` failure reason, optional `message` string.
+
+`pairing.complete` payload fields: `trustedDeviceId` device ID, `fingerprint` fingerprint string, `persistedAt` RFC 3339 timestamp.
+
+### 7.4 Presence Messages
+
+`presence.update` payload fields: `status` one of `online`, `offline`, `away`; optional `lastSeenAt` RFC 3339 timestamp; `capabilities` array of selected capability names.
+
+### 7.5 Clipboard Messages
+
+`clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string.
+
+`clipboard.fetchRequest` payload fields: `offerId`, `requestingDeviceId` device ID.
+
+`clipboard.fetchResponse` payload fields: `offerId`, `contentBase64` string, `byteSize` non-negative integer, `sha256` clipboard hash.
+
+`clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
+
+### 7.6 Operation Messages
+
+`operation.transition` payload fields: `operationId`, `operationType` string, `previousState` operation state, `nextState` operation state, optional `failureReason`, optional `details` object.
+
+### 7.7 Trust Messages
+
+`trust.revoke` payload fields: `revokedDeviceId` device ID, `reason` string, `revokedAt` RFC 3339 timestamp.
+
+Revocation messages are advisory. Local revocation state is authoritative and MUST NOT depend on receiving a peer's `trust.revoke`.
+
+### 7.8 Error Messages
+
+`error` payload fields: `failureReason`, optional `refMessageId`, optional `message` string, optional `details` object.
+
+## 8. Trust State Machine
+
+Trust is local state. Each daemon independently decides whether a peer is discovered, pending pairing, trusted, blocked, or revoked. Implementations MUST persist trust state durably before relying on it for protected operations.
+
+| From | To | Trigger | Requirements |
+| --- | --- | --- | --- |
+| `discovered` | `pairing_pending` | Local pairing start or accepted remote pairing start | TLS established and Ed25519 extension parsed |
+| `pairing_pending` | `trusted` | Pairing completion | Identity verification passed, matching fingerprint confirmed on both sides, durable trust persisted |
+| `pairing_pending` | `discovered` | Reject, timeout, or failed verification | No trusted entry persisted; failure logged |
+| `trusted` | `blocked` | Local block | Active sessions terminated; block recorded |
+| `trusted` | `revoked` | Local revocation | Active trust removed; negative-trust evidence retained |
+| `blocked` | `discovered` | Explicit local unblock | Prior block evidence remains auditable |
+| `revoked` | `discovered` | Explicit local reset followed by full new pairing flow | Silent re-trust forbidden |
+
+Only `trusted` peers may perform protected operations. `discovered` and `pairing_pending` peers may exchange only the minimum messages required for authentication and pairing.
+
+Revocation MUST keep a durable negative-trust record keyed by the Ed25519 public key and derived device ID. Deleting active trust MUST NOT delete the evidence needed to reject the identity later. Re-establishing trust with a revoked identity requires an explicit local reset followed by a full new pairing flow.
+
+Pairing occurs over mutual TLS. There is no separate custom key exchange outside TLS; ephemeral key agreement is provided by the TLS handshake.
+
+## 9. Capability Negotiation
+
+After transport and identity verification, peers exchange authenticated capability advertisements. A capability advertisement MUST include the protocol version, implementation identifier, supported feature names, feature versions where applicable, and policy flags required to use each feature.
+
+Peers compute a mutually supported session capability set. A peer MUST reject or fail an operation with `CapabilityUnavailable` if the required capability is absent from the authenticated negotiated set. Capabilities learned through discovery are hints only and MUST NOT authorize behavior.
+
+## 10. Operation Lifecycle
+
+All cross-device actions flow through this transition table:
+
+| From | To | Rule |
+| --- | --- | --- |
+| `Created` | `Pending` | Operation accepted locally |
+| `Pending` | `Dispatched` | Message queued or sent to peer |
+| `Dispatched` | `Active` | Peer acknowledges or starts work |
+| `Active` | `Done` | Work completed successfully |
+| `Created`, `Pending`, `Dispatched`, `Active` | `Failed` | Failure reason recorded |
+| `Pending`, `Dispatched`, `Active` | `Expired` | Monotonic expiry elapsed |
+| `Done`, `Failed`, `Expired` | none | Terminal states have no outgoing transitions |
+
+Duplicate reports for the same terminal state are idempotent. Conflicting terminal reports MUST be rejected with `InvalidTransition` and logged. Each transition MUST record the operation ID, source device ID, destination device ID, operation type, previous state, next state, timestamp or monotonic-relative timing data, and typed failure reason when applicable.
+
+## 11. Clipboard Offer/Fetch
+
+Clipboard continuity uses metadata-only offers and authenticated fetch. A device MUST NOT eagerly push clipboard content to all peers.
+
+Offers contain metadata only: `offerId`, `contentType`, `byteSize`, `sha256`, `expiresInMs`, `sourceDeviceId`, and `requiredCapability`. Fetch responses include `contentBase64`, `byteSize`, and `sha256`. Receivers MUST verify byte size and SHA-256 before accepting content.
+
+Expiry is measured from local receipt time using monotonic timers. Wall-clock timestamps are audit-only. Expired, rejected, unauthorized, payload-too-large, or mismatched-hash fetches MUST fail with typed failure reasons and produce security event log entries. Clipboard event log entries MUST record metadata only, never clipboard content.
+
+## 12. Presence
+
+Presence provides basic trusted-peer visibility: online/offline state, last-seen information, reachability, and authenticated capability summary. Presence is not a trust source.
+
+Presence heartbeats and status updates MUST be exchanged only after transport and identity verification. A peer observed only through discovery is `discovered`, not authenticated online. Offline detection SHOULD use local monotonic timers and configurable timeout thresholds so clock skew does not decide reachability.
+
+## 13. Security Event Log Schema
+
+Each daemon maintains an append-only security event log for audit, debugging, conformance, and attack-simulation evidence. Event logs are local audit records; peers do not exchange event-log contents as protocol data.
+
+Each event MUST include `eventId`, `eventType`, `severity`, `localDeviceId`, optional `peerDeviceId`, optional `operationId`, `timestamp`, `outcome`, optional `failureReason`, and `details`. Event details MUST NOT contain private keys or clipboard content.
+
+Required event classes include pairing attempts, trust transitions, authentication failures, connection establishment and rejection, certificate rotation, capability negotiation, operation lifecycle transitions, clipboard offer/fetch metadata, revocation, parser rejection for malformed certificates, malformed messages, and policy denial.
+
+Security tests for the KDE Connect vulnerability classes MUST assert both network rejection behavior and the expected event-log failure reason.
+
+## 14. Failure Reasons
+
+The v0.1-draft failure reason vocabulary is:
+
+- `PeerUnreachable`
+- `PeerRejected`
+- `OfferExpired`
+- `CapabilityUnavailable`
+- `ConnectionLost`
+- `Timeout`
+- `PolicyDenied`
+- `AuthenticationFailed`
+- `Unauthorized`
+- `HashMismatch`
+- `MalformedMessage`
+- `VersionMismatch`
+- `ProtocolError`
+- `PayloadTooLarge`
+- `InvalidTransition`
+
+Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draft. Additional diagnostics may appear in local event `details` or optional human-readable `message` fields.
+
+## 15. Test Vectors
+
+The protocol requires deterministic test vectors for both daemon implementations. Required vector groups include Ed25519 public key, derived device ID, display fingerprint, ECDSA P-256 certificate containing the custom Ed25519 X.509 extension, byte-level DER encoding of the custom extension, accepted and rejected pairing transcripts, capability negotiation examples, clipboard offer/fetch metadata and hash verification examples, operation lifecycle transition examples, security event log examples, and malformed certificate inputs for fail-closed parser tests.
+
+The full certificate bytes are future conformance material and are not defined in this draft. Appendix B may point to future deterministic certificate bytes until vector generation exists.
+
+## 16. Security Considerations
+
+Rift's security design specifically addresses three KDE Connect vulnerability classes documented in the project register.
+
+CVE-2025-66270-style identity switching is mitigated by deriving device identity from the Ed25519 public key and validating device ID consistency across every authenticated session. Trust never follows unauthenticated discovery identifiers.
+
+CVE-2025-32900-style device spoofing is mitigated by keeping discovery metadata minimal and unauthoritative. User-visible device information and capabilities are accepted only after mutual TLS and Ed25519 binding verification.
+
+CVE-2025-32898-style weak verification is mitigated by pairing with a fingerprint derived from the full Ed25519 public key rather than an eight-character verification code.
+
+The Dart certificate parser is a security-sensitive component because the platform certificate API does not expose extensions. It MUST reject malformed, truncated, duplicated, oversized, or adversarial extension data without accepting the peer. Parser failures are authentication failures, not recoverable warnings.
+
+Rift does not claim to prove peer devices are uncompromised. A trusted but compromised peer may still request capabilities allowed by local policy. Capability grants, audit logging, revocation, and explicit fetch are the controls for that risk.
+
+## Appendix A. ASN.1 Extension Definition
+
+The v0.1-draft custom extension is identified by OID `2.25.293029629918709742181702189012786017422` and is non-critical.
+
+The X.509 `Extension.extnValue` contains the DER bytes for this ASN.1 value:
+
+```asn1
+RiftEd25519PublicKey ::= OCTET STRING (SIZE(32))
+```
+
+The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes.
+
+## Appendix B. Example Certificates
+
+Deterministic certificate vector bytes are future conformance material. This appendix remains reserved for valid certificates generated by each implementation path and malformed examples used for parser rejection tests.
+
+## Appendix C. Example Message Flows
+
+### C.1 Session Establishment
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "session.hello",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-111111111111",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": {
+    "supportedVersions": ["0.1-draft"],
+    "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+    "implementationId": "riftd-cs/0.1.0",
+    "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }]
+  }
+}
+```
+
+### C.2 Capability Negotiation
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "capability.selected",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-222222222222",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": {
+    "selectedCapabilities": [
+      { "name": "clipboard.offer_fetch", "version": 1 },
+      { "name": "presence.basic", "version": 1 },
+      { "name": "operation.lifecycle", "version": 1 },
+      { "name": "security.event_log", "version": 1 }
+    ]
+  }
+}
+```
+
+### C.3 Clipboard Success
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "clipboard.fetchResponse",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-333333333333",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": {
+    "offerId": "018f2f9a-8b7c-4a4b-9c0d-444444444444",
+    "contentBase64": "aGVsbG8=",
+    "byteSize": 5,
+    "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  }
+}
+```
+
+### C.4 Hash Mismatch Error
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "error",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-555555555555",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": { "failureReason": "HashMismatch" }
+}
+```
+
+### C.5 Revocation Rejection
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "session.reject",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-666666666666",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": { "failureReason": "Unauthorized", "message": "peer identity is revoked" }
+}
+```
+
+### C.6 Identity-Switch Rejection
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "error",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-777777777777",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "payload": { "failureReason": "AuthenticationFailed", "message": "device ID does not match TLS-bound Ed25519 identity" }
+}
+```
