@@ -1,3 +1,2 @@
-# Dart Daemon
-
-Placeholder for the future Android daemon implementation in Dart.
+A sample command-line application with an entrypoint in `bin/`, library code
+in `lib/`, and example unit test in `test/`.
