@@ -43,3 +43,31 @@ The following NuGet packages have been integrated to fulfill the core requiremen
 ## Execution
 
 The daemon can currently be built and run. When running in a standard console via `dotnet run`, it successfully hosts the Named Pipe and remains persistently active.
+
+---
+
+# Week 2 Architecture & Testing Setup
+
+**Tasks:**
+- `[daemon-cs] Module interfaces and DI setup`
+- `[daemon-cs][test] Unit test skeleton with first crypto tests`
+
+During Week 2, the focus shifted to establishing the architectural boundaries (so implementation can be done cleanly against the protocol spec) and initializing the testing infrastructure.
+
+## Module Boundaries defined
+
+Strict C# interfaces were created in `daemon-cs/Interfaces` to enforce dependency injection contracts for all primary components:
+1.  **`IIdentityManager`**: Exposes `GetPublicKey`, `GetCertificate`, and `EnsureIdentityAsync`.
+2.  **`ITrustStore`**: Exposes getters and setters for the device trust states using the `PeerTrustState` enum.
+3.  **`IDiscoveryService`**: Wraps the mDNS-SD multicast logic.
+4.  **`IClipboardService`**: Abstracts the protocol logic for `clipboard.offer` and `clipboard.fetch`.
+
+Dummy/Mock implementations of these interfaces were registered in `Program.cs` locally. This ensures that the generic .NET Host remains resolvable and compiles correctly while the business logic gets implemented.
+
+## Unit Test Infrastructure
+
+A dedicated test suite was created in `daemon-cs.Tests`:
+*   Initialized as an **xUnit** test project.
+*   Added the `System.Text.Json` dependency to consume raw JSON reference payloads.
+*   **`VectorLoader.cs`**: A helper class programmed to dynamically read canonical test vectors from the `spec/vectors/` directory relative path, ensuring test determinism.
+*   **`ConformanceTests.cs`**: Initialized with unit test stubs (`Identity_Matches_Vector`, `Fingerprint_Matches_Vector`) that will be populated to assert the daemon logic against the standard spec vectors.
