@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
-import '../lib/src/interfaces/identity_manager.dart';
+import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 
 class MockIdentityManager implements IdentityManager {
   @override

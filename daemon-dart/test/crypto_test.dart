@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:asn1lib/asn1lib.dart';
-import '../lib/src/crypto/cert_builder.dart';
+import 'package:daemon_dart/src/crypto/cert_builder.dart';
 
 void main() {
   group('Rift Crypto Tests', () {
@@ -10,21 +10,18 @@ void main() {
       
       final ext = RiftCertBuilder.createEd25519Extension(mockEd25519Key);
       
-      expect(ext.elements.length, equals(3));
+      expect(ext.elements.length, equals(2)); // Omitted critical flag (default false)
       
       // First element is OID
       final oidElement = ext.elements[0] as ASN1ObjectIdentifier;
       // Compare raw encoded bytes for OID
       expect(oidElement.encodedBytes, equals(Uint8List.fromList([
-        0x06, 0x09, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x86, 0xDF, 0x3F, 0x01
+        0x06, 0x14, 0x69, 0x83, 0xB8, 0xF3, 0xBA, 0x8C, 0xBA, 0xBF, 
+        0xCA, 0xD1, 0xCD, 0x9A, 0xAB, 0xF7, 0x88, 0x88, 0x95, 0xFB, 0xE9, 0x0E
       ])));
       
-      // Second element is Critical flag (boolean)
-      final boolElement = ext.elements[1] as ASN1Boolean;
-      expect(boolElement.booleanValue, isTrue);
-      
-      // Third element is the key (octet string)
-      final octetElement = ext.elements[2] as ASN1OctetString;
+      // Second element is the key (octet string)
+      final octetElement = ext.elements[1] as ASN1OctetString;
       expect(octetElement.valueBytes(), equals(mockEd25519Key));
     });
 
