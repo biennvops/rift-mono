@@ -24,11 +24,5 @@ void main() {
       final octetElement = ext.elements[1] as ASN1OctetString;
       expect(octetElement.valueBytes(), equals(mockEd25519Key));
     });
-
-    test('Should fail gracefully when Biên test vectors are missing', () {
-      // Placeholder for: [daemon-dart][risk-cert-interop] Generate ECDSA cert with custom extension; verify against Biên's vectors
-      // Currently Biên's test vectors have not been merged yet.
-      expect(true, isTrue);
-    });
   });
 }
