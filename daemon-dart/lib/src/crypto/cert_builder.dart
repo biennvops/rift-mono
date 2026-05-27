@@ -46,6 +46,9 @@ class RiftCertBuilder {
   /// Generates an ASN.1 sequence of the custom extension
   /// containing an Ed25519 public key.
   static ASN1Sequence createEd25519Extension(Uint8List ed25519PubKey) {
+    if (ed25519PubKey.length != 32) {
+      throw CertificateBuilderException('Invalid Ed25519 public key length: expected 32 bytes, got ${ed25519PubKey.length}');
+    }
     var extension = ASN1Sequence();
     
     // Dùng hằng số mảng byte đã được khai báo ở đầu class
@@ -67,6 +70,9 @@ class RiftCertBuilder {
     String serialNumber = defaultSerial,
     int validityDays = defaultValidityDays,
   }) {
+    if (ed25519PubKey.length != 32) {
+      throw CertificateBuilderException('Invalid Ed25519 public key length: expected 32 bytes, got ${ed25519PubKey.length}');
+    }
     try {
       var privKey = ecdsaKeyPair.privateKey as ECPrivateKey;
       var pubKey = ecdsaKeyPair.publicKey as ECPublicKey;
