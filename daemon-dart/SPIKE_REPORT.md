@@ -10,11 +10,7 @@
 
 ```text
 daemon-dart/
-├── bin/
-│   ├── cert_spike.dart            # Kịch bản Smoke Test (Tuần 1): Thử nghiệm tạo khóa ECDSA và giới hạn dart:io.
-│   └── daemon_dart.dart           # Entry point mặc định của ứng dụng CLI daemon.
 ├── lib/
-│   ├── daemon_dart.dart           # File xuất (export) các thư viện cốt lõi của daemon.
 │   └── src/
 │       ├── crypto/
 │       │   └── cert_builder.dart  # [Quan trọng] Xử lý sinh chứng chỉ X.509, dịch UUID OID sang Base-128 và Inject ASN.1 Extension.
@@ -25,9 +21,7 @@ daemon-dart/
 │           ├── transport.dart         # Giao diện quy định chuẩn cho kết nối mTLS.
 │           └── trust_store.dart       # Giao diện quy định chuẩn lưu trữ trạng thái thiết bị đáng tin cậy.
 ├── test/
-│   ├── crypto_test.dart           # Unit Test kiểm chứng độ chính xác đến từng byte của khối ASN.1.
-│   ├── interfaces_test.dart       # Unit Test kiểm chứng tính đúng đắn khi thực thi các Mock Interfaces.
-│   └── daemon_dart_test.dart      # File test sinh tự động của Dart.
+│   └── crypto_test.dart           # Unit Test kiểm chứng độ chính xác đến từng byte của khối ASN.1.
 ├── demo_cert.dart                 # Script mô phỏng tự tạo file PEM chứng chỉ để đọc bằng OpenSSL.
 └── pubspec.yaml                   # Chứa cấu hình thư viện bắt buộc: pointycastle, asn1lib, basic_utils.
 ```

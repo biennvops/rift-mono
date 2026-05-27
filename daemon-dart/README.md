@@ -9,28 +9,34 @@
 Dưới đây là các câu lệnh bắt buộc phải biết khi làm việc với codebase của thư mục `daemon-dart`:
 
 ### Chạy Unit Test (Kiểm tra logic hệ thống)
-Mọi thay đổi mã nguồn đều phải được kiểm định bằng cách chạy test. Hệ thống test hiện tại bao quát 100% logic mã hóa ASN.1 và xác thực độ chính xác đến từng byte.
+Mọi thay đổi mã nguồn đều phải được kiểm định bằng cách chạy test. Hệ thống test hiện tại tập trung kiểm tra cấu trúc OID và Extension X.509.
 ```bash
 dart test
 ```
+
+**Ý nghĩa của các bài test (Bắt buộc phải Pass 100%):**
+1. **Test Cấu trúc ASN.1 (`crypto_test.dart`):** Băm nhỏ khối Extension sinh ra để đếm số lượng thành phần (phải bằng 2, không có cờ Critical) và so sánh từng byte của khối OID với chuẩn tĩnh. **Nếu Fail:** Chứng chỉ tạo ra bị dị dạng, Windows sẽ từ chối kết nối mTLS.
+2. **Test Đón Test Vector (`crypto_test.dart`):** Giữ chỗ chờ file PEM đối chiếu từ Protocol Lead. **Nếu Fail:** Thuật toán mã hóa của Android đang lệch pha với chuẩn giao thức.
 
 ### Chạy kịch bản Demo Sinh Chứng Chỉ & Kiểm định bằng OpenSSL
 Lệnh này sẽ gọi hệ thống `RiftCertBuilder` để sinh ra chứng chỉ X.509 thật, lưu vào file tạm `demo.pem`, sau đó dùng hệ thống `openssl` tiêu chuẩn để đọc cấu trúc bên trong. (Dùng để chứng minh chứng chỉ hoàn toàn tương thích và hợp lệ).
 ```bash
 dart run demo_cert.dart > demo.pem && openssl x509 -in demo.pem -text -noout
 ```
+**Ý nghĩa:**
+- **Thành công:** Lệnh in ra thông tin cấu trúc chứng chỉ chuẩn xác. Quan trọng nhất là khối `X509v3 extensions` hiện rõ dòng OID `2.25...`. Điều này chứng tỏ thuật toán "nhào nặn" byte của chúng ta đã **tương thích (Interop) 100%** với hệ thống bảo mật toàn cầu.
+- **Thất bại:** OpenSSL chửi `unable to load certificate` hoặc lỗi Parse ASN.1. Nguyên nhân do mảng nhị phân tạo ra bị sai chuẩn, Windows/Linux sẽ thẳng thừng từ chối đọc chứng chỉ này.
 
-### Chạy Smoke Test Tuần 1 (Kiểm tra giới hạn dart:io)
-Kịch bản thử nghiệm khả năng tự sinh khóa ECDSA cơ bản và chỉ ra điểm yếu của Dart trong việc đọc X.509 Extensions.
-```bash
-dart run bin/cert_spike.dart
-```
+
 
 ### Phân tích mã nguồn (Dart Linter)
 Kiểm tra xem code có vi phạm các quy tắc format hay naming convention của Dart hay không.
 ```bash
 dart analyze
 ```
+**Ý nghĩa:**
+- **Thành công (`No issues found!`):** Code sạch 100%, không import thừa, không có biến rác (dead code), tên biến chuẩn `lowerCamelCase`. Đáp ứng tiêu chuẩn khắt khe nhất của dự án.
+- **Thất bại:** Báo lỗi Warning (Màu vàng). Dù ứng dụng vẫn chạy được, nhưng việc chứa import thừa hoặc bỏ qua `stackTrace` có thể che giấu các lỗ hổng bảo mật hoặc làm phình to ứng dụng. Kiên quyết không Push code lên Git nếu lệnh này chưa ra màu xanh.
 
 ---
 
