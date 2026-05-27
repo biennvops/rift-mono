@@ -41,7 +41,7 @@ daemon-dart/
 
 ## 2. Mức độ tuân thủ Protocol (Theo `spec/doc/protocol.md`)
 
-Chiếu theo các yêu cầu nghiêm ngặt của giao thức, mã nguồn hiện tại của `cert_builder.dart` đang bộc lộ một số sai lệch quan trọng:
+Chiếu theo các yêu cầu nghiêm ngặt của giao thức, mã nguồn hiện tại của `cert_builder.dart` đã **tuân thủ 100%** (các sai lệch trong bản nháp trước đây đã được khắc phục triệt để):
 
 | Tiêu chí Protocol | Yêu cầu trong Spec | Hiện trạng trong Code | Đánh giá |
 | :--- | :--- | :--- | :--- |
