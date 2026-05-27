@@ -17,6 +17,8 @@ dart test
 **Ý nghĩa của các bài test (Bắt buộc phải Pass 100%):**
 1. **Test Cấu trúc ASN.1 (`crypto_test.dart`):** Băm nhỏ khối Extension sinh ra để đếm số lượng thành phần (phải bằng 2, không có cờ Critical) và so sánh từng byte của khối OID với chuẩn tĩnh. **Nếu Fail:** Chứng chỉ tạo ra bị dị dạng, Windows sẽ từ chối kết nối mTLS.
 2. **Test Đón Test Vector (`crypto_test.dart`):** Giữ chỗ chờ file PEM đối chiếu từ Protocol Lead. **Nếu Fail:** Thuật toán mã hóa của Android đang lệch pha với chuẩn giao thức.
+3. **Test Giải mã ASN.1 End-to-End (`crypto_test.dart`):** Kiểm tra khả năng trích xuất chính xác 32-byte Ed25519 từ chứng chỉ hợp lệ. **Nếu Fail:** Không thể định danh thiết bị đối tác.
+4. **Test Chặn chứng chỉ dị dạng Fail-Closed (`crypto_test.dart`):** Cố tình đưa chứng chỉ rác (invalid PEM) để kiểm tra luồng ném Exception. **Nếu Fail:** Hệ thống sẽ im lặng chấp nhận chứng chỉ giả mạo, gây lỗ hổng bảo mật nghiêm trọng.
 
 ### Chạy kịch bản Demo Sinh Chứng Chỉ & Kiểm định bằng OpenSSL
 Lệnh này sẽ gọi hệ thống `RiftCertBuilder` để sinh ra chứng chỉ X.509 thật, lưu vào file tạm `demo.pem`, sau đó dùng hệ thống `openssl` tiêu chuẩn để đọc cấu trúc bên trong. (Dùng để chứng minh chứng chỉ hoàn toàn tương thích và hợp lệ).

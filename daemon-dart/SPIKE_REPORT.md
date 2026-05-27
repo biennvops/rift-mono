@@ -36,6 +36,9 @@ daemon-dart/
 -  **`[daemon-dart][risk-cert-interop]` (Tuần 2):** Xây dựng bộ Custom ASN.1 Parser để sinh chứng chỉ ECDSA P-256 chứa Custom Extension. 
   - *Lịch sử:* Bản implement ban đầu của Kiệt sử dụng **Mock Data** (hardcode chuỗi String), vi phạm nghiêm trọng tính toàn vẹn của dự án.
   - *Hiện tại:* Đã được System can thiệp viết lại bằng kỹ thuật Inject ASN.1 Byte chuẩn xác. Chức năng này đã **Real 100%**, khắc phục toàn bộ lỗi phạm quy OID/Critical và pass 100% Unit Test. (Đạt)
+-  **`[daemon-dart][risk-asn1-parser]` (Tuần 3):** Xây dựng `cert_decoder.dart` (Custom X.509 ASN.1 Parser v1).
+  - Đã triển khai logic tự động tìm kiếm và trích xuất đúng 32-byte khóa Ed25519 từ mảng byte OID.
+  - Áp dụng nguyên tắc Fail-Closed nghiêm ngặt qua `CertificateDecoderException` và chặn 100% chứng chỉ dị dạng. (Đạt)
 
 ---
 
