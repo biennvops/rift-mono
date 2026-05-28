@@ -10,6 +10,7 @@ environment:
 dependencies:
   asn1lib: ^1.6.5
   basic_utils: ^5.8.2
+  nsd: ^5.0.1
   path: ^1.9.0
   pointycastle: ^4.0.0
 
