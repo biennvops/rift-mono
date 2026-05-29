@@ -44,16 +44,15 @@ In v0.1-draft, the device ID is derived as:
 
 1. take the exact raw 32-byte Ed25519 public key;
 2. compute SHA-256 over those 32 bytes;
-3. encode the digest as Base32 without padding;
-4. lowercase the Base32 string;
-5. take the first 32 characters;
-6. prefix with `rift-`.
+3. encode the digest as Base32 per RFC 4648, then strip any padding characters (`=`) and lowercase the result;
+4. take the first 32 characters;
+5. prefix with `rift-`.
 
 A valid device ID therefore matches `^rift-[a-z2-7]{32}$`. Any protocol message carrying a device ID MUST match the Ed25519 identity bound to the current TLS session.
 
 ### 3.2 Pairing Fingerprint
 
-In v0.1-draft, the pairing fingerprint uses the same SHA-256 digest as device ID derivation, encoded as Base32 without padding, uppercased, truncated to 32 characters, and displayed as eight groups of four characters separated by hyphens.
+In v0.1-draft, the pairing fingerprint uses the same SHA-256 digest as device ID derivation, encoded as Base32 per RFC 4648 with padding stripped, uppercased, truncated to 32 characters, and displayed as eight groups of four characters separated by hyphens.
 
 Example format: `ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567`.
 
@@ -80,7 +79,8 @@ The v0.1-draft extension is:
 | OID | `2.25.293029629918709742181702189012786017422` |
 | Criticality | Non-critical |
 | X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes |
-| Expected payload shape | `04 20 <32 bytes>` |
+| Expected inner encoding | `04 20 <32 bytes>` (34 bytes: tag `04`, length `20`, value) |
+| Full `extnValue` on wire | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 22 04 20 <32 bytes>` (36 bytes total) |
 
 On receipt, an implementation MUST reject the session if the extension is absent, duplicated, critical, malformed, uses the wrong OID, has the wrong length, is oversized, contains unparsable DER, or does not decode to exactly one 32-byte Ed25519 public key. The Dart implementation's custom certificate parser MUST fail closed for all parse failures.
 
@@ -92,13 +92,42 @@ Discovery records MUST expose only minimal non-sensitive metadata needed to init
 
 Discovery version fields are hints only. The first encrypted peer message performs authoritative version negotiation.
 
+### 4.1 Service Type and Instance Naming
+
+The v0.1-draft mDNS-SD service type is `_rift._tcp`. This name is not registered with IANA per RFC 6763 §7 and is used as a local-network application protocol name only. Implementers should note that the IANA Service Name registry contains related entries `rift-lies` (port 914) and `rift-ties` (port 915) for the unrelated IETF RIFT protocol (Routing in Fat Trees, RFC 9692); there is no technical conflict because service type matching is exact.
+
+The service instance name MUST be unique on the local network segment. Implementations SHOULD use the device ID (which is derived from a public key hash and reveals no private information beyond reachability) as the instance name. Implementations MAY use an opaque random identifier regenerated on each advertisement cycle if even public-key-derived identifiers are considered too much pre-authentication disclosure. The instance name MUST NOT contain the trusted device display name.
+
+The service domain is `local.`.
+
+### 4.2 TXT Record Keys
+
+The following TXT record key-value pairs are defined for v0.1-draft:
+
+| Key | Required | Value | Notes |
+| --- | --- | --- | --- |
+| `minV` | Yes | Protocol version string | Lowest version this daemon supports, e.g. `0.1-draft` |
+| `maxV` | Yes | Protocol version string | Highest version this daemon supports, e.g. `0.1-draft` |
+| `did` | No | Device ID string | Non-authoritative hint; MUST be verified post-TLS |
+| `fp` | No | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust |
+
+All TXT record values are UTF-8 strings. The total TXT record payload MUST NOT exceed 1300 bytes. Unknown TXT record keys MUST be ignored by receivers. TXT records MUST NOT contain: device display names, capability lists, trust state information, clipboard metadata, or any content exchanged only over authenticated channels.
+
+### 4.3 Advertisement and Browse Behavior
+
+A daemon MUST begin advertising its service record when it is ready to accept peer TLS connections and MUST stop advertising when it is shutting down or no longer accepting connections. Implementations SHOULD re-advertise on network interface changes (Wi-Fi reconnection, IP address change).
+
+A daemon MAY browse continuously or periodically for `_rift._tcp` services. Implementations MUST handle the appearance and disappearance of peer service records gracefully. When a previously advertised peer's service record disappears, the implementation SHOULD mark the peer as unreachable but MUST NOT change its trust state based on discovery events alone.
+
+Duplicate service records (same instance name from the same host) MUST be deduplicated by the implementation. If two distinct hosts advertise the same instance name, the implementation SHOULD present both as separate discovered peers distinguished by their resolved addresses.
+
 ## 5. Transport Security and Session Bootstrap
 
 All peer protocol messages after discovery run inside an authenticated encrypted transport. No clipboard content, authenticated device information, capability grants, trust transitions, operation messages, or event-log content may be exchanged over plaintext peer transport.
 
 ### 5.1 Mutual TLS Policy
 
-Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.2 with strong cipher suites is allowed where TLS 1.3-only enforcement is unavailable.
+Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.2 with strong cipher suites is allowed as a fallback where TLS 1.3-only enforcement is unavailable at the platform API level (for example, Dart's `SecurityContext` does not expose a minimum protocol version setter).
 
 Both peers MUST present certificates. A successful TLS handshake is necessary but not sufficient for trust. Trusted peers are accepted by Ed25519 public-key match, not by certificate chain trust alone.
 
@@ -225,6 +254,52 @@ After transport and identity verification, peers exchange authenticated capabili
 
 Peers compute a mutually supported session capability set. A peer MUST reject or fail an operation with `CapabilityUnavailable` if the required capability is absent from the authenticated negotiated set. Capabilities learned through discovery are hints only and MUST NOT authorize behavior.
 
+The daemon exposes negotiated capabilities and all protocol functionality to local client applications via a transport-agnostic JSON-RPC 2.0 IPC contract defined in the companion IPC API Specification (`ipc.md`).
+
+### 9.1 Capability Object Schema
+
+Each capability is represented as a JSON object:
+
+| Field | Required | Type | Notes |
+| --- | --- | --- | --- |
+| `name` | Yes | string | Dot-separated lowercase identifier, e.g. `clipboard.offer_fetch` |
+| `version` | Yes | integer | Positive integer, monotonically increasing across revisions |
+| `policyFlags` | No | array of strings | Policy constraints required to use this capability; empty array or absent if none |
+
+Capability names use a `<domain>.<feature>` convention. The v0.1-draft vocabulary is a closed set; implementations MUST NOT advertise capability names outside this set in v0.1-draft.
+
+### 9.2 Negotiation Algorithm
+
+Capability negotiation proceeds as follows:
+
+1. After `session.accept`, each peer sends a `capability.advertise` message containing all capabilities it supports.
+2. The session initiator (the peer that sent `session.hello`) computes the selected set: for each capability name present in both advertisements, the selected version is the minimum of the two advertised versions.
+3. If the selected version for any capability is below the minimum required version for that capability (defined per capability), the capability is excluded from the selected set.
+4. The initiator sends `capability.selected` containing the computed intersection.
+5. The responder validates the selection. If the responder disagrees (the initiator selected a capability it did not advertise, or selected a version it cannot support), the responder MUST send `error` with `ProtocolError` and terminate the session.
+6. After successful capability selection, both peers use only the selected capabilities for the remainder of the session.
+
+If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
+
+### 9.3 Required v0.1-Draft Capabilities
+
+The following capabilities are REQUIRED for a conformant v0.1-draft session:
+
+| Name | Version | Minimum | Description |
+| --- | --- | --- | --- |
+| `clipboard.offer_fetch` | 1 | 1 | Clipboard metadata offer and authenticated content fetch |
+| `presence.basic` | 1 | 1 | Online/offline status and last-seen tracking |
+| `operation.lifecycle` | 1 | 1 | Operation state machine transitions |
+| `security.event_log` | 1 | 1 | Security event logging for audit |
+
+All four capabilities MUST be present in the selected set for a v0.1-draft session to proceed to protected operations. If any required capability is absent after negotiation, the session MAY remain open for diagnostic purposes but MUST NOT permit clipboard, presence, or operation messages.
+
+### 9.4 Version Mismatch and Forward Compatibility
+
+When a peer advertises a capability version higher than the local implementation supports, the negotiation algorithm selects the lower version. The higher-version peer MUST be able to operate at any version down to the minimum defined for that capability.
+
+Unknown capability names in a peer's advertisement MUST be silently ignored. This allows future protocol versions to introduce new capabilities without breaking v0.1-draft peers.
+
 ## 10. Operation Lifecycle
 
 All cross-device actions flow through this transition table:
@@ -261,9 +336,49 @@ Each daemon maintains an append-only security event log for audit, debugging, co
 
 Each event MUST include `eventId`, `eventType`, `severity`, `localDeviceId`, optional `peerDeviceId`, optional `operationId`, `timestamp`, `outcome`, optional `failureReason`, and `details`. Event details MUST NOT contain private keys or clipboard content.
 
-Required event classes include pairing attempts, trust transitions, authentication failures, connection establishment and rejection, certificate rotation, capability negotiation, operation lifecycle transitions, clipboard offer/fetch metadata, revocation, parser rejection for malformed certificates, malformed messages, and policy denial.
-
 Security tests for the KDE Connect vulnerability classes MUST assert both network rejection behavior and the expected event-log failure reason.
+
+### 13.1 Event Type Strings
+
+The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT emit event types outside this vocabulary in v0.1-draft.
+
+| `eventType` | Description |
+| --- | --- |
+| `pairing.attempted` | Pairing flow initiated (local or remote) |
+| `pairing.completed` | Pairing succeeded; trust persisted |
+| `pairing.rejected` | Pairing rejected by either side |
+| `trust.transitioned` | Trust state changed (any transition from Section 8) |
+| `trust.revoked` | Peer trust revoked; sessions terminated |
+| `auth.failed` | Authentication or identity verification failed |
+| `connection.established` | Mutual TLS session established with a peer |
+| `connection.rejected` | TLS session rejected (untrusted, blocked, or revoked peer) |
+| `connection.lost` | TLS session lost unexpectedly |
+| `certificate.rotated` | Peer certificate changed while Ed25519 identity unchanged |
+| `capability.negotiated` | Capability set computed for a session |
+| `operation.transitioned` | Operation state changed (any transition from Section 10) |
+| `clipboard.offered` | Clipboard offer broadcast to peers |
+| `clipboard.fetched` | Clipboard content fetched by or from a peer |
+| `clipboard.expired` | Clipboard offer expired without fetch |
+| `message.malformed` | Received peer message failed envelope or schema validation |
+| `certificate.malformed` | Peer certificate failed extension parsing |
+| `policy.denied` | Action denied by local policy |
+
+### 13.2 Severity Levels
+
+| `severity` | Usage |
+| --- | --- |
+| `info` | Normal protocol events: connection established, pairing completed, capability negotiated, clipboard offered/fetched |
+| `warning` | Non-fatal anomalies: certificate rotation, capability version downgrade, offer expiry |
+| `error` | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed |
+| `critical` | Security violations: authentication failure, identity mismatch, revoked peer reconnection attempt, malformed certificate |
+
+### 13.3 Outcome Values
+
+| `outcome` | Meaning |
+| --- | --- |
+| `success` | Event completed normally |
+| `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
+| `denied` | Event blocked by local policy; `failureReason` MUST be present |
 
 ## 14. Failure Reasons
 
@@ -289,9 +404,100 @@ Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draf
 
 ## 15. Test Vectors
 
-The protocol requires deterministic test vectors for both daemon implementations. Required vector groups include Ed25519 public key, derived device ID, display fingerprint, ECDSA P-256 certificate containing the custom Ed25519 X.509 extension, byte-level DER encoding of the custom extension, accepted and rejected pairing transcripts, capability negotiation examples, clipboard offer/fetch metadata and hash verification examples, operation lifecycle transition examples, security event log examples, and malformed certificate inputs for fail-closed parser tests.
+The protocol requires deterministic test vectors for both daemon implementations. The full certificate bytes are future conformance material and are not defined in this draft. Machine-readable JSON versions of these vectors will be maintained in `spec/vectors/`.
 
-The full certificate bytes are future conformance material and are not defined in this draft. Appendix B may point to future deterministic certificate bytes until vector generation exists.
+### 15.1 Identity Derivation
+
+Test input: the Ed25519 public key from RFC 8032 §7.1 Test Vector 1.
+
+| Step | Value |
+| --- | --- |
+| Ed25519 public key (32 bytes, hex) | `d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3` |
+| SHA-256 of public key (32 bytes, hex) | `13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7` |
+| Base32 (RFC 4648, lowercase, padding stripped) | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq` |
+| First 32 characters | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
+| Device ID | `rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
+| Display fingerprint | `CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ` |
+
+Both implementations MUST produce identical device ID and fingerprint values from this public key.
+
+### 15.2 Custom Extension DER Encoding
+
+Using the test public key from Section 15.1, the custom X.509 extension has the following DER structure:
+
+**OID encoding** for `2.25.293029629918709742181702189012786017422` (20 value bytes):
+
+```
+06 14 69 83 b8 f3 ba 8c ba bf ca d1 cd 9a ab f7 88 88 95 fb e9 0e
+```
+
+**Inner extnValue content** (34 bytes: OCTET STRING tag `04`, length `20`, 32-byte key):
+
+```
+04 20 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a
+     0e e1 72 f3 da a3 f4 a1 84 46 b0 b8 d1 83 f8 e3
+```
+
+**Outer extnValue OCTET STRING** (36 bytes: wraps the inner encoding):
+
+```
+04 22 04 20 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a
+          0e e1 72 f3 da a3 f4 a1 84 46 b0 b8 d1 83 f8 e3
+```
+
+**Complete Extension SEQUENCE** (60 bytes: OID + extnValue, criticality FALSE omitted per DER):
+
+```
+30 3a 06 14 69 83 b8 f3 ba 8c ba bf ca d1 cd 9a ab f7 88 88
+     95 fb e9 0e 04 22 04 20 d7 5a 98 01 82 b1 0a b7 d5 4b
+     fe d3 c9 64 07 3a 0e e1 72 f3 da a3 f4 a1 84 46 b0 b8
+     d1 83 f8 e3
+```
+
+Both implementations MUST produce byte-identical extension DER for a given Ed25519 public key. The OID value bytes and the inner OCTET STRING encoding are the critical conformance surfaces.
+
+### 15.3 Clipboard Hash
+
+| Field | Value |
+| --- | --- |
+| Content (UTF-8 string) | `hello` |
+| Content (raw bytes, hex) | `68656c6c6f` |
+| Byte size | `5` |
+| SHA-256 (64 lowercase hex characters) | `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824` |
+| Base64 of content | `aGVsbG8=` |
+
+A receiver MUST verify both `byteSize` and `sha256` match after decoding `contentBase64`.
+
+### 15.4 Envelope Validation
+
+**Valid envelope** using the test device ID:
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "presence.update",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+  "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+  "payload": {
+    "status": "online",
+    "capabilities": ["clipboard.offer_fetch", "presence.basic"]
+  }
+}
+```
+
+**Invalid envelope** — device ID does not match `^rift-[a-z2-7]{32}$`:
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "presence.update",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+  "sourceDeviceId": "rift-INVALID_ID_WITH_UPPERCASE",
+  "payload": { "status": "online" }
+}
+```
+
+Implementations MUST reject this envelope with `MalformedMessage`.
 
 ## 16. Security Considerations
 
@@ -317,11 +523,62 @@ The X.509 `Extension.extnValue` contains the DER bytes for this ASN.1 value:
 RiftEd25519PublicKey ::= OCTET STRING (SIZE(32))
 ```
 
-The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes.
+The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes. In the X.509 `Extension` SEQUENCE, this 34-byte value is wrapped in the outer `extnValue` OCTET STRING, producing `04 22 04 20 <32 bytes>` (36 bytes) on the wire.
 
 ## Appendix B. Example Certificates
 
-Deterministic certificate vector bytes are future conformance material. This appendix remains reserved for valid certificates generated by each implementation path and malformed examples used for parser rejection tests.
+Deterministic certificate vector bytes are future conformance material to be generated by each implementation and placed in `spec/vectors/`. This appendix defines the structural requirements and the malformed-input rejection catalog.
+
+### B.1 Conformant Certificate Structure
+
+A conformant Rift ECDSA P-256 self-signed certificate MUST have the following structure:
+
+| Field | Requirement | Notes |
+| --- | --- | --- |
+| Version | v3 (integer `2`) | Required to carry extensions |
+| Serial number | Implementation-chosen | No normative value; MUST be unique per device |
+| Signature algorithm | `ecdsa-with-SHA256` (OID `1.2.840.10045.4.3.2`) | ECDSA P-256 with SHA-256 |
+| Issuer | Same as Subject | Self-signed |
+| Validity | Implementation-chosen | See Section 3.4 for renewal policy |
+| Subject | Implementation-chosen | No normative format required |
+| Subject public key algorithm | `id-ecPublicKey` (OID `1.2.840.10045.2.1`) with `secp256r1` | ECDSA P-256 |
+| Extensions | Custom Ed25519 extension (Section 3.5) | MUST be present; MUST NOT be critical |
+
+### B.2 Extension Placement
+
+The custom extension appears inside the `extensions` field of `tbsCertificate` as a standard X.509v3 Extension SEQUENCE:
+
+```
+Certificate
+  └─ tbsCertificate
+       └─ extensions [3] EXPLICIT
+            └─ SEQUENCE OF Extension
+                 └─ Extension (Rift Ed25519)
+                      ├─ extnID: 2.25.293029629918709742181702189012786017422
+                      ├─ critical: FALSE (omitted in DER)
+                      └─ extnValue: OCTET STRING containing 04 20 <32-byte Ed25519 key>
+```
+
+Implementations locating the extension MUST match by OID only. The extension MAY appear at any position within the extensions sequence.
+
+### B.3 Malformed Certificate Rejection Catalog
+
+Both implementations MUST reject the TLS session with `AuthenticationFailed` for each of the following malformed-input classes. Security tests (Section 13, `certificate.malformed` event type) MUST cover every class.
+
+| # | Malformed Input Class | Expected Behavior |
+| --- | --- | --- |
+| 1 | Extension absent | Reject: no Ed25519 identity bound |
+| 2 | Extension duplicated (two extensions with the Rift OID) | Reject: ambiguous identity |
+| 3 | Extension marked critical | Reject: violates spec requirement of non-critical |
+| 4 | Wrong OID (valid extension structure but different OID) | Reject: extension not found |
+| 5 | Inner OCTET STRING too short (fewer than 32 key bytes) | Reject: invalid key length |
+| 6 | Inner OCTET STRING too long (more than 32 key bytes) | Reject: invalid key length |
+| 7 | Wrong DER tag (e.g. `03` BIT STRING instead of `04` OCTET STRING) | Reject: unparsable value |
+| 8 | Truncated DER (tag and length present but value bytes missing) | Reject: incomplete encoding |
+| 9 | Oversized extnValue (length field exceeds remaining certificate bytes) | Reject: malformed DER |
+| 10 | Valid structure but Ed25519 key does not match trust store | Reject: untrusted identity (see Section 5.2) |
+
+For all classes 1–9, the parser MUST fail closed without crashing, leaking memory, or accepting the peer. Class 10 is a trust-layer rejection that occurs after successful parsing.
 
 ## Appendix C. Example Message Flows
 
