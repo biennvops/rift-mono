@@ -80,7 +80,7 @@ The v0.1-draft extension is:
 | Criticality | Non-critical |
 | X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes |
 | Expected inner encoding | `04 20 <32 bytes>` (34 bytes: tag `04`, length `20`, value) |
-| Full `extnValue` on wire | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 24 04 20 <32 bytes>` (36 bytes total) |
+| Full `extnValue` on wire | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 22 04 20 <32 bytes>` (36 bytes total) |
 
 On receipt, an implementation MUST reject the session if the extension is absent, duplicated, critical, malformed, uses the wrong OID, has the wrong length, is oversized, contains unparsable DER, or does not decode to exactly one 32-byte Ed25519 public key. The Dart implementation's custom certificate parser MUST fail closed for all parse failures.
 
@@ -523,7 +523,7 @@ The X.509 `Extension.extnValue` contains the DER bytes for this ASN.1 value:
 RiftEd25519PublicKey ::= OCTET STRING (SIZE(32))
 ```
 
-The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes. In the X.509 `Extension` SEQUENCE, this 34-byte value is wrapped in the outer `extnValue` OCTET STRING, producing `04 24 04 20 <32 bytes>` (36 bytes) on the wire.
+The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes. In the X.509 `Extension` SEQUENCE, this 34-byte value is wrapped in the outer `extnValue` OCTET STRING, producing `04 22 04 20 <32 bytes>` (36 bytes) on the wire.
 
 ## Appendix B. Example Certificates
 
