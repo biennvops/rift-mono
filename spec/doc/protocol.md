@@ -402,9 +402,100 @@ Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draf
 
 ## 15. Test Vectors
 
-The protocol requires deterministic test vectors for both daemon implementations. Required vector groups include Ed25519 public key, derived device ID, display fingerprint, ECDSA P-256 certificate containing the custom Ed25519 X.509 extension, byte-level DER encoding of the custom extension, accepted and rejected pairing transcripts, capability negotiation examples, clipboard offer/fetch metadata and hash verification examples, operation lifecycle transition examples, security event log examples, and malformed certificate inputs for fail-closed parser tests.
+The protocol requires deterministic test vectors for both daemon implementations. The full certificate bytes are future conformance material and are not defined in this draft. Machine-readable JSON versions of these vectors will be maintained in `spec/vectors/`.
 
-The full certificate bytes are future conformance material and are not defined in this draft. Appendix B may point to future deterministic certificate bytes until vector generation exists.
+### 15.1 Identity Derivation
+
+Test input: the Ed25519 public key from RFC 8032 §7.1 Test Vector 1.
+
+| Step | Value |
+| --- | --- |
+| Ed25519 public key (32 bytes, hex) | `d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3` |
+| SHA-256 of public key (32 bytes, hex) | `13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7` |
+| Base32 (RFC 4648, lowercase, padding stripped) | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq` |
+| First 32 characters | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
+| Device ID | `rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
+| Display fingerprint | `CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ` |
+
+Both implementations MUST produce identical device ID and fingerprint values from this public key.
+
+### 15.2 Custom Extension DER Encoding
+
+Using the test public key from Section 15.1, the custom X.509 extension has the following DER structure:
+
+**OID encoding** for `2.25.293029629918709742181702189012786017422` (20 value bytes):
+
+```
+06 14 69 83 b8 f3 ba 8c ba bf ca d1 cd 9a ab f7 88 88 95 fb e9 0e
+```
+
+**Inner extnValue content** (34 bytes: OCTET STRING tag `04`, length `20`, 32-byte key):
+
+```
+04 20 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a
+     0e e1 72 f3 da a3 f4 a1 84 46 b0 b8 d1 83 f8 e3
+```
+
+**Outer extnValue OCTET STRING** (36 bytes: wraps the inner encoding):
+
+```
+04 22 04 20 d7 5a 98 01 82 b1 0a b7 d5 4b fe d3 c9 64 07 3a
+          0e e1 72 f3 da a3 f4 a1 84 46 b0 b8 d1 83 f8 e3
+```
+
+**Complete Extension SEQUENCE** (60 bytes: OID + extnValue, criticality FALSE omitted per DER):
+
+```
+30 3a 06 14 69 83 b8 f3 ba 8c ba bf ca d1 cd 9a ab f7 88 88
+     95 fb e9 0e 04 22 04 20 d7 5a 98 01 82 b1 0a b7 d5 4b
+     fe d3 c9 64 07 3a 0e e1 72 f3 da a3 f4 a1 84 46 b0 b8
+     d1 83 f8 e3
+```
+
+Both implementations MUST produce byte-identical extension DER for a given Ed25519 public key. The OID value bytes and the inner OCTET STRING encoding are the critical conformance surfaces.
+
+### 15.3 Clipboard Hash
+
+| Field | Value |
+| --- | --- |
+| Content (UTF-8 string) | `hello` |
+| Content (raw bytes, hex) | `68656c6c6f` |
+| Byte size | `5` |
+| SHA-256 (64 lowercase hex characters) | `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824` |
+| Base64 of content | `aGVsbG8=` |
+
+A receiver MUST verify both `byteSize` and `sha256` match after decoding `contentBase64`.
+
+### 15.4 Envelope Validation
+
+**Valid envelope** using the test device ID:
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "presence.update",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+  "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+  "payload": {
+    "status": "online",
+    "capabilities": ["clipboard.offer_fetch", "presence.basic"]
+  }
+}
+```
+
+**Invalid envelope** — device ID does not match `^rift-[a-z2-7]{32}$`:
+
+```json
+{
+  "rift": "0.1-draft",
+  "type": "presence.update",
+  "messageId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+  "sourceDeviceId": "rift-INVALID_ID_WITH_UPPERCASE",
+  "payload": { "status": "online" }
+}
+```
+
+Implementations MUST reject this envelope with `MalformedMessage`.
 
 ## 16. Security Considerations
 
