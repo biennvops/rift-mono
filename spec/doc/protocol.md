@@ -254,6 +254,8 @@ After transport and identity verification, peers exchange authenticated capabili
 
 Peers compute a mutually supported session capability set. A peer MUST reject or fail an operation with `CapabilityUnavailable` if the required capability is absent from the authenticated negotiated set. Capabilities learned through discovery are hints only and MUST NOT authorize behavior.
 
+The daemon exposes negotiated capabilities and all protocol functionality to local client applications via a transport-agnostic JSON-RPC 2.0 IPC contract defined in the companion IPC API Specification (`ipc.md`).
+
 ### 9.1 Capability Object Schema
 
 Each capability is represented as a JSON object:
