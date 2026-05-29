@@ -92,6 +92,35 @@ Discovery records MUST expose only minimal non-sensitive metadata needed to init
 
 Discovery version fields are hints only. The first encrypted peer message performs authoritative version negotiation.
 
+### 4.1 Service Type and Instance Naming
+
+The v0.1-draft mDNS-SD service type is `_rift._tcp`. This name is not registered with IANA per RFC 6763 §7 and is used as a local-network application protocol name only. Implementers should note that the IANA Service Name registry contains related entries `rift-lies` (port 914) and `rift-ties` (port 915) for the unrelated IETF RIFT protocol (Routing in Fat Trees, RFC 9692); there is no technical conflict because service type matching is exact.
+
+The service instance name MUST be unique on the local network segment. Implementations SHOULD use the device ID (which is derived from a public key hash and reveals no private information beyond reachability) as the instance name. Implementations MAY use an opaque random identifier regenerated on each advertisement cycle if even public-key-derived identifiers are considered too much pre-authentication disclosure. The instance name MUST NOT contain the trusted device display name.
+
+The service domain is `local.`.
+
+### 4.2 TXT Record Keys
+
+The following TXT record key-value pairs are defined for v0.1-draft:
+
+| Key | Required | Value | Notes |
+| --- | --- | --- | --- |
+| `minV` | Yes | Protocol version string | Lowest version this daemon supports, e.g. `0.1-draft` |
+| `maxV` | Yes | Protocol version string | Highest version this daemon supports, e.g. `0.1-draft` |
+| `did` | No | Device ID string | Non-authoritative hint; MUST be verified post-TLS |
+| `fp` | No | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust |
+
+All TXT record values are UTF-8 strings. The total TXT record payload MUST NOT exceed 1300 bytes. Unknown TXT record keys MUST be ignored by receivers. TXT records MUST NOT contain: device display names, capability lists, trust state information, clipboard metadata, or any content exchanged only over authenticated channels.
+
+### 4.3 Advertisement and Browse Behavior
+
+A daemon MUST begin advertising its service record when it is ready to accept peer TLS connections and MUST stop advertising when it is shutting down or no longer accepting connections. Implementations SHOULD re-advertise on network interface changes (Wi-Fi reconnection, IP address change).
+
+A daemon MAY browse continuously or periodically for `_rift._tcp` services. Implementations MUST handle the appearance and disappearance of peer service records gracefully. When a previously advertised peer's service record disappears, the implementation SHOULD mark the peer as unreachable but MUST NOT change its trust state based on discovery events alone.
+
+Duplicate service records (same instance name from the same host) MUST be deduplicated by the implementation. If two distinct hosts advertise the same instance name, the implementation SHOULD present both as separate discovered peers distinguished by their resolved addresses.
+
 ## 5. Transport Security and Session Bootstrap
 
 All peer protocol messages after discovery run inside an authenticated encrypted transport. No clipboard content, authenticated device information, capability grants, trust transitions, operation messages, or event-log content may be exchanged over plaintext peer transport.
@@ -224,6 +253,50 @@ Pairing occurs over mutual TLS. There is no separate custom key exchange outside
 After transport and identity verification, peers exchange authenticated capability advertisements. A capability advertisement MUST include the protocol version, implementation identifier, supported feature names, feature versions where applicable, and policy flags required to use each feature.
 
 Peers compute a mutually supported session capability set. A peer MUST reject or fail an operation with `CapabilityUnavailable` if the required capability is absent from the authenticated negotiated set. Capabilities learned through discovery are hints only and MUST NOT authorize behavior.
+
+### 9.1 Capability Object Schema
+
+Each capability is represented as a JSON object:
+
+| Field | Required | Type | Notes |
+| --- | --- | --- | --- |
+| `name` | Yes | string | Dot-separated lowercase identifier, e.g. `clipboard.offer_fetch` |
+| `version` | Yes | integer | Positive integer, monotonically increasing across revisions |
+| `policyFlags` | No | array of strings | Policy constraints required to use this capability; empty array or absent if none |
+
+Capability names use a `<domain>.<feature>` convention. The v0.1-draft vocabulary is a closed set; implementations MUST NOT advertise capability names outside this set in v0.1-draft.
+
+### 9.2 Negotiation Algorithm
+
+Capability negotiation proceeds as follows:
+
+1. After `session.accept`, each peer sends a `capability.advertise` message containing all capabilities it supports.
+2. The session initiator (the peer that sent `session.hello`) computes the selected set: for each capability name present in both advertisements, the selected version is the minimum of the two advertised versions.
+3. If the selected version for any capability is below the minimum required version for that capability (defined per capability), the capability is excluded from the selected set.
+4. The initiator sends `capability.selected` containing the computed intersection.
+5. The responder validates the selection. If the responder disagrees (the initiator selected a capability it did not advertise, or selected a version it cannot support), the responder MUST send `error` with `ProtocolError` and terminate the session.
+6. After successful capability selection, both peers use only the selected capabilities for the remainder of the session.
+
+If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
+
+### 9.3 Required v0.1-Draft Capabilities
+
+The following capabilities are REQUIRED for a conformant v0.1-draft session:
+
+| Name | Version | Minimum | Description |
+| --- | --- | --- | --- |
+| `clipboard.offer_fetch` | 1 | 1 | Clipboard metadata offer and authenticated content fetch |
+| `presence.basic` | 1 | 1 | Online/offline status and last-seen tracking |
+| `operation.lifecycle` | 1 | 1 | Operation state machine transitions |
+| `security.event_log` | 1 | 1 | Security event logging for audit |
+
+All four capabilities MUST be present in the selected set for a v0.1-draft session to proceed to protected operations. If any required capability is absent after negotiation, the session MAY remain open for diagnostic purposes but MUST NOT permit clipboard, presence, or operation messages.
+
+### 9.4 Version Mismatch and Forward Compatibility
+
+When a peer advertises a capability version higher than the local implementation supports, the negotiation algorithm selects the lower version. The higher-version peer MUST be able to operate at any version down to the minimum defined for that capability.
+
+Unknown capability names in a peer's advertisement MUST be silently ignored. This allows future protocol versions to introduce new capabilities without breaking v0.1-draft peers.
 
 ## 10. Operation Lifecycle
 
