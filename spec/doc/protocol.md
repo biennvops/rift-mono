@@ -334,9 +334,49 @@ Each daemon maintains an append-only security event log for audit, debugging, co
 
 Each event MUST include `eventId`, `eventType`, `severity`, `localDeviceId`, optional `peerDeviceId`, optional `operationId`, `timestamp`, `outcome`, optional `failureReason`, and `details`. Event details MUST NOT contain private keys or clipboard content.
 
-Required event classes include pairing attempts, trust transitions, authentication failures, connection establishment and rejection, certificate rotation, capability negotiation, operation lifecycle transitions, clipboard offer/fetch metadata, revocation, parser rejection for malformed certificates, malformed messages, and policy denial.
-
 Security tests for the KDE Connect vulnerability classes MUST assert both network rejection behavior and the expected event-log failure reason.
+
+### 13.1 Event Type Strings
+
+The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT emit event types outside this vocabulary in v0.1-draft.
+
+| `eventType` | Description |
+| --- | --- |
+| `pairing.attempted` | Pairing flow initiated (local or remote) |
+| `pairing.completed` | Pairing succeeded; trust persisted |
+| `pairing.rejected` | Pairing rejected by either side |
+| `trust.transitioned` | Trust state changed (any transition from Section 8) |
+| `trust.revoked` | Peer trust revoked; sessions terminated |
+| `auth.failed` | Authentication or identity verification failed |
+| `connection.established` | Mutual TLS session established with a peer |
+| `connection.rejected` | TLS session rejected (untrusted, blocked, or revoked peer) |
+| `connection.lost` | TLS session lost unexpectedly |
+| `certificate.rotated` | Peer certificate changed while Ed25519 identity unchanged |
+| `capability.negotiated` | Capability set computed for a session |
+| `operation.transitioned` | Operation state changed (any transition from Section 10) |
+| `clipboard.offered` | Clipboard offer broadcast to peers |
+| `clipboard.fetched` | Clipboard content fetched by or from a peer |
+| `clipboard.expired` | Clipboard offer expired without fetch |
+| `message.malformed` | Received peer message failed envelope or schema validation |
+| `certificate.malformed` | Peer certificate failed extension parsing |
+| `policy.denied` | Action denied by local policy |
+
+### 13.2 Severity Levels
+
+| `severity` | Usage |
+| --- | --- |
+| `info` | Normal protocol events: connection established, pairing completed, capability negotiated, clipboard offered/fetched |
+| `warning` | Non-fatal anomalies: certificate rotation, capability version downgrade, offer expiry |
+| `error` | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed |
+| `critical` | Security violations: authentication failure, identity mismatch, revoked peer reconnection attempt, malformed certificate |
+
+### 13.3 Outcome Values
+
+| `outcome` | Meaning |
+| --- | --- |
+| `success` | Event completed normally |
+| `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
+| `denied` | Event blocked by local policy; `failureReason` MUST be present |
 
 ## 14. Failure Reasons
 
