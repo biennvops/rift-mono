@@ -44,16 +44,15 @@ In v0.1-draft, the device ID is derived as:
 
 1. take the exact raw 32-byte Ed25519 public key;
 2. compute SHA-256 over those 32 bytes;
-3. encode the digest as Base32 without padding;
-4. lowercase the Base32 string;
-5. take the first 32 characters;
-6. prefix with `rift-`.
+3. encode the digest as Base32 per RFC 4648, then strip any padding characters (`=`) and lowercase the result;
+4. take the first 32 characters;
+5. prefix with `rift-`.
 
 A valid device ID therefore matches `^rift-[a-z2-7]{32}$`. Any protocol message carrying a device ID MUST match the Ed25519 identity bound to the current TLS session.
 
 ### 3.2 Pairing Fingerprint
 
-In v0.1-draft, the pairing fingerprint uses the same SHA-256 digest as device ID derivation, encoded as Base32 without padding, uppercased, truncated to 32 characters, and displayed as eight groups of four characters separated by hyphens.
+In v0.1-draft, the pairing fingerprint uses the same SHA-256 digest as device ID derivation, encoded as Base32 per RFC 4648 with padding stripped, uppercased, truncated to 32 characters, and displayed as eight groups of four characters separated by hyphens.
 
 Example format: `ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567`.
 
@@ -80,7 +79,8 @@ The v0.1-draft extension is:
 | OID | `2.25.293029629918709742181702189012786017422` |
 | Criticality | Non-critical |
 | X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes |
-| Expected payload shape | `04 20 <32 bytes>` |
+| Expected inner encoding | `04 20 <32 bytes>` (34 bytes: tag `04`, length `20`, value) |
+| Full `extnValue` on wire | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 24 04 20 <32 bytes>` (36 bytes total) |
 
 On receipt, an implementation MUST reject the session if the extension is absent, duplicated, critical, malformed, uses the wrong OID, has the wrong length, is oversized, contains unparsable DER, or does not decode to exactly one 32-byte Ed25519 public key. The Dart implementation's custom certificate parser MUST fail closed for all parse failures.
 
@@ -98,7 +98,7 @@ All peer protocol messages after discovery run inside an authenticated encrypted
 
 ### 5.1 Mutual TLS Policy
 
-Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.2 with strong cipher suites is allowed where TLS 1.3-only enforcement is unavailable.
+Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.2 with strong cipher suites is allowed as a fallback where TLS 1.3-only enforcement is unavailable at the platform API level (for example, Dart's `SecurityContext` does not expose a minimum protocol version setter).
 
 Both peers MUST present certificates. A successful TLS handshake is necessary but not sufficient for trust. Trusted peers are accepted by Ed25519 public-key match, not by certificate chain trust alone.
 
@@ -317,7 +317,7 @@ The X.509 `Extension.extnValue` contains the DER bytes for this ASN.1 value:
 RiftEd25519PublicKey ::= OCTET STRING (SIZE(32))
 ```
 
-The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes.
+The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` followed by the 32 raw Ed25519 public-key bytes. In the X.509 `Extension` SEQUENCE, this 34-byte value is wrapped in the outer `extnValue` OCTET STRING, producing `04 24 04 20 <32 bytes>` (36 bytes) on the wire.
 
 ## Appendix B. Example Certificates
 
