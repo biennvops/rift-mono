@@ -12,6 +12,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
   nsd_lib.Registration? _registration;
   nsd_lib.Discovery? _discovery;
   
+  // Cache to prevent spamming duplicate discovery events
+  final Map<String, DiscoveredPeer> _knownPeers = {};
+  
   final StreamController<DiscoveredPeer> _peerController = StreamController<DiscoveredPeer>.broadcast();
 
   DiscoveryServiceImpl(this._identityManager, this._port);
@@ -63,14 +66,28 @@ class DiscoveryServiceImpl implements DiscoveryService {
             return fallback;
           }
 
+          final peerDeviceId = getTxtStr('id', service.name!);
+          
           final peer = DiscoveredPeer(
-            deviceId: getTxtStr('id', service.name!),
+            deviceId: peerDeviceId,
             address: service.host!,
             port: service.port ?? 0,
             protocolVersion: getTxtStr('version', 'unknown'),
           );
           
-          _peerController.add(peer);
+          // Only broadcast if it's a new peer or its connection info has changed
+          bool isNewOrUpdated = true;
+          if (_knownPeers.containsKey(peerDeviceId)) {
+            final existing = _knownPeers[peerDeviceId]!;
+            if (existing.address == peer.address && existing.port == peer.port && existing.protocolVersion == peer.protocolVersion) {
+              isNewOrUpdated = false;
+            }
+          }
+          
+          if (isNewOrUpdated) {
+            _knownPeers[peerDeviceId] = peer;
+            _peerController.add(peer);
+          }
         }
       }
     });

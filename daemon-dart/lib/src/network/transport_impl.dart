@@ -11,6 +11,7 @@ import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/cert_builder.dart';
 import '../crypto/cert_decoder.dart';
+import '../crypto/identity_manager_impl.dart';
 import 'frame_codec.dart';
 
 class TransportImpl implements Transport {
@@ -18,7 +19,7 @@ class TransportImpl implements Transport {
   final int _port;
   
   SecureServerSocket? _serverSocket;
-  final List<SecureSocket> _activeSockets = [];
+  final Map<String, SecureSocket> _socketMap = {};
   final StreamController<dynamic> _messageController = StreamController<dynamic>.broadcast();
   
   late SecurityContext _securityContext;
@@ -72,7 +73,7 @@ class TransportImpl implements Transport {
     _handleNewConnection(socket);
   }
 
-  void _handleNewConnection(SecureSocket socket) {
+  Future<void> _handleNewConnection(SecureSocket socket) async {
     var peerCert = socket.peerCertificate;
     if (peerCert == null) {
       socket.destroy();
@@ -82,11 +83,10 @@ class TransportImpl implements Transport {
     try {
       // Post-handshake Ed25519 extraction via Fail-Closed parser
       // Will throw if the certificate does not contain a valid Rift extension
-      RiftCertDecoder.extractEd25519PublicKey(peerCert.pem);
+      var peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(peerCert.pem);
+      var peerDeviceId = await IdentityManagerImpl.deriveDeviceId(peerEd25519Key);
       
-      // In a real flow, we would register this socket under the derived Device ID
-      // For now, we just attach the stream listener.
-      _activeSockets.add(socket);
+      _socketMap[peerDeviceId] = socket;
       
       socket.cast<List<int>>().transform(RiftFrameTransformer()).listen(
         (String jsonString) {
@@ -94,12 +94,14 @@ class TransportImpl implements Transport {
         },
         onError: (e) {
           socket.destroy();
-          _activeSockets.remove(socket);
+          _socketMap.remove(peerDeviceId);
         },
         onDone: () {
-          _activeSockets.remove(socket);
+          _socketMap.remove(peerDeviceId);
         },
       );
+      
+      // TODO: Notify session manager to send session.hello
     } on CertificateDecoderException catch (_) {
       // Fail-closed: malicious or invalid certificate
       socket.destroy();
@@ -108,10 +110,9 @@ class TransportImpl implements Transport {
 
   @override
   Future<void> sendMessage(String deviceId, dynamic message) async {
-    // Temporary naive implementation for week 4 (broadcasting to all sockets)
-    // A proper implementation would route by deviceId
-    var frame = RiftFrameCodec.encode(jsonEncode(message));
-    for (var socket in _activeSockets) {
+    var socket = _socketMap[deviceId];
+    if (socket != null) {
+      var frame = RiftFrameCodec.encode(jsonEncode(message));
       socket.add(frame);
     }
   }

@@ -52,9 +52,15 @@ class IdentityManagerImpl implements IdentityManager {
     var hash = await sha256.hash(_publicKey);
     _fingerprintBytes = Uint8List.fromList(hash.bytes);
 
-    // Calculate Device ID: rift- + first 32 chars of lowercase Base32(fingerprint)
-    var base32Str = _encodeBase32(_fingerprintBytes).toLowerCase();
-    _deviceId = 'rift-${base32Str.substring(0, 32)}';
+    _deviceId = await deriveDeviceId(_publicKey);
+  }
+
+  /// Derives the device ID from an Ed25519 public key
+  static Future<String> deriveDeviceId(Uint8List pubKey) async {
+    var sha256 = Sha256();
+    var hash = await sha256.hash(pubKey);
+    var base32Str = _encodeBase32(Uint8List.fromList(hash.bytes)).toLowerCase();
+    return 'rift-${base32Str.substring(0, 32)}';
   }
 
   @override
