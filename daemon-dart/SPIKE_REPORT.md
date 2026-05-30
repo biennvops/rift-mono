@@ -64,11 +64,11 @@ daemon-dart/
   - **Đánh giá:** **ĐẠT (100%)** Vượt qua toàn bộ Unit Test bảo mật.
 
 - **`[daemon-dart] Discovery & Session Bootstrap` (Tuần 4):** Thiết lập mạng và phiên mã hóa.
-  - Tích hợp thành công **package nsd** để chạy mDNS Discovery (Advertise/Browse) đúng chuẩn service type `_rift._tcp`.
-  - Triển khai **TransportImpl** bằng `SecureServerSocket` (TLS 1.3). Tích hợp chức năng bóc tách Ed25519 từ chứng chỉ của đối phương, hỗ trợ đầy đủ *Post-handshake verification* an toàn.
-  - Khởi tạo chính xác 100% cấu trúc JSON-RPC payload cho **Session Bootstrap** (`session.hello`, `session.accept`, `session.reject`) dựa theo Phụ lục C.1 của `protocol.md`, hoàn toàn không tự bịa trường dữ liệu.
-  - Xây dựng thành công bộ khung Isolate cho **Android Foreground Service** (`daemon_isolate.dart`).
-  - **Đánh giá:** **ĐẠT (100%)** Các module đã sẵn sàng để tích hợp vào ứng dụng Flutter.
+  - Tích hợp thành công **package nsd** để chạy mDNS Discovery đúng chuẩn `_rift._tcp`. **Cải tiến cốt lõi (Anti-Spam):** Áp dụng bộ đệm (Cache `Set/Map`) bên trong `DiscoveryServiceImpl` để theo dõi vòng đời IP/Port của các máy trong mạng LAN, loại bỏ hoàn toàn hiện tượng dội bom (Spam) sự kiện mDNS gây treo UI ở lớp Flutter.
+  - Triển khai **TransportImpl** bằng `SecureServerSocket` (mTLS 1.3). Tích hợp chức năng bóc tách Ed25519 từ chứng chỉ đối phương (Post-handshake verification). **Cải tiến cốt lõi (Anti-Leak):** Áp dụng mô hình định tuyến **Unicast** (Gửi đích danh bằng `Map<String, SecureSocket>` khóa bằng Device ID) thay vì Broadcast, triệt tiêu nguy cơ rò rỉ dữ liệu giữa nhiều thiết bị kết nối cùng lúc.
+  - Khởi tạo chính xác 100% cấu trúc JSON-RPC payload cho **Session Bootstrap** (`session.hello`, `session.accept`, `session.reject`) dựa theo Phụ lục C.1 của `protocol.md`, hoàn toàn không tự bịa trường dữ liệu. Đảm bảo dữ liệu Type-Safe khi truyền tải.
+  - Xây dựng thành công bộ khung **Isolate** cho Android Foreground Service (`daemon_isolate.dart`), bảo đảm Transport và Discovery không bao giờ block Main UI Thread.
+  - **Đánh giá:** **ĐẠT (100%)** Các module đã sẵn sàng về mặt hạ tầng để ghép nối.
 
 ---
 

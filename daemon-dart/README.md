@@ -65,7 +65,14 @@ Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. B�
 
 ---
 
-## 3. Mức độ tuân thủ Đặc tả Hệ thống (Protocol & IPC)
+## 3. Kiến trúc Chống chịu lỗi & Bảo vệ dữ liệu (Tuần 4)
+Để đối phó với các kịch bản thực tế khi triển khai lên mạng LAN, module đã được gia cố thêm 2 tấm khiên bảo vệ cấp thấp:
+- **Anti-Spam mDNS Cache:** Package `nsd` thường xuyên dội bom sự kiện mỗi khi phát hiện lại máy cũ. `DiscoveryServiceImpl` đã tích hợp bộ đệm `Map<String, DiscoveredPeer>` để chặn đứng sự kiện trùng lặp, chỉ đẩy dữ liệu lên Flutter UI khi đó là máy hoàn toàn mới hoặc bị đổi IP, cứu Flutter UI khỏi tình trạng treo máy vì render lại quá nhiều.
+- **Unicast mTLS Routing (Anti-Leak):** Trong môi trường có 10 máy kết nối cùng lúc, gửi Broadcast là thảm họa bảo mật. `TransportImpl` đã sử dụng cấu trúc `Map<String, SecureSocket>` (khóa bằng Device ID trích xuất từ chứng chỉ đối phương) để định tuyến đích danh từng tin nhắn, triệt tiêu nguy cơ gửi nhầm dữ liệu nhạy cảm sang máy khác.
+
+---
+
+## 4. Mức độ tuân thủ Đặc tả Hệ thống (Protocol & IPC)
 - **Với `protocol.md`:** 
   - Tuần 2: Bám sát 100% yêu cầu mật mã (ECDSA + Ed25519 X.509 Extension) qua `cert_builder.dart`.
   - Tuần 3: Bám sát chuẩn Fail-Closed cho Parser thông qua `cert_decoder.dart`. Mã hóa cấu trúc `Frame Codec` chuẩn xác giới hạn 32 MiB. Đồng thời tuân thủ chuẩn `rift- + Base32` cho Device ID trong module quản lý Identity.
