@@ -36,8 +36,9 @@ daemon-dart/
 │   ├── decoder_test.dart                   # Unit test kiểm chứng cơ chế Fail-Closed của cert_decoder
 │   ├── frame_codec_test.dart               # Unit test kiểm tra giới hạn 32 MiB và cấu trúc Frame
 │   └── identity_test.dart                  # Unit test xác minh sinh Device ID và Base32 hợp lệ
-├── pubspec.yaml                            # Khai báo nền tảng Dart (cryptography, pointycastle, asn1lib)
+├── pubspec.yaml                            # Khai báo nền tảng Dart (cryptography, pointycastle, asn1lib, nsd)
 ├── demo_cert.dart                          # Script thử nghiệm sinh chứng chỉ PEM ra file
+├── demo_daemon.dart                        # Kịch bản giả lập Flutter nổ máy Isolate nghiệm thu Tuần 4
 └── README.md                               # Hướng dẫn chạy test, linter và kiến trúc tổng quan
 ```
 
