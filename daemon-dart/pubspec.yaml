@@ -1,5 +1,5 @@
 name: daemon_dart
-description: A sample command-line application.
+description: Rift Android Daemon (Dart Core) providing mTLS and protocol handling.
 version: 1.0.0
 # repository: https://github.com/my_org/my_repo
 
@@ -11,7 +11,7 @@ dependencies:
   asn1lib: ^1.6.5
   basic_utils: ^5.8.2
   json_rpc_2: ^3.0.2
-  nsd: ^5.0.1
+
   path: ^1.9.0
   pointycastle: ^4.0.0
   stream_channel: ^2.1.2

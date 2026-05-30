@@ -1,6 +1,6 @@
 # Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1)
 
-**Đối chiếu chuẩn:** `finaltask.md` (Master Plan)
+**Đối chiếu chuẩn:** `フィナーレ.md` (Master Plan)
 **Thành phần:** Android Daemon (`daemon-dart`)
 **Đánh giá bởi:** System Review
 
@@ -19,7 +19,7 @@ daemon-dart/
 
 ---
 
-## 1. Mức độ tuân thủ Task (Theo `finaltask.md`)
+## 1. Mức độ tuân thủ Task (Theo `フィナーレ.md`)
 
 - **`[daemon-dart][infra]` (Tuần 1):** Khởi tạo cấu trúc Dart daemon cơ bản.
   - Đã cài đặt và kiểm định tính khả dụng của các gói mật mã `pointycastle` và `asn1lib`.
