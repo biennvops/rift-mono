@@ -69,7 +69,7 @@ Module mạng và mDNS của Tuần 4 được thiết kế để chạy độc 
 ```bash
 dart run demo_daemon.dart
 ```
-> **Lưu ý:** Nếu chạy lệnh này trong môi trường thuần Dart (không có máy ảo Flutter Engine), tiến trình mDNS (`nsd` package) có thể báo lỗi `MissingPluginException` do thiếu MethodChannel của hệ điều hành. Điều này là hoàn toàn bình thường. Lệnh này chủ yếu dùng để verify quá trình khởi tạo Isolate.
+> **Lưu ý:** Nếu chạy lệnh này trong môi trường thuần Dart (không có máy ảo Flutter Engine), trình biên dịch (Compiler) có thể văng lỗi Crash liên quan đến FFI (VD: `_FfiUseSiteTransformer...`). Điều này xảy ra vì gói mDNS `nsd` chứa các liên kết FFI/Native platform của Flutter, không thể biên dịch bằng Dart VM độc lập. File này chỉ mang tính chất minh họa luồng (Flow) cho team UI.
 
 **Tích hợp vào Flutter UI:**
 1. Gọi hàm `Isolate.spawn(daemonEntryPoint, receivePort.sendPort)`.
