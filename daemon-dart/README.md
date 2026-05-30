@@ -10,8 +10,9 @@
 - `lib/src/crypto/`: Chứa logic mật mã học cực kỳ quan trọng:
   - `cert_builder.dart`: Tự động bọc mã Ed25519 vào chứng chỉ X.509 bằng kỹ thuật *Double OCTET STRING*.
   - `cert_decoder.dart`: Trình phân tích cú pháp (Parser) X.509 an toàn (Fail-Closed).
-  - `identity_manager_impl.dart`: Sinh và lưu trữ vĩnh viễn khóa Ed25519 (dùng package `cryptography`).
-- `lib/src/network/`: Chứa `frame_codec.dart` định dạng cấu trúc khung truyền tải (Length prefix + JSON, max 32 MiB).
+  - `identity_manager_impl.dart`: Sinh và lưu trữ khóa Ed25519 (cryptography). Ứng dụng **Atomic Write** chống lỗi hỏng file.
+- `lib/src/network/`: 
+  - `frame_codec.dart`: Định dạng cấu trúc khung truyền tải (Length prefix + JSON, max 32 MiB). Tích hợp sẵn `RiftFrameTransformer` (StreamTransformer) chặn Memory Exhaustion.
 - `test/`: Chứa các kịch bản kiểm thử bảo mật (Fail-Closed).
 - `demo_cert.dart`: Kịch bản mẫu để sinh thử một file chứng chỉ hợp lệ `demo.pem` ra ổ cứng.
 

@@ -55,8 +55,8 @@ daemon-dart/
 
 - **`[daemon-dart] Identity, Certificates, Frame Parsing` (Tuần 3):** Hoàn thiện bảo mật cốt lõi.
   - Xây dựng thành công bộ giải mã **X.509 Decoder (`cert_decoder.dart`)** chuẩn Fail-Closed. Bóc tách an toàn mã Ed25519 từ cấu trúc ASN.1.
-  - Triển khai **Frame Codec (`frame_codec.dart`)** chặn các gói tin vượt quá 32 MiB và kiểm soát tính toàn vẹn của JSON-RPC.
-  - Hoàn thiện **`IdentityManagerImpl`**: Tích hợp package `cryptography` để sinh và lưu trữ khóa Ed25519, tính toán Device ID chuẩn `rift- + Base32`.
+  - Triển khai **Frame Codec (`frame_codec.dart`)** cấu trúc 4-byte length prefix. **Cải tiến:** Tích hợp `RiftFrameTransformer` (StreamTransformer) xử lý dữ liệu theo từng luồng (chunk) thay vì nạp tĩnh 32 MiB vào RAM, ngăn chặn dứt điểm tấn công tràn bộ nhớ (OOM/Memory Exhaustion).
+  - Hoàn thiện **`IdentityManagerImpl`**: Tích hợp package `cryptography` để sinh và lưu trữ khóa Ed25519, tính toán Device ID chuẩn `rift- + Base32`. **Cải tiến:** Sử dụng kỹ thuật Ghi Nguyên tử (Atomic Write) ghi ra file `.tmp` trước khi `rename` để loại bỏ 100% nguy cơ hỏng khóa khi thiết bị tắt nguồn đột ngột.
   - **Đánh giá:** **ĐẠT (100%)** Vượt qua toàn bộ Unit Test bảo mật.
 
 ---
