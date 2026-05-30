@@ -7,7 +7,11 @@
 ## 1. Cấu trúc thư mục
 
 - `lib/src/interfaces/`: Chứa 5 Interfaces cốt lõi (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`). Mọi thao tác nghiệp vụ phải đi qua các giao diện này.
-- `lib/src/crypto/`: Chứa logic mật mã học cực kỳ quan trọng, tiêu biểu là `cert_builder.dart` để tự động bọc mã Ed25519 vào chứng chỉ X.509 bằng kỹ thuật *Double OCTET STRING*.
+- `lib/src/crypto/`: Chứa logic mật mã học cực kỳ quan trọng:
+  - `cert_builder.dart`: Tự động bọc mã Ed25519 vào chứng chỉ X.509 bằng kỹ thuật *Double OCTET STRING*.
+  - `cert_decoder.dart`: Trình phân tích cú pháp (Parser) X.509 an toàn (Fail-Closed).
+  - `identity_manager_impl.dart`: Sinh và lưu trữ vĩnh viễn khóa Ed25519 (dùng package `cryptography`).
+- `lib/src/network/`: Chứa `frame_codec.dart` định dạng cấu trúc khung truyền tải (Length prefix + JSON, max 32 MiB).
 - `test/`: Chứa các kịch bản kiểm thử bảo mật (Fail-Closed).
 - `demo_cert.dart`: Kịch bản mẫu để sinh thử một file chứng chỉ hợp lệ `demo.pem` ra ổ cứng.
 
@@ -16,7 +20,7 @@
 ## 2. Hướng dẫn sử dụng & Các lệnh cơ bản
 
 ### 2.1. Cài đặt các gói phụ thuộc
-Trước khi làm việc, hãy đảm bảo tải đủ thư viện (`pointycastle`, `asn1lib`):
+Trước khi làm việc, hãy đảm bảo tải đủ thư viện (`pointycastle`, `asn1lib`, `cryptography`):
 ```bash
 dart pub get
 ```
@@ -48,5 +52,8 @@ Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. B�
 ---
 
 ## 3. Mức độ tuân thủ Đặc tả Hệ thống (Protocol & IPC)
-- **Với `protocol.md`:** Đã bám sát 100% yêu cầu mật mã (ECDSA + Ed25519 X.509 Extension) thông qua `cert_builder.dart` ở Tuần 2, sử dụng nền tảng `pointycastle` và `asn1lib` đã dọn sẵn ở Tuần 1.
-- **Với `ipc.md`:** Xây dựng 5 Interfaces (Abstract) ở Tuần 2 để tạo màng bọc trừu tượng (Abstraction Layer), dọn đường cho kết nối JSON-RPC 2.0 từ Flutter UI vào thẳng các module nghiệp vụ trong các tuần tới. Không bị Hard-Code vào công nghệ truyền tải.
+- **Với `protocol.md`:** 
+  - Tuần 2: Bám sát 100% yêu cầu mật mã (ECDSA + Ed25519 X.509 Extension) qua `cert_builder.dart`.
+  - Tuần 3: Bám sát chuẩn Fail-Closed cho Parser thông qua `cert_decoder.dart`. Mã hóa cấu trúc `Frame Codec` chuẩn xác giới hạn 32 MiB. Đồng thời tuân thủ chuẩn `rift- + Base32` cho Device ID trong module quản lý Identity.
+- **Với `ipc.md`:** 
+  - Tuần 2 & 3: Xây dựng và bắt đầu triển khai các Interfaces (Abstract) để tạo màng bọc trừu tượng (Abstraction Layer), dọn đường cho kết nối JSON-RPC 2.0 từ Flutter UI vào thẳng các module nghiệp vụ trong các tuần tới. Không bị Hard-Code vào công nghệ truyền tải.

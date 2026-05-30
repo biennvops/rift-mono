@@ -6,7 +6,7 @@
 
 ---
 
-## Cấu trúc thư mục & Tệp quan trọng (Tính đến Tuần 2)
+## Cấu trúc thư mục & Tệp quan trọng (Tính đến Tuần 3)
 
 ```text
 daemon-dart/
@@ -59,7 +59,7 @@ Mọi quyết định kiến trúc trong Tuần 1 và Tuần 2 đều nhằm đ�
 
 ---
 
-## 3. Đánh giá Rủi ro (Risk Assessment) tính đến Tuần 2
+## 3. Đánh giá Rủi ro (Risk Assessment) tính đến Tuần 3
 
 1. **Rủi ro Parse Chứng Chỉ (Dự kiến cho Tuần 3):**
    Đã sinh được chứng chỉ thành công ở Tuần 2, nhưng bài toán tiếp theo ở Tuần 3 là trích xuất (Giải mã/Parser) chứng chỉ gửi từ máy tính khác. Yêu cầu đặt ra là phải viết Parser an toàn (Fail-Closed) để chặn các cuộc tấn công chứng chỉ giả.
