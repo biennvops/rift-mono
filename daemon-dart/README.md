@@ -63,8 +63,15 @@ dart run demo_cert.dart
 ```
 Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. Bạn có thể dùng `openssl x509 -in demo.pem -text -noout` để tự mình kiểm tra cấu trúc bên trong.
 
-### 2.5. Tích hợp Daemon vào Android (Dành cho Tuần 4+)
-Module mạng và mDNS của Tuần 4 được thiết kế để chạy độc lập dưới dạng Isolate. Để khởi động Daemon từ Flutter UI:
+Module mạng và mDNS của Tuần 4 được thiết kế để chạy độc lập dưới dạng Isolate. Để khởi động Daemon từ Flutter UI hoặc qua kịch bản, bạn có thể tham khảo file mẫu `demo_daemon.dart`.
+
+**Cách chạy thử nghiệm (Chỉ test Cấu trúc):**
+```bash
+dart run demo_daemon.dart
+```
+> **Lưu ý:** Nếu chạy lệnh này trong môi trường thuần Dart (không có máy ảo Flutter Engine), tiến trình mDNS (`nsd` package) có thể báo lỗi `MissingPluginException` do thiếu MethodChannel của hệ điều hành. Điều này là hoàn toàn bình thường. Lệnh này chủ yếu dùng để verify quá trình khởi tạo Isolate.
+
+**Tích hợp vào Flutter UI:**
 1. Gọi hàm `Isolate.spawn(daemonEntryPoint, receivePort.sendPort)`.
 2. Truyền cấu hình `DaemonConfig(storagePath: '...', port: 8080)` qua cổng tin nhắn.
 3. Daemon sẽ tự động bật mDNS (`_rift._tcp`) và mở máy chủ mTLS `SecureServerSocket` chờ kết nối từ thiết bị khác.
