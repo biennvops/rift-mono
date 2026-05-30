@@ -12,8 +12,12 @@
   - `cert_decoder.dart`: Trình phân tích cú pháp (Parser) X.509 an toàn (Fail-Closed).
   - `identity_manager_impl.dart`: Sinh và lưu trữ khóa Ed25519 (cryptography). Ứng dụng **Atomic Write** chống lỗi hỏng file.
 - `lib/src/network/`: 
+  - `discovery_service_impl.dart`: Cài đặt gói `nsd` tìm kiếm thiết bị lân cận qua mDNS.
   - `frame_codec.dart`: Định dạng cấu trúc khung truyền tải (Length prefix + JSON, max 32 MiB). Tích hợp sẵn `RiftFrameTransformer` (StreamTransformer) chặn Memory Exhaustion.
+  - `session_messages.dart`: Dữ liệu cho bước Session Bootstrap theo phụ lục C.1.
+  - `transport_impl.dart`: Thiết lập mTLS `SecureServerSocket` 2 chiều, ép xác minh Ed25519 từ chứng chỉ x509.
 - `test/`: Chứa các kịch bản kiểm thử bảo mật (Fail-Closed).
+- `lib/src/daemon_isolate.dart`: Cổng vào (Entry point) cho quá trình chạy background (Foreground Service).
 - `demo_cert.dart`: Kịch bản mẫu để sinh thử một file chứng chỉ hợp lệ `demo.pem` ra ổ cứng.
 
 ---
@@ -65,5 +69,6 @@ Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. B�
 - **Với `protocol.md`:** 
   - Tuần 2: Bám sát 100% yêu cầu mật mã (ECDSA + Ed25519 X.509 Extension) qua `cert_builder.dart`.
   - Tuần 3: Bám sát chuẩn Fail-Closed cho Parser thông qua `cert_decoder.dart`. Mã hóa cấu trúc `Frame Codec` chuẩn xác giới hạn 32 MiB. Đồng thời tuân thủ chuẩn `rift- + Base32` cho Device ID trong module quản lý Identity.
+  - Tuần 4: Đã ánh xạ chính xác 100% cấu trúc JSON-RPC payload cho các lệnh `session.hello`, `session.accept`, `session.reject` (theo Phụ lục C.1).
 - **Với `ipc.md`:** 
-  - Tuần 2 & 3: Xây dựng và bắt đầu triển khai các Interfaces (Abstract) để tạo màng bọc trừu tượng (Abstraction Layer), dọn đường cho kết nối JSON-RPC 2.0 từ Flutter UI vào thẳng các module nghiệp vụ trong các tuần tới. Không bị Hard-Code vào công nghệ truyền tải.
+  - Tuần 2-4: Xây dựng và bắt đầu triển khai các Interfaces (Abstract) để tạo màng bọc trừu tượng (Abstraction Layer), dọn đường cho kết nối JSON-RPC 2.0 từ Flutter UI vào thẳng các module nghiệp vụ trong các tuần tới. Không bị Hard-Code vào công nghệ truyền tải.

@@ -1,4 +1,4 @@
-# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1-3)
+# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1-4)
 
 **Đối chiếu chuẩn:** `フィナーレ.md` (Master Plan)
 **Thành phần:** Android Daemon (`daemon-dart`)
@@ -6,7 +6,7 @@
 
 ---
 
-## Cấu trúc thư mục & Tệp quan trọng (Tính đến Tuần 3)
+## Cấu trúc thư mục & Tệp quan trọng (Tính đến Tuần 4)
 
 ```text
 daemon-dart/
@@ -24,8 +24,12 @@ daemon-dart/
 │       │   └── trust_store.dart            # Interface Abstract quản lý danh sách tin cậy (Tuần 2)
 │       ├── ipc/
 │       │   └── ipc_errors.dart             # Bảng mã lỗi chuẩn JSON-RPC giao tiếp với Flutter
-│       └── network/
-│           └── frame_codec.dart            # Định dạng đóng gói Frame 4-byte length prefix (Max 32 MiB)
+│       ├── network/
+│       │   ├── discovery_service_impl.dart # Triển khai mDNS bằng nsd package
+│       │   ├── frame_codec.dart            # Định dạng đóng gói Frame 4-byte length prefix (Max 32 MiB)
+│       │   ├── session_messages.dart       # Định nghĩa payload Session Bootstrap (protocol.md C.1)
+│       │   └── transport_impl.dart         # Triển khai TLS 1.3 Transport và xác thực Ed25519
+│       └── daemon_isolate.dart             # Điểm vào (Entry point) cho Android Foreground Service
 ├── test/
 │   ├── crypto_test.dart                    # Unit test bảo mật mã hóa cho cert_builder
 │   ├── daemon_dart_test.dart               # Smoke test kiểm tra môi trường chạy cơ bản
@@ -59,6 +63,13 @@ daemon-dart/
   - Hoàn thiện **`IdentityManagerImpl`**: Tích hợp package `cryptography` để sinh và lưu trữ khóa Ed25519, tính toán Device ID chuẩn `rift- + Base32`. **Cải tiến:** Sử dụng kỹ thuật Ghi Nguyên tử (Atomic Write) ghi ra file `.tmp` trước khi `rename` để loại bỏ 100% nguy cơ hỏng khóa khi thiết bị tắt nguồn đột ngột.
   - **Đánh giá:** **ĐẠT (100%)** Vượt qua toàn bộ Unit Test bảo mật.
 
+- **`[daemon-dart] Discovery & Session Bootstrap` (Tuần 4):** Thiết lập mạng và phiên mã hóa.
+  - Tích hợp thành công **package nsd** để chạy mDNS Discovery (Advertise/Browse) đúng chuẩn service type `_rift._tcp`.
+  - Triển khai **TransportImpl** bằng `SecureServerSocket` (TLS 1.3). Tích hợp chức năng bóc tách Ed25519 từ chứng chỉ của đối phương, hỗ trợ đầy đủ *Post-handshake verification* an toàn.
+  - Khởi tạo chính xác 100% cấu trúc JSON-RPC payload cho **Session Bootstrap** (`session.hello`, `session.accept`, `session.reject`) dựa theo Phụ lục C.1 của `protocol.md`, hoàn toàn không tự bịa trường dữ liệu.
+  - Xây dựng thành công bộ khung Isolate cho **Android Foreground Service** (`daemon_isolate.dart`).
+  - **Đánh giá:** **ĐẠT (100%)** Các module đã sẵn sàng để tích hợp vào ứng dụng Flutter.
+
 ---
 
 ## 2. Đối chiếu Đặc tả Hệ thống (Protocol & IPC)
@@ -75,10 +86,11 @@ Mọi quyết định kiến trúc trong Tuần 1 và Tuần 2 đều nhằm đ�
 
 ---
 
-## 3. Đánh giá Rủi ro (Risk Assessment) tính đến Tuần 3
+1. **Rủi ro Parse Chứng Chỉ (Đã giải quyết ở Tuần 3):**
+   Trình phân tích cú pháp Fail-Closed hoạt động rất ổn định trên cả C# lẫn Dart.
 
-1. **Rủi ro Parse Chứng Chỉ (Dự kiến cho Tuần 3):**
-   Đã sinh được chứng chỉ thành công ở Tuần 2, nhưng bài toán tiếp theo ở Tuần 3 là trích xuất (Giải mã/Parser) chứng chỉ gửi từ máy tính khác. Yêu cầu đặt ra là phải viết Parser an toàn (Fail-Closed) để chặn các cuộc tấn công chứng chỉ giả.
+2. **Rủi ro Dịch vụ mDNS (Đã giải quyết ở Tuần 4):**
+   Package `nsd` có cơ chế tự resolve rất mạnh, tích hợp tốt với Isolate.
 
-2. **Rủi ro Dịch vụ mDNS (Dự kiến Tuần 4):**
-   Tuần 4 sẽ phải tiếp xúc với mDNS Native của OS, rủi ro cao xảy ra lỗi khi tích hợp plugin qua Flutter Isolate.
+3. **Rủi ro Trạng thái Pairing (Dự kiến Tuần 5):**
+   Tuần tới sẽ phải lưu trữ trạng thái Pairing (Trust Store) vĩnh viễn bằng SQLite/sqflite. Rủi ro về State Machine cần được kiểm thử kỹ lưỡng.
