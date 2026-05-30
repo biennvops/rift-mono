@@ -20,6 +20,8 @@
 
 ## 2. Hướng dẫn sử dụng & Các lệnh cơ bản
 
+> **LƯU Ý QUAN TRỌNG:** Mọi lệnh Terminal dưới đây đều **BẮT BUỘC** phải được chạy bên trong thư mục `daemon-dart`. Đảm bảo bạn đã dùng lệnh `cd daemon-dart` trước khi gõ bất cứ lệnh `dart` nào.
+
 ### 2.1. Cài đặt các gói phụ thuộc
 Trước khi làm việc, hãy đảm bảo tải đủ thư viện (`pointycastle`, `asn1lib`, `cryptography`):
 ```bash
@@ -33,15 +35,22 @@ dart analyze
 ```
 > **Lưu ý:** Bắt buộc phải hiện `No issues found!` mới được tạo Pull Request.
 
-### 2.3. Chạy Unit Test Bảo mật
-Chạy toàn bộ kịch bản test để xác minh module mã hóa sinh đúng mảng byte ASN.1.
+### 2.3. Chạy Unit Test Bảo mật (Hoàn thiện ở Tuần 3)
+Hệ thống Test giờ đây bao phủ cả 3 phân hệ mật mã/mạng cốt lõi:
+1. **Mã hóa ASN.1 (`crypto_test`):** Xác minh mảng byte sinh ra chứa đúng OID Ed25519.
+2. **Giải mã Fail-Closed (`decoder_test`):** Xác minh hệ thống biết cách đập bỏ các chứng chỉ độc hại/sai chuẩn.
+3. **Khung mạng Stream (`frame_codec_test`):** Xác minh cơ chế khóa 32 MiB chống ngập lụt RAM.
+4. **Định danh `identity_test`:** Xác minh bộ Ghi nguyên tử (Atomic Write) và chuỗi Device ID chuẩn `rift-`.
+
 ```bash
 dart test
 ```
-> **Trường hợp Test Thất bại (Fail-Closed):**
-> Nếu hệ thống in ra màn hình `Expected: <...>` nhưng `Actual: <...>`, kèm theo thông báo đỏ `Some tests failed. Exit code: 1`. 
-> - **Kết luận:** Chứng tỏ mảng byte ASN.1 của chứng chỉ đã bị thao túng hoặc cấu trúc không khớp chuẩn X.509 đặc tả. Cơ chế **Fail-Closed** đã được kích hoạt, đóng sập luồng chạy ngay lập tức.
-> - **Hậu quả:** Pull Request của bạn sẽ bị CI/CD chặn hoàn toàn, tuyệt đối không được phép Merge vào nhánh gốc để bảo vệ hệ thống khỏi lỗ hổng Parser.
+> **Trường hợp 1 trong 14 Tests bị Thất bại:**
+> Nếu hệ thống in ra thông báo đỏ `Some tests failed. Exit code: 1`, điều này chứng tỏ Hệ thống phòng thủ của ứng dụng đã bị phá vỡ hoặc có lỗi nghiêm trọng:
+> - **Lỗi `crypto_test` / `decoder_test`:** Chứng tỏ cấu trúc byte ASN.1 đã bị thao túng, hoặc cơ chế bóc tách Fail-Closed đang gặp lỗi hổng.
+> - **Lỗi `frame_codec_test`:** Hệ thống lọc luồng (Stream) đang không hoạt động, nguy cơ bị lọt gói tin quá 32 MiB hoặc bị tràn RAM.
+> - **Lỗi `identity_test`:** Cấu trúc Ghi Nguyên tử (Atomic Write) đang thất bại, nguy cơ cao làm hỏng file lưu trữ khóa Ed25519.
+> - **Hậu quả chung:** CI/CD sẽ chặn hoàn toàn Pull Request của bạn. Tuyệt đối không được Merge cho đến khi khắc phục xong!
 
 ### 2.4. Chạy kịch bản Demo (Sinh chứng chỉ)
 Để thử nghiệm tính năng sinh chứng chỉ tự cấp phát của Tuần 2, bạn có thể chạy lệnh:
