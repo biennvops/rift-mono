@@ -27,7 +27,7 @@
 > **LƯU Ý QUAN TRỌNG:** Mọi lệnh Terminal dưới đây đều **BẮT BUỘC** phải được chạy bên trong thư mục `daemon-dart`. Đảm bảo bạn đã dùng lệnh `cd daemon-dart` trước khi gõ bất cứ lệnh `dart` nào.
 
 ### 2.1. Cài đặt các gói phụ thuộc
-Trước khi làm việc, hãy đảm bảo tải đủ thư viện (`pointycastle`, `asn1lib`, `cryptography`):
+Trước khi làm việc, hãy đảm bảo tải đủ thư viện (Bao gồm `pointycastle`, `asn1lib`, `cryptography` cho bảo mật và `nsd` cho mDNS):
 ```bash
 dart pub get
 ```
@@ -62,6 +62,12 @@ dart test
 dart run demo_cert.dart
 ```
 Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. Bạn có thể dùng `openssl x509 -in demo.pem -text -noout` để tự mình kiểm tra cấu trúc bên trong.
+
+### 2.5. Tích hợp Daemon vào Android (Dành cho Tuần 4+)
+Module mạng và mDNS của Tuần 4 được thiết kế để chạy độc lập dưới dạng Isolate. Để khởi động Daemon từ Flutter UI:
+1. Gọi hàm `Isolate.spawn(daemonEntryPoint, receivePort.sendPort)`.
+2. Truyền cấu hình `DaemonConfig(storagePath: '...', port: 8080)` qua cổng tin nhắn.
+3. Daemon sẽ tự động bật mDNS (`_rift._tcp`) và mở máy chủ mTLS `SecureServerSocket` chờ kết nối từ thiết bị khác.
 
 ---
 
