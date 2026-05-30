@@ -1,0 +1,112 @@
+// lib/src/crypto/cert_decoder.dart
+
+import 'dart:typed_data';
+import 'package:asn1lib/asn1lib.dart';
+import 'package:basic_utils/basic_utils.dart';
+import 'cert_builder.dart';
+
+class CertificateDecoderException implements Exception {
+  final String message;
+  CertificateDecoderException(this.message);
+  @override
+  String toString() => 'CertificateDecoderException: $message';
+}
+
+/// A highly secure, fail-closed X.509 ASN.1 Parser specifically built for Rift.
+class RiftCertDecoder {
+  /// Extracts the Ed25519 public key from a Rift mTLS certificate.
+  /// Throws [CertificateDecoderException] if the certificate is malformed,
+  /// missing the custom extension, or if the key length is invalid (Fail-Closed).
+  static Uint8List extractEd25519PublicKey(String pem) {
+    try {
+      var certBytes = CryptoUtils.getBytesFromPEMString(pem);
+      var parser = ASN1Parser(certBytes);
+      var certObj = parser.nextObject();
+
+      if (certObj is! ASN1Sequence || certObj.elements.isEmpty) {
+        throw CertificateDecoderException('Invalid base certificate structure');
+      }
+
+      var tbsObj = certObj.elements[0];
+      if (tbsObj is! ASN1Sequence) {
+        throw CertificateDecoderException('Invalid TBS certificate structure');
+      }
+
+      // X.509 TBSCertificate has [3] EXPLICIT Extensions at the end
+      ASN1Object? extensionsTag;
+      for (var e in tbsObj.elements) {
+        if (e.tag == 0xA3) {
+          extensionsTag = e;
+          break;
+        }
+      }
+
+      if (extensionsTag == null) {
+        throw CertificateDecoderException('No extensions found in certificate');
+      }
+
+      var extParser = ASN1Parser(extensionsTag.valueBytes());
+      var extSequence = extParser.nextObject();
+      if (extSequence is! ASN1Sequence) {
+        throw CertificateDecoderException('Invalid extensions structure');
+      }
+
+      // Iterate through the extensions
+      for (var ext in extSequence.elements) {
+        if (ext is! ASN1Sequence || ext.elements.isEmpty) {
+          continue;
+        }
+
+        var oidObj = ext.elements[0];
+        if (oidObj.tag != 0x06) continue; // Not an OID
+
+        // Check if this is the Rift Custom OID
+        bool isRiftOid = true;
+        var oidBytes = oidObj.encodedBytes;
+        if (oidBytes.length != RiftCertBuilder.riftCustomOidBytes.length) {
+          isRiftOid = false;
+        } else {
+          for (int i = 0; i < oidBytes.length; i++) {
+            if (oidBytes[i] != RiftCertBuilder.riftCustomOidBytes[i]) {
+              isRiftOid = false;
+              break;
+            }
+          }
+        }
+
+        if (isRiftOid) {
+          var octetStringObj = ext.elements.last;
+          if (octetStringObj.tag != 0x04) {
+             throw CertificateDecoderException('Extension value is not an OCTET STRING');
+          }
+
+          // Unpack Outer OCTET STRING
+          var innerBytes = octetStringObj.valueBytes();
+          
+          // Unpack Inner OCTET STRING (Double wrapping)
+          if (innerBytes.isEmpty || innerBytes[0] != 0x04) {
+            throw CertificateDecoderException('Inner value is not an OCTET STRING');
+          }
+          
+          var innerParser = ASN1Parser(innerBytes);
+          var innerOctetObj = innerParser.nextObject();
+          
+          var pubKeyBytes = innerOctetObj.valueBytes();
+          
+          if (pubKeyBytes.length != 32) {
+            throw CertificateDecoderException('Invalid Ed25519 public key length: ${pubKeyBytes.length} bytes (expected 32)');
+          }
+          
+          return pubKeyBytes;
+        }
+      }
+
+      throw CertificateDecoderException('Rift Custom OID extension not found in certificate');
+    } catch (e) {
+      if (e is CertificateDecoderException) {
+        rethrow;
+      }
+      throw CertificateDecoderException('Failed to parse certificate: $e');
+    }
+  }
+}
