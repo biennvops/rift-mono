@@ -12,13 +12,29 @@
 daemon-dart/
 ├── lib/
 │   └── src/
-│       ├── crypto/            # Chứa logic X.509 (cert_builder.dart, cert_decoder.dart, identity_manager_impl.dart)
-│       ├── network/           # Chứa logic mTLS (frame_codec.dart)
-│       └── interfaces/        # Chứa 5 interface cốt lõi của Daemon (identity, transport...)
-├── test/                      # Chứa file crypto_test.dart
-├── pubspec.yaml               # Khai báo nền tảng Dart và các thư viện cốt lõi
-├── demo_cert.dart             # Script chạy sinh thử chứng chỉ PEM
-└── README.md                  # Hướng dẫn chạy test và Linter
+│       ├── crypto/
+│       │   ├── cert_builder.dart           # Xây dựng chứng chỉ mTLS X.509 chứa custom OID Ed25519
+│       │   ├── cert_decoder.dart           # Trình Parser Fail-Closed để bóc tách Ed25519 từ ASN.1
+│       │   └── identity_manager_impl.dart  # Triển khai thuật toán sinh và lưu khóa Ed25519 (cryptography)
+│       ├── interfaces/
+│       │   ├── clipboard_service.dart      # Interface Abstract quản lý Clipboard (Tuần 2)
+│       │   ├── discovery_service.dart      # Interface Abstract quản lý mDNS (Tuần 2)
+│       │   ├── identity_manager.dart       # Interface Abstract định nghĩa thông tin Identity (Tuần 2)
+│       │   ├── transport.dart              # Interface Abstract quản lý kết nối Network (Tuần 2)
+│       │   └── trust_store.dart            # Interface Abstract quản lý danh sách tin cậy (Tuần 2)
+│       ├── ipc/
+│       │   └── ipc_errors.dart             # Bảng mã lỗi chuẩn JSON-RPC giao tiếp với Flutter
+│       └── network/
+│           └── frame_codec.dart            # Định dạng đóng gói Frame 4-byte length prefix (Max 32 MiB)
+├── test/
+│   ├── crypto_test.dart                    # Unit test bảo mật mã hóa cho cert_builder
+│   ├── daemon_dart_test.dart               # Smoke test kiểm tra môi trường chạy cơ bản
+│   ├── decoder_test.dart                   # Unit test kiểm chứng cơ chế Fail-Closed của cert_decoder
+│   ├── frame_codec_test.dart               # Unit test kiểm tra giới hạn 32 MiB và cấu trúc Frame
+│   └── identity_test.dart                  # Unit test xác minh sinh Device ID và Base32 hợp lệ
+├── pubspec.yaml                            # Khai báo nền tảng Dart (cryptography, pointycastle, asn1lib)
+├── demo_cert.dart                          # Script thử nghiệm sinh chứng chỉ PEM ra file
+└── README.md                               # Hướng dẫn chạy test, linter và kiến trúc tổng quan
 ```
 
 ---
