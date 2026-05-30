@@ -1,6 +1,7 @@
 // lib/src/daemon_isolate.dart
 
 import 'dart:isolate';
+import 'dart:convert';
 import 'crypto/identity_manager_impl.dart';
 import 'network/discovery_service_impl.dart';
 import 'network/transport_impl.dart';
@@ -32,6 +33,24 @@ void daemonEntryPoint(SendPort sendPort) async {
         await transport.startServer();
 
         var discoveryService = DiscoveryServiceImpl(identityManager, msg.port);
+        
+        // Link Discovery events to Flutter UI via JSON-RPC Notifications (Tuân thủ ipc.md)
+        discoveryService.onDeviceDiscovered.listen((peer) {
+          var notification = {
+            'jsonrpc': '2.0',
+            'method': 'rift.onPeerDiscovered',
+            'params': {
+              'deviceId': peer.deviceId,
+              'address': peer.address,
+              'port': peer.port,
+              'txtRecord': {
+                'version': peer.protocolVersion
+              }
+            }
+          };
+          sendPort.send(jsonEncode(notification));
+        });
+
         await discoveryService.startAdvertising();
         await discoveryService.startDiscovery();
 
