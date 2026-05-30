@@ -6,14 +6,8 @@ public class Worker(ILogger<Worker> logger, IpcListener ipcListener) : Backgroun
     {
         logger.LogInformation("Rift Daemon (Windows) starting...");
 
-        // Start IPC listener in the background
+        // Start IPC listener and await it so cancellation and faults are observed immediately
         var ipcTask = ipcListener.ListenAsync(stoppingToken);
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await Task.Delay(10000, stoppingToken);
-        }
-
         await ipcTask;
     }
 }
