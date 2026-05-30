@@ -68,4 +68,48 @@ void main() {
       );
     });
   });
+
+  group('RiftFrameTransformer Tests', () {
+    test('Should correctly process a stream of chunked frames', () async {
+      String payload1 = '{"a": 1}';
+      String payload2 = '{"b": 2}';
+      
+      var frame1 = RiftFrameCodec.encode(payload1);
+      var frame2 = RiftFrameCodec.encode(payload2);
+      
+      var combinedBytes = Uint8List.fromList([...frame1, ...frame2]);
+      
+      // Simulate chunking (1 byte at a time)
+      Stream<List<int>> chunkedStream = Stream.fromIterable(
+        combinedBytes.map((b) => [b]),
+      );
+      
+      var transformer = RiftFrameTransformer();
+      var result = await chunkedStream.transform(transformer).toList();
+      
+      expect(result.length, equals(2));
+      expect(result[0], equals(payload1));
+      expect(result[1], equals(payload2));
+    });
+
+    test('Should throw PayloadTooLarge if a chunk declares length > 32 MiB', () async {
+      var frame = Uint8List(8);
+      var bd = ByteData.view(frame.buffer);
+      bd.setUint32(0, (32 * 1024 * 1024) + 1, Endian.big); // 32 MiB + 1
+      
+      Stream<List<int>> stream = Stream.value(frame);
+      
+      expect(
+        () async => await stream.transform(RiftFrameTransformer()).toList(),
+        throwsA(
+          isA<FrameCodecException>().having(
+            (e) => e.message,
+            'message',
+            contains('PayloadTooLarge'),
+          ),
+        ),
+      );
+    });
+  });
 }
+

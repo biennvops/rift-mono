@@ -1,5 +1,6 @@
 // lib/src/network/frame_codec.dart
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -72,3 +73,57 @@ class RiftFrameCodec {
     }
   }
 }
+
+/// A StreamTransformer that incrementally processes a byte stream into decoded Rift frames.
+/// Prevents Memory Exhaustion (OOM) by enforcing the maxFrameSize directly on the stream chunks.
+class RiftFrameTransformer extends StreamTransformerBase<List<int>, String> {
+  @override
+  Stream<String> bind(Stream<List<int>> stream) async* {
+    var buffer = BytesBuilder(copy: false);
+    int? expectedLength;
+
+    await for (var chunk in stream) {
+      buffer.add(chunk);
+
+      while (true) {
+        if (expectedLength == null) {
+          if (buffer.length >= 4) {
+            var bytes = buffer.takeBytes();
+            var byteData = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.lengthInBytes);
+            expectedLength = byteData.getUint32(0, Endian.big);
+            buffer.add(bytes.sublist(4));
+
+            if (expectedLength == 0) {
+              throw FrameCodecException('MalformedMessage: zero-length frame');
+            }
+            if (expectedLength > RiftFrameCodec.maxFrameSize) {
+              throw FrameCodecException('PayloadTooLarge: declared length $expectedLength exceeds max ${RiftFrameCodec.maxFrameSize}');
+            }
+          } else {
+            break; // Wait for more bytes
+          }
+        }
+
+        if (buffer.length >= expectedLength) {
+          var bytes = buffer.takeBytes();
+          var frameData = bytes.sublist(0, expectedLength);
+          buffer.add(bytes.sublist(expectedLength)); // Re-add the remaining bytes
+
+          try {
+            yield utf8.decode(frameData);
+          } catch (e) {
+            throw FrameCodecException('MalformedMessage: invalid UTF-8 sequence');
+          }
+          expectedLength = null; // Reset for the next frame
+        } else {
+          break; // Wait for more bytes to complete the current frame
+        }
+      }
+    }
+
+    if (expectedLength != null || buffer.length > 0) {
+      throw FrameCodecException('Unexpected end of stream with incomplete frame');
+    }
+  }
+}
+

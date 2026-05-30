@@ -1,6 +1,6 @@
 // lib/src/crypto/identity_manager_impl.dart
 
-import 'dart:convert';
+
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -31,9 +31,11 @@ class IdentityManagerImpl implements IdentityManager {
       var random = Random.secure();
       _privateKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
       
-      // Save it durably
+      // Save it durably using Atomic Write to prevent corruption on crash
       await keyFile.parent.create(recursive: true);
-      await keyFile.writeAsBytes(_privateKey, flush: true);
+      var tempFile = File('${keyFile.path}.tmp');
+      await tempFile.writeAsBytes(_privateKey, flush: true);
+      await tempFile.rename(keyFile.path);
       
       await _derivePublicKey();
     }
@@ -52,7 +54,7 @@ class IdentityManagerImpl implements IdentityManager {
 
     // Calculate Device ID: rift- + first 32 chars of lowercase Base32(fingerprint)
     var base32Str = _encodeBase32(_fingerprintBytes).toLowerCase();
-    _deviceId = 'rift-' + base32Str.substring(0, 32);
+    _deviceId = 'rift-${base32Str.substring(0, 32)}';
   }
 
   @override
