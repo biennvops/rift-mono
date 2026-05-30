@@ -1,4 +1,4 @@
-# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1 & 2)
+# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1-3)
 
 **Đối chiếu chuẩn:** `フィナーレ.md` (Master Plan)
 **Thành phần:** Android Daemon (`daemon-dart`)
@@ -12,7 +12,8 @@
 daemon-dart/
 ├── lib/
 │   └── src/
-│       ├── crypto/            # Chứa logic sinh chứng chỉ X.509 (cert_builder.dart)
+│       ├── crypto/            # Chứa logic X.509 (cert_builder.dart, cert_decoder.dart, identity_manager_impl.dart)
+│       ├── network/           # Chứa logic mTLS (frame_codec.dart)
 │       └── interfaces/        # Chứa 5 interface cốt lõi của Daemon (identity, transport...)
 ├── test/                      # Chứa file crypto_test.dart
 ├── pubspec.yaml               # Khai báo nền tảng Dart và các thư viện cốt lõi
@@ -36,6 +37,12 @@ daemon-dart/
   - **Tối ưu hóa:** Sử dụng `BytesBuilder` để chống phân mảnh bộ nhớ khi thao tác byte ASN.1; Loại bỏ `dynamic` (thay bằng `DiscoveredPeer`) để đảm bảo Type-Safety tuyệt đối cho kiến trúc Interface.
   - **Đánh giá:** **ĐẠT (100%)**
 
+- **`[daemon-dart] Identity, Certificates, Frame Parsing` (Tuần 3):** Hoàn thiện bảo mật cốt lõi.
+  - Xây dựng thành công bộ giải mã **X.509 Decoder (`cert_decoder.dart`)** chuẩn Fail-Closed. Bóc tách an toàn mã Ed25519 từ cấu trúc ASN.1.
+  - Triển khai **Frame Codec (`frame_codec.dart`)** chặn các gói tin vượt quá 32 MiB và kiểm soát tính toàn vẹn của JSON-RPC.
+  - Hoàn thiện **`IdentityManagerImpl`**: Tích hợp package `cryptography` để sinh và lưu trữ khóa Ed25519, tính toán Device ID chuẩn `rift- + Base32`.
+  - **Đánh giá:** **ĐẠT (100%)** Vượt qua toàn bộ Unit Test bảo mật.
+
 ---
 
 ## 2. Đối chiếu Đặc tả Hệ thống (Protocol & IPC)
@@ -44,7 +51,7 @@ Mọi quyết định kiến trúc trong Tuần 1 và Tuần 2 đều nhằm đ�
 
 ### 2.1. Tuân thủ `spec/doc/protocol.md` (Giao thức Mạng & Bảo mật)
 - **Cách áp dụng ở Tuần 1:** Đặc tả yêu cầu bắt buộc dùng chuẩn chữ ký ECDSA P-256 và mở rộng X.509. Vì Dart SDK không đủ mạnh để thao tác với OID tùy chỉnh, nên Tuần 1 đã chốt phương án hạ tầng: cài đặt 2 thư viện cấp thấp là `pointycastle` và `asn1lib`.
-- **Cách áp dụng ở Tuần 2:** Thực thi chính xác Mục 3.4 của Protocol. File `cert_builder.dart` đã trực tiếp dùng `asn1lib` để bọc *Double OCTET STRING* mảng byte. Qua đó nhúng thành công OID đặc chế (`2.25...`) chứa mã Ed25519 vào chứng chỉ mTLS. Đảm bảo tính đồng nhất 100% với Daemon chạy trên Windows.
+- **Cách áp dụng ở Tuần 2 & 3:** Thực thi chính xác Mục 3.4 của Protocol. Đã viết `cert_builder.dart` để nhúng OID đặc chế (`2.25...`) chứa mã Ed25519, và `cert_decoder.dart` để giải mã ngược lại với chuẩn an toàn Fail-Closed. Định dạng Device ID cũng được bám sát chuẩn `rift- + lowercase Base32` thông qua `IdentityManagerImpl`. Bộ khung `frame_codec.dart` giới hạn tin nhắn nghiêm ngặt ở mức 32 MiB theo đúng đặc tả.
 
 ### 2.2. Tuân thủ `spec/doc/ipc.md` (Giao tiếp Flutter Client)
 - **Cách áp dụng ở Tuần 1:** Xây dựng bộ khung thư mục nghiêm ngặt, tách biệt vùng chứa mã giao tiếp (`ipc/`) và mã nghiệp vụ gốc (`interfaces/`, `crypto/`).
@@ -57,5 +64,5 @@ Mọi quyết định kiến trúc trong Tuần 1 và Tuần 2 đều nhằm đ�
 1. **Rủi ro Parse Chứng Chỉ (Dự kiến cho Tuần 3):**
    Đã sinh được chứng chỉ thành công ở Tuần 2, nhưng bài toán tiếp theo ở Tuần 3 là trích xuất (Giải mã/Parser) chứng chỉ gửi từ máy tính khác. Yêu cầu đặt ra là phải viết Parser an toàn (Fail-Closed) để chặn các cuộc tấn công chứng chỉ giả.
 
-2. **Rủi ro Dịch vụ mDNS:**
+2. **Rủi ro Dịch vụ mDNS (Dự kiến Tuần 4):**
    Tuần 4 sẽ phải tiếp xúc với mDNS Native của OS, rủi ro cao xảy ra lỗi khi tích hợp plugin qua Flutter Isolate.
