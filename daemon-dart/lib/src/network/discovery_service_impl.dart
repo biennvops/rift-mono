@@ -67,8 +67,20 @@ class DiscoveryServiceImpl implements DiscoveryService {
             return fallback;
           }
 
-          final peerDeviceId = getTxtStr('did', getTxtStr('id', service.name!));
-          final peerMinVersion = getTxtStr('minV', getTxtStr('version', 'unknown'));
+          String getTxtStrAny(List<String> keys, String fallback) {
+            if (service.txt != null) {
+              for (final key in keys) {
+                final txtValue = service.txt![key];
+                if (txtValue != null) {
+                  return String.fromCharCodes(txtValue);
+                }
+              }
+            }
+            return fallback;
+          }
+
+          final peerDeviceId = getTxtStrAny(['did', 'id'], service.name!);
+          final peerMinVersion = getTxtStrAny(['minV', 'version'], 'unknown');
           final peerMaxVersion = getTxtStr('maxV', peerMinVersion);
           
           final peer = DiscoveredPeer(
