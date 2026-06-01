@@ -1,94 +1,94 @@
-# Rift Android Daemon (Dart) - Hướng dẫn sử dụng & Kiến trúc
+# Rift Android Daemon (Dart) - Usage Guide & Architecture
 
-Đây là module lõi chạy ngầm (daemon) trên hệ điều hành Android của dự án Rift, được phát triển bằng ngôn ngữ Dart. Nhiệm vụ của module này là giao tiếp bảo mật với Windows Daemon (qua mTLS) và cung cấp dịch vụ cho Flutter UI (qua JSON-RPC).
+This is the core background module (daemon) on the Android OS for the Rift project, developed using the Dart language. The mission of this module is to securely communicate with the Windows Daemon (via mTLS) and provide services to the Flutter UI (via JSON-RPC).
 
 ---
 
-## 1. Cấu trúc thư mục
+## 1. Directory Structure
 
-- `lib/src/interfaces/`: Chứa 5 Interfaces cốt lõi (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`). Mọi thao tác nghiệp vụ phải đi qua các giao diện này.
-- `lib/src/crypto/`: Chứa logic mật mã học cực kỳ quan trọng:
-  - `cert_builder.dart`: Tự động bọc mã Ed25519 vào chứng chỉ X.509 bằng kỹ thuật *Double OCTET STRING*.
-  - `cert_decoder.dart`: Trình phân tích cú pháp (Parser) X.509 an toàn (Fail-Closed).
-  - `identity_manager_impl.dart`: Sinh và lưu trữ khóa Ed25519 (cryptography). Ứng dụng **Atomic Write** chống lỗi hỏng file.
+- `lib/src/interfaces/`: Contains 5 core Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`). All business operations must go through these interfaces.
+- `lib/src/crypto/`: Contains extremely important cryptographic logic:
+  - `cert_builder.dart`: Automatically wraps the Ed25519 key into an X.509 certificate using the *Double OCTET STRING* technique.
+  - `cert_decoder.dart`: A secure X.509 Parser (Fail-Closed).
+  - `identity_manager_impl.dart`: Generates and stores the Ed25519 key (cryptography). Implements **Atomic Write** to prevent file corruption.
 - `lib/src/network/`: 
-  - `discovery_service_impl.dart`: Cài đặt gói `nsd` tìm kiếm thiết bị lân cận qua mDNS.
-  - `frame_codec.dart`: Định dạng cấu trúc khung truyền tải (Length prefix + JSON, max 32 MiB). Tích hợp sẵn `RiftFrameTransformer` (StreamTransformer) chặn Memory Exhaustion.
-  - `session_messages.dart`: Dữ liệu cho bước Session Bootstrap theo phụ lục C.1.
-  - `transport_impl.dart`: Thiết lập mTLS `SecureServerSocket` 2 chiều, ép xác minh Ed25519 từ chứng chỉ x509.
-- `test/`: Chứa các kịch bản kiểm thử bảo mật (Fail-Closed).
-- `lib/src/daemon_isolate.dart`: Cổng vào (Entry point) cho quá trình chạy background (Foreground Service).
-- `demo_cert.dart`: Kịch bản mẫu để sinh thử một file chứng chỉ hợp lệ `demo.pem` ra ổ cứng.
+  - `discovery_service_impl.dart`: Implements the `nsd` package to find nearby devices via mDNS.
+  - `frame_codec.dart`: Formats the transport frame structure (Length prefix + JSON, max 32 MiB). Built-in `RiftFrameTransformer` (StreamTransformer) to prevent Memory Exhaustion.
+  - `session_messages.dart`: Data for the Session Bootstrap step according to appendix C.1.
+  - `transport_impl.dart`: Sets up a 2-way mTLS `SecureServerSocket`, enforcing Ed25519 verification from the x509 certificate.
+- `test/`: Contains security test scenarios (Fail-Closed).
+- `lib/src/daemon_isolate.dart`: Entry point for the background process (Foreground Service).
+- `demo_cert.dart`: A sample script to test generating a valid `demo.pem` certificate file to disk.
 
 ---
 
-## 2. Hướng dẫn sử dụng & Các lệnh cơ bản
+## 2. Usage Guide & Basic Commands
 
-> **LƯU Ý QUAN TRỌNG:** Mọi lệnh Terminal dưới đây đều **BẮT BUỘC** phải được chạy bên trong thư mục `daemon-dart`. Đảm bảo bạn đã dùng lệnh `cd daemon-dart` trước khi gõ bất cứ lệnh `dart` nào.
+> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before typing any `dart` commands.
 
-### 2.1. Cài đặt các gói phụ thuộc
-Trước khi làm việc, hãy đảm bảo tải đủ thư viện (Bao gồm `pointycastle`, `asn1lib`, `cryptography` cho bảo mật và `nsd` cho mDNS):
+### 2.1. Install Dependencies
+Before working, ensure you have downloaded enough libraries (Including `pointycastle`, `asn1lib`, `cryptography` for security and `nsd` for mDNS):
 ```bash
 dart pub get
 ```
 
-### 2.2. Kiểm tra chất lượng Code (Linter)
-Mọi đoạn code đẩy lên nhánh phải không có cảnh báo. Hệ thống Linter đã được cấu hình khắt khe trong `analysis_options.yaml`.
+### 2.2. Code Quality Check (Linter)
+All code pushed to the branch must not have warnings. The Linter system is strictly configured in `analysis_options.yaml`.
 ```bash
 dart analyze
 ```
-> **Lưu ý:** Bắt buộc phải hiện `No issues found!` mới được tạo Pull Request.
+> **Note:** Must output `No issues found!` to create a Pull Request.
 
-### 2.3. Chạy Unit Test Bảo mật (Hoàn thiện ở Tuần 3)
-Hệ thống Test giờ đây bao phủ cả 3 phân hệ mật mã/mạng cốt lõi:
-1. **Mã hóa ASN.1 (`crypto_test`):** Xác minh mảng byte sinh ra chứa đúng OID Ed25519.
-2. **Giải mã Fail-Closed (`decoder_test`):** Xác minh hệ thống biết cách đập bỏ các chứng chỉ độc hại/sai chuẩn.
-3. **Khung mạng Stream (`frame_codec_test`):** Xác minh cơ chế khóa 32 MiB chống ngập lụt RAM.
-4. **Định danh `identity_test`:** Xác minh bộ Ghi nguyên tử (Atomic Write) và chuỗi Device ID chuẩn `rift-`.
+### 2.3. Run Security Unit Tests (Completed in Week 3)
+The Test system now covers all 3 core cryptography/network subsystems:
+1. **ASN.1 Encryption (`crypto_test`):** Verifies the generated byte array contains the correct Ed25519 OID.
+2. **Fail-Closed Decoding (`decoder_test`):** Verifies the system knows how to destroy malicious/malformed certificates.
+3. **Stream Network Frame (`frame_codec_test`):** Verifies the 32 MiB lock mechanism to prevent RAM flooding.
+4. **Identity `identity_test`:** Verifies the Atomic Write mechanism and the standard `rift-` Device ID string.
 
 ```bash
 dart test
 ```
-> **Trường hợp 1 trong 14 Tests bị Thất bại:**
-> Nếu hệ thống in ra thông báo đỏ `Some tests failed. Exit code: 1`, điều này chứng tỏ Hệ thống phòng thủ của ứng dụng đã bị phá vỡ hoặc có lỗi nghiêm trọng:
-> - **Lỗi `crypto_test` / `decoder_test`:** Chứng tỏ cấu trúc byte ASN.1 đã bị thao túng, hoặc cơ chế bóc tách Fail-Closed đang gặp lỗi hổng.
-> - **Lỗi `frame_codec_test`:** Hệ thống lọc luồng (Stream) đang không hoạt động, nguy cơ bị lọt gói tin quá 32 MiB hoặc bị tràn RAM.
-> - **Lỗi `identity_test`:** Cấu trúc Ghi Nguyên tử (Atomic Write) đang thất bại, nguy cơ cao làm hỏng file lưu trữ khóa Ed25519.
-> - **Hậu quả chung:** CI/CD sẽ chặn hoàn toàn Pull Request của bạn. Tuyệt đối không được Merge cho đến khi khắc phục xong!
+> **Case where 1 of 14 Tests Fails:**
+> If the system prints a red message `Some tests failed. Exit code: 1`, this proves that the application's defense system has been breached or there is a serious error:
+> - **Error in `crypto_test` / `decoder_test`:** Proves the ASN.1 byte structure has been manipulated, or the Fail-Closed decoding mechanism has a loophole.
+> - **Error in `frame_codec_test`:** The stream filter system is not working, risking the passage of packets over 32 MiB or RAM overflow.
+> - **Error in `identity_test`:** The Atomic Write structure is failing, high risk of corrupting the Ed25519 key storage file.
+> - **General Consequence:** CI/CD will completely block your Pull Request. Absolutely no merging until fixed!
 
-### 2.4. Chạy kịch bản Demo (Sinh chứng chỉ)
-Để thử nghiệm tính năng sinh chứng chỉ tự cấp phát của Tuần 2, bạn có thể chạy lệnh:
+### 2.4. Run Demo Script (Generate Certificate)
+To test the self-signed certificate generation feature of Week 2, you can run the command:
 ```bash
 dart run demo_cert.dart
 ```
-Lệnh này sẽ tạo ra một file `demo.pem` ngay tại thư mục gốc. Bạn có thể dùng `openssl x509 -in demo.pem -text -noout` để tự mình kiểm tra cấu trúc bên trong.
+This command will create a `demo.pem` file right in the root directory. You can use `openssl x509 -in demo.pem -text -noout` to manually check the internal structure.
 
-Module mạng và mDNS của Tuần 4 được thiết kế để chạy độc lập dưới dạng Isolate. Để khởi động Daemon từ Flutter UI hoặc qua kịch bản, bạn có thể tham khảo file mẫu `demo_daemon.dart`.
+Week 4's network and mDNS modules are designed to run independently as an Isolate. To start the Daemon from the Flutter UI or via script, you can refer to the `demo_daemon.dart` sample file.
 
-**Cách chạy thử nghiệm (Chỉ test Cấu trúc):**
+**How to test run (Structure test only):**
 ```bash
 dart run demo_daemon.dart
 ```
-> **Lưu ý:** Nếu chạy lệnh này trong môi trường thuần Dart (không có máy ảo Flutter Engine), trình biên dịch (Compiler) có thể văng lỗi Crash liên quan đến FFI (VD: `_FfiUseSiteTransformer...`). Điều này xảy ra vì gói mDNS `nsd` chứa các liên kết FFI/Native platform của Flutter, không thể biên dịch bằng Dart VM độc lập. File này chỉ mang tính chất minh họa luồng (Flow) cho team UI.
+> **Note:** If running this command in a pure Dart environment (without the Flutter Engine VM), the Compiler might throw a Crash error related to FFI (E.g., `_FfiUseSiteTransformer...`). This happens because the `nsd` mDNS package contains Flutter's FFI/Native platform bindings, which cannot be compiled by the standalone Dart VM. This file is purely for illustrating the Flow for the UI team.
 
-**Tích hợp vào Flutter UI:**
-1. Gọi hàm `Isolate.spawn(daemonEntryPoint, receivePort.sendPort)`.
-2. Truyền cấu hình `DaemonConfig(storagePath: '...', port: 8080)` qua cổng tin nhắn.
-3. Daemon sẽ tự động bật mDNS (`_rift._tcp`) và mở máy chủ mTLS `SecureServerSocket` chờ kết nối từ thiết bị khác.
-
----
-
-## 3. Kiến trúc Chống chịu lỗi & Bảo vệ dữ liệu (Tuần 4)
-Để đối phó với các kịch bản thực tế khi triển khai lên mạng LAN, module đã được gia cố thêm 2 tấm khiên bảo vệ cấp thấp:
-- **Anti-Spam mDNS Cache:** Package `nsd` thường xuyên dội bom sự kiện mỗi khi phát hiện lại máy cũ. `DiscoveryServiceImpl` đã tích hợp bộ đệm `Map<String, DiscoveredPeer>` để chặn đứng sự kiện trùng lặp, chỉ đẩy dữ liệu lên Flutter UI khi đó là máy hoàn toàn mới hoặc bị đổi IP, cứu Flutter UI khỏi tình trạng treo máy vì render lại quá nhiều.
-- **Unicast mTLS Routing (Anti-Leak):** Trong môi trường có 10 máy kết nối cùng lúc, gửi Broadcast là thảm họa bảo mật. `TransportImpl` đã sử dụng cấu trúc `Map<String, SecureSocket>` (khóa bằng Device ID trích xuất từ chứng chỉ đối phương) để định tuyến đích danh từng tin nhắn, triệt tiêu nguy cơ gửi nhầm dữ liệu nhạy cảm sang máy khác.
+**Integration into Flutter UI:**
+1. Call the function `Isolate.spawn(daemonEntryPoint, receivePort.sendPort)`.
+2. Pass the config `DaemonConfig(storagePath: '...', port: 8080)` through the message port.
+3. The Daemon will automatically turn on mDNS (`_rift._tcp`) and open the `SecureServerSocket` mTLS server waiting for connections from other devices.
 
 ---
 
-## 4. Mức độ tuân thủ Đặc tả Hệ thống (Protocol & IPC)
-- **Với `protocol.md`:** 
-  - Tuần 2: Bám sát 100% yêu cầu mật mã (ECDSA + Ed25519 X.509 Extension) qua `cert_builder.dart`.
-  - Tuần 3: Bám sát chuẩn Fail-Closed cho Parser thông qua `cert_decoder.dart`. Mã hóa cấu trúc `Frame Codec` chuẩn xác giới hạn 32 MiB. Đồng thời tuân thủ chuẩn `rift- + Base32` cho Device ID trong module quản lý Identity.
-  - Tuần 4: Đã ánh xạ chính xác 100% cấu trúc JSON-RPC payload cho các lệnh `session.hello`, `session.accept`, `session.reject` (theo Phụ lục C.1).
-- **Với `ipc.md`:** 
-  - Tuần 2-4: Xây dựng và bắt đầu triển khai các Interfaces (Abstract) để tạo màng bọc trừu tượng (Abstraction Layer), dọn đường cho kết nối JSON-RPC 2.0 từ Flutter UI vào thẳng các module nghiệp vụ trong các tuần tới. Không bị Hard-Code vào công nghệ truyền tải.
+## 3. Resiliency & Data Protection Architecture (Week 4)
+To cope with real-world scenarios when deployed on a LAN, the module has been reinforced with 2 low-level protective shields:
+- **Anti-Spam mDNS Cache:** The `nsd` package often spams events every time it rediscovers old devices. `DiscoveryServiceImpl` has integrated a cache `Map<String, DiscoveredPeer>` to block duplicate events, only pushing data to the Flutter UI when it is a completely new device or the IP has changed, saving the Flutter UI from freezing due to excessive re-rendering.
+- **Unicast mTLS Routing (Anti-Leak):** In an environment with 10 devices connecting simultaneously, sending Broadcasts is a security disaster. `TransportImpl` used the structure `Map<String, SecureSocket>` (keyed by the Device ID extracted from the peer's certificate) to explicitly route each message, eliminating the risk of mistakenly sending sensitive data to the wrong device.
+
+---
+
+## 4. Compliance Level with System Specification (Protocol & IPC)
+- **With `protocol.md`:** 
+  - Week 2: Strictly adhered 100% to cryptographic requirements (ECDSA + Ed25519 X.509 Extension) via `cert_builder.dart`.
+  - Week 3: Strictly adhered to the Fail-Closed standard for the Parser via `cert_decoder.dart`. Encoded the `Frame Codec` structure accurately with a 32 MiB limit. Also complied with the `rift- + Base32` standard for the Device ID in the Identity management module.
+  - Week 4: Accurately mapped 100% of the JSON-RPC payload structure for `session.hello`, `session.accept`, `session.reject` commands (according to Appendix C.1), absolutely no fabricated data fields. Ensuring Type-Safe data during transmission.
+- **With `ipc.md`:** 
+  - Week 2-4: Built and started implementing Interfaces (Abstract) to create an Abstraction Layer, paving the way for JSON-RPC 2.0 connections from Flutter UI straight into business modules in the coming weeks. Not hard-coded to any transport technology.
