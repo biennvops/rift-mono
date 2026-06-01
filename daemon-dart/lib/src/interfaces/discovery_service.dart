@@ -1,14 +1,20 @@
 class DiscoveredPeer {
-  final String deviceId;
+  final String instanceId;
   final String address;
   final int port;
-  final String protocolVersion;
+  final String minVersion;
+  final String maxVersion;
+  final String? deviceIdHint;
+  final String? fingerprintPrefix;
 
   DiscoveredPeer({
-    required this.deviceId,
+    required this.instanceId,
     required this.address,
     required this.port,
-    required this.protocolVersion,
+    required this.minVersion,
+    required this.maxVersion,
+    this.deviceIdHint,
+    this.fingerprintPrefix,
   });
 }
 
