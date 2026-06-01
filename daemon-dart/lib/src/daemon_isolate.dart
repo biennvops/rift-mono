@@ -44,7 +44,9 @@ void daemonEntryPoint(SendPort sendPort) async {
               'address': peer.address,
               'port': peer.port,
               'txtRecord': {
-                'version': peer.protocolVersion
+                'minV': peer.protocolVersion,
+                'maxV': peer.protocolVersion,
+                'did': peer.deviceId,
               }
             }
           };

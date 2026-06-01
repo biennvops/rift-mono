@@ -28,8 +28,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
     
     // Convert strings to Uint8List for TXT records as required by nsd package
     final txtRecord = <String, Uint8List>{
-      'version': Uint8List.fromList('0.1-draft'.codeUnits),
-      'id': Uint8List.fromList(_identityManager.deviceId.codeUnits),
+      'minV': Uint8List.fromList('0.1-draft'.codeUnits),
+      'maxV': Uint8List.fromList('0.1-draft'.codeUnits),
+      'did': Uint8List.fromList(_identityManager.deviceId.codeUnits),
     };
 
     final service = nsd_lib.Service(
@@ -66,13 +67,15 @@ class DiscoveryServiceImpl implements DiscoveryService {
             return fallback;
           }
 
-          final peerDeviceId = getTxtStr('id', service.name!);
+          final peerDeviceId = getTxtStr('did', getTxtStr('id', service.name!));
+          final peerMinVersion = getTxtStr('minV', getTxtStr('version', 'unknown'));
+          final peerMaxVersion = getTxtStr('maxV', peerMinVersion);
           
           final peer = DiscoveredPeer(
             deviceId: peerDeviceId,
             address: service.host!,
             port: service.port ?? 0,
-            protocolVersion: getTxtStr('version', 'unknown'),
+            protocolVersion: peerMaxVersion,
           );
           
           // Only broadcast if it's a new peer or its connection info has changed
