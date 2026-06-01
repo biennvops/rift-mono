@@ -1,61 +1,61 @@
-# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1 & 2)
+# Dart Daemon Assessment & Analysis Report (Week 1 & 2)
 
-**Đối chiếu chuẩn:** `フィナーレ.md` (Master Plan)
-**Thành phần:** Android Daemon (`daemon-dart`)
-**Đánh giá bởi:** System Review
+**Reference Standard:** `フィナーレ.md` (Master Plan)
+**Component:** Android Daemon (`daemon-dart`)
+**Assessed by:** System Review
 
 ---
 
-## Cấu trúc thư mục & Tệp quan trọng (Tính đến Tuần 2)
+## Directory Structure & Important Files (As of Week 2)
 
 ```text
 daemon-dart/
 ├── lib/
 │   └── src/
-│       ├── crypto/            # Chứa logic sinh chứng chỉ X.509 (cert_builder.dart)
-│       └── interfaces/        # Chứa 5 interface cốt lõi của Daemon (identity, transport...)
-├── test/                      # Chứa file crypto_test.dart
-├── pubspec.yaml               # Khai báo nền tảng Dart và các thư viện cốt lõi
-├── demo_cert.dart             # Script chạy sinh thử chứng chỉ PEM
-└── README.md                  # Hướng dẫn chạy test và Linter
+│       ├── crypto/            # Contains logic to generate X.509 certificate (cert_builder.dart)
+│       └── interfaces/        # Contains 5 core interfaces of the Daemon (identity, transport...)
+├── test/                      # Contains crypto_test.dart
+├── pubspec.yaml               # Dart platform declaration and core libraries
+├── demo_cert.dart             # Script to test generating PEM certificate
+└── README.md                  # Guide for running tests and Linter
 ```
 
 ---
 
-## 1. Mức độ tuân thủ Task (Theo `フィナーレ.md`)
+## 1. Task Compliance Level (According to `フィナーレ.md`)
 
-- **`[daemon-dart][infra]` (Tuần 1):** Khởi tạo cấu trúc Dart daemon cơ bản.
-  - Đã cài đặt và kiểm định tính khả dụng của các gói mật mã `pointycastle` và `asn1lib`.
-  - Định hình rõ ràng quy hoạch thư mục chuẩn bị cho các module giao thức.
-  - **Đánh giá:** **ĐẠT (100%)**
+- **`[daemon-dart][infra]` (Week 1):** Initialize basic Dart daemon structure.
+  - Installed and verified the usability of cryptography packages `pointycastle` and `asn1lib`.
+  - Clearly shaped the directory planning in preparation for protocol modules.
+  - **Assessment:** **PASSED (100%)**
 
-- **`[daemon-dart] Module interfaces & [test]` (Tuần 2):** Xây dựng nền móng giao tiếp và chứng chỉ.
-  - Đã thiết lập đủ 5 Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`).
-  - Viết thành công `cert_builder.dart` để tự động chèn OID tùy chỉnh và public key Ed25519 vào chứng chỉ X.509.
-  - Vượt qua bài kiểm tra bảo mật Unit Test chứng chỉ mTLS.
-  - **Tối ưu hóa:** Sử dụng `BytesBuilder` để chống phân mảnh bộ nhớ khi thao tác byte ASN.1; Loại bỏ `dynamic` (thay bằng `DiscoveredPeer`) để đảm bảo Type-Safety tuyệt đối cho kiến trúc Interface.
-  - **Đánh giá:** **ĐẠT (100%)**
-
----
-
-## 2. Đối chiếu Đặc tả Hệ thống (Protocol & IPC)
-
-Mọi quyết định kiến trúc trong Tuần 1 và Tuần 2 đều nhằm đáp ứng chính xác 2 bản đặc tả cốt lõi của dự án:
-
-### 2.1. Tuân thủ `spec/doc/protocol.md` (Giao thức Mạng & Bảo mật)
-- **Cách áp dụng ở Tuần 1:** Đặc tả yêu cầu bắt buộc dùng chuẩn chữ ký ECDSA P-256 và mở rộng X.509. Vì Dart SDK không đủ mạnh để thao tác với OID tùy chỉnh, nên Tuần 1 đã chốt phương án hạ tầng: cài đặt 2 thư viện cấp thấp là `pointycastle` và `asn1lib`.
-- **Cách áp dụng ở Tuần 2:** Thực thi chính xác Mục 3.4 của Protocol. File `cert_builder.dart` đã trực tiếp dùng `asn1lib` để bọc *Double OCTET STRING* mảng byte. Qua đó nhúng thành công OID đặc chế (`2.25...`) chứa mã Ed25519 vào chứng chỉ mTLS. Đảm bảo tính đồng nhất 100% với Daemon chạy trên Windows.
-
-### 2.2. Tuân thủ `spec/doc/ipc.md` (Giao tiếp Flutter Client)
-- **Cách áp dụng ở Tuần 1:** Xây dựng bộ khung thư mục nghiêm ngặt, tách biệt vùng chứa mã giao tiếp (`ipc/`) và mã nghiệp vụ gốc (`interfaces/`, `crypto/`).
-- **Cách áp dụng ở Tuần 2:** Đặc tả IPC yêu cầu kết nối bằng JSON-RPC 2.0 qua Transport-agnostic. Để làm nền móng, Tuần 2 đã tạo ra 5 Abstract Interfaces (`IdentityManager`, `DiscoveryService`...). Đây là lớp trừu tượng (Abstraction Layer) ép code giao tiếp JSON-RPC sau này phải tương tác thông qua nó, giúp Daemon không bị hard-code vào bất kỳ giao thức kết nối cứng nào.
+- **`[daemon-dart] Module interfaces & [test]` (Week 2):** Build communication and certificate foundations.
+  - Set up all 5 Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`).
+  - Successfully wrote `cert_builder.dart` to automatically insert the custom OID and Ed25519 public key into the X.509 certificate.
+  - Passed the mTLS certificate security Unit Test.
+  - **Optimization:** Used `BytesBuilder` to prevent memory fragmentation during ASN.1 byte manipulation; Removed `dynamic` (replaced with `DiscoveredPeer`) to ensure absolute Type-Safety for the Interface architecture.
+  - **Assessment:** **PASSED (100%)**
 
 ---
 
-## 3. Đánh giá Rủi ro (Risk Assessment) tính đến Tuần 2
+## 2. System Specification Alignment (Protocol & IPC)
 
-1. **Rủi ro Parse Chứng Chỉ (Dự kiến cho Tuần 3):**
-   Đã sinh được chứng chỉ thành công ở Tuần 2, nhưng bài toán tiếp theo ở Tuần 3 là trích xuất (Giải mã/Parser) chứng chỉ gửi từ máy tính khác. Yêu cầu đặt ra là phải viết Parser an toàn (Fail-Closed) để chặn các cuộc tấn công chứng chỉ giả.
+All architectural decisions in Week 1 and Week 2 are strictly designed to meet the two core specifications of the project:
 
-2. **Rủi ro Dịch vụ mDNS:**
-   Tuần 4 sẽ phải tiếp xúc với mDNS Native của OS, rủi ro cao xảy ra lỗi khi tích hợp plugin qua Flutter Isolate.
+### 2.1. Compliance with `spec/doc/protocol.md` (Network Protocol & Security)
+- **Application in Week 1:** The specification strictly requires the ECDSA P-256 signature standard and X.509 extension. Since the Dart SDK is not powerful enough to manipulate custom OIDs, Week 1 finalized the infrastructure approach: installing 2 low-level libraries, `pointycastle` and `asn1lib`.
+- **Application in Week 2:** Exactly executed Section 3.4 of the Protocol. The `cert_builder.dart` file directly used `asn1lib` to wrap the byte array in a *Double OCTET STRING*. Thereby successfully embedding the custom OID (`2.25...`) containing the Ed25519 key into the mTLS certificate. Guaranteed 100% consistency with the Windows Daemon.
+
+### 2.2. Compliance with `spec/doc/ipc.md` (Flutter Client Communication)
+- **Application in Week 1:** Built a strict directory framework, separating the communication code area (`ipc/`) and core business code (`interfaces/`, `crypto/`).
+- **Application in Week 2:** The IPC specification requires connections via JSON-RPC 2.0 over a Transport-agnostic binding. As a foundation, Week 2 created 5 Abstract Interfaces (`IdentityManager`, `DiscoveryService`...). This is the Abstraction Layer that forces future JSON-RPC communication code to interact through it, keeping the Daemon from being hard-coded to any rigid connection protocol.
+
+---
+
+## 3. Risk Assessment as of Week 2
+
+1. **Certificate Parsing Risk (Expected for Week 3):**
+   Successfully generated the certificate in Week 2, but the next challenge in Week 3 is to extract (Decode/Parse) the certificate sent from another device. The requirement is to write a secure Parser (Fail-Closed) to block spoofed certificate attacks.
+
+2. **mDNS Service Risk:**
+   Week 4 will have to interact with the OS Native mDNS, high risk of errors when integrating the plugin via Flutter Isolate.
