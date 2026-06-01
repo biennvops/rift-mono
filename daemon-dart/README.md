@@ -1,37 +1,37 @@
-# Rift Android Daemon (Dart) - Hướng dẫn sử dụng & Tổng kết
+# Rift Android Daemon (Dart) - Usage Guide & Summary
 
-Đây là module lõi chạy ngầm (daemon) trên hệ điều hành Android của dự án Rift, được phát triển bằng ngôn ngữ Dart.
+This is the core background module (daemon) on the Android OS for the Rift project, developed using the Dart language.
 
 ---
 
-## 1. Hướng dẫn sử dụng & Các lệnh cơ bản
+## 1. Usage Guide & Basic Commands
 
-Dưới đây là các câu lệnh cơ bản để làm việc với codebase của thư mục `daemon-dart` (Tuần 1):
+Below are the basic commands to work with the codebase of the `daemon-dart` directory (Week 1):
 
-### Chạy Unit Test (Kiểm tra môi trường)
-Đảm bảo hệ thống Dart đã cài đặt đúng các package và môi trường chạy trơn tru.
+### Run Unit Tests (Environment Check)
+Ensure the Dart system has the packages installed correctly and the runtime environment is smooth.
 ```bash
 dart test
 ```
 
-### Phân tích mã nguồn (Dart Linter)
-Kiểm tra xem code có vi phạm các quy tắc format hay naming convention của Dart hay không.
+### Source Code Analysis (Dart Linter)
+Check if the code violates any formatting rules or naming conventions of Dart.
 ```bash
 dart analyze
 ```
-- **Thành công (`No issues found!`):** Code sạch 100%, đáp ứng tiêu chuẩn.
-- **Thất bại:** Báo lỗi Warning. Kiên quyết không Push code lên Git nếu lệnh này chưa ra màu xanh.
+- **Success (`No issues found!`):** Code is 100% clean, meeting standards.
+- **Failure:** Reports Warning errors. Strictly do not Push code to Git if this command does not return green.
 
 ---
 
-## 2. Kết luận: Thành quả Tuần 1 (Hoàn thành 100%)
+## 2. Conclusion: Week 1 Deliverables (100% Completed)
 
-Trong Tuần 1 của dự án, Kiệt (Android Daemon Lead) đã hoàn thành xuất sắc mục tiêu "Khởi tạo hạ tầng" (`[daemon-dart][infra]`) được giao trong `finaltask.md`:
+In Week 1 of the project, Kiet (Android Daemon Lead) successfully completed the "Infrastructure Initialization" (`[daemon-dart][infra]`) objective assigned in `finaltask.md`:
 
-1. **Thiết lập Hạ tầng Core:**
-   - Đã khởi tạo thành công project Dart chuẩn (`daemon-dart`).
-   - Tích hợp thành công các thư viện mật mã cốt lõi: `pointycastle` (dành cho ECDSA P-256), `asn1lib` (để xử lý mảng byte ASN.1), và `basic_utils`.
+1. **Core Infrastructure Setup:**
+   - Successfully initialized the standard Dart project (`daemon-dart`).
+   - Successfully integrated core cryptography libraries: `pointycastle` (for ECDSA P-256), `asn1lib` (for handling ASN.1 byte arrays), and `basic_utils`.
 
-2. **Dọn dẹp Lỗi & Clean Code:**
-   - Đã xử lý triệt để các cảnh báo Linter của Dart.
-   - Codebase đã sạch sẽ, chuẩn bị sẵn sàng cho việc xây dựng kiến trúc Interface và mã hóa X.509 ở Tuần 2.
+2. **Error Cleanup & Clean Code:**
+   - Completely resolved Dart Linter warnings.
+   - Codebase is clean and ready for building the Interface architecture and X.509 cryptography in Week 2.

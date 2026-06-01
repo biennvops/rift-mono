@@ -1,52 +1,52 @@
-# Báo cáo Đánh giá & Phân tích Dart Daemon (Tuần 1)
+# Dart Daemon Assessment & Analysis Report (Week 1)
 
-**Đối chiếu chuẩn:** `フィナーレ.md` (Master Plan)
-**Thành phần:** Android Daemon (`daemon-dart`)
-**Đánh giá bởi:** System Review
+**Reference Standard:** `フィナーレ.md` (Master Plan)
+**Component:** Android Daemon (`daemon-dart`)
+**Assessed by:** System Review
 
 ---
 
-## Cấu trúc thư mục & Tệp quan trọng (Quy hoạch tại Tuần 1)
+## Directory Structure & Important Files (Planned in Week 1)
 
 ```text
 daemon-dart/
 ├── lib/
-│   └── src/                   # Thư mục gốc chứa mã nguồn (hiện tại trống, sẽ phát triển ở các tuần tiếp theo)
-├── test/                      # Thư mục chứa cấu hình Unit Test ban đầu
-├── pubspec.yaml               # Khai báo nền tảng Dart và các thư viện cốt lõi (pointycastle, asn1lib, basic_utils)
-└── README.md                  # Hướng dẫn chạy test và Linter
+│   └── src/                   # Root directory containing source code (currently empty, to be developed in following weeks)
+├── test/                      # Directory containing initial Unit Test configurations
+├── pubspec.yaml               # Dart platform declaration and core libraries (pointycastle, asn1lib, basic_utils)
+└── README.md                  # Guide for running tests and Linter
 ```
 
 ---
 
-## 1. Mức độ tuân thủ Task (Theo `フィナーレ.md`)
+## 1. Task Compliance Level (According to `フィナーレ.md`)
 
-- **`[daemon-dart][infra]` (Tuần 1):** Khởi tạo cấu trúc Dart daemon cơ bản.
-  - Đã cài đặt và kiểm định tính khả dụng của các gói mật mã `pointycastle` và `asn1lib`.
-  - Đã thiết lập khung kiểm thử (Test Framework) và Linter.
-  - Định hình rõ ràng quy hoạch thư mục chuẩn bị cho các module giao thức.
-  - **Đánh giá:** **ĐẠT (100%)**
+- **`[daemon-dart][infra]` (Week 1):** Initialize basic Dart daemon structure.
+  - Installed and verified the usability of cryptography packages `pointycastle` and `asn1lib`.
+  - Set up the Test Framework and Linter.
+  - Clearly shaped the directory planning in preparation for protocol modules.
+  - **Assessment:** **PASSED (100%)**
 
 ---
 
-## 2. Đối chiếu Đặc tả Hệ thống (Protocol & IPC)
+## 2. System Specification Alignment (Protocol & IPC)
 
-Dù Tuần 1 chỉ tập trung vào hạ tầng cơ bản, các quyết định nền móng đã được định hướng nghiêm ngặt theo đặc tả của dự án:
+Although Week 1 only focuses on basic infrastructure, foundational decisions have been strictly guided according to project specifications:
 
-- **Đặc tả `spec/doc/protocol.md`:**
-  - *Yêu cầu mật mã (Mục 3.4):* Giao thức bắt buộc sử dụng chữ ký **ECDSA P-256** và chứng chỉ mạng X.509 có chứa OID tùy chỉnh.
-  - *Kết quả Tuần 1:* Đã lựa chọn và cài đặt thành công `pointycastle` và `asn1lib`. Đây là quyết định hạ tầng cốt lõi vì thư viện mặc định của Dart không đủ khả năng can thiệp sâu vào byte để đáp ứng yêu cầu bảo mật này.
+- **Specification `spec/doc/protocol.md`:**
+  - *Cryptography Requirements (Section 3.4):* The protocol strictly requires **ECDSA P-256** signatures and X.509 network certificates containing a custom OID.
+  - *Week 1 Result:* Successfully selected and installed `pointycastle` and `asn1lib`. This is a core infrastructure decision because Dart's default library lacks the capability to deeply manipulate bytes to meet this security requirement.
   
-- **Đặc tả `spec/doc/ipc.md`:**
-  - *Yêu cầu giao tiếp (Mục 2):* Daemon phải giao tiếp với Flutter UI bằng chuẩn **JSON-RPC 2.0** qua Transport-agnostic binding.
-  - *Kết quả Tuần 1:* Đang ở trạng thái quy hoạch. (Các thư viện như `json_rpc_2` và cấu trúc module IPC sẽ được triển khai khi hoàn tất tầng mạng).
+- **Specification `spec/doc/ipc.md`:**
+  - *Communication Requirements (Section 2):* The daemon must communicate with the Flutter UI using the **JSON-RPC 2.0** standard via a Transport-agnostic binding.
+  - *Week 1 Result:* In the planning state. (Libraries like `json_rpc_2` and IPC module structures will be implemented upon completion of the network layer).
 
 ---
 
-## 3. Đánh giá Rủi ro (Risk Assessment) tính đến Tuần 1
+## 3. Risk Assessment as of Week 1
 
-1. **Rủi ro Cấu trúc ASN.1 (Dự kiến cho Tuần 2):**
-   Thư viện chuẩn `dart:io` của Dart không hỗ trợ việc nhúng Custom X.509 Extension (chúng ta cần nhúng Ed25519 Public Key vào chứng chỉ mTLS theo chuẩn giao thức). Rủi ro rất cao là chúng ta sẽ phải thao tác trực tiếp với mảng byte ASN.1 bằng tay (Hack ASN.1 Tree) qua thư viện `asn1lib` ở tuần tới.
+1. **ASN.1 Structure Risk (Expected for Week 2):**
+   Dart's standard `dart:io` library does not support embedding Custom X.509 Extensions (we need to embed the Ed25519 Public Key into the mTLS certificate according to the protocol standard). There is a very high risk that we will have to manually manipulate the ASN.1 byte array (Hack ASN.1 Tree) via the `asn1lib` library next week.
 
-2. **Rủi ro Kiến trúc:**
-   Cần đảm bảo thiết kế module interfaces ở tuần tới phải đồng bộ hoàn toàn với kiến trúc C# Worker Service trên Windows để kiến trúc IPC có thể hoạt động trơn tru.
+2. **Architectural Risk:**
+   Need to ensure that the module interfaces designed next week fully synchronize with the C# Worker Service architecture on Windows so that the IPC architecture can operate smoothly.
