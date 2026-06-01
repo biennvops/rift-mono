@@ -60,13 +60,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
       for (var service in _discovery!.services) {
         if (service.name != null && service.name != _identityManager.deviceId && service.host != null) {
           
-          String getTxtStr(String key, String fallback) {
-            if (service.txt != null && service.txt![key] != null) {
-              return String.fromCharCodes(service.txt![key]!);
-            }
-            return fallback;
-          }
-
           String getTxtStrAny(List<String> keys, String fallback) {
             if (service.txt != null) {
               for (final key in keys) {
@@ -81,7 +74,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
           final peerDeviceId = getTxtStrAny(['did', 'id'], service.name!);
           final peerMinVersion = getTxtStrAny(['minV', 'version'], 'unknown');
-          final peerMaxVersion = getTxtStr('maxV', peerMinVersion);
+          final peerMaxVersion = getTxtStrAny(['maxV', 'version'], peerMinVersion);
           
           final peer = DiscoveredPeer(
             deviceId: peerDeviceId,
