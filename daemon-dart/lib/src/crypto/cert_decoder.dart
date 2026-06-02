@@ -51,6 +51,8 @@ class RiftCertDecoder {
         throw CertificateDecoderException('Invalid extensions structure');
       }
 
+      Uint8List? extractedKey;
+
       // Iterate through the extensions
       for (var ext in extSequence.elements) {
         if (ext is! ASN1Sequence || ext.elements.isEmpty) {
@@ -75,9 +77,30 @@ class RiftCertDecoder {
         }
 
         if (isRiftOid) {
-          var octetStringObj = ext.elements.last;
+          if (extractedKey != null) {
+            throw CertificateDecoderException('Rift Custom OID extension is duplicated');
+          }
+
+          var valueIndex = 1;
+          if (ext.elements.length <= valueIndex) {
+            throw CertificateDecoderException('Malformed Rift extension: missing extnValue');
+          }
+
+          if (ext.elements[valueIndex].tag == 0x01) {
+            var criticalBytes = ext.elements[valueIndex].valueBytes();
+            if (criticalBytes.isNotEmpty && criticalBytes[0] != 0x00) {
+              throw CertificateDecoderException('Rift Custom OID extension must be non-critical');
+            }
+            valueIndex++;
+          }
+
+          if (ext.elements.length != valueIndex + 1) {
+            throw CertificateDecoderException('Malformed Rift extension structure');
+          }
+
+          var octetStringObj = ext.elements[valueIndex];
           if (octetStringObj.tag != 0x04) {
-             throw CertificateDecoderException('Extension value is not an OCTET STRING');
+            throw CertificateDecoderException('Extension value is not an OCTET STRING');
           }
 
           // Unpack Outer OCTET STRING
@@ -90,6 +113,12 @@ class RiftCertDecoder {
           
           var innerParser = ASN1Parser(innerBytes);
           var innerOctetObj = innerParser.nextObject();
+          if (innerOctetObj.encodedBytes.length != innerBytes.length) {
+            throw CertificateDecoderException('Malformed inner OCTET STRING');
+          }
+          if (innerOctetObj.tag != 0x04) {
+            throw CertificateDecoderException('Inner value is not an OCTET STRING');
+          }
           
           var pubKeyBytes = innerOctetObj.valueBytes();
           
@@ -97,8 +126,12 @@ class RiftCertDecoder {
             throw CertificateDecoderException('Invalid Ed25519 public key length: ${pubKeyBytes.length} bytes (expected 32)');
           }
           
-          return pubKeyBytes;
+          extractedKey = Uint8List.fromList(pubKeyBytes);
         }
+      }
+
+      if (extractedKey != null) {
+        return extractedKey;
       }
 
       throw CertificateDecoderException('Rift Custom OID extension not found in certificate');

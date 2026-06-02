@@ -66,11 +66,30 @@ class RiftFrameCodec {
 
     var payloadBytes = Uint8List.view(frameBytes.buffer, frameBytes.offsetInBytes + 4, declaredLength);
     
+    return _validateAndDecodeJsonObject(payloadBytes);
+  }
+
+  static String _validateAndDecodeJsonObject(Uint8List payloadBytes) {
+    final decodedPayload = () {
+      try {
+        return utf8.decode(payloadBytes);
+      } catch (e) {
+        throw FrameCodecException('MalformedMessage: invalid UTF-8 sequence');
+      }
+    }();
+
     try {
-      return utf8.decode(payloadBytes);
+      final parsed = json.decode(decodedPayload);
+      if (parsed is! Map<String, dynamic>) {
+        throw FrameCodecException('MalformedMessage: non-object JSON value');
+      }
+    } on FrameCodecException {
+      rethrow;
     } catch (e) {
-      throw FrameCodecException('MalformedMessage: invalid UTF-8 sequence');
+      throw FrameCodecException('MalformedMessage: invalid JSON payload');
     }
+
+    return decodedPayload;
   }
 }
 
@@ -109,11 +128,9 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, String> {
           var frameData = bytes.sublist(0, expectedLength);
           buffer.add(bytes.sublist(expectedLength)); // Re-add the remaining bytes
 
-          try {
-            yield utf8.decode(frameData);
-          } catch (e) {
-            throw FrameCodecException('MalformedMessage: invalid UTF-8 sequence');
-          }
+          yield RiftFrameCodec._validateAndDecodeJsonObject(
+            Uint8List.fromList(frameData),
+          );
           expectedLength = null; // Reset for the next frame
         } else {
           break; // Wait for more bytes to complete the current frame
@@ -126,4 +143,3 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, String> {
     }
   }
 }
-

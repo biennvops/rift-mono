@@ -67,6 +67,40 @@ void main() {
         throwsA(isA<FrameCodecException>()),
       );
     });
+
+    test('Should throw MalformedMessage on invalid JSON payload', () {
+      var payloadBytes = Uint8List.fromList('not-json'.codeUnits);
+      var frame = Uint8List(4 + payloadBytes.length);
+      var bd = ByteData.view(frame.buffer);
+      bd.setUint32(0, payloadBytes.length, Endian.big);
+      frame.setRange(4, frame.length, payloadBytes);
+
+      expect(
+        () => RiftFrameCodec.decode(frame),
+        throwsA(
+          isA<FrameCodecException>().having(
+            (e) => e.message,
+            'message',
+            contains('invalid JSON payload'),
+          ),
+        ),
+      );
+    });
+
+    test('Should throw MalformedMessage on non-object JSON payload', () {
+      var frame = RiftFrameCodec.encode('"text"');
+
+      expect(
+        () => RiftFrameCodec.decode(frame),
+        throwsA(
+          isA<FrameCodecException>().having(
+            (e) => e.message,
+            'message',
+            contains('non-object JSON value'),
+          ),
+        ),
+      );
+    });
   });
 
   group('RiftFrameTransformer Tests', () {
@@ -112,4 +146,3 @@ void main() {
     });
   });
 }
-

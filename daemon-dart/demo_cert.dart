@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 import 'package:basic_utils/basic_utils.dart';
-import 'lib/src/crypto/cert_builder.dart';
+import 'package:daemon_dart/src/crypto/cert_builder.dart';
 
 void main() {
   try {

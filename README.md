@@ -23,5 +23,4 @@ Local reference documents may be placed in `spec/references/`; this directory is
 
 ## Status
 
-- **Tuần 1 & 2:** Khởi tạo thành công kiến trúc hạ tầng và các module giao tiếp gốc cho nhánh `daemon-dart`. Đã triển khai xong thuật toán sinh chứng chỉ X.509 (mTLS) tuân thủ đặc tả giao thức (ECDSA P-256).
-- **Trạng thái hiện tại:** Đang phát triển các cơ chế giải mã (Parser) và khám phá thiết bị (mDNS).
+Initial workspace scaffold.
