@@ -16,7 +16,10 @@ extension TrustStateExtension on TrustState {
 
   static TrustState fromJson(String value) {
     if (value == 'pairing_pending') return TrustState.pairingPending;
-    return TrustState.values.firstWhere((e) => e.name == value, orElse: () => TrustState.discovered);
+    return TrustState.values.firstWhere(
+      (e) => e.name == value,
+      orElse: () => throw ArgumentError('Unknown TrustState: $value'),
+    );
   }
 }
 
