@@ -14,13 +14,15 @@ The v0.1-draft profile has these normative constants:
 | --- | --- |
 | Protocol version | `0.1-draft` |
 | Peer transport framing | 4-byte unsigned big-endian length prefix followed by one UTF-8 JSON object |
-| Maximum encoded JSON frame size | 32 MiB |
+| Maximum encoded JSON frame size | 32 MiB (authenticated peers); 64 KiB (pre-authentication) |
 | Binary clipboard content | Base64 in JSON; payloads exceeding the frame limit fail with `PayloadTooLarge` |
 | Message IDs, operation IDs, offer IDs, event IDs | Lowercase RFC 4122 UUIDv4 strings |
 | Audit timestamps | RFC 3339 UTC |
 | Relative durations and expiries | Integer milliseconds, interpreted with local monotonic timers |
 
-Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame larger than 32 MiB MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
+Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame exceeding the applicable size limit MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
+
+Frame size limits are state-dependent. Before Ed25519 Proof of Possession (Section 5.3) verification succeeds, the maximum encoded frame size is 64 KiB. This pre-authentication limit prevents unauthenticated peers from exhausting daemon memory on resource-constrained devices. After PoP verification succeeds for a trusted peer, the maximum frame size increases to 32 MiB. Implementations MUST reject oversized frames by reading only the 4-byte length prefix, comparing against the applicable limit, and closing the connection without buffering the frame body.
 
 ## 2. Terminology and Conventions
 
@@ -173,6 +175,8 @@ On receiving a `session.hello` with `identityProof`, the verifier MUST:
 
 A `session.hello` message without `identityProof` MUST be rejected with `AuthenticationFailed`. Implementations MUST NOT fall back to extension-only verification.
 
+The verifier MUST use the exact 32-byte Ed25519 public key extracted from the peer's custom X.509 certificate extension (step 2) as the sole key for both reconstructing the signing input (step 4) and performing the Ed25519 signature verification (step 5). Implementations MUST NOT use any alternative public key obtained from the message payload, envelope, or any other source for PoP verification.
+
 #### 5.3.3 Channel and Certificate Binding Rationale
 
 Binding the proof to the TLS channel prevents replay attacks: a signature captured from one TLS session cannot be reused in another because the channel binding value differs per session. The inclusion of the signer's public key in the signing input prevents cross-identity replay where an attacker replays a proof intended for a different key.
@@ -204,6 +208,8 @@ Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` 
 Any device ID field inside a message payload (e.g., `sourceDeviceId` in `clipboard.offer`, `requestingDeviceId` in `clipboard.fetchRequest`) MUST be validated against the authenticated `sourceDeviceId` from the envelope. If a payload identity field does not match the envelope's authenticated identity, the message MUST be rejected with `Unauthorized` and a `critical` security event MUST be logged. Implementations MUST use only the envelope's authenticated `sourceDeviceId` for all business logic, state updates, and audit logging — never an unverified payload field.
 
 Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+
+Each TLS connection MUST process at most one `session.hello` message in each direction. If a peer sends a second `session.hello` on the same connection, the receiver MUST reject it with `ProtocolError` and terminate the session. This prevents application-layer state confusion from replayed or duplicated session initiation messages.
 
 ## 7. Normative Peer Message Schemas
 
@@ -318,6 +324,10 @@ Each capability is represented as a JSON object:
 | `policyFlags` | No | array of strings | Policy constraints required to use this capability; empty array or absent if none |
 
 Capability names use a `<domain>.<feature>` convention. The v0.1-draft vocabulary is a closed set; implementations MUST NOT advertise capability names outside this set in v0.1-draft.
+
+### 9.1.1 Capability Advertisement Limits
+
+A `capability.advertise` or `session.hello` message MUST NOT contain more than 64 capability objects. Capability `name` strings MUST NOT exceed 128 characters. Each element in `policyFlags` MUST NOT exceed 128 characters, and the `policyFlags` array MUST NOT contain more than 16 elements. If any of these limits are exceeded, the receiver MUST reject the message with `ProtocolError` and terminate the session. These bounds prevent resource exhaustion from adversarial capability advertisements.
 
 ### 9.2 Negotiation Algorithm
 
