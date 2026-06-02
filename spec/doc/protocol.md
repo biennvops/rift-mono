@@ -14,13 +14,15 @@ The v0.1-draft profile has these normative constants:
 | --- | --- |
 | Protocol version | `0.1-draft` |
 | Peer transport framing | 4-byte unsigned big-endian length prefix followed by one UTF-8 JSON object |
-| Maximum encoded JSON frame size | 32 MiB |
+| Maximum encoded JSON frame size | 32 MiB (authenticated peers); 64 KiB (pre-authentication) |
 | Binary clipboard content | Base64 in JSON; payloads exceeding the frame limit fail with `PayloadTooLarge` |
 | Message IDs, operation IDs, offer IDs, event IDs | Lowercase RFC 4122 UUIDv4 strings |
 | Audit timestamps | RFC 3339 UTC |
 | Relative durations and expiries | Integer milliseconds, interpreted with local monotonic timers |
 
-Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame larger than 32 MiB MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
+Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame exceeding the applicable size limit MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
+
+Frame size limits are state-dependent. Before Ed25519 Proof of Possession (Section 5.3) verification succeeds, the maximum encoded frame size is 64 KiB. This pre-authentication limit prevents unauthenticated peers from exhausting daemon memory on resource-constrained devices. After PoP verification succeeds for a trusted peer, the maximum frame size increases to 32 MiB. Implementations MUST reject oversized frames by reading only the 4-byte length prefix, comparing against the applicable limit, and closing the connection without buffering the frame body.
 
 ## 2. Terminology and Conventions
 
@@ -32,7 +34,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", and "MAY" 
 
 ## 3. Cryptographic Primitives and Identity Values
 
-Rift uses a dual-keypair model. Ed25519 provides stable device identity and fingerprint verification. ECDSA P-256 provides compatibility with standard TLS certificate authentication. The two identities are bound by embedding the Ed25519 public key in a custom extension of the ECDSA P-256 X.509 certificate.
+Rift uses a dual-keypair model. Ed25519 provides stable device identity and fingerprint verification. ECDSA P-256 provides compatibility with standard TLS certificate authentication. The two identities are bound by embedding the Ed25519 public key in a custom extension of the ECDSA P-256 X.509 certificate, and by requiring a post-handshake Ed25519 Proof of Possession (Section 5.3) that cryptographically proves ownership of the Ed25519 private key.
 
 Private keys MUST be generated and stored by the daemon. Private keys MUST NOT leave the daemon process, be transmitted on the network, or be exposed through IPC APIs.
 
@@ -96,7 +98,7 @@ Discovery version fields are hints only. The first encrypted peer message perfor
 
 The v0.1-draft mDNS-SD service type is `_rift._tcp`. This name is not registered with IANA per RFC 6763 §7 and is used as a local-network application protocol name only. Implementers should note that the IANA Service Name registry contains related entries `rift-lies` (port 914) and `rift-ties` (port 915) for the unrelated IETF RIFT protocol (Routing in Fat Trees, RFC 9692); there is no technical conflict because service type matching is exact.
 
-The service instance name MUST be unique on the local network segment. Implementations SHOULD use the device ID (which is derived from a public key hash and reveals no private information beyond reachability) as the instance name. Implementations MAY use an opaque random identifier regenerated on each advertisement cycle if even public-key-derived identifiers are considered too much pre-authentication disclosure. The instance name MUST NOT contain the trusted device display name.
+The service instance name MUST be unique on the local network segment. Implementations SHOULD use an opaque random identifier regenerated on each advertisement cycle as the instance name to minimize pre-authentication identity disclosure. Implementations MAY use the device ID (which is derived from a public key hash and reveals no private information beyond reachability) if stable instance naming is required for a specific use case. The instance name MUST NOT contain the trusted device display name.
 
 The service domain is `local.`.
 
@@ -108,8 +110,8 @@ The following TXT record key-value pairs are defined for v0.1-draft:
 | --- | --- | --- | --- |
 | `minV` | Yes | Protocol version string | Lowest version this daemon supports, e.g. `0.1-draft` |
 | `maxV` | Yes | Protocol version string | Highest version this daemon supports, e.g. `0.1-draft` |
-| `did` | No | Device ID string | Non-authoritative hint; MUST be verified post-TLS |
-| `fp` | No | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust |
+| `did` | No | Device ID string | Non-authoritative hint; MUST be verified post-TLS. Implementations SHOULD NOT include this field by default to limit pre-authentication identity disclosure; it MAY be included when explicit peer recognition before connection is required |
+| `fp` | No | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust. Implementations SHOULD NOT include this field by default for the same privacy reasons as `did` |
 
 All TXT record values are UTF-8 strings. The total TXT record payload MUST NOT exceed 1300 bytes. Unknown TXT record keys MUST be ignored by receivers. TXT records MUST NOT contain: device display names, capability lists, trust state information, clipboard metadata, or any content exchanged only over authenticated channels.
 
@@ -139,7 +141,51 @@ Immediately after TLS establishment, each peer MUST extract the Ed25519 public k
 
 For trusted peers, the extracted Ed25519 public key MUST match the trust store entry for the claimed peer. For untrusted discovered peers, the extracted key MAY be used to create a pairing candidate but MUST NOT grant access to protected operations until pairing completes. For blocked or revoked peers, the session MUST be rejected.
 
+Extracting the Ed25519 public key from the certificate extension is necessary but not sufficient. The TLS handshake proves possession of the ECDSA P-256 private key only. To prevent identity misbinding — where an attacker embeds another device's Ed25519 public key in their own certificate — each peer MUST also complete Ed25519 Proof of Possession as defined in Section 5.3 before the session is considered authenticated.
+
 Every message carrying a device ID MUST be checked for consistency with the Ed25519 identity bound to the current TLS session. A peer that changes from one device ID in discovery to another authenticated identity MUST NOT inherit trust from the discovery identity. This invariant directly mitigates the device-ID mismatch class represented by CVE-2025-66270.
+
+### 5.3 Ed25519 Proof of Possession
+
+Because the certificate extension embeds the Ed25519 public key as data, the TLS handshake alone does not prove that the peer holds the corresponding Ed25519 private key. Without this proof, an attacker who knows a victim's Ed25519 public key could forge a certificate embedding that key and impersonate the victim to any peer that trusts it. This is an identity misbinding attack.
+
+To bind the Ed25519 identity to the TLS session, each peer MUST prove possession of its Ed25519 private key during session establishment. The proof is carried in the `session.hello` message and verified before `session.accept` is sent.
+
+#### 5.3.1 Proof Construction
+
+The proof is an Ed25519 signature over a channel-bound and certificate-bound challenge. The signer MUST construct the challenge as follows:
+
+1. Extract the TLS channel binding value using `tls-exporter` (RFC 9266) with label `EXPORTER-RIFT-Ed25519-PoP` and no context, producing 32 bytes. If `tls-exporter` is unavailable (e.g., TLS 1.2 fallback), use `tls-unique` (RFC 5929); in this case, the TLS 1.2 session MUST have negotiated the Extended Master Secret extension (RFC 7627) — see Section 5.3.4. Implementations MUST prefer `tls-exporter` when available.
+2. Compute the SHA-256 hash of the signer's own DER-encoded ECDSA P-256 certificate, producing 32 bytes.
+3. Construct the signing input by concatenating in order: the ASCII string `RiftPoP-v2:`, the 32-byte channel binding value, the 32-byte Ed25519 public key of the signer, and the 32-byte SHA-256 certificate hash (96 bytes of key material total, 107 bytes total with prefix).
+4. Sign the concatenated input with the Ed25519 private key, producing a 64-byte signature.
+
+The proof is transmitted as `identityProof` in the `session.hello` payload, encoded as lowercase hexadecimal (128 characters).
+
+#### 5.3.2 Proof Verification
+
+On receiving a `session.hello` with `identityProof`, the verifier MUST:
+
+1. Extract the same TLS channel binding value from its side of the session.
+2. Extract the Ed25519 public key from the peer's certificate extension.
+3. Compute the SHA-256 hash of the peer's DER-encoded ECDSA P-256 certificate as presented during the TLS handshake.
+4. Reconstruct the expected signing input using the same concatenation as Section 5.3.1 (prefix, channel binding, peer's Ed25519 public key, hash of peer's ECDSA certificate).
+5. Verify the Ed25519 signature over the reconstructed input using the extracted public key.
+6. If verification fails, reject the session with `AuthenticationFailed` and log a `critical` security event of type `auth.failed` with details indicating identity-proof failure.
+
+A `session.hello` message without `identityProof` MUST be rejected with `AuthenticationFailed`. Implementations MUST NOT fall back to extension-only verification.
+
+The verifier MUST use the exact 32-byte Ed25519 public key extracted from the peer's custom X.509 certificate extension (step 2) as the sole key for both reconstructing the signing input (step 4) and performing the Ed25519 signature verification (step 5). Implementations MUST NOT use any alternative public key obtained from the message payload, envelope, or any other source for PoP verification.
+
+#### 5.3.3 Channel and Certificate Binding Rationale
+
+Binding the proof to the TLS channel prevents replay attacks: a signature captured from one TLS session cannot be reused in another because the channel binding value differs per session. The inclusion of the signer's public key in the signing input prevents cross-identity replay where an attacker replays a proof intended for a different key.
+
+Binding the proof to the signer's ECDSA certificate prevents the Triple Handshake Attack (CVE-2014-1295) against `tls-unique` in TLS 1.2 fallback scenarios. Without certificate binding, an active MitM could synchronize `tls-unique` values across two TLS sessions and replay the victim's PoP signature. Including the certificate hash ensures the signature is valid only for the specific ECDSA certificate used in the handshake — the attacker's certificate hash will differ, causing verification to fail on the target.
+
+#### 5.3.4 TLS 1.2 Extended Master Secret Requirement
+
+When a TLS 1.2 session is used (i.e., `tls-exporter` is unavailable and `tls-unique` is the channel binding), the session MUST have negotiated the Extended Master Secret (EMS) extension defined in RFC 7627. If EMS was not negotiated, the implementation MUST reject the session with `AuthenticationFailed` before attempting PoP verification. This requirement prevents the class of Triple Handshake attacks where the attacker synchronizes the master secret across two non-EMS sessions. TLS 1.3 is not affected because it incorporates equivalent protections by design.
 
 ## 6. Peer Message Envelope and Version Negotiation
 
@@ -159,7 +205,11 @@ Every peer message is one JSON object using the common envelope:
 
 Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` MUST cause `ProtocolError`. Implementations MUST reject missing required fields, wrong JSON types, malformed identifiers, or envelope/device identity mismatches with `MalformedMessage`, `Unauthorized`, or `ProtocolError` as applicable.
 
-Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, and `capabilities`. The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+Any device ID field inside a message payload (e.g., `sourceDeviceId` in `clipboard.offer`, `requestingDeviceId` in `clipboard.fetchRequest`) MUST be validated against the authenticated `sourceDeviceId` from the envelope. If a payload identity field does not match the envelope's authenticated identity, the message MUST be rejected with `Unauthorized` and a `critical` security event MUST be logged. Implementations MUST use only the envelope's authenticated `sourceDeviceId` for all business logic, state updates, and audit logging — never an unverified payload field.
+
+Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+
+Each TLS connection MUST process at most one `session.hello` message in each direction. If a peer sends a second `session.hello` on the same connection, the receiver MUST reject it with `ProtocolError` and terminate the session. This prevents application-layer state confusion from replayed or duplicated session initiation messages.
 
 ## 7. Normative Peer Message Schemas
 
@@ -174,11 +224,14 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "supportedVersions": ["0.1-draft"],
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
-  "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }]
+  "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+  "identityProof": "a]1b2c3...128 hex chars...f4e5d6"
 }
 ```
 
-`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `capabilities` array of capability objects.
+The `identityProof` field is REQUIRED. It contains a 128-character lowercase hexadecimal string encoding the 64-byte Ed25519 signature defined in Section 5.3.
+
+`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
 `session.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
@@ -192,13 +245,15 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.3 Pairing Messages
 
-`pairing.start` payload fields: `fingerprint` fingerprint string, `expiresInMs` duration, optional `displayName` string.
+`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string.
 
-`pairing.approve` payload fields: `fingerprint` fingerprint string, `approvedAt` RFC 3339 timestamp.
+`pairing.approve` payload fields: `approvedAt` RFC 3339 timestamp.
 
 `pairing.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
-`pairing.complete` payload fields: `trustedDeviceId` device ID, `fingerprint` fingerprint string, `persistedAt` RFC 3339 timestamp.
+`pairing.complete` payload fields: `trustedDeviceId` device ID, `persistedAt` RFC 3339 timestamp.
+
+The `fingerprint` field MUST NOT appear in pairing message payloads. The receiving daemon MUST always derive the fingerprint locally from the peer's Ed25519 public key as extracted from the authenticated TLS certificate extension (Section 3.2, Section 3.5). Displaying or acting on a fingerprint received in a peer message payload would allow an attacker to spoof the fingerprint shown to the user, defeating the visual verification step. The `trustedDeviceId` in `pairing.complete` MUST match the device ID derived from the session's authenticated Ed25519 identity; a mismatch MUST be rejected with `AuthenticationFailed`.
 
 ### 7.4 Presence Messages
 
@@ -206,13 +261,15 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.5 Clipboard Messages
 
-`clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string.
+`clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string, `offerSequence` non-negative integer.
 
 `clipboard.fetchRequest` payload fields: `offerId`, `requestingDeviceId` device ID.
 
 `clipboard.fetchResponse` payload fields: `offerId`, `contentBase64` string, `byteSize` non-negative integer, `sha256` clipboard hash.
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
+
+The `offerSequence` field is a strictly increasing per-peer monotonic sequence number. Each device MUST increment `offerSequence` for every new `clipboard.offer` it sends within a session. The receiver MUST maintain a high-water mark of the highest `offerSequence` seen from each peer. An incoming `clipboard.offer` with an `offerSequence` less than or equal to the current high-water mark for that peer MUST be silently discarded and logged as a `warning` security event of type `clipboard.offer_replay`. This provides defense-in-depth against application-layer replay or reordering of clipboard offers beyond the transport-layer protections provided by TLS.
 
 ### 7.6 Operation Messages
 
@@ -246,7 +303,7 @@ Only `trusted` peers may perform protected operations. `discovered` and `pairing
 
 Revocation MUST keep a durable negative-trust record keyed by the Ed25519 public key and derived device ID. Deleting active trust MUST NOT delete the evidence needed to reject the identity later. Re-establishing trust with a revoked identity requires an explicit local reset followed by a full new pairing flow.
 
-Pairing occurs over mutual TLS. There is no separate custom key exchange outside TLS; ephemeral key agreement is provided by the TLS handshake.
+Pairing occurs over mutual TLS. There is no separate custom key exchange outside TLS; ephemeral key agreement is provided by the TLS handshake. Both peers MUST complete Ed25519 Proof of Possession (Section 5.3) as part of session establishment before pairing messages are exchanged.
 
 ## 9. Capability Negotiation
 
@@ -267,6 +324,10 @@ Each capability is represented as a JSON object:
 | `policyFlags` | No | array of strings | Policy constraints required to use this capability; empty array or absent if none |
 
 Capability names use a `<domain>.<feature>` convention. The v0.1-draft vocabulary is a closed set; implementations MUST NOT advertise capability names outside this set in v0.1-draft.
+
+### 9.1.1 Capability Advertisement Limits
+
+A `capability.advertise` or `session.hello` message MUST NOT contain more than 64 capability objects. Capability `name` strings MUST NOT exceed 128 characters. Each element in `policyFlags` MUST NOT exceed 128 characters, and the `policyFlags` array MUST NOT contain more than 16 elements. If any of these limits are exceeded, the receiver MUST reject the message with `ProtocolError` and terminate the session. These bounds prevent resource exhaustion from adversarial capability advertisements.
 
 ### 9.2 Negotiation Algorithm
 
@@ -350,6 +411,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `trust.transitioned` | Trust state changed (any transition from Section 8) |
 | `trust.revoked` | Peer trust revoked; sessions terminated |
 | `auth.failed` | Authentication or identity verification failed |
+| `auth.identity_proof_failed` | Ed25519 Proof of Possession verification failed (Section 5.3) |
 | `connection.established` | Mutual TLS session established with a peer |
 | `connection.rejected` | TLS session rejected (untrusted, blocked, or revoked peer) |
 | `connection.lost` | TLS session lost unexpectedly |
@@ -359,6 +421,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `clipboard.offered` | Clipboard offer broadcast to peers |
 | `clipboard.fetched` | Clipboard content fetched by or from a peer |
 | `clipboard.expired` | Clipboard offer expired without fetch |
+| `clipboard.offer_replay` | Clipboard offer rejected due to out-of-order or replayed sequence number |
 | `message.malformed` | Received peer message failed envelope or schema validation |
 | `certificate.malformed` | Peer certificate failed extension parsing |
 | `policy.denied` | Action denied by local policy |
@@ -503,7 +566,7 @@ Implementations MUST reject this envelope with `MalformedMessage`.
 
 Rift's security design specifically addresses three KDE Connect vulnerability classes documented in the project register.
 
-CVE-2025-66270-style identity switching is mitigated by deriving device identity from the Ed25519 public key and validating device ID consistency across every authenticated session. Trust never follows unauthenticated discovery identifiers.
+CVE-2025-66270-style identity switching is mitigated by two complementary mechanisms: (1) deriving device identity from the Ed25519 public key and validating device ID consistency across every authenticated message, and (2) requiring Ed25519 Proof of Possession (Section 5.3) during session establishment. Without PoP, an attacker who knows a victim's Ed25519 public key could embed it in their own ECDSA certificate and impersonate the victim (identity misbinding). The PoP step ensures that the peer actually holds the Ed25519 private key corresponding to the claimed identity. Trust never follows unauthenticated discovery identifiers.
 
 CVE-2025-32900-style device spoofing is mitigated by keeping discovery metadata minimal and unauthoritative. User-visible device information and capabilities are accepted only after mutual TLS and Ed25519 binding verification.
 
@@ -594,7 +657,8 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
     "supportedVersions": ["0.1-draft"],
     "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
     "implementationId": "riftd-cs/0.1.0",
-    "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }]
+    "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+    "identityProof": "a1b2c3d4...128 hex characters...e5f6a7b8"
   }
 }
 ```
