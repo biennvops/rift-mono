@@ -87,6 +87,11 @@ class TransportImpl implements Transport {
       var peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(peerCert.pem);
       var peerDeviceId = await IdentityManagerImpl.deriveDeviceId(peerEd25519Key);
       
+      // FIX: Close existing socket if device reconnects to prevent leak and zombie sockets
+      if (_socketMap.containsKey(peerDeviceId)) {
+        _socketMap[peerDeviceId]?.destroy();
+      }
+      
       _socketMap[peerDeviceId] = socket;
       
       socket.cast<List<int>>().transform(RiftFrameTransformer()).listen(
@@ -95,10 +100,14 @@ class TransportImpl implements Transport {
         },
         onError: (e) {
           socket.destroy();
-          _socketMap.remove(peerDeviceId);
+          if (_socketMap[peerDeviceId] == socket) {
+            _socketMap.remove(peerDeviceId);
+          }
         },
         onDone: () {
-          _socketMap.remove(peerDeviceId);
+          if (_socketMap[peerDeviceId] == socket) {
+            _socketMap.remove(peerDeviceId);
+          }
         },
       );
       
