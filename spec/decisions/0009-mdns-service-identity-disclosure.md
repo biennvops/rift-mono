@@ -10,7 +10,7 @@ mDNS-SD discovery records are broadcast before any authentication. The amount of
 
 ## Decision
 
-Discovery records expose only the minimum metadata needed to initiate a TLS connection. Allowed: service type (`_rift._tcp`), TCP port, version hints (`minV`, `maxV`), optional device ID hint (`did`), optional fingerprint prefix (`fp`). Prohibited: device display names, icons, capability lists, trust state, clipboard metadata, any content exchanged only over authenticated channels.
+Discovery records expose only the minimum metadata needed to initiate a TLS connection. Allowed: service type (`_rift._tcp`), TCP port, version hints (`minV`, `maxV`), optional device ID hint (`did`), optional fingerprint prefix (`fp`). Prohibited: device display names, icons, capability lists, trust state, clipboard metadata, any content exchanged only over authenticated channels. Implementations SHOULD NOT include `did` or `fp` by default to limit pre-authentication identity disclosure and prevent passive network mapping of Rift devices; these fields MAY be included when explicit peer recognition before connection is required.
 
 The service type `_rift._tcp` is not registered with IANA per RFC 6763 §7. The nearby IANA registrations `rift-lies` (port 914) and `rift-ties` (port 915) are for the unrelated IETF RIFT protocol (RFC 9692) with no naming conflict.
 
