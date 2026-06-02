@@ -8,6 +8,18 @@ enum TrustState {
   revoked,
 }
 
+extension TrustStateExtension on TrustState {
+  String toJson() {
+    if (this == TrustState.pairingPending) return 'pairing_pending';
+    return name;
+  }
+
+  static TrustState fromJson(String value) {
+    if (value == 'pairing_pending') return TrustState.pairingPending;
+    return TrustState.values.firstWhere((e) => e.name == value, orElse: () => TrustState.discovered);
+  }
+}
+
 class TrustRecord {
   final String deviceId;
   final Uint8List ed25519PublicKey;
