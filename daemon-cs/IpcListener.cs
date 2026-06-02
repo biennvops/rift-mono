@@ -35,7 +35,15 @@ public class IpcListener(ILogger<IpcListener> logger)
             catch (Exception ex)
             {
                 logger.LogError(ex, "Error in IPC listener loop.");
-                await Task.Delay(1000, stoppingToken);
+
+                try
+                {
+                    await Task.Delay(1000, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
     }
