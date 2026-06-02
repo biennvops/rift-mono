@@ -40,13 +40,13 @@ void daemonEntryPoint(SendPort sendPort) async {
             'jsonrpc': '2.0',
             'method': 'rift.onPeerDiscovered',
             'params': {
-              'deviceId': peer.deviceId,
+              'deviceId': peer.deviceIdHint ?? peer.instanceId,
               'address': peer.address,
               'port': peer.port,
               'txtRecord': {
-                'minV': peer.protocolVersion,
-                'maxV': peer.protocolVersion,
-                'did': peer.deviceId,
+                'minV': peer.minVersion,
+                'maxV': peer.maxVersion,
+                'did': peer.deviceIdHint ?? peer.instanceId,
               }
             }
           };

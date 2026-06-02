@@ -77,17 +77,19 @@ class DiscoveryServiceImpl implements DiscoveryService {
           final peerMaxVersion = getTxtStrAny(['maxV', 'version'], peerMinVersion);
           
           final peer = DiscoveredPeer(
-            deviceId: peerDeviceId,
+            instanceId: peerDeviceId,
             address: service.host!,
             port: service.port ?? 0,
-            protocolVersion: peerMaxVersion,
+            minVersion: peerMinVersion,
+            maxVersion: peerMaxVersion,
+            deviceIdHint: peerDeviceId,
           );
           
           // Only broadcast if it's a new peer or its connection info has changed
           bool isNewOrUpdated = true;
           if (_knownPeers.containsKey(peerDeviceId)) {
             final existing = _knownPeers[peerDeviceId]!;
-            if (existing.address == peer.address && existing.port == peer.port && existing.protocolVersion == peer.protocolVersion) {
+            if (existing.address == peer.address && existing.port == peer.port && existing.maxVersion == peer.maxVersion && existing.minVersion == peer.minVersion) {
               isNewOrUpdated = false;
             }
           }

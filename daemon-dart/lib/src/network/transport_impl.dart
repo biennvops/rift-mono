@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 
 import 'package:basic_utils/basic_utils.dart';
@@ -20,14 +21,14 @@ class TransportImpl implements Transport {
   
   SecureServerSocket? _serverSocket;
   final Map<String, SecureSocket> _socketMap = {};
-  final StreamController<dynamic> _messageController = StreamController<dynamic>.broadcast();
+  final StreamController<Uint8List> _messageController = StreamController<Uint8List>.broadcast();
   
   late SecurityContext _securityContext;
 
   TransportImpl(this._identityManager, this._port);
 
   @override
-  Stream<dynamic> get onMessageReceived => _messageController.stream;
+  Stream<Uint8List> get onMessageReceived => _messageController.stream;
 
   Future<void> initialize() async {
     // Generate ephemeral ECDSA P-256 key pair
@@ -90,7 +91,7 @@ class TransportImpl implements Transport {
       
       socket.cast<List<int>>().transform(RiftFrameTransformer()).listen(
         (String jsonString) {
-          _messageController.add(jsonString);
+          _messageController.add(Uint8List.fromList(utf8.encode(jsonString)));
         },
         onError: (e) {
           socket.destroy();
@@ -109,10 +110,10 @@ class TransportImpl implements Transport {
   }
 
   @override
-  Future<void> sendMessage(String deviceId, dynamic message) async {
+  Future<void> sendMessage(String deviceId, Uint8List message) async {
     var socket = _socketMap[deviceId];
     if (socket != null) {
-      var frame = RiftFrameCodec.encode(jsonEncode(message));
+      var frame = RiftFrameCodec.encode(utf8.decode(message));
       socket.add(frame);
     }
   }
