@@ -151,11 +151,12 @@ To bind the Ed25519 identity to the TLS session, each peer MUST prove possession
 
 #### 5.3.1 Proof Construction
 
-The proof is an Ed25519 signature over a channel-bound challenge. The signer MUST construct the challenge as follows:
+The proof is an Ed25519 signature over a channel-bound and certificate-bound challenge. The signer MUST construct the challenge as follows:
 
-1. Extract the TLS channel binding value using `tls-exporter` (RFC 9266) with label `EXPORTER-RIFT-Ed25519-PoP` and no context, producing 32 bytes. If `tls-exporter` is unavailable (e.g., TLS 1.2 fallback), use `tls-unique` (RFC 5929). Implementations MUST prefer `tls-exporter` when available.
-2. Construct the signing input by concatenating the ASCII string `RiftPoP-v1:`, the 32-byte channel binding value, and the 32-byte Ed25519 public key of the signer (64 bytes of key material total, 75 bytes total with prefix).
-3. Sign the concatenated input with the Ed25519 private key, producing a 64-byte signature.
+1. Extract the TLS channel binding value using `tls-exporter` (RFC 9266) with label `EXPORTER-RIFT-Ed25519-PoP` and no context, producing 32 bytes. If `tls-exporter` is unavailable (e.g., TLS 1.2 fallback), use `tls-unique` (RFC 5929); in this case, the TLS 1.2 session MUST have negotiated the Extended Master Secret extension (RFC 7627) — see Section 5.3.4. Implementations MUST prefer `tls-exporter` when available.
+2. Compute the SHA-256 hash of the signer's own DER-encoded ECDSA P-256 certificate, producing 32 bytes.
+3. Construct the signing input by concatenating in order: the ASCII string `RiftPoP-v2:`, the 32-byte channel binding value, the 32-byte Ed25519 public key of the signer, and the 32-byte SHA-256 certificate hash (96 bytes of key material total, 107 bytes total with prefix).
+4. Sign the concatenated input with the Ed25519 private key, producing a 64-byte signature.
 
 The proof is transmitted as `identityProof` in the `session.hello` payload, encoded as lowercase hexadecimal (128 characters).
 
@@ -165,15 +166,22 @@ On receiving a `session.hello` with `identityProof`, the verifier MUST:
 
 1. Extract the same TLS channel binding value from its side of the session.
 2. Extract the Ed25519 public key from the peer's certificate extension.
-3. Reconstruct the expected signing input using the same concatenation as Section 5.3.1.
-4. Verify the Ed25519 signature over the reconstructed input using the extracted public key.
-5. If verification fails, reject the session with `AuthenticationFailed` and log a `critical` security event of type `auth.failed` with details indicating identity-proof failure.
+3. Compute the SHA-256 hash of the peer's DER-encoded ECDSA P-256 certificate as presented during the TLS handshake.
+4. Reconstruct the expected signing input using the same concatenation as Section 5.3.1 (prefix, channel binding, peer's Ed25519 public key, hash of peer's ECDSA certificate).
+5. Verify the Ed25519 signature over the reconstructed input using the extracted public key.
+6. If verification fails, reject the session with `AuthenticationFailed` and log a `critical` security event of type `auth.failed` with details indicating identity-proof failure.
 
 A `session.hello` message without `identityProof` MUST be rejected with `AuthenticationFailed`. Implementations MUST NOT fall back to extension-only verification.
 
-#### 5.3.3 Channel Binding Rationale
+#### 5.3.3 Channel and Certificate Binding Rationale
 
 Binding the proof to the TLS channel prevents replay attacks: a signature captured from one TLS session cannot be reused in another because the channel binding value differs per session. The inclusion of the signer's public key in the signing input prevents cross-identity replay where an attacker replays a proof intended for a different key.
+
+Binding the proof to the signer's ECDSA certificate prevents the Triple Handshake Attack (CVE-2014-1295) against `tls-unique` in TLS 1.2 fallback scenarios. Without certificate binding, an active MitM could synchronize `tls-unique` values across two TLS sessions and replay the victim's PoP signature. Including the certificate hash ensures the signature is valid only for the specific ECDSA certificate used in the handshake — the attacker's certificate hash will differ, causing verification to fail on the target.
+
+#### 5.3.4 TLS 1.2 Extended Master Secret Requirement
+
+When a TLS 1.2 session is used (i.e., `tls-exporter` is unavailable and `tls-unique` is the channel binding), the session MUST have negotiated the Extended Master Secret (EMS) extension defined in RFC 7627. If EMS was not negotiated, the implementation MUST reject the session with `AuthenticationFailed` before attempting PoP verification. This requirement prevents the class of Triple Handshake attacks where the attacker synchronizes the master secret across two non-EMS sessions. TLS 1.3 is not affected because it incorporates equivalent protections by design.
 
 ## 6. Peer Message Envelope and Version Negotiation
 
@@ -192,6 +200,8 @@ Every peer message is one JSON object using the common envelope:
 | `requiredExtensions` | No | array of strings | Unknown values cause `ProtocolError` |
 
 Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` MUST cause `ProtocolError`. Implementations MUST reject missing required fields, wrong JSON types, malformed identifiers, or envelope/device identity mismatches with `MalformedMessage`, `Unauthorized`, or `ProtocolError` as applicable.
+
+Any device ID field inside a message payload (e.g., `sourceDeviceId` in `clipboard.offer`, `requestingDeviceId` in `clipboard.fetchRequest`) MUST be validated against the authenticated `sourceDeviceId` from the envelope. If a payload identity field does not match the envelope's authenticated identity, the message MUST be rejected with `Unauthorized` and a `critical` security event MUST be logged. Implementations MUST use only the envelope's authenticated `sourceDeviceId` for all business logic, state updates, and audit logging — never an unverified payload field.
 
 Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
 
@@ -229,13 +239,15 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.3 Pairing Messages
 
-`pairing.start` payload fields: `fingerprint` fingerprint string, `expiresInMs` duration, optional `displayName` string.
+`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string.
 
-`pairing.approve` payload fields: `fingerprint` fingerprint string, `approvedAt` RFC 3339 timestamp.
+`pairing.approve` payload fields: `approvedAt` RFC 3339 timestamp.
 
 `pairing.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
-`pairing.complete` payload fields: `trustedDeviceId` device ID, `fingerprint` fingerprint string, `persistedAt` RFC 3339 timestamp.
+`pairing.complete` payload fields: `trustedDeviceId` device ID, `persistedAt` RFC 3339 timestamp.
+
+The `fingerprint` field MUST NOT appear in pairing message payloads. The receiving daemon MUST always derive the fingerprint locally from the peer's Ed25519 public key as extracted from the authenticated TLS certificate extension (Section 3.2, Section 3.5). Displaying or acting on a fingerprint received in a peer message payload would allow an attacker to spoof the fingerprint shown to the user, defeating the visual verification step. The `trustedDeviceId` in `pairing.complete` MUST match the device ID derived from the session's authenticated Ed25519 identity; a mismatch MUST be rejected with `AuthenticationFailed`.
 
 ### 7.4 Presence Messages
 
@@ -243,13 +255,15 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.5 Clipboard Messages
 
-`clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string.
+`clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string, `offerSequence` non-negative integer.
 
 `clipboard.fetchRequest` payload fields: `offerId`, `requestingDeviceId` device ID.
 
 `clipboard.fetchResponse` payload fields: `offerId`, `contentBase64` string, `byteSize` non-negative integer, `sha256` clipboard hash.
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
+
+The `offerSequence` field is a strictly increasing per-peer monotonic sequence number. Each device MUST increment `offerSequence` for every new `clipboard.offer` it sends within a session. The receiver MUST maintain a high-water mark of the highest `offerSequence` seen from each peer. An incoming `clipboard.offer` with an `offerSequence` less than or equal to the current high-water mark for that peer MUST be silently discarded and logged as a `warning` security event of type `clipboard.offer_replay`. This provides defense-in-depth against application-layer replay or reordering of clipboard offers beyond the transport-layer protections provided by TLS.
 
 ### 7.6 Operation Messages
 
@@ -397,6 +411,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `clipboard.offered` | Clipboard offer broadcast to peers |
 | `clipboard.fetched` | Clipboard content fetched by or from a peer |
 | `clipboard.expired` | Clipboard offer expired without fetch |
+| `clipboard.offer_replay` | Clipboard offer rejected due to out-of-order or replayed sequence number |
 | `message.malformed` | Received peer message failed envelope or schema validation |
 | `certificate.malformed` | Peer certificate failed extension parsing |
 | `policy.denied` | Action denied by local policy |
