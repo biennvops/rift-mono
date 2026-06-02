@@ -1,6 +1,45 @@
+import 'dart:typed_data';
+
+enum TrustState {
+  discovered,
+  pairingPending,
+  trusted,
+  blocked,
+  revoked,
+}
+
+extension TrustStateExtension on TrustState {
+  String toJson() {
+    if (this == TrustState.pairingPending) return 'pairing_pending';
+    return name;
+  }
+
+  static TrustState fromJson(String value) {
+    if (value == 'pairing_pending') return TrustState.pairingPending;
+    return TrustState.values.firstWhere((e) => e.name == value, orElse: () => TrustState.discovered);
+  }
+}
+
+class TrustRecord {
+  final String deviceId;
+  final Uint8List ed25519PublicKey;
+  final String fingerprint;
+  final TrustState state;
+
+  TrustRecord({
+    required this.deviceId,
+    required this.ed25519PublicKey,
+    required this.fingerprint,
+    required this.state,
+  });
+}
+
 abstract class TrustStore {
   Future<void> initialize();
-  Future<void> saveTrustedDevice(String deviceId, String fingerprint);
-  Future<bool> isDeviceTrusted(String deviceId);
-  Future<void> revokeDevice(String deviceId);
+  Future<void> saveTrustRecord(TrustRecord record);
+  Future<TrustRecord?> getTrustRecord(String deviceId);
+  Future<TrustState> getTrustState(String deviceId);
+  Future<void> blockDevice(String deviceId);
+  Future<void> revokeDevice(String deviceId, {required String reason});
+  Future<void> unblockDevice(String deviceId);
 }
