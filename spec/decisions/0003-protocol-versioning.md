@@ -1,3 +1,8 @@
+# ADR-0003: Protocol versioning
+
+Status: proposed
+
+Decision: Adopt semantic-like versioning for protocol profiles; v0.1-draft is initial.
 # ADR 0003: Protocol Versioning
 
 ## Status
