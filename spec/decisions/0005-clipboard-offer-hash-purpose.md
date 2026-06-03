@@ -17,6 +17,7 @@ See protocol specification Sections 3.3 and 11.
 ## Consequences
 
 - SHA-256 is mandatory; implementations cannot substitute a weaker hash.
-- The hash protects against content tampering by a compromised-but-trusted peer.
+- The hash detects content corruption during transport, encoding errors, and implementation bugs between offer and fetch.
+- The hash does NOT authenticate the sender or protect against a malicious peer that controls both the content and the hash. Sender authentication is provided by the TLS session and Ed25519 identity verification (Sections 5.2 and 5.3).
 - The hash is computed over raw bytes, not Base64, so both sides must agree on pre-encoding content.
 - Deduplication can use the same hash as a secondary benefit.
