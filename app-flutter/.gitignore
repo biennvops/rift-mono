@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local properties
+local.properties
+android/local.properties
+
+# iOS/macOS Ephemeral
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/flutter_export_environment.sh
+macos/Flutter/ephemeral/

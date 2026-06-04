@@ -1,8 +1,3 @@
-# ADR-0006: Pairing flow transport
-
-Status: proposed
-
-Decision: Perform pairing over mutual TLS channels established post-discovery; pairing messages are carried in authenticated session only.
 # ADR 0006: Pairing Flow Transport
 
 ## Status

@@ -2,7 +2,7 @@ name: Flutter CI
 
 on:
   push:
-    branches: [ main, kim-week1 ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -17,9 +17,11 @@ jobs:
           flutter-version: 'stable'
           cache: true
       - name: Install dependencies
-        run: |
-          flutter pub get
+        run: flutter pub get
+        working-directory: app-flutter
       - name: Analyze
         run: flutter analyze
+        working-directory: app-flutter
       - name: Run tests
         run: flutter test --coverage
+        working-directory: app-flutter

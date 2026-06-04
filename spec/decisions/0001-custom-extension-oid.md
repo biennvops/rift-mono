@@ -1,8 +1,3 @@
-# ADR-0001: Custom X.509 extension OID
-
-Status: proposed
-
-Decision: Reserve an OID for embedding Ed25519 public keys in ECDSA P-256 certificates. Details to be finalized.
 # ADR 0001: Custom Extension OID
 
 ## Status

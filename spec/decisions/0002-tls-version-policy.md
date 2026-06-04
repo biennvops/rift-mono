@@ -1,8 +1,3 @@
-# ADR-0002: TLS version policy
-
-Status: proposed
-
-Decision: Prefer TLS 1.3; allow TLS 1.2 fallback with EMS and strong ciphers where platform APIs force it. Details TBD.
 # ADR 0002: TLS Version Policy
 
 ## Status

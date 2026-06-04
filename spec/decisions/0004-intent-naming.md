@@ -1,8 +1,3 @@
-# ADR-0004: Intent vs Action naming
-
-Status: proposed
-
-Decision: Use `operation.*` as protocol-level term to avoid collision with Android `Intent`.
 # ADR 0004: Intent Naming
 
 ## Status

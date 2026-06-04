@@ -1,8 +1,3 @@
-# ADR-0005: Clipboard offer hash purpose
-
-Status: proposed
-
-Decision: Use SHA-256 to commit to clipboard content in offers; receivers must verify on fetch.
 # ADR 0005: Clipboard Offer Hash Purpose
 
 ## Status
