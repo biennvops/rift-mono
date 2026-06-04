@@ -225,7 +225,7 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
   "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
-  "identityProof": "a]1b2c3...128 hex chars...f4e5d6"
+  "identityProof": "a1b2c3...128 hex chars...f4e5d6"
 }
 ```
 

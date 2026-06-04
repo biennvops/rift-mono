@@ -214,6 +214,7 @@ class RiftCertBuilder {
 
       return lines.join('\n');
     } catch (e) {
+      if (e is CertificateBuilderException) rethrow;
       // Tuân thủ Mục 4 & 7: Minh bạch lỗi, ghi log nguyên nhân và bắt Exception
       throw CertificateBuilderException(
         'Failed to generate self-signed certificate',
