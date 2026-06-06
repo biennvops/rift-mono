@@ -89,6 +89,13 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash) async {
+    if (channelBinding.length != 32) {
+      throw ArgumentError('channelBinding must be exactly 32 bytes');
+    }
+    if (certHash.length != 32) {
+      throw ArgumentError('certHash must be exactly 32 bytes');
+    }
+
     // Protocol Section 5.3.1: RiftPoP-v2: + channelBinding + publicKey + certHash
     final prefix = Uint8List.fromList('RiftPoP-v2:'.codeUnits);
     final builder = BytesBuilder(copy: false);

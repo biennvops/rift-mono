@@ -55,10 +55,11 @@ daemon-dart/
   - **Assessment:** **PASSED (100%)**
 
 - **`[daemon-dart] Identity, Certificates, Frame Parsing` (Week 3):** Finalize core security.
-  - Successfully built the standard Fail-Closed **X.509 Decoder (`cert_decoder.dart`)**. Safely extracted the Ed25519 key from the ASN.1 structure.
+  - Successfully built the standard Fail-Closed **X.509 Decoder (`cert_decoder.dart`)**. Safely extracted the Ed25519 key from the ASN.1 structure. **Security Hardening:** Passed 8 comprehensive attack vectors (missing OID, duplicate OID, critical flags, length anomalies, truncated DER) in `decoder_test.dart`.
   - Implemented the **Frame Codec (`frame_codec.dart`)** with a 4-byte length prefix structure. **Improvement:** Integrated `RiftFrameTransformer` (StreamTransformer) to process data in chunks instead of statically loading 32 MiB into RAM, completely preventing memory exhaustion (OOM) attacks.
-  - Finalized **`IdentityManagerImpl`**: Integrated the `cryptography` package to generate and store the Ed25519 key, calculating the standard `rift- + Base32` Device ID. **Improvement:** Used Atomic Write technique to write to a `.tmp` file before `rename` to completely eliminate the risk of key corruption when the device loses power abruptly.
-  - **Assessment:** **PASSED (100%)** Passed all security Unit Tests.
+  - Finalized **`IdentityManagerImpl`**: Integrated the `cryptography` package to generate and store the Ed25519 key, calculating the standard `rift- + Base32` Device ID. **Security Hardening:** Added strict 32-byte length validation to `signIdentityProof` to prevent Length Extension/Domain Separation attacks.
+  - Fixed X.509 standard compliance in **`cert_builder.dart`** by generating cryptographically random 64-bit serial numbers to prevent TLS caching collisions.
+  - **Assessment:** **PASSED (100%)** 24/24 Security Unit Tests passing.
 
 ---
 
@@ -76,10 +77,13 @@ All architectural decisions in Week 1 and Week 2 are strictly designed to meet t
 
 ---
 
-## 3. Risk Assessment as of Week 3
+## 3. Risk Assessment (Moving into Week 4)
 
-1. **Certificate Parsing Risk (Expected for Week 3):**
-   Successfully generated the certificate in Week 2, but the next challenge in Week 3 is to extract (Decode/Parse) the certificate sent from another device. The requirement is to write a secure Parser (Fail-Closed) to block spoofed certificate attacks.
+1. **mDNS Service Risk (Expected Week 4):**
+   Week 4 will have to interact with the OS Native mDNS for discovery. There is a high risk of errors when integrating native plugins (`nsd`) via the Flutter Isolate.
+   
+2. **Slowloris OOM Risk (Expected Week 4):**
+   Although `frame_codec.dart` handles 32 MiB limits securely, the Transport layer must implement strict `ReadTimeout` on `SecureSocket` connections to prevent Slowloris attacks from exhausting memory.
 
-2. **mDNS Service Risk (Expected Week 4):**
-   Week 4 will have to interact with the OS Native mDNS, high risk of errors when integrating the plugin via Flutter Isolate.
+3. **Plaintext Key Storage Risk (Future/Backlog):**
+   Currently, `identity_manager_impl.dart` stores `identity.key` in plaintext. While protected by the Android App Sandbox (chmod 700), it remains vulnerable on rooted devices. Future iterations should explore Android Keystore integration via Flutter channels.
