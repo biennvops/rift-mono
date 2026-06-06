@@ -86,4 +86,21 @@ class IdentityManagerImpl implements IdentityManager {
     }
     return result.toString();
   }
+
+  @override
+  Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash) async {
+    // Protocol Section 5.3.1: RiftPoP-v2: + channelBinding + publicKey + certHash
+    final prefix = Uint8List.fromList('RiftPoP-v2:'.codeUnits);
+    final builder = BytesBuilder(copy: false);
+    builder.add(prefix);
+    builder.add(channelBinding);
+    builder.add(_publicKey);
+    builder.add(certHash);
+
+    final payload = builder.takeBytes();
+    final algorithm = Ed25519();
+    final keyPair = await algorithm.newKeyPairFromSeed(_privateKey);
+    final signature = await algorithm.sign(payload, keyPair: keyPair);
+    return Uint8List.fromList(signature.bytes);
+  }
 }
