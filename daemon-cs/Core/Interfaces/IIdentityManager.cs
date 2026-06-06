@@ -24,4 +24,14 @@ public interface IIdentityManager
     /// Gets the ECDSA P-256 TLS certificate which embeds the Ed25519 public key in a custom extension.
     /// </summary>
     X509Certificate2 GetTlsCertificate();
+
+    /// <summary>
+    /// Signs the given data using the Ed25519 private key for Proof of Possession.
+    /// </summary>
+    byte[] SignEd25519(byte[] data);
+
+    /// <summary>
+    /// Gets the pairing fingerprint (e.g. ABCD-EFGH-...).
+    /// </summary>
+    string GetFingerprint();
 }

@@ -15,7 +15,7 @@ public class IdentityManagerTests
         // Act
         mockIdentityManager.Object.EnsureIdentityInitialized();
         
-        // Assert
+        // Assert (Note: This is skeleton scaffolding that verifies mock dispatch, not actual behavior)
         mockIdentityManager.Verify(m => m.EnsureIdentityInitialized(), Times.Once);
     }
 }

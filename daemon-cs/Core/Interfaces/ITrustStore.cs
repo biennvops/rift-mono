@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace Rift.Daemon.Windows.Core.Interfaces;
@@ -13,9 +14,17 @@ public enum TrustState
 
 public class PeerIdentity 
 {
-    public string DeviceId { get; set; } = string.Empty;
+    public string DeviceId { get; init; } = string.Empty;
     public byte[]? Ed25519PublicKey { get; set; }
     public TrustState State { get; set; }
+    
+    public string? EcdsaCertificateFingerprint { get; set; }
+    public DateTimeOffset LastStateTransitionAt { get; set; }
+    
+    /// <summary>
+    /// Evidence needed to reject the identity later if revoked.
+    /// </summary>
+    public string? RevocationEvidence { get; set; }
 }
 
 public interface ITrustStore
@@ -36,12 +45,12 @@ public interface ITrustStore
     IEnumerable<PeerIdentity> GetAllPeers();
 
     /// <summary>
-    /// Updates the state of a peer tracking the state machine transition.
+    /// Attempts to update the state of a peer ensuring a valid state machine transition.
     /// </summary>
-    void UpdatePeerState(string deviceId, TrustState newState);
+    bool TryTransition(string deviceId, TrustState newState);
 
     /// <summary>
-    /// Rejects future connection attempts and removes key material.
+    /// Rejects future connection attempts and retains negative-trust evidence.
     /// </summary>
-    void RevokePeer(string deviceId);
+    void RevokePeer(string deviceId, string revocationEvidence);
 }

@@ -8,7 +8,7 @@ public interface IDiscoveryService
     /// Starts advertising this device over mDNS-SD using Makaretu.
     /// Only exposes non-sensitive device info.
     /// </summary>
-    void StartAdvertising(string deviceId, IEnumerable<string> capabilities);
+    void StartAdvertising(string deviceId, int minVersion, int maxVersion);
 
     /// <summary>
     /// Stops advertising this device.

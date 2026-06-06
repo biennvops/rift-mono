@@ -16,7 +16,7 @@ public class TrustStoreTests
         // Act
         mockTrustStore.Object.SavePeer(peer);
         
-        // Assert
+        // Assert (Note: This is skeleton scaffolding that verifies mock dispatch, not actual behavior)
         mockTrustStore.Verify(t => t.SavePeer(It.Is<PeerIdentity>(p => p.DeviceId == "test-device")), Times.Once);
     }
 }
