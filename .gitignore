@@ -64,3 +64,8 @@ spec/references/*
 tmp/
 temp/
 .cache/
+
+# IDE / project artifacts
+*.iml
+**/.metadata
+.idea/

@@ -5,10 +5,8 @@ enum TrustState {
   pairingPending,
   trusted,
   blocked,
-  revoked,
-}
+  revoked;
 
-extension TrustStateExtension on TrustState {
   String toJson() {
     if (this == TrustState.pairingPending) return 'pairing_pending';
     return name;

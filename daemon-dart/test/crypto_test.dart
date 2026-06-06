@@ -27,7 +27,23 @@ void main() {
       expect(ext.encodedBytes, equals(expectedDer));
     });
 
-    test('Should generate valid self-signed cert containing the extension', () {
+    test('Should throw CertificateBuilderException on invalid key length', () {
+      final invalidKey = Uint8List.fromList([0x01, 0x02, 0x03]);
+      final keyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
+      expect(
+        () => RiftCertBuilder.generateSelfSignedCert(keyPair, invalidKey),
+        throwsA(isA<CertificateBuilderException>()),
+      );
+    });
+
+    test('Should throw CertificateBuilderException on malformed base cert extraction', () {
+      expect(
+        () => RiftCertBuilder.createEd25519Extension(Uint8List(31)),
+        throwsA(isA<CertificateBuilderException>()),
+      );
+    });
+
+    test('Should correctly extract Ed25519 key from the generated cert via ASN.1 parsing', () {
       final keyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
       final certPem = RiftCertBuilder.generateSelfSignedCert(keyPair, mockEd25519Key);
       
@@ -41,29 +57,19 @@ void main() {
       final extensionsObj = tbsSeq.elements.last;
       expect(extensionsObj.tag, equals(0xA3)); // Context specific tag 3
       
-      // Verify that the extension is present inside
-      final extBytes = extensionsObj.encodedBytes;
+      // Verify that the extension is present inside and parse it
+      final extParser = ASN1Parser(extensionsObj.valueBytes());
+      final extSeq = extParser.nextObject() as ASN1Sequence; // The SEQUENCE OF Extension
+      final riftExtSeq = extSeq.elements.first as ASN1Sequence; // The Extension (Rift Ed25519)
       
-      final expectedOidSequence = [
-        0x06, 0x14, 0x69, 0x83, 0xB8, 0xF3, 0xBA, 0x8C, 0xBA, 0xBF, 
-        0xCA, 0xD1, 0xCD, 0x9A, 0xAB, 0xF7, 0x88, 0x88, 0x95, 0xFB, 0xE9, 0x0E
-      ];
+      final oid = riftExtSeq.elements[0] as ASN1ObjectIdentifier;
+      expect(oid.encodedBytes, equals(RiftCertBuilder.riftCustomOidBytes));
       
-      bool containsOid = false;
-      for (int i = 0; i < extBytes.length - expectedOidSequence.length; i++) {
-        bool match = true;
-        for (int j = 0; j < expectedOidSequence.length; j++) {
-          if (extBytes[i + j] != expectedOidSequence[j]) {
-            match = false;
-            break;
-          }
-        }
-        if (match) {
-          containsOid = true;
-          break;
-        }
-      }
-      expect(containsOid, isTrue, reason: 'Generated cert should contain the custom OID');
+      final outerOctet = riftExtSeq.elements.last as ASN1OctetString;
+      final innerParser = ASN1Parser(outerOctet.valueBytes());
+      final innerOctet = innerParser.nextObject() as ASN1OctetString;
+      
+      expect(innerOctet.valueBytes(), equals(mockEd25519Key));
     });
   });
 }
