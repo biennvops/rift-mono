@@ -1,4 +1,4 @@
-# Dart Daemon Assessment & Analysis Report (Week 1)
+# Dart Daemon Assessment & Analysis Report (Week 1 & 2)
 
 **Reference Standard:** `フィナーレ.md` (Master Plan)
 **Component:** Android Daemon (`daemon-dart`)
@@ -6,14 +6,17 @@
 
 ---
 
-## Directory Structure & Important Files (Planned in Week 1)
+## Directory Structure & Important Files (As of Week 2)
 
 ```text
 daemon-dart/
 ├── lib/
-│   └── src/                   # Root directory containing source code (currently empty, to be developed in following weeks)
-├── test/                      # Directory containing initial Unit Test configurations
-├── pubspec.yaml               # Dart platform declaration and core libraries (pointycastle, asn1lib, basic_utils)
+│   └── src/
+│       ├── crypto/            # Contains logic to generate X.509 certificate (cert_builder.dart)
+│       └── interfaces/        # Contains 5 core interfaces of the Daemon (identity, transport...)
+├── test/                      # Contains crypto_test.dart
+├── pubspec.yaml               # Dart platform declaration and core libraries
+├── demo_cert.dart             # Script to test generating PEM certificate
 └── README.md                  # Guide for running tests and Linter
 ```
 
@@ -23,30 +26,37 @@ daemon-dart/
 
 - **`[daemon-dart][infra]` (Week 1):** Initialize basic Dart daemon structure.
   - Installed and verified the usability of cryptography packages `pointycastle` and `asn1lib`.
-  - Set up the Test Framework and Linter.
   - Clearly shaped the directory planning in preparation for protocol modules.
+  - **Assessment:** **PASSED (100%)**
+
+- **`[daemon-dart] Module interfaces & [test]` (Week 2):** Build communication and certificate foundations.
+  - Set up all 5 Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`).
+  - Successfully wrote `cert_builder.dart` to automatically insert the custom OID and Ed25519 public key into the X.509 certificate.
+  - Passed the mTLS certificate security Unit Test.
+  - **Optimization:** Used `BytesBuilder` to prevent memory fragmentation during ASN.1 byte manipulation; Removed `dynamic` (replaced with `DiscoveredPeer`) to ensure absolute Type-Safety for the Interface architecture.
+  - **Security & Refactoring (Leader's Review):** Upgraded `TrustState` to Enhanced Enums, fixed Exception double-wrapping in `cert_builder.dart`, added `signIdentityProof` for Ed25519 PoP compliance, added connection lifecycle methods to `Transport`, and expanded `crypto_test.dart` with robust negative testing (ASN.1 parsing and invalid key handling).
   - **Assessment:** **PASSED (100%)**
 
 ---
 
 ## 2. System Specification Alignment (Protocol & IPC)
 
-Although Week 1 only focuses on basic infrastructure, foundational decisions have been strictly guided according to project specifications:
+All architectural decisions in Week 1 and Week 2 are strictly designed to meet the two core specifications of the project:
 
-- **Specification `spec/doc/protocol.md`:**
-  - *Cryptography Requirements (Section 3.4):* The protocol strictly requires **ECDSA P-256** signatures and X.509 network certificates containing a custom OID.
-  - *Week 1 Result:* Successfully selected and installed `pointycastle` and `asn1lib`. This is a core infrastructure decision because Dart's default library lacks the capability to deeply manipulate bytes to meet this security requirement.
-  
-- **Specification `spec/doc/ipc.md`:**
-  - *Communication Requirements (Section 2):* The daemon must communicate with the Flutter UI using the **JSON-RPC 2.0** standard via a Transport-agnostic binding.
-  - *Week 1 Result:* In the planning state. (Libraries like `json_rpc_2` and IPC module structures will be implemented upon completion of the network layer).
+### 2.1. Compliance with `spec/doc/protocol.md` (Network Protocol & Security)
+- **Application in Week 1:** The specification strictly requires the ECDSA P-256 signature standard and X.509 extension. Since the Dart SDK is not powerful enough to manipulate custom OIDs, Week 1 finalized the infrastructure approach: installing 2 low-level libraries, `pointycastle` and `asn1lib`.
+- **Application in Week 2:** Exactly executed Section 3.4 of the Protocol. The `cert_builder.dart` file directly used `asn1lib` to wrap the byte array in a *Double OCTET STRING*. Thereby successfully embedding the custom OID (`2.25...`) containing the Ed25519 key into the mTLS certificate. Guaranteed 100% consistency with the Windows Daemon.
+
+### 2.2. Compliance with `spec/doc/ipc.md` (Flutter Client Communication)
+- **Application in Week 1:** Built a strict directory framework, separating the communication code area (`ipc/`) and core business code (`interfaces/`, `crypto/`).
+- **Application in Week 2:** The IPC specification requires connections via JSON-RPC 2.0 over a Transport-agnostic binding. As a foundation, Week 2 created 5 Abstract Interfaces (`IdentityManager`, `DiscoveryService`...). This is the Abstraction Layer that forces future JSON-RPC communication code to interact through it, keeping the Daemon from being hard-coded to any rigid connection protocol.
 
 ---
 
-## 3. Risk Assessment as of Week 1
+## 3. Risk Assessment as of Week 2
 
-1. **ASN.1 Structure Risk (Expected for Week 2):**
-   Dart's standard `dart:io` library does not support embedding Custom X.509 Extensions (we need to embed the Ed25519 Public Key into the mTLS certificate according to the protocol standard). There is a very high risk that we will have to manually manipulate the ASN.1 byte array (Hack ASN.1 Tree) via the `asn1lib` library next week.
+1. **Certificate Parsing Risk (Expected for Week 3):**
+   Successfully generated the certificate in Week 2, but the next challenge in Week 3 is to extract (Decode/Parse) the certificate sent from another device. The requirement is to write a secure Parser (Fail-Closed) to block spoofed certificate attacks.
 
-2. **Architectural Risk:**
-   Need to ensure that the module interfaces designed next week fully synchronize with the C# Worker Service architecture on Windows so that the IPC architecture can operate smoothly.
+2. **mDNS Service Risk:**
+   Week 4 will have to interact with the OS Native mDNS, high risk of errors when integrating the plugin via Flutter Isolate.

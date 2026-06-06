@@ -1,0 +1,27 @@
+class DiscoveredPeer {
+  final String instanceId;
+  final String address;
+  final int port;
+  final String minVersion;
+  final String maxVersion;
+  final String? deviceIdHint;
+  final String? fingerprintPrefix;
+
+  DiscoveredPeer({
+    required this.instanceId,
+    required this.address,
+    required this.port,
+    required this.minVersion,
+    required this.maxVersion,
+    this.deviceIdHint,
+    this.fingerprintPrefix,
+  });
+}
+
+abstract class DiscoveryService {
+  Future<void> startAdvertising();
+  Future<void> stopAdvertising();
+  Stream<DiscoveredPeer> get onDeviceDiscovered;
+  Future<void> startDiscovery();
+  Future<void> stopDiscovery();
+}
