@@ -7,6 +7,7 @@ using Rift.Daemon.Linux;
 
 namespace Rift.Daemon.Tests.Core;
 
+[SupportedOSPlatform("osx")]
 [SupportedOSPlatform("linux")]
 public class LinuxIpcListenerTests : IDisposable
 {
@@ -19,19 +20,17 @@ public class LinuxIpcListenerTests : IDisposable
         _socketPath = Path.Combine(_testDir, "test.sock");
     }
 
-    private static bool IsLinux => OperatingSystem.IsLinux();
+    private static bool IsUnix => OperatingSystem.IsMacOS() || OperatingSystem.IsLinux();
 
     [Fact]
     public void FitsInSunPath_WithinLimit_ReturnsTrue()
     {
-        if (!IsLinux) return;
         Assert.True(LinuxIpcListener.FitsInSunPath("/tmp/rift-daemon/v0.1.sock"));
     }
 
     [Fact]
     public void FitsInSunPath_ExactlyAtLimit_ReturnsTrue()
     {
-        if (!IsLinux) return;
         // 107 bytes + 1 NUL = 108 = LinuxSunPathLimit
         var path = "/" + new string('a', 106);
         Assert.Equal(107, Encoding.UTF8.GetByteCount(path));
@@ -41,7 +40,6 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void FitsInSunPath_ExceedsLimit_ReturnsFalse()
     {
-        if (!IsLinux) return;
         // 108 bytes + 1 NUL = 109 > 108
         var path = "/" + new string('a', 107);
         Assert.Equal(108, Encoding.UTF8.GetByteCount(path));
@@ -51,7 +49,6 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void FitsInSunPath_NonAsciiExceedsLimit_ReturnsFalse()
     {
-        if (!IsLinux) return;
         // Each é is 2 UTF-8 bytes, so this is shorter by char count but long by byte count
         var path = "/" + new string('é', 54);
         Assert.True(path.Length < LinuxIpcListener.LinuxSunPathLimit);
@@ -62,7 +59,7 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void ResolveSocketPath_UsesXdgRuntimeDir_WhenValid()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         var xdgDir = Path.Combine(_testDir, "xdg-runtime");
         Directory.CreateDirectory(xdgDir);
@@ -86,7 +83,7 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void ResolveSocketPath_FallsBackToTmp_WhenXdgUnset()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         var prev = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         try
@@ -104,7 +101,7 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void ResolveSocketPath_FallsBackToTmp_WhenXdgNonexistent()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         var prev = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         try
@@ -122,7 +119,7 @@ public class LinuxIpcListenerTests : IDisposable
     [Fact]
     public void ResolveSocketPath_FallsBackToTmp_WhenXdgNotWritable()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         var xdgDir = Path.Combine(_testDir, "xdg-readonly");
         Directory.CreateDirectory(xdgDir);
@@ -142,27 +139,72 @@ public class LinuxIpcListenerTests : IDisposable
     }
 
     [Fact]
-    public void FallbackDirectory_WrongMode_RefusesToStart()
+    public void DefaultValidateFallbackDirectory_WrongMode_ReturnsFalse()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
-        var fallbackDir = Path.Combine(_testDir, "wrong-mode");
-        Directory.CreateDirectory(fallbackDir);
-        // Set wrong mode (0755 instead of 0700)
-        File.SetUnixFileMode(fallbackDir,
+        var dir = Path.Combine(_testDir, "wrong-mode");
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
+
+        Assert.False(LinuxIpcListener.DefaultValidateFallbackDirectory(dir));
+    }
+
+    [Fact]
+    public void DefaultValidateFallbackDirectory_CorrectMode_ReturnsTrue()
+    {
+        if (!IsUnix) return;
+
+        var dir = Path.Combine(_testDir, "correct-mode");
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        Assert.True(LinuxIpcListener.DefaultValidateFallbackDirectory(dir));
+    }
+
+    [Fact]
+    public void EnsureFallbackDirectory_FailedValidation_Throws()
+    {
+        if (!IsUnix) return;
+
+        var dir = Path.Combine(_testDir, "will-fail");
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            LinuxIpcListener.EnsureFallbackDirectory(dir, _ => false));
+        Assert.Contains("failed security validation", ex.Message);
+    }
+
+    [Fact]
+    public void EnsureFallbackDirectory_PassedValidation_DoesNotThrow()
+    {
+        if (!IsUnix) return;
+
+        var dir = Path.Combine(_testDir, "will-pass");
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        LinuxIpcListener.EnsureFallbackDirectory(dir, _ => true);
+    }
+
+    [Fact]
+    public void ResolveSocketPath_InjectedValidatorRejects_Throws()
+    {
+        if (!IsUnix) return;
 
         var prev = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
         try
         {
             Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", null);
-            // We can't directly test EnsureFallbackDirectory since it's private,
-            // but we can verify the pattern by checking modes ourselves
-            var mode = File.GetUnixFileMode(fallbackDir);
-            var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-            Assert.NotEqual(expected, mode);
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                LinuxIpcListener.ResolveSocketPath(validateFallbackDir: _ => false));
+            Assert.Contains("failed security validation", ex.Message);
         }
         finally
         {
@@ -171,27 +213,9 @@ public class LinuxIpcListenerTests : IDisposable
     }
 
     [Fact]
-    public void HandleExistingSocket_ConnectionRefused_DeletesSocket()
-    {
-        if (!IsLinux) return;
-
-        Directory.CreateDirectory(_testDir);
-        // Create a regular file to simulate a stale socket
-        File.WriteAllText(_socketPath, "");
-
-        using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        var ex = Assert.Throws<SocketException>(
-            () => probe.Connect(new UnixDomainSocketEndPoint(_socketPath)));
-
-        // ConnectionRefused or other error depending on the file type,
-        // but the point is it's not connectable
-        Assert.True(ex.SocketErrorCode != SocketError.Success);
-    }
-
-    [Fact]
     public void ConnectProbeDetectsLiveInstance()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         Directory.CreateDirectory(_testDir);
 
@@ -206,9 +230,22 @@ public class LinuxIpcListenerTests : IDisposable
     }
 
     [Fact]
+    public void ConnectProbeToNonSocketFile_ThrowsSocketException()
+    {
+        if (!IsUnix) return;
+
+        Directory.CreateDirectory(_testDir);
+        File.WriteAllText(_socketPath, "");
+
+        using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        Assert.Throws<SocketException>(
+            () => probe.Connect(new UnixDomainSocketEndPoint(_socketPath)));
+    }
+
+    [Fact]
     public async Task ClientCanConnectAndReceiveJsonRpcResponse()
     {
-        if (!IsLinux) return;
+        if (!IsUnix) return;
 
         Directory.CreateDirectory(_testDir);
 
@@ -237,20 +274,6 @@ public class LinuxIpcListenerTests : IDisposable
         clientRpc.Dispose();
         client.Shutdown(SocketShutdown.Both);
         await serverTask;
-    }
-
-    [Fact]
-    public void InjectableValidateDirectory_CanRejectBadDirectory()
-    {
-        if (!IsLinux) return;
-
-        // The injectable Func<string, bool> seam allows tests to simulate
-        // a directory that fails validation (wrong owner, wrong mode, etc.)
-        Func<string, bool> alwaysReject = _ => false;
-        Func<string, bool> alwaysAccept = _ => true;
-
-        Assert.False(alwaysReject("/some/path"));
-        Assert.True(alwaysAccept("/some/path"));
     }
 
     public void Dispose()
