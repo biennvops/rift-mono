@@ -6,7 +6,7 @@ using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Linux;
 
-public class LinuxIpcListener : IIpcListener, IDisposable
+public class LinuxIpcListener(ILogger<LinuxIpcListener> logger) : IIpcListener, IDisposable
 {
     private const string SocketDirName = "rift-daemon";
     private const string SocketFileName = "v0.1.sock";
@@ -15,22 +15,10 @@ public class LinuxIpcListener : IIpcListener, IDisposable
     private static readonly UnixFileMode Dir0700 =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
-    private readonly ILogger<LinuxIpcListener> _logger;
-    private readonly Func<string, bool> _validateDirectory;
+    internal Func<string, bool> ValidateFallbackDirectory { get; init; } = DefaultValidateFallbackDirectory;
 
     private Socket? _listenSocket;
     private string? _socketPath;
-
-    public LinuxIpcListener(ILogger<LinuxIpcListener> logger)
-        : this(logger, DefaultValidateDirectory)
-    {
-    }
-
-    internal LinuxIpcListener(ILogger<LinuxIpcListener> logger, Func<string, bool> validateDirectory)
-    {
-        _logger = logger;
-        _validateDirectory = validateDirectory;
-    }
 
     public static void EnsureNoDuplicateInstance()
     {
@@ -52,13 +40,16 @@ public class LinuxIpcListener : IIpcListener, IDisposable
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
+            // Stale socket — safe to remove. Other SocketException variants (e.g. EACCES)
+            // propagate deliberately: unlike macOS's catch-all delete, we refuse to touch
+            // a socket we can't positively identify as stale.
             File.Delete(socketPath);
         }
     }
 
     public async Task ListenAsync(CancellationToken stoppingToken)
     {
-        _socketPath = ResolveSocketPath();
+        _socketPath = ResolveSocketPath(ValidateFallbackDirectory);
         var socketDir = Path.GetDirectoryName(_socketPath)!;
 
         EnsureDirectoryWithMode(socketDir);
@@ -68,29 +59,21 @@ public class LinuxIpcListener : IIpcListener, IDisposable
 
         try
         {
-            try
-            {
-                _listenSocket.Bind(new UnixDomainSocketEndPoint(_socketPath));
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
-            {
-                throw new InvalidOperationException(
-                    $"Another rift-daemon instance is already listening on {_socketPath}", ex);
-            }
+            BindSocket(_listenSocket, _socketPath);
 
             File.SetUnixFileMode(_socketPath,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite);
 
             _listenSocket.Listen(backlog: 8);
 
-            _logger.LogInformation("Listening for IPC connections on {path}", _socketPath);
+            logger.LogInformation("Listening for IPC connections on {path}", _socketPath);
 
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
                     var client = await _listenSocket.AcceptAsync(stoppingToken);
-                    _logger.LogInformation("Client connected to IPC socket.");
+                    logger.LogInformation("Client connected to IPC socket.");
                     _ = Task.Run(() => HandleClientAsync(client, stoppingToken), stoppingToken);
                 }
                 catch (OperationCanceledException)
@@ -112,7 +95,20 @@ public class LinuxIpcListener : IIpcListener, IDisposable
         }
     }
 
-    internal static string ResolveSocketPath()
+    private static void BindSocket(Socket socket, string path)
+    {
+        try
+        {
+            socket.Bind(new UnixDomainSocketEndPoint(path));
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            throw new InvalidOperationException(
+                $"Another rift-daemon instance is already listening on {path}", ex);
+        }
+    }
+
+    internal static string ResolveSocketPath(Func<string, bool>? validateFallbackDir = null)
     {
         var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
 
@@ -134,38 +130,45 @@ public class LinuxIpcListener : IIpcListener, IDisposable
             throw new InvalidOperationException(
                 $"Socket path exceeds Linux sun_path limit of {LinuxSunPathLimit} bytes: {fallback}");
 
-        EnsureFallbackDirectory(fallbackDir);
+        EnsureFallbackDirectory(fallbackDir, validateFallbackDir ?? DefaultValidateFallbackDirectory);
         return fallback;
     }
 
     internal static bool FitsInSunPath(string path) =>
         Encoding.UTF8.GetByteCount(path) + 1 <= LinuxSunPathLimit;
 
-    private static void EnsureFallbackDirectory(string dirPath)
+    internal static void EnsureFallbackDirectory(string dirPath, Func<string, bool> validate)
     {
         if (Directory.Exists(dirPath))
         {
-            var mode = File.GetUnixFileMode(dirPath);
-            if (mode != Dir0700)
+            if (!validate(dirPath))
                 throw new InvalidOperationException(
-                    $"Fallback directory {dirPath} has mode {mode}, expected {Dir0700}. Refusing to start.");
-
-            var probe = Path.Combine(dirPath, $".probe-{Guid.NewGuid():N}");
-            try
-            {
-                File.WriteAllText(probe, "");
-                File.Delete(probe);
-            }
-            catch (UnauthorizedAccessException)
-            {
-                throw new InvalidOperationException(
-                    $"Fallback directory {dirPath} is not writable. Refusing to start.");
-            }
+                    $"Fallback directory {dirPath} failed security validation " +
+                    "(wrong mode or not writable). Refusing to start.");
         }
         else
         {
             Directory.CreateDirectory(dirPath);
             File.SetUnixFileMode(dirPath, Dir0700);
+        }
+    }
+
+    internal static bool DefaultValidateFallbackDirectory(string dirPath)
+    {
+        var mode = File.GetUnixFileMode(dirPath);
+        if (mode != Dir0700)
+            return false;
+
+        var probe = Path.Combine(dirPath, $".probe-{Guid.NewGuid():N}");
+        try
+        {
+            File.WriteAllText(probe, "");
+            File.Delete(probe);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
         }
     }
 
@@ -205,11 +208,14 @@ public class LinuxIpcListener : IIpcListener, IDisposable
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            _logger.LogInformation("Removing stale socket file at {path}", path);
+            logger.LogInformation("Removing stale socket file at {path}", path);
             File.Delete(path);
         }
         catch (SocketException ex)
         {
+            // Deliberately stricter than macOS's catch-all delete: only ConnectionRefused
+            // is a reliable stale-socket signal. Other errors (EACCES, ETIMEDOUT) on the
+            // /tmp fallback path could indicate a socket owned by another user.
             throw new InvalidOperationException(
                 $"Cannot probe existing socket at {path} (SocketError={ex.SocketErrorCode}). " +
                 "Refusing to delete — resolve manually.", ex);
@@ -223,11 +229,11 @@ public class LinuxIpcListener : IIpcListener, IDisposable
             await using var stream = new NetworkStream(client, ownsSocket: true);
             using var jsonRpc = JsonRpc.Attach(stream, new RiftApiHandler());
             await jsonRpc.Completion;
-            _logger.LogInformation("IPC client disconnected.");
+            logger.LogInformation("IPC client disconnected.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error handling IPC client.");
+            logger.LogError(ex, "Error handling IPC client.");
         }
     }
 
@@ -238,11 +244,11 @@ public class LinuxIpcListener : IIpcListener, IDisposable
             try
             {
                 File.Delete(_socketPath);
-                _logger.LogInformation("Cleaned up socket file at {path}", _socketPath);
+                logger.LogInformation("Cleaned up socket file at {path}", _socketPath);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to clean up socket file at {path}", _socketPath);
+                logger.LogWarning(ex, "Failed to clean up socket file at {path}", _socketPath);
             }
         }
     }
@@ -252,9 +258,6 @@ public class LinuxIpcListener : IIpcListener, IDisposable
         _listenSocket?.Dispose();
         CleanupSocketFile();
     }
-
-    private static bool DefaultValidateDirectory(string dirPath) =>
-        Directory.Exists(dirPath) && IsDirectoryWritable(dirPath);
 }
 
 internal static class Interop
