@@ -43,3 +43,39 @@ The following NuGet packages have been integrated to fulfill the core requiremen
 ## Execution
 
 The daemon can currently be built and run. When running in a standard console via `dotnet run`, it successfully hosts the Named Pipe and remains persistently active.
+
+---
+
+# Windows Daemon (riftd) - Week 2 Interface Architecture
+
+**Assignee:** Thạo
+**Task:** `[daemon-cs][infra] C# daemon module interfaces and Unit test skeleton`
+
+This section outlines the architectural foundation built for the daemon's internal modules and testing infrastructure during Week 2.
+
+## Project Structure Updates
+
+1. **Solution File (`Rift.Daemon.sln`)**
+   * A solution file was introduced to manage multiple `.csproj` projects together seamlessly.
+2. **Unit Testing Project (`Rift.Daemon.Windows.Tests`)**
+   * A new `xUnit` testing project was instantiated inside the `daemon-cs/` root directory.
+   * It properly targets `net10.0-windows` and leverages **Moq** for mocking dependencies.
+
+## Core Interfaces Designed
+
+A clean set of interfaces was added to `Core/Interfaces/` to abstract the system components per the project specification (preparing for concrete dependency injection):
+
+1.  **`IIdentityManager` (Identity Engine)**
+    *   **Responsibilities:** Ensures Ed25519 device identity and custom X.509 P-256 certificate generation via BouncyCastle.NET. Exposes `GetDeviceId` and cryptographic keys.
+2.  **`ITrustStore` (Database Abstraction)**
+    *   **Responsibilities:** Persists and retrieves `PeerIdentity` records based on the Protocol's Trust State Machine (`Discovered`, `PairingPending`, `Trusted`, `Blocked`, `Revoked`).
+3.  **`ITransport` (Network/RPC Layer)**
+    *   **Responsibilities:** Handles incoming/outgoing mTLS sessions and secure payload dispatching over mutually authenticated connections.
+4.  **`IDiscoveryService` (mDNS Engine)**
+    *   **Responsibilities:** Wraps the `Makaretu` library logic to advertise device capabilities and discover peers locally without exposing sensitive payloads.
+5.  **`IClipboardService` (Clipboard Operations)**
+    *   **Responsibilities:** Manages the broadcasting and reception of Clipboard Offers (metadata only) across trusted connections without hooking local desktop boundaries natively inside Session 0.
+
+## Execution (Week 2 Tests)
+
+The system successfully builds. The architecture integrates natively, and execution flows through the `xUnit` test suite where test skeletons run and pass without errors.
