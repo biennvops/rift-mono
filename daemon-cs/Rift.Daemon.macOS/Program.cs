@@ -8,4 +8,14 @@ builder.Services.AddSingleton<IIpcListener, MacIpcListener>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
-host.Run();
+
+try
+{
+    host.Run();
+}
+catch (InvalidOperationException ex) when (ex.Message.Contains("Another rift-daemon instance"))
+{
+    var logger = host.Services.GetRequiredService<ILoggerFactory>()
+        .CreateLogger("Rift.Daemon.macOS");
+    logger.LogCritical(ex, "Exiting: {message}", ex.Message);
+}

@@ -108,9 +108,8 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
         {
             probe.Connect(new UnixDomainSocketEndPoint(path));
             probe.Shutdown(SocketShutdown.Both);
-            logger.LogCritical(
-                "Another rift-daemon instance is already listening on {path}, exiting", path);
-            Environment.Exit(0);
+            throw new InvalidOperationException(
+                $"Another rift-daemon instance is already listening on {path}");
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
