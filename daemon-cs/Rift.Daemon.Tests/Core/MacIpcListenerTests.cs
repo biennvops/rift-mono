@@ -1,7 +1,6 @@
 using System.IO;
 using System.Net.Sockets;
 using System.Runtime.Versioning;
-using System.Text;
 using StreamJsonRpc;
 using Rift.Daemon.Core;
 
@@ -20,9 +19,12 @@ public class MacIpcListenerTests : IDisposable
         _socketPath = Path.Combine(_testDir, "test.sock");
     }
 
+    private static bool IsUnix => OperatingSystem.IsMacOS() || OperatingSystem.IsLinux();
+
     [Fact]
     public void DirectoryCreatedWithCorrectPermissions()
     {
+        if (!IsUnix) return;
         Directory.CreateDirectory(_testDir);
         File.SetUnixFileMode(_testDir,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -36,6 +38,8 @@ public class MacIpcListenerTests : IDisposable
     [Fact]
     public void SocketFileCreatedWithCorrectPermissions()
     {
+        if (!IsUnix) return;
+
         Directory.CreateDirectory(_testDir);
 
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -50,6 +54,8 @@ public class MacIpcListenerTests : IDisposable
     [Fact]
     public void ConnectProbeDetectsLiveInstance()
     {
+        if (!IsUnix) return;
+
         Directory.CreateDirectory(_testDir);
 
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
@@ -65,6 +71,8 @@ public class MacIpcListenerTests : IDisposable
     [Fact]
     public void ConnectProbeDetectsStaleSocket()
     {
+        if (!IsUnix) return;
+
         Directory.CreateDirectory(_testDir);
 
         // Simulate a stale socket: create a regular file at the socket path.
@@ -82,6 +90,8 @@ public class MacIpcListenerTests : IDisposable
     [Fact]
     public async Task ClientCanConnectAndReceiveJsonRpcResponse()
     {
+        if (!IsUnix) return;
+
         Directory.CreateDirectory(_testDir);
 
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
