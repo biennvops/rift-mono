@@ -80,8 +80,7 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
                 return primary;
         }
 
-        var uid = Environment.GetEnvironmentVariable("UID")
-                  ?? Interop.GetUid().ToString();
+        var uid = Interop.GetUid().ToString();
         var fallback = Path.Combine("/tmp", $"rift-daemon-{uid}", SocketFileName);
 
         if (fallback.Length >= MacOsSunPathLimit)
