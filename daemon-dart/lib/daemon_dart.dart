@@ -7,3 +7,4 @@ export 'src/interfaces/identity_manager.dart';
 export 'src/interfaces/transport.dart';
 export 'src/interfaces/trust_store.dart';
 export 'src/crypto/cert_builder.dart';
+export 'src/daemon.dart';

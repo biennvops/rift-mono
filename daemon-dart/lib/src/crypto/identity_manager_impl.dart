@@ -5,7 +5,9 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
+import 'package:basic_utils/basic_utils.dart';
 import '../interfaces/identity_manager.dart';
+import 'cert_builder.dart';
 
 class IdentityManagerImpl implements IdentityManager {
   final String storagePath;
@@ -14,6 +16,9 @@ class IdentityManagerImpl implements IdentityManager {
   late String _deviceId;
   late Uint8List _fingerprintBytes;
   SimpleKeyPair? _cachedKeyPair;
+
+  late String _tlsCertificatePem;
+  late String _tlsPrivateKeyPem;
 
   IdentityManagerImpl(this.storagePath);
 
@@ -40,6 +45,17 @@ class IdentityManagerImpl implements IdentityManager {
       
       await _derivePublicKey();
     }
+
+    // Generate Ephemeral TLS Certificate for the session
+    // Because the trust root is Ed25519, the TLS certificate can be ephemeral.
+    final ecdsaKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
+    _tlsPrivateKeyPem = CryptoUtils.encodeEcPrivateKeyToPem(ecdsaKeyPair.privateKey as ECPrivateKey);
+    
+    _tlsCertificatePem = RiftCertBuilder.generateSelfSignedCert(
+      ecdsaKeyPair,
+      _publicKey,
+      commonName: _deviceId,
+    );
   }
 
   Future<void> _derivePublicKey() async {
@@ -66,6 +82,12 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   String get deviceId => _deviceId;
+
+  @override
+  String get tlsCertificatePem => _tlsCertificatePem;
+
+  @override
+  String get tlsPrivateKeyPem => _tlsPrivateKeyPem;
 
   /// Simple RFC 4648 Base32 Encoder without padding
   static String _encodeBase32(Uint8List data) {
@@ -125,7 +147,9 @@ class IdentityManagerImpl implements IdentityManager {
         _fingerprintBytes[i] = 0;
       }
       _deviceId = '';
-    } catch (_) {
+      _tlsCertificatePem = '';
+      _tlsPrivateKeyPem = '';
+    } on Error {
       // Ignore uninitialized fields
     }
     _cachedKeyPair = null;

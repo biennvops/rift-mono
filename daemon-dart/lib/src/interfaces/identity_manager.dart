@@ -5,6 +5,8 @@ abstract class IdentityManager {
   Uint8List getEd25519PublicKey();
   Uint8List getDeviceFingerprint();
   String get deviceId;
+  String get tlsCertificatePem;
+  String get tlsPrivateKeyPem;
   Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash);
   Future<void> dispose();
 }
