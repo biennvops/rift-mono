@@ -1,4 +1,3 @@
-// lib/src/crypto/identity_manager_impl.dart
 
 
 import 'dart:io';
@@ -14,6 +13,7 @@ class IdentityManagerImpl implements IdentityManager {
   late Uint8List _publicKey;
   late String _deviceId;
   late Uint8List _fingerprintBytes;
+  SimpleKeyPair? _cachedKeyPair;
 
   IdentityManagerImpl(this.storagePath);
 
@@ -36,6 +36,7 @@ class IdentityManagerImpl implements IdentityManager {
       var tempFile = File('${keyFile.path}.tmp');
       await tempFile.writeAsBytes(_privateKey, flush: true);
       await tempFile.rename(keyFile.path);
+      // TODO(Security): Integrate Android Keystore via Flutter channels to avoid plaintext Ed25519 seed storage.
       
       await _derivePublicKey();
     }
@@ -43,8 +44,8 @@ class IdentityManagerImpl implements IdentityManager {
 
   Future<void> _derivePublicKey() async {
     var algorithm = Ed25519();
-    var keyPair = await algorithm.newKeyPairFromSeed(_privateKey);
-    var pubKeyObj = await keyPair.extractPublicKey();
+    _cachedKeyPair = await algorithm.newKeyPairFromSeed(_privateKey);
+    var pubKeyObj = await _cachedKeyPair!.extractPublicKey();
     _publicKey = Uint8List.fromList(pubKeyObj.bytes);
 
     // Calculate Fingerprint: SHA-256(Ed25519 pubkey)
@@ -89,6 +90,7 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash) async {
+    if (_cachedKeyPair == null) throw StateError('IdentityManager not initialized');
     if (channelBinding.length != 32) {
       throw ArgumentError('channelBinding must be exactly 32 bytes');
     }
@@ -106,8 +108,15 @@ class IdentityManagerImpl implements IdentityManager {
 
     final payload = builder.takeBytes();
     final algorithm = Ed25519();
-    final keyPair = await algorithm.newKeyPairFromSeed(_privateKey);
-    final signature = await algorithm.sign(payload, keyPair: keyPair);
+    final signature = await algorithm.sign(payload, keyPair: _cachedKeyPair!);
     return Uint8List.fromList(signature.bytes);
+  }
+
+  @override
+  Future<void> dispose() async {
+    for (var i = 0; i < _privateKey.length; i++) {
+      _privateKey[i] = 0;
+    }
+    _cachedKeyPair = null;
   }
 }

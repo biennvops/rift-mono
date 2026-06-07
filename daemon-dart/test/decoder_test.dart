@@ -1,4 +1,3 @@
-// test/decoder_test.dart
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -107,6 +106,9 @@ void main() {
         throwsA(isA<CertificateDecoderException>().having((e) => e.message, 'msg', contains('non-critical'))),
       );
     });
+
+    // Class 4: Extension Criticality True but Not Supported - Not tested here as OID is exactly matched and supported.
+
 
     test('Class 5: Should throw if inner key is < 32 bytes', () {
       var shortKey = Uint8List.fromList(List.generate(31, (i) => i));

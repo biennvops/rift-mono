@@ -110,8 +110,9 @@ class RiftCertBuilder {
       var actualSerialNumber = serialNumber;
       if (actualSerialNumber == defaultSerial) {
         var random = Random.secure();
-        var ms = DateTime.now().millisecondsSinceEpoch;
-        actualSerialNumber = '$ms${random.nextInt(10000)}';
+        var bytes = List.generate(8, (_) => random.nextInt(256));
+        var hexStr = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        actualSerialNumber = BigInt.parse(hexStr, radix: 16).toString();
       }
 
       // 1. Generate base self-signed certificate using basic_utils

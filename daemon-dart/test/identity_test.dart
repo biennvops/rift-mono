@@ -1,6 +1,6 @@
-// test/identity_test.dart
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
@@ -41,6 +41,62 @@ void main() {
 
       expect(key2, equals(key1));
       expect(deviceId2, equals(deviceId1));
+    });
+
+    test('Should throw Exception if key file is corrupted (wrong length)', () async {
+      var keyFile = File('${tempDir.path}/identity.key');
+      await keyFile.writeAsBytes([1, 2, 3]); // Only 3 bytes instead of 32
+      
+      var manager = IdentityManagerImpl(tempDir.path);
+      expect(
+        () => manager.initialize(),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'msg', contains('Corrupted identity key file'))),
+      );
+    });
+
+    test('Should correctly sign Proof of Possession and enforce 32-byte arguments', () async {
+      var manager = IdentityManagerImpl(tempDir.path);
+      await manager.initialize();
+
+      var validChannelBinding = Uint8List.fromList(List.generate(32, (i) => i));
+      var validCertHash = Uint8List.fromList(List.generate(32, (i) => 255 - i));
+
+      // Should sign successfully
+      var signature = await manager.signIdentityProof(validChannelBinding, validCertHash);
+      expect(signature.length, equals(64)); // Ed25519 signature is 64 bytes
+
+      // Should throw on invalid length
+      var invalidBuffer = Uint8List.fromList(List.generate(31, (i) => i));
+      expect(
+        () => manager.signIdentityProof(invalidBuffer, validCertHash),
+        throwsA(isA<ArgumentError>()),
+      );
+      expect(
+        () => manager.signIdentityProof(validChannelBinding, invalidBuffer),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('Should throw StateError if signing before initialize', () async {
+      var manager = IdentityManagerImpl(tempDir.path);
+      var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
+      
+      expect(
+        () => manager.signIdentityProof(validBuffer, validBuffer),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('Should clear memory on dispose', () async {
+      var manager = IdentityManagerImpl(tempDir.path);
+      await manager.initialize();
+      await manager.dispose();
+      
+      var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
+      expect(
+        () => manager.signIdentityProof(validBuffer, validBuffer),
+        throwsA(isA<StateError>()),
+      );
     });
   });
 }

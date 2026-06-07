@@ -1,5 +1,5 @@
-// test/frame_codec_test.dart
 
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/network/frame_codec.dart';
@@ -7,21 +7,17 @@ import 'package:daemon_dart/src/network/frame_codec.dart';
 void main() {
   group('RiftFrameCodec Tests', () {
     test('Should correctly encode and decode a JSON string', () {
-      String payload = '{"rift": "0.1-draft", "type": "session.hello"}';
+      Map<String, dynamic> payload = {"rift": "0.1-draft", "type": "session.hello"};
       var encoded = RiftFrameCodec.encode(payload);
+      var jsonString = json.encode(payload);
       
       // Length should be 4 bytes prefix + payload length
-      expect(encoded.length, equals(4 + payload.length));
+      expect(encoded.length, equals(4 + utf8.encode(jsonString).length));
       
       var decoded = RiftFrameCodec.decode(encoded);
       expect(decoded, equals(payload));
     });
 
-    test('Should reject payloads exceeding 32 MiB on encode', () {
-      // Mock a huge string (this takes RAM, so we just check the length logic)
-      // Actually we can't easily allocate 32 MiB string in test without slowing it down.
-      // We will skip testing actual 32 MiB string allocation, but we test decode bounds.
-    });
 
     test('Should throw PayloadTooLarge on decode if declared length > 32 MiB', () {
       var frame = Uint8List(8);
@@ -55,12 +51,12 @@ void main() {
     });
 
     test('Should throw FrameCodecException on length mismatch', () {
-      String payload = '{"a": "b"}';
+      Map<String, dynamic> payload = {"a": "b"};
       var encoded = RiftFrameCodec.encode(payload);
       
       // Corrupt the length prefix
       var bd = ByteData.view(encoded.buffer);
-      bd.setUint32(0, payload.length + 10, Endian.big);
+      bd.setUint32(0, utf8.encode(json.encode(payload)).length + 10, Endian.big);
       
       expect(
         () => RiftFrameCodec.decode(encoded),
@@ -88,7 +84,11 @@ void main() {
     });
 
     test('Should throw MalformedMessage on non-object JSON payload', () {
-      var frame = RiftFrameCodec.encode('"text"');
+      var payloadBytes = utf8.encode('"text"');
+      var frame = Uint8List(4 + payloadBytes.length);
+      var bd = ByteData.view(frame.buffer);
+      bd.setUint32(0, payloadBytes.length, Endian.big);
+      frame.setRange(4, frame.length, payloadBytes);
 
       expect(
         () => RiftFrameCodec.decode(frame),
@@ -105,8 +105,8 @@ void main() {
 
   group('RiftFrameTransformer Tests', () {
     test('Should correctly process a stream of chunked frames', () async {
-      String payload1 = '{"a": 1}';
-      String payload2 = '{"b": 2}';
+      Map<String, dynamic> payload1 = {"a": 1};
+      Map<String, dynamic> payload2 = {"b": 2};
       
       var frame1 = RiftFrameCodec.encode(payload1);
       var frame2 = RiftFrameCodec.encode(payload2);

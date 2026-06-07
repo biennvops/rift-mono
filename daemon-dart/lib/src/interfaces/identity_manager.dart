@@ -6,4 +6,5 @@ abstract class IdentityManager {
   Uint8List getDeviceFingerprint();
   String get deviceId;
   Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash);
+  Future<void> dispose();
 }

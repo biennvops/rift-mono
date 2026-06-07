@@ -1,4 +1,3 @@
-// lib/src/network/frame_codec.dart
 
 import 'dart:async';
 import 'dart:convert';
@@ -17,8 +16,9 @@ class FrameCodecException implements Exception {
 class RiftFrameCodec {
   static const int maxFrameSize = 32 * 1024 * 1024; // 32 MiB
 
-  /// Encodes a JSON string into a Rift protocol frame.
-  static Uint8List encode(String jsonString) {
+  /// Encodes a JSON object into a Rift protocol frame.
+  static Uint8List encode(Map<String, dynamic> payload) {
+    var jsonString = json.encode(payload);
     var payloadBytes = utf8.encode(jsonString);
     var length = payloadBytes.length;
 
@@ -41,10 +41,10 @@ class RiftFrameCodec {
     return frame;
   }
 
-  /// Decodes a Rift protocol frame into a JSON string.
+  /// Decodes a Rift protocol frame into a JSON object.
   /// Note: The input [frameBytes] must be EXACTLY the complete frame
   /// (length prefix + payload). Stream chunking must be handled at the transport layer.
-  static String decode(Uint8List frameBytes) {
+  static Map<String, dynamic> decode(Uint8List frameBytes) {
     if (frameBytes.length < 4) {
       throw FrameCodecException('Frame too small to contain length prefix');
     }
@@ -69,7 +69,7 @@ class RiftFrameCodec {
     return _validateAndDecodeJsonObject(payloadBytes);
   }
 
-  static String _validateAndDecodeJsonObject(Uint8List payloadBytes) {
+  static Map<String, dynamic> _validateAndDecodeJsonObject(Uint8List payloadBytes) {
     final decodedPayload = () {
       try {
         return utf8.decode(payloadBytes);
@@ -83,25 +83,25 @@ class RiftFrameCodec {
       if (parsed is! Map<String, dynamic>) {
         throw FrameCodecException('MalformedMessage: non-object JSON value');
       }
+      return parsed;
     } on FrameCodecException {
       rethrow;
     } catch (e) {
       throw FrameCodecException('MalformedMessage: invalid JSON payload');
     }
-
-    return decodedPayload;
   }
 }
 
 /// A StreamTransformer that incrementally processes a byte stream into decoded Rift frames.
 /// Prevents Memory Exhaustion (OOM) by enforcing the maxFrameSize directly on the stream chunks.
-class RiftFrameTransformer extends StreamTransformerBase<List<int>, String> {
+class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, dynamic>> {
   @override
-  Stream<String> bind(Stream<List<int>> stream) async* {
+  Stream<Map<String, dynamic>> bind(Stream<List<int>> stream) async* {
     var buffer = BytesBuilder(copy: false);
     int? expectedLength;
 
-    await for (var chunk in stream) {
+    try {
+      await for (var chunk in stream) {
       buffer.add(chunk);
 
       while (true) {
@@ -140,6 +140,10 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, String> {
 
     if (expectedLength != null || buffer.length > 0) {
       throw FrameCodecException('Unexpected end of stream with incomplete frame');
+    }
+    } catch (e) {
+      buffer.clear();
+      rethrow;
     }
   }
 }
