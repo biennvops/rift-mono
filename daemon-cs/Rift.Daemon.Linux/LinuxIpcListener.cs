@@ -259,11 +259,3 @@ public class LinuxIpcListener(ILogger<LinuxIpcListener> logger) : IIpcListener, 
         CleanupSocketFile();
     }
 }
-
-internal static class Interop
-{
-    [System.Runtime.InteropServices.DllImport("libc")]
-    private static extern uint getuid();
-
-    public static uint GetUid() => getuid();
-}

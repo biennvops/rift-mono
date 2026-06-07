@@ -183,11 +183,3 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
         CleanupSocketFile();
     }
 }
-
-internal static class Interop
-{
-    [System.Runtime.InteropServices.DllImport("libc")]
-    private static extern uint getuid();
-
-    public static uint GetUid() => getuid();
-}
