@@ -1,26 +1,26 @@
 using System;
 using System.Collections.Generic;
 
-namespace Rift.Daemon.Windows.Core.Interfaces;
+namespace Rift.Daemon.Core.Interfaces;
 
-public enum TrustState 
-{ 
-    Discovered, 
-    PairingPending, 
-    Trusted, 
-    Blocked, 
-    Revoked 
+public enum TrustState
+{
+    Discovered,
+    PairingPending,
+    Trusted,
+    Blocked,
+    Revoked
 }
 
-public class PeerIdentity 
+public class PeerIdentity
 {
     public string DeviceId { get; init; } = string.Empty;
     public byte[]? Ed25519PublicKey { get; set; }
     public TrustState State { get; set; }
-    
+
     public string? EcdsaCertificateFingerprint { get; set; }
     public DateTimeOffset LastStateTransitionAt { get; set; }
-    
+
     /// <summary>
     /// Evidence needed to reject the identity later if revoked.
     /// </summary>

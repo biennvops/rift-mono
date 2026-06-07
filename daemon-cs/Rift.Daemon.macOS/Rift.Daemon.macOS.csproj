@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>osx</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    <PackageReference Include="StreamJsonRpc" Version="2.24.92" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rift.Daemon.Core\Rift.Daemon.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Resources\com.rift.daemon.plist" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

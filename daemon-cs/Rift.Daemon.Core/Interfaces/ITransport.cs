@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Rift.Daemon.Windows.Core.Interfaces;
+namespace Rift.Daemon.Core.Interfaces;
 
 /// <summary>
 /// Carries one decoded frame received from a peer session.

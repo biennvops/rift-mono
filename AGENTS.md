@@ -14,7 +14,7 @@ Rift is a security-first, local-first, cross-platform device continuity platform
 - `spec/vectors/` — deterministic test vectors for cross-implementation conformance.
 - `spec/examples/` — example certificates and message flows.
 - `spec/references/` — gitignored directory for local copies of RFCs and reference documents.
-- `daemon-cs/` — Windows daemon (C#/.NET 10). Uses BouncyCastle.NET + native .NET crypto, SslStream for mTLS, StreamJsonRpc over named pipes, SQLite via Microsoft.Data.Sqlite.
+- `daemon-cs/` — Multi-platform daemon (C#/.NET 10). Three projects: `Rift.Daemon.Core` (shared library, cross-platform interfaces, Worker, JSON-RPC API), `Rift.Daemon.Windows` (Windows Service + Named Pipes), `Rift.Daemon.macOS` (launchd LaunchAgent + Unix Domain Sockets). Uses BouncyCastle.NET + native .NET crypto, StreamJsonRpc for IPC, SQLite via Microsoft.Data.Sqlite.
 - `daemon-dart/` — Android daemon (Dart). Uses PointyCastle for crypto, SecureSocket for mTLS, json_rpc_2 over SendPort/ReceivePort, SQLite via sqflite. Includes a purpose-built ASN.1 parser for X.509 extension extraction (security-critical component).
 - `app-flutter/` — Single Flutter/Dart codebase targeting Android + Windows. Material 3. One `JsonRpcRiftClient` consumes both daemons via JSON-RPC 2.0.
 - `tests-conformance/` — Cross-implementation protocol conformance tests (one harness, two daemons).
@@ -23,7 +23,7 @@ Rift is a security-first, local-first, cross-platform device continuity platform
 
 ## Architecture
 
-**Dual-daemon model:** Two independent daemon implementations (C#/.NET on Windows, Dart on Android) conform to one protocol spec. Both are runnable as standalone console processes for dev/CI and as platform services (Windows Service, Android foreground service) in production. The daemon core is a library with thin entry points for each hosting mode.
+**Dual-daemon model:** Two independent daemon implementations (C#/.NET on Windows and macOS, Dart on Android) conform to one protocol spec. Both are runnable as standalone console processes for dev/CI and as platform services (Windows Service, macOS LaunchAgent, Android foreground service) in production. The C# daemon uses a shared core library (`Rift.Daemon.Core`) with platform-specific entry points for IPC and service hosting.
 
 **Dual-keypair identity:** Ed25519 for permanent device identity (fingerprint, device ID, trust store). ECDSA P-256 for TLS certificates. The Ed25519 public key is embedded in the P-256 cert via a custom X.509 extension (OID `2.25.293029629918709742181702189012786017422`).
 

@@ -1,8 +1,8 @@
 using Xunit;
 using Moq;
-using Rift.Daemon.Windows.Core.Interfaces;
+using Rift.Daemon.Core.Interfaces;
 
-namespace Rift.Daemon.Windows.Tests.Core;
+namespace Rift.Daemon.Tests.Core;
 
 public class IdentityManagerTests
 {

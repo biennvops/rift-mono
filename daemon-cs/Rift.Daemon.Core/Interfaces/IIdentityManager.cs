@@ -1,6 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 
-namespace Rift.Daemon.Windows.Core.Interfaces;
+namespace Rift.Daemon.Core.Interfaces;
 
 public interface IIdentityManager
 {

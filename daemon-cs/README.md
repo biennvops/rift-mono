@@ -1,33 +1,80 @@
-# Rift Windows Daemon (riftd)
+# Rift Daemon (C#/.NET)
 
-A .NET 10 Worker Service that implements the Rift protocol on Windows.
+A .NET 10 daemon that implements the Rift protocol. Multi-platform: Windows (named pipes, Windows Service) and macOS (Unix domain sockets, launchd LaunchAgent).
+
+## Project Structure
+
+```
+daemon-cs/
+├── Rift.Daemon.Core/           # Shared library (net10.0)
+│   ├── Interfaces/             # Platform-agnostic contracts
+│   ├── Worker.cs               # Background service
+│   ├── IRiftApi.cs             # JSON-RPC API interface
+│   └── RiftApiHandler.cs      # JSON-RPC API implementation
+├── Rift.Daemon.Windows/        # Windows entry point (net10.0-windows)
+│   ├── Program.cs              # Windows Service host
+│   └── WindowsIpcListener.cs   # Named Pipes + ACL security
+├── Rift.Daemon.macOS/          # macOS entry point (net10.0)
+│   ├── Program.cs              # Generic Host (for launchd)
+│   ├── MacIpcListener.cs       # Unix Domain Socket + POSIX security
+│   └── Resources/              # launchd plist
+├── Rift.Daemon.Tests/          # Cross-platform tests (net10.0)
+└── Rift.Daemon.sln
+```
 
 ## Libraries & Rationale
 
-- **Portable.BouncyCastle**: Used for Ed25519 identity generation and X.509 certificate extension crafting. It provides finer control over ASN.1 structures than the standard `System.Security.Cryptography` stack.
-- **Makaretu.Dns.Multicast**: A lightweight mDNS-SD implementation used for local peer discovery and advertisement.
-- **StreamJsonRpc**: Implements JSON-RPC 2.0 over arbitrary transports. Used here for IPC between the daemon and the Flutter client.
-- **Microsoft.Data.Sqlite**: Provides durable local persistence for the trust store, capabilities, and security event log.
-- **Microsoft.Extensions.Hosting.WindowsServices**: Enables the daemon to run as a native Windows Service with proper lifecycle mapping.
+- **Portable.BouncyCastle**: Ed25519 identity generation and X.509 certificate extension crafting.
+- **Makaretu.Dns.Multicast**: mDNS-SD for local peer discovery and advertisement.
+- **StreamJsonRpc**: JSON-RPC 2.0 over arbitrary transports for IPC with the Flutter client.
+- **Microsoft.Data.Sqlite**: Durable local persistence for trust store, capabilities, and security event log.
+- **Microsoft.Extensions.Hosting.WindowsServices** (Windows only): Windows Service lifecycle.
 
-## Infrastructure
-- **IPC**: Uses Windows Named Pipes (`\\.\pipe\rift-daemon-v0.1`) for local communication.
-- **Lifecycle**: Managed via .NET Generic Host.
+## IPC
+
+| Platform | Transport | Security |
+|----------|-----------|----------|
+| Windows  | Named Pipes (`\\.\pipe\rift-daemon-v0.1`) | Windows ACLs: deny NetworkSid, allow current user + InteractiveSid |
+| macOS    | Unix Domain Socket (`$TMPDIR/rift-daemon/v0.1.sock`) | 0700 parent directory + 0600 socket file |
 
 ## Development
 
 ### Build
-```ps1
-dotnet build
+
+```bash
+# Core library (cross-platform)
+dotnet build Rift.Daemon.Core/
+
+# macOS daemon
+dotnet build Rift.Daemon.macOS/
+
+# Tests
+dotnet test Rift.Daemon.Tests/
 ```
 
 ### Run (Console)
-```ps1
-dotnet run
+
+```bash
+# macOS
+dotnet run --project Rift.Daemon.macOS/
+```
+
+```powershell
+# Windows
+dotnet run --project Rift.Daemon.Windows/
+```
+
+### Install as macOS LaunchAgent
+
+```bash
+cp Rift.Daemon.macOS/Resources/com.rift.daemon.plist ~/Library/LaunchAgents/
+# Edit the plist to set the correct binary path
+launchctl load ~/Library/LaunchAgents/com.rift.daemon.plist
 ```
 
 ### Install as Windows Service
-```ps1
+
+```powershell
 sc.exe create RiftDaemon binPath= "C:\path\to\Rift.Daemon.Windows.exe"
 sc.exe start RiftDaemon
 ```

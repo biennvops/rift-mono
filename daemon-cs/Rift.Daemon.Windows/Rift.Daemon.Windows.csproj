@@ -5,15 +5,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-Rift.Daemon.Windows-b1f07f56-c267-4c30-9220-6558acd26d91</UserSecretsId>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Rift.Daemon.Windows.Tests\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes)</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.8" />
-    <PackageReference Include="Portable.BouncyCastle" Version="1.9.0" />
     <PackageReference Include="StreamJsonRpc" Version="2.24.92" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rift.Daemon.Core\Rift.Daemon.Core.csproj" />
+  </ItemGroup>
+
 </Project>
