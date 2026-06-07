@@ -1,0 +1,30 @@
+{
+  "identityDerivation": {
+    "ed25519PublicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+    "sha256Hex": "13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7",
+    "base32": "cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq",
+    "deviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+    "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ"
+  },
+  "extensionDer": {
+    "oidHex": "06146983b8f3ba8cbabfcad1cd9aabf7888895fbe90e",
+    "innerExtnValueHex": "0420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+    "outerExtnValueHex": "04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+  },
+  "clipboardHash": {
+    "content": "Hello Rift",
+    "sha256Base64": "A5ByvErCB9O1B/xELZ+R9h5wX+Xj1M/8Xg5m+sP0mxg="
+  },
+  "envelopeValidation": {
+    "valid": {
+      "lengthPrefixHex": "0000001B",
+      "json": "{\"type\":\"ping\",\"id\":\"...\"}"
+    },
+    "invalid": [
+      {
+        "reason": "Length prefix exceeds 32 MiB",
+        "lengthPrefixHex": "02000001"
+      }
+    ]
+  }
+}

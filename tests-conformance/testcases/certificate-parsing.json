@@ -1,0 +1,10 @@
+{
+  "suite": "certificate-parsing",
+  "testCases": [
+    {
+      "id": "cert-malformed-01",
+      "input": { "file": "../../spec/vectors/malformed-01-ext-absent.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed" }
+    }
+  ]
+}
