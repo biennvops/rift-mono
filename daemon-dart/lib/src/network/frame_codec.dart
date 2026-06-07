@@ -141,9 +141,8 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, 
     if (expectedLength != null || buffer.length > 0) {
       throw FrameCodecException('Unexpected end of stream with incomplete frame');
     }
-    } catch (e) {
+    } finally {
       buffer.clear();
-      rethrow;
     }
   }
 }

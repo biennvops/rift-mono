@@ -55,11 +55,11 @@ daemon-dart/
   - **Assessment:** **PASSED (100%)**
 
 - **`[daemon-dart] Identity, Certificates, Frame Parsing` (Week 3):** Finalize core security.
-  - Successfully built the standard Fail-Closed **X.509 Decoder (`cert_decoder.dart`)**. Safely extracted the Ed25519 key from the ASN.1 structure. **Security Hardening:** Passed 8 comprehensive attack vectors (missing OID, duplicate OID, critical flags, length anomalies, truncated DER) in `decoder_test.dart`.
-  - Implemented the **Frame Codec (`frame_codec.dart`)** with a 4-byte length prefix structure. **Improvement:** Integrated `RiftFrameTransformer` (StreamTransformer) to process data in chunks instead of statically loading 32 MiB into RAM, and optimized JSON parsing to return Map directly, completely preventing memory exhaustion (OOM) attacks and double-parsing overhead.
-  - Finalized **`IdentityManagerImpl`**: Integrated the `cryptography` package to generate and store the Ed25519 key, calculating the standard `rift- + Base32` Device ID. **Security Hardening:** Added strict 32-byte length validation to `signIdentityProof`, implemented `KeyPair` caching for extreme performance, and added memory clearing via `dispose()` to mitigate RAM scraping.
+  - Successfully built the standard Fail-Closed **X.509 Decoder (`cert_decoder.dart`)**. Safely extracted the Ed25519 key from the ASN.1 structure. **Security Hardening:** Passed 10 comprehensive attack vectors (missing OID, duplicate OID, unsupported critical flags, length anomalies, truncated DER, and fragile OID alteration) in `decoder_test.dart`. Fixed a critical Fail-Open bug to strictly reject unknown critical extensions.
+  - Implemented the **Frame Codec (`frame_codec.dart`)** with a 4-byte length prefix structure. **Improvement:** Integrated `RiftFrameTransformer` (StreamTransformer) with a `try/finally` block to process data in chunks and guarantee memory zeroing on error. Optimized JSON parsing to return Map directly, completely preventing memory exhaustion (OOM) attacks and double-parsing overhead.
+  - Finalized **`IdentityManagerImpl`**: Integrated the `cryptography` package to generate and store the Ed25519 key, calculating the standard `rift- + Base32` Device ID. **Security Hardening:** Added strict 32-byte length validation to `signIdentityProof`, verified async compliance via Contract Stubs, implemented `KeyPair` caching for extreme performance, and added memory clearing via `dispose()` to mitigate RAM scraping.
   - Fixed X.509 standard compliance in **`cert_builder.dart`** by generating cryptographically random 64-bit entropy serial numbers to prevent TLS caching collisions.
-  - **Assessment:** **PASSED (100%)** 27/27 Security Unit Tests passing.
+  - **Assessment:** **PASSED (100%)** 30/30 Security Unit Tests passing.
 
 ---
 

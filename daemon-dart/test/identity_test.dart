@@ -87,6 +87,20 @@ void main() {
       );
     });
 
+    test('Contract Stub: signIdentityProof returns valid Future<Uint8List> signature asynchronously', () async {
+      var manager = IdentityManagerImpl(tempDir.path);
+      await manager.initialize();
+      var cb = Uint8List(32);
+      var ch = Uint8List(32);
+      
+      // Verify it returns a Future correctly (async signature compliance)
+      var signatureFuture = manager.signIdentityProof(cb, ch);
+      expect(signatureFuture, isA<Future<Uint8List>>());
+      
+      var signature = await signatureFuture;
+      expect(signature.length, equals(64));
+    });
+
     test('Should clear memory on dispose', () async {
       var manager = IdentityManagerImpl(tempDir.path);
       await manager.initialize();

@@ -126,6 +126,14 @@ class RiftCertDecoder {
           }
           
           extractedKey = Uint8List.fromList(pubKeyBytes);
+        } else {
+          // Unknown extension. X.509 requires rejecting the certificate if an unsupported extension is marked critical.
+          if (ext.elements.length > 1 && ext.elements[1].tag == 0x01) {
+            var criticalBytes = ext.elements[1].valueBytes();
+            if (criticalBytes.isNotEmpty && criticalBytes[0] != 0x00) {
+              throw CertificateDecoderException('Unsupported critical extension encountered');
+            }
+          }
         }
       }
 

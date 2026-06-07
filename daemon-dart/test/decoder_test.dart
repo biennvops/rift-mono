@@ -107,8 +107,21 @@ void main() {
       );
     });
 
-    // Class 4: Extension Criticality True but Not Supported - Not tested here as OID is exactly matched and supported.
-
+    test('Class 4: Should throw if unknown extension is marked Critical', () {
+      var unknownOid = ASN1ObjectIdentifier.fromBytes(Uint8List.fromList([0x06, 0x03, 0x55, 0x04, 0x03])); // Random OID
+      var ext = ASN1Sequence();
+      ext.add(unknownOid);
+      ext.add(ASN1Boolean(true)); // CRITICAL
+      ext.add(ASN1OctetString(Uint8List.fromList([0x01])));
+      
+      var validExt = RiftCertBuilder.createEd25519Extension(mockEd25519Key);
+      var pem = _createTestCert([ext, validExt]);
+      
+      expect(
+        () => RiftCertDecoder.extractEd25519PublicKey(pem),
+        throwsA(isA<CertificateDecoderException>().having((e) => e.message, 'msg', contains('Unsupported critical extension'))),
+      );
+    });
 
     test('Class 5: Should throw if inner key is < 32 bytes', () {
       var shortKey = Uint8List.fromList(List.generate(31, (i) => i));
@@ -150,6 +163,19 @@ void main() {
       expect(
         () => RiftCertDecoder.extractEd25519PublicKey(badPem),
         throwsA(isA<CertificateDecoderException>()),
+      );
+    });
+
+    test('Class 9: Should throw if OID encoding is altered (Fragile OID match test)', () {
+      var ext = RiftCertBuilder.createEd25519Extension(mockEd25519Key);
+      var bytes = ext.encodedBytes;
+      // Flip a bit in the OID data to simulate an altered but structurally valid ASN.1 OID
+      bytes[10] ^= 0x01; 
+      var alteredExt = ASN1Sequence.fromBytes(bytes);
+      var pem = _createTestCert([alteredExt]);
+      expect(
+        () => RiftCertDecoder.extractEd25519PublicKey(pem),
+        throwsA(isA<CertificateDecoderException>().having((e) => e.message, 'msg', contains('not found'))),
       );
     });
   });
