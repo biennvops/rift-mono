@@ -59,5 +59,8 @@ public class SecurityEventRecord
 
 public interface ISecurityEventLog
 {
+    /// <summary>
+    /// Appends a new security event to the append-only log.
+    /// </summary>
     Task LogEventAsync(SecurityEventRecord securityEvent);
 }
