@@ -8,7 +8,10 @@ StartLimitBurst=5
 Type=notify
 ExecStart=/usr/local/bin/rift-daemon
 Restart=on-failure
-RestartSec=30s
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=read-only
+NoNewPrivileges=true
 
 [Install]
 WantedBy=default.target
