@@ -34,12 +34,6 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
 
             logger.LogInformation("Listening for IPC connections on {path}", _socketPath);
 
-            stoppingToken.Register(() =>
-            {
-                _listenSocket.Dispose();
-                CleanupSocketFile();
-            });
-
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
