@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Rift.Daemon.Core\Rift.Daemon.Core.csproj" />
+    <ProjectReference Include="..\Rift.Daemon.Linux\Rift.Daemon.Linux.csproj" />
   </ItemGroup>
 
 </Project>
