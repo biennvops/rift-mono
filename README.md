@@ -23,8 +23,4 @@ Local reference documents may be placed in `spec/references/`; this directory is
 
 ## Status
 
-**Week 3 Complete (v0.1-draft MVP)**
-- Core identity management, cryptography, and frame codecs are implemented for Android (Dart).
-- Custom X.509 ASN.1 parser successfully extracts Ed25519 public keys with 100% fail-closed validation against 8 classes of malformed input.
-- Cross-platform daemon communication interfaces are defined.
-- 24/24 Security and Unit tests passing.
+Initial workspace scaffold.
