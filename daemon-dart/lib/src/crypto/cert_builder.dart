@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:asn1lib/asn1lib.dart';
 import 'package:basic_utils/basic_utils.dart';
@@ -105,6 +106,15 @@ class RiftCertBuilder {
       var privKey = ecdsaKeyPair.privateKey as ECPrivateKey;
       var pubKey = ecdsaKeyPair.publicKey as ECPublicKey;
 
+      // RFC 5280: Serial numbers must be unique to prevent caching issues.
+      var actualSerialNumber = serialNumber;
+      if (actualSerialNumber == defaultSerial) {
+        var random = Random.secure();
+        var bytes = List.generate(8, (_) => random.nextInt(256));
+        var hexStr = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+        actualSerialNumber = BigInt.parse(hexStr, radix: 16).toString();
+      }
+
       // 1. Generate base self-signed certificate using basic_utils
       var csr = X509Utils.generateEccCsrPem(
         {'CN': commonName},
@@ -115,7 +125,7 @@ class RiftCertBuilder {
         privKey,
         csr,
         validityDays,
-        serialNumber: serialNumber,
+        serialNumber: actualSerialNumber,
       );
 
       // 2. Decode the base cert to inject the custom extension
