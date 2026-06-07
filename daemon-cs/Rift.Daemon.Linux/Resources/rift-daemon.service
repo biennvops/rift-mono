@@ -11,8 +11,8 @@ Restart=on-failure
 RestartSec=5s
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/run/user/%U/rift-daemon
-ReadWritePaths=/tmp/rift-daemon-%U
+ReadWritePaths=/run/user/%U
+ReadWritePaths=/tmp
 NoNewPrivileges=true
 
 [Install]
