@@ -1,0 +1,19 @@
+[Unit]
+Description=Rift Daemon
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/rift-daemon
+Restart=on-failure
+RestartSec=5s
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/user/%U
+ReadWritePaths=/tmp
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
