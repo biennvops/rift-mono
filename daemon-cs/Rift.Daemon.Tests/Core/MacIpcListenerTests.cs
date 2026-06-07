@@ -1,11 +1,14 @@
 using System.IO;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using System.Text;
 using StreamJsonRpc;
 using Rift.Daemon.Core;
 
 namespace Rift.Daemon.Tests.Core;
 
+[SupportedOSPlatform("osx")]
+[SupportedOSPlatform("linux")]
 public class MacIpcListenerTests : IDisposable
 {
     private readonly string _testDir;
