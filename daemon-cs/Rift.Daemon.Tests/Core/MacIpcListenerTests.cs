@@ -48,16 +48,6 @@ public class MacIpcListenerTests : IDisposable
     }
 
     [Fact]
-    public void SocketPathLengthValidatedAgainst104CharLimit()
-    {
-        var longDir = new string('x', 90);
-        var longPath = Path.Combine("/tmp", longDir, "test.sock");
-
-        Assert.True(longPath.Length >= 104,
-            $"Test path should exceed 104 chars, got {longPath.Length}");
-    }
-
-    [Fact]
     public void ConnectProbeDetectsLiveInstance()
     {
         Directory.CreateDirectory(_testDir);
