@@ -20,9 +20,9 @@ public class LinuxIpcListener(ILogger<LinuxIpcListener> logger) : IIpcListener, 
     private Socket? _listenSocket;
     private string? _socketPath;
 
-    public static void EnsureNoDuplicateInstance()
+    public static void EnsureNoDuplicateInstance(Func<string, bool>? validateFallbackDir = null)
     {
-        var socketPath = ResolveSocketPath();
+        var socketPath = ResolveSocketPath(validateFallbackDir);
         var socketDir = Path.GetDirectoryName(socketPath)!;
 
         EnsureDirectoryWithMode(socketDir);
