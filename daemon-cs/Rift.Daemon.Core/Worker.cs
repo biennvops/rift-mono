@@ -12,11 +12,8 @@ public class Worker(ILogger<Worker> logger, IIpcListener ipcListener) : Backgrou
 
         var ipcTask = ipcListener.ListenAsync(stoppingToken);
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await Task.Delay(10000, stoppingToken);
-        }
-
-        await ipcTask;
+        var completed = await Task.WhenAny(ipcTask, Task.Delay(Timeout.Infinite, stoppingToken));
+        if (completed == ipcTask)
+            await ipcTask;
     }
 }

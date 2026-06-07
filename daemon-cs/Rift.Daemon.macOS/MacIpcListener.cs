@@ -9,10 +9,38 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
 {
     private const string SocketDirName = "rift-daemon";
     private const string SocketFileName = "v0.1.sock";
-    private const int MacOsSunPathLimit = 104;
+    internal const int MacOsSunPathLimit = 104;
 
     private Socket? _listenSocket;
     private string? _socketPath;
+
+    public static void EnsureNoDuplicateInstance()
+    {
+        var socketPath = ResolveSocketPath();
+        var socketDir = Path.GetDirectoryName(socketPath)!;
+
+        EnsureDirectoryWithMode(socketDir);
+
+        if (!File.Exists(socketPath))
+            return;
+
+        using var probe = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        try
+        {
+            probe.Connect(new UnixDomainSocketEndPoint(socketPath));
+            probe.Shutdown(SocketShutdown.Both);
+            throw new InvalidOperationException(
+                $"Another rift-daemon instance is already listening on {socketPath}");
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
+        {
+            File.Delete(socketPath);
+        }
+        catch (SocketException)
+        {
+            File.Delete(socketPath);
+        }
+    }
 
     public async Task ListenAsync(CancellationToken stoppingToken)
     {
@@ -62,7 +90,7 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
         }
     }
 
-    private static string ResolveSocketPath()
+    internal static string ResolveSocketPath()
     {
         var tmpDir = Environment.GetEnvironmentVariable("TMPDIR");
         string primary;
@@ -84,7 +112,7 @@ public class MacIpcListener(ILogger<MacIpcListener> logger) : IIpcListener, IDis
         return fallback;
     }
 
-    private void EnsureDirectoryWithMode(string dirPath)
+    private static void EnsureDirectoryWithMode(string dirPath)
     {
         Directory.CreateDirectory(dirPath);
         File.SetUnixFileMode(dirPath,
