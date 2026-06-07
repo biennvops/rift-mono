@@ -1,4 +1,4 @@
-namespace Rift.Daemon.Windows;
+namespace Rift.Daemon.Core;
 
 public interface IRiftApi
 {

@@ -2,10 +2,12 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using StreamJsonRpc;
+using Rift.Daemon.Core;
+using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Windows;
 
-public class IpcListener(ILogger<IpcListener> logger)
+public class WindowsIpcListener(ILogger<WindowsIpcListener> logger) : IIpcListener
 {
     private const string PipeName = "rift-daemon-v0.1";
 
@@ -16,16 +18,14 @@ public class IpcListener(ILogger<IpcListener> logger)
             try
             {
                 logger.LogInformation("Waiting for IPC connection on \\\\.\\pipe\\{pipe}", PipeName);
-                
+
                 var pipeSecurity = new PipeSecurity();
 
-                // Deny remote network access explicitly
                 pipeSecurity.AddAccessRule(new PipeAccessRule(
                     new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
                     PipeAccessRights.FullControl,
                     AccessControlType.Deny));
 
-                // Allow the current user (e.g. SYSTEM or Service Account) full control
                 using (var currentIdentity = WindowsIdentity.GetCurrent())
                 {
                     if (currentIdentity.User != null)
@@ -37,7 +37,6 @@ public class IpcListener(ILogger<IpcListener> logger)
                     }
                 }
 
-                // Allow local interactive users (the UI process in session 1+) to connect and read/write
                 pipeSecurity.AddAccessRule(new PipeAccessRule(
                     new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
                     PipeAccessRights.ReadWrite,
@@ -54,7 +53,7 @@ public class IpcListener(ILogger<IpcListener> logger)
                     pipeSecurity: pipeSecurity);
 
                 await pipeServer.WaitForConnectionAsync(stoppingToken);
-                
+
                 logger.LogInformation("Client connected to IPC pipe.");
 
                 try

@@ -1,12 +1,15 @@
-namespace Rift.Daemon.Windows;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Rift.Daemon.Core.Interfaces;
 
-public class Worker(ILogger<Worker> logger, IpcListener ipcListener) : BackgroundService
+namespace Rift.Daemon.Core;
+
+public class Worker(ILogger<Worker> logger, IIpcListener ipcListener) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        logger.LogInformation("Rift Daemon (Windows) starting...");
+        logger.LogInformation("Rift Daemon starting...");
 
-        // Start IPC listener in the background
         var ipcTask = ipcListener.ListenAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
