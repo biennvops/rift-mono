@@ -59,10 +59,10 @@ class IdentityManagerImpl implements IdentityManager {
   }
 
   @override
-  Uint8List getEd25519PublicKey() => _publicKey;
+  Uint8List getEd25519PublicKey() => Uint8List.fromList(_publicKey);
 
   @override
-  Uint8List getDeviceFingerprint() => _fingerprintBytes;
+  Uint8List getDeviceFingerprint() => Uint8List.fromList(_fingerprintBytes);
 
   @override
   String get deviceId => _deviceId;
@@ -114,8 +114,19 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Future<void> dispose() async {
-    for (var i = 0; i < _privateKey.length; i++) {
-      _privateKey[i] = 0;
+    try {
+      for (var i = 0; i < _privateKey.length; i++) {
+        _privateKey[i] = 0;
+      }
+      for (var i = 0; i < _publicKey.length; i++) {
+        _publicKey[i] = 0;
+      }
+      for (var i = 0; i < _fingerprintBytes.length; i++) {
+        _fingerprintBytes[i] = 0;
+      }
+      _deviceId = '';
+    } catch (_) {
+      // Ignore uninitialized fields
     }
     _cachedKeyPair = null;
   }

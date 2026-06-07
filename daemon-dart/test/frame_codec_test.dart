@@ -144,5 +144,26 @@ void main() {
         ),
       );
     });
+
+    test('Should throw FrameCodecException on incomplete stream', () async {
+      Map<String, dynamic> payload = {"a": 1};
+      var frame = RiftFrameCodec.encode(payload);
+      
+      // Cut the frame in half to simulate an abrupt stream end
+      var incompleteFrame = frame.sublist(0, frame.length - 2);
+      
+      Stream<List<int>> stream = Stream.value(incompleteFrame);
+      
+      expect(
+        () async => await stream.transform(RiftFrameTransformer()).toList(),
+        throwsA(
+          isA<FrameCodecException>().having(
+            (e) => e.message,
+            'message',
+            contains('Unexpected end of stream with incomplete frame'),
+          ),
+        ),
+      );
+    });
   });
 }

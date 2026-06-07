@@ -102,41 +102,41 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, 
 
     try {
       await for (var chunk in stream) {
-      buffer.add(chunk);
+        buffer.add(chunk);
 
-      while (true) {
-        if (expectedLength == null) {
-          if (buffer.length >= 4) {
+        while (true) {
+          if (expectedLength == null) {
+            if (buffer.length >= 4) {
+              var bytes = buffer.takeBytes();
+              var byteData = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.lengthInBytes);
+              expectedLength = byteData.getUint32(0, Endian.big);
+              buffer.add(bytes.sublist(4));
+
+              if (expectedLength == 0) {
+                throw FrameCodecException('MalformedMessage: zero-length frame');
+              }
+              if (expectedLength > RiftFrameCodec.maxFrameSize) {
+                throw FrameCodecException('PayloadTooLarge: declared length $expectedLength exceeds max ${RiftFrameCodec.maxFrameSize}');
+              }
+            } else {
+              break; // Wait for more bytes
+            }
+          }
+
+          if (buffer.length >= expectedLength) {
             var bytes = buffer.takeBytes();
-            var byteData = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.lengthInBytes);
-            expectedLength = byteData.getUint32(0, Endian.big);
-            buffer.add(bytes.sublist(4));
+            var frameData = bytes.sublist(0, expectedLength);
+            buffer.add(bytes.sublist(expectedLength)); // Re-add the remaining bytes
 
-            if (expectedLength == 0) {
-              throw FrameCodecException('MalformedMessage: zero-length frame');
-            }
-            if (expectedLength > RiftFrameCodec.maxFrameSize) {
-              throw FrameCodecException('PayloadTooLarge: declared length $expectedLength exceeds max ${RiftFrameCodec.maxFrameSize}');
-            }
+            yield RiftFrameCodec._validateAndDecodeJsonObject(
+              Uint8List.fromList(frameData),
+            );
+            expectedLength = null; // Reset for the next frame
           } else {
-            break; // Wait for more bytes
+            break; // Wait for more bytes to complete the current frame
           }
         }
-
-        if (buffer.length >= expectedLength) {
-          var bytes = buffer.takeBytes();
-          var frameData = bytes.sublist(0, expectedLength);
-          buffer.add(bytes.sublist(expectedLength)); // Re-add the remaining bytes
-
-          yield RiftFrameCodec._validateAndDecodeJsonObject(
-            Uint8List.fromList(frameData),
-          );
-          expectedLength = null; // Reset for the next frame
-        } else {
-          break; // Wait for more bytes to complete the current frame
-        }
       }
-    }
 
     if (expectedLength != null || buffer.length > 0) {
       throw FrameCodecException('Unexpected end of stream with incomplete frame');
