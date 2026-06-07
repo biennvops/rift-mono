@@ -12,6 +12,10 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.8" />
     <PackageReference Include="StreamJsonRpc" Version="2.24.92" />
   </ItemGroup>
+  
+  <ItemGroup>
+    <FrameworkReference Remove="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Rift.Daemon.Core\Rift.Daemon.Core.csproj" />
