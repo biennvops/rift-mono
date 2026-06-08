@@ -36,25 +36,9 @@ class RiftDaemon {
     await _discoveryService!.startAdvertising();
     await _discoveryService!.startDiscovery();
 
-    // 5. Connect discovery events to Session/Transport orchestration
-    _discoveryService!.onDeviceDiscovered.listen((peer) {
-      if (peer.deviceIdHint == _identityManager!.deviceId) {
-        return; // Ignore self
-      }
-
-      // Automatically attempt to connect to discovered peers.
-      // Note: In a production app, connection might require user initiation,
-      // but the spec suggests Rift continuously maintains LAN meshes.
-      _transport!.connectTo(peer.address, peer.port).then((_) {
-        // We do not eagerly send session.hello unless requested, 
-        // or we do it to complete the mesh. Let's assume initiator sends hello.
-        if (peer.deviceIdHint != null) {
-          _sessionManager!.sendSessionHello(peer.deviceIdHint!);
-        }
-      }).catchError((e) {
-        // Ignore connection failures to unreachable mDNS peers
-      });
-    });
+    // 5. Peer Discovery is now completely passive.
+    // We DO NOT auto-connect to unknown devices for privacy reasons.
+    // Connections must be explicitly initiated via IPC commands from the Flutter UI.
   }
 
   Future<void> stop() async {
@@ -79,9 +63,47 @@ class RiftDaemon {
         // Isolate Crash Boundary: Forward uncaught exceptions to UI layer
         Isolate.current.addErrorListener(sendPort);
 
+        // Setup ReceivePort to listen for UI commands
+        final commandPort = ReceivePort();
+        commandPort.listen((message) async {
+          if (message is Map<String, dynamic>) {
+            final cmd = message['command'];
+            if (cmd == 'stop') {
+              await daemon.stop();
+              commandPort.close();
+            } else if (cmd == 'connect') {
+              final host = message['host'] as String;
+              final port = message['port'] as int;
+              final peerDeviceId = message['peerDeviceId'] as String?;
+              
+              try {
+                await daemon._transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
+                if (peerDeviceId != null) {
+                  await daemon._sessionManager!.sendSessionHello(peerDeviceId);
+                }
+              } catch (e) {
+                sendPort.send({'event': 'connection_error', 'error': e.toString()});
+              }
+            }
+          }
+        });
+
+        // Forward discovered peers to UI
+        daemon._discoveryService!.onDeviceDiscovered.listen((peer) {
+          if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
+          sendPort.send({
+            'event': 'peer_discovered',
+            'instanceId': peer.instanceId,
+            'address': peer.address,
+            'port': peer.port,
+            'deviceIdHint': peer.deviceIdHint,
+          });
+        });
+
         sendPort.send({
           'status': 'running', 
           'deviceId': daemon._identityManager!.deviceId,
+          'commandPort': commandPort.sendPort,
         });
       }
     } catch (e) {

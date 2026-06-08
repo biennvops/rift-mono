@@ -17,9 +17,10 @@ class TransportMessage {
 abstract class Transport {
   Future<void> startServer();
   Future<void> stopServer();
-  Future<void> connectTo(String host, int port);
+  Future<void> connectTo(String host, int port, {String? expectedDeviceId});
   void disconnect(String peerDeviceId);
   void setPeerAuthenticated(String peerDeviceId);
   Stream<TransportMessage> get onMessageReceived;
   Future<void> sendMessage(String deviceId, Uint8List message);
+  Uint8List? getPeerCert(String peerDeviceId);
 }

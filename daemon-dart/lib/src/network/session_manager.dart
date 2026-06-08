@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
-import 'package:cryptography/cryptography.dart';
 
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
@@ -33,17 +32,19 @@ class SessionManager {
   }
 
   Future<void> sendSessionHello(String peerDeviceId) async {
-    // We send our PoP
-    final certHash = Uint8List(32); // In a real scenario, this is the hash of our ephemeral cert.
+    final peerCertDer = _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw SessionException('Cannot send session.hello: Peer certificate not found for $peerDeviceId');
+    }
     
-    // Generate our PoP
-    // Note: async signIdentityProof requires awaiting
-    final proofBytes = await _identityManager.signIdentityProof(_dummyChannelBinding, certHash);
-    final proofHex = proofBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
+    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, peerCertDer);
 
     final payload = {
+      'rift': '0.1-draft',
       'id': const Uuid().v4(),
       'type': 'session.hello',
+      'sourceDeviceId': _identityManager.deviceId,
+      'destinationDeviceId': peerDeviceId,
       'payload': {
         'deviceId': _identityManager.deviceId,
         'fingerprint': _identityManager.getDeviceFingerprint().map((b) => b.toRadixString(16).padLeft(2, '0')).join(''),
@@ -148,13 +149,7 @@ class SessionManager {
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    
-    // Dynamic Cert Hash (No Hardcoding)
-    final certHashDigest = await Sha256().hash(msg.peerCertDer!);
-    final certHash = Uint8List.fromList(certHashDigest.bytes);
-
-    final proofBytes = await _identityManager.signIdentityProof(_dummyChannelBinding, certHash);
-    final proofHex = proofBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join('');
+    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, msg.peerCertDer!);
 
     final payload = {
       'rift': '0.1-draft',

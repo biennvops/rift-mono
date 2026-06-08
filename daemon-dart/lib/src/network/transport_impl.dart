@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
+import '../crypto/base32_utils.dart';
 import 'frame_codec.dart';
 
 class TransportImpl implements Transport {
@@ -15,6 +16,7 @@ class TransportImpl implements Transport {
   
   SecureServerSocket? _serverSocket;
   final Map<String, SecureSocket> _peers = {};
+  final Map<String, Uint8List> _peerCerts = {};
   final Set<String> _authenticatedPeers = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
 
@@ -48,10 +50,12 @@ class TransportImpl implements Transport {
       await socket.close();
     }
     _peers.clear();
+    _peerCerts.clear();
+    await _messageController.close();
   }
 
   @override
-  Future<void> connectTo(String host, int port) async {
+  Future<void> connectTo(String host, int port, {String? expectedDeviceId}) async {
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
@@ -63,7 +67,22 @@ class TransportImpl implements Transport {
       host,
       port,
       context: context,
-      onBadCertificate: (X509Certificate cert) => true, // Verification is deferred to post-handshake Ed25519 check
+      onBadCertificate: (X509Certificate cert) {
+        if (expectedDeviceId != null) {
+          try {
+            final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(cert.pem);
+            final hash = sha256.convert(peerEd25519Key);
+            final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
+            final actualDeviceId = 'rift-${base32Str.substring(0, 32)}';
+            if (actualDeviceId != expectedDeviceId) {
+              return false; // Reject MITM immediately during TLS handshake
+            }
+          } catch (_) {
+            return false; // Fail-closed on invalid cert
+          }
+        }
+        return true; // Defer to post-handshake if expectedDeviceId is not provided
+      },
     );
 
     _handleConnection(socket, isServer: false);
@@ -82,10 +101,11 @@ class TransportImpl implements Transport {
       
       // Compute expected peer device ID based on the key
       final hash = sha256.convert(peerEd25519Key);
-      final base32Str = _encodeBase32(Uint8List.fromList(hash.bytes)).toLowerCase();
+      final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
 
       _peers[peerDeviceId] = socket;
+      _peerCerts[peerDeviceId] = peerCert.der;
 
       int frameSizeProvider() {
         return _authenticatedPeers.contains(peerDeviceId) 
@@ -128,6 +148,7 @@ class TransportImpl implements Transport {
   void disconnect(String peerDeviceId) {
     _peers[peerDeviceId]?.destroy();
     _peers.remove(peerDeviceId);
+    _peerCerts.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
   }
 
@@ -158,24 +179,6 @@ class TransportImpl implements Transport {
     }
   }
 
-  /// Simple RFC 4648 Base32 Encoder without padding
-  static String _encodeBase32(Uint8List data) {
-    const String alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    int buffer = 0;
-    int bitsLeft = 0;
-    StringBuffer result = StringBuffer();
-
-    for (int i = 0; i < data.length; i++) {
-      buffer = (buffer << 8) | data[i];
-      bitsLeft += 8;
-      while (bitsLeft >= 5) {
-        result.write(alphabet[(buffer >> (bitsLeft - 5)) & 0x1F]);
-        bitsLeft -= 5;
-      }
-    }
-    if (bitsLeft > 0) {
-      result.write(alphabet[(buffer << (5 - bitsLeft)) & 0x1F]);
-    }
-    return result.toString();
-  }
+  @override
+  Uint8List? getPeerCert(String peerDeviceId) => _peerCerts[peerDeviceId];
 }

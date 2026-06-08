@@ -129,8 +129,8 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, 
                 throw FrameCodecException('PayloadTooLarge: declared length $expectedLength exceeds current max ${maxFrameSizeProvider()}');
               }
               
-              // Set limit strictly to this frame's size + max next frame
-              currentLimit = expectedLength + maxFrameSizeProvider() + 4;
+              // Limit strictly to this frame's size + a safe margin for the incoming chunk (64 KiB)
+              currentLimit = expectedLength + (64 * 1024);
             } else {
               break; // Wait for more bytes
             }

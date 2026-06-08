@@ -18,8 +18,7 @@ This is the core background module (daemon) on the Android OS for the Rift proje
   - `discovery_service_impl.dart`: Uses `nsd` to broadcast mDNS Opaque IDs to prevent timing attacks.
   - `session_manager.dart`: Orchestrates the `session.hello` state machine, prevents double-hello attacks, and strictly validates Ed25519 PoP signatures against X.509 certs.
 - `lib/src/daemon.dart`: The master orchestrator that binds all services and provides an `isolateEntryPoint` for Flutter Background Services.
-- `test/`: Contains security test scenarios (Fail-Closed), including 34 passing tests across crypto, identity, pop, and frame handling.
-- `demo_cert.dart`: A sample script to test generating a valid `demo.pem` certificate file to disk.
+- `test/`: Contains security test scenarios (Fail-Closed), including 33 passing tests across crypto, identity, pop, and frame handling.
 
 ---
 
@@ -74,15 +73,31 @@ import 'package:daemon_dart/daemon_dart.dart';
 
 void startDaemon() async {
   ReceivePort receivePort = ReceivePort();
+  SendPort? commandPort;
   
   // Start the background daemon
   await Isolate.spawn(RiftDaemon.isolateEntryPoint, {
     'sendPort': receivePort.sendPort,
   });
 
-  // Listen for JSON-RPC messages from the Daemon
+  // Listen for messages from the Daemon
   receivePort.listen((message) {
-    print('Message from Daemon: $message');
+    if (message is Map<String, dynamic>) {
+      if (message['status'] == 'running') {
+        commandPort = message['commandPort'];
+        print('Daemon is running. Device ID: ${message['deviceId']}');
+        
+        // Example: Command the daemon to connect to a discovered peer
+        // commandPort?.send({
+        //   'command': 'connect',
+        //   'host': '192.168.1.5',
+        //   'port': 11112,
+        //   'peerDeviceId': 'rift-xyz123'
+        // });
+      } else if (message['event'] == 'peer_discovered') {
+        print('Peer Discovered: ${message['deviceIdHint']}');
+      }
+    }
   });
 }
 ```

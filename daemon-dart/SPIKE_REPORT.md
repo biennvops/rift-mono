@@ -35,9 +35,8 @@ daemon-dart/
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB limit and Frame structure
 │   ├── identity_test.dart                  # Unit test to verify valid Device ID and Base32 generation
-│   └── pop_test.dart                       # PoP signature verification Test Vectors (107-byte)
+│   └── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
 ├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
-├── demo_cert.dart                          # Script to test generating PEM certificate
 └── README.md                               # Guide for running tests, linter and overall architecture
 ```
 
@@ -66,10 +65,10 @@ daemon-dart/
   - **Assessment:** **PASSED (100%)** 31/31 Security Unit Tests passing.
 
 - **`[daemon-dart] mDNS, Transport, Session Orchestration` (Week 4):** Finalize Network.
-  - Implemented **mDNS Discovery (`discovery_service_impl.dart`)** using `nsd`. Opaque Instance IDs are bound to the daemon session lifecycle to mitigate passive tracking / timing correlation attacks.
-  - Implemented **mTLS Transport (`transport_impl.dart`)** with `SecureServerSocket`. **Security Hardening:** Strictly extracts the Ed25519 identity directly from the custom X.509 extension; enforced a state-dependent Memory Exhaustion protection (64 KiB pre-auth / 32 MiB post-auth) for `RiftFrameTransformer`. Added a 10-second Handshake Timeout to mitigate Connection Slot Exhaustion attacks.
-  - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6 (Double `session.hello` rejection), Envelope Identity spoofing checks, and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure with strictly enforced 2-byte length-prefixing for each field to mitigate Canonicalization Attacks. Includes Capability Negotiation lists.
-  - Created the Root Daemon Orchestrator **`daemon.dart`** with `isolateEntryPoint` to encapsulate the Android Background Service requirements and establish the `SendPort/ReceivePort` IPC bridge. **Resilience:** Implemented `Isolate.current.addErrorListener` to propagate fatal isolate crashes to the UI layer, preventing silent daemon death.
+  - Implemented **mDNS Discovery (`discovery_service_impl.dart`)** using `nsd`. Opaque Instance IDs are bound to the daemon session lifecycle to mitigate passive tracking. **Fix:** Added `_seenInstanceIds` tracking to eliminate duplicate peer emissions.
+  - Implemented **mTLS Transport (`transport_impl.dart`)** with `SecureServerSocket`. **Security Hardening:** Strictly extracts Ed25519 identity from custom X.509 extension; enforced Memory Exhaustion protection (64 KiB/32 MiB) with strict chunking limits. Added 10-second Handshake Timeout to mitigate Connection Slot Exhaustion. **Fix:** Eliminated MITM window by enforcing `expectedDeviceId` immediately inside `onBadCertificate` during the TLS Handshake.
+  - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6, Envelope Identity validation (`sourceDeviceId`), and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure with 2-byte length-prefixing to mitigate Canonicalization Attacks. **Fix:** Synchronized signing paths by exposing `getPeerCert` from Transport.
+  - Created the Root Daemon Orchestrator **`daemon.dart`** with `isolateEntryPoint` to encapsulate Android Background Services. **Resilience:** Implemented `Isolate.current.addErrorListener` to propagate fatal isolate crashes to the UI layer. **Fix:** Replaced auto-connect privacy risk with a bidirectional IPC `commandPort`, allowing the Flutter UI to explicitly trigger `connect` and `stop` commands.
   - **BLOCKER (High Risk):** Due to Dart `SecureSocket` limitations, `tls-exporter` (TLS 1.3) and Extended Master Secret (TLS 1.2) are unavailable. PoP signatures currently bind to a `_dummyChannelBinding` (32 bytes of zeros). This leaves the protocol vulnerable to Triple Handshake Attacks. Awaiting Architect Decision (ADR) on whether to downgrade spec to use Application Nonces or write a JNI/BoringSSL native plugin.
   - **Assessment:** Code structurally compliant, but pending Architect ADR for the TLS Channel Binding blocker.
 

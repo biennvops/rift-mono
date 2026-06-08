@@ -7,6 +7,6 @@ abstract class IdentityManager {
   String get deviceId;
   String get tlsCertificatePem;
   String get tlsPrivateKeyPem;
-  Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash);
+  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List peerCertDer);
   Future<void> dispose();
 }

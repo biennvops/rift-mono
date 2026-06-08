@@ -8,6 +8,8 @@ import 'package:path/path.dart' as p;
 import 'package:basic_utils/basic_utils.dart';
 import '../interfaces/identity_manager.dart';
 import 'cert_builder.dart';
+import 'base32_utils.dart';
+import 'pop_manager.dart';
 
 class IdentityManagerImpl implements IdentityManager {
   final String storagePath;
@@ -70,7 +72,7 @@ class IdentityManagerImpl implements IdentityManager {
     _fingerprintBytes = Uint8List.fromList(hash.bytes);
 
     // Calculate Device ID: rift- + first 32 chars of lowercase Base32(fingerprint)
-    var base32Str = _encodeBase32(_fingerprintBytes).toLowerCase();
+    final base32Str = Base32Utils.encode(_fingerprintBytes).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
   }
 
@@ -89,49 +91,11 @@ class IdentityManagerImpl implements IdentityManager {
   @override
   String get tlsPrivateKeyPem => _tlsPrivateKeyPem;
 
-  /// Simple RFC 4648 Base32 Encoder without padding
-  static String _encodeBase32(Uint8List data) {
-    const String alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    int buffer = 0;
-    int bitsLeft = 0;
-    StringBuffer result = StringBuffer();
-
-    for (int i = 0; i < data.length; i++) {
-      buffer = (buffer << 8) | data[i];
-      bitsLeft += 8;
-      while (bitsLeft >= 5) {
-        result.write(alphabet[(buffer >> (bitsLeft - 5)) & 0x1F]);
-        bitsLeft -= 5;
-      }
-    }
-    if (bitsLeft > 0) {
-      result.write(alphabet[(buffer << (5 - bitsLeft)) & 0x1F]);
-    }
-    return result.toString();
-  }
-
   @override
-  Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash) async {
+  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List peerCertDer) async {
     if (_cachedKeyPair == null) throw StateError('IdentityManager not initialized');
-    if (channelBinding.length != 32) {
-      throw ArgumentError('channelBinding must be exactly 32 bytes');
-    }
-    if (certHash.length != 32) {
-      throw ArgumentError('certHash must be exactly 32 bytes');
-    }
-
-    // Protocol Section 5.3.1: RiftPoP-v2: + channelBinding + publicKey + certHash
-    final prefix = Uint8List.fromList('RiftPoP-v2:'.codeUnits);
-    final builder = BytesBuilder(copy: false);
-    builder.add(prefix);
-    builder.add(channelBinding);
-    builder.add(_publicKey);
-    builder.add(certHash);
-
-    final payload = builder.takeBytes();
-    final algorithm = Ed25519();
-    final signature = await algorithm.sign(payload, keyPair: _cachedKeyPair!);
-    return Uint8List.fromList(signature.bytes);
+    return await PoPManager.generateIdentityProof(
+        channelBinding, _publicKey, peerCertDer, _privateKey);
   }
 
   @override
@@ -149,7 +113,7 @@ class IdentityManagerImpl implements IdentityManager {
       _deviceId = '';
       _tlsCertificatePem = '';
       _tlsPrivateKeyPem = '';
-    } on Error {
+    } catch (e) {
       // Ignore uninitialized fields
     }
     _cachedKeyPair = null;

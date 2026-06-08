@@ -12,6 +12,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
+  final Set<String> _seenInstanceIds = {};
 
   DiscoveryServiceImpl({
     required this.port,
@@ -56,7 +57,10 @@ class DiscoveryServiceImpl implements DiscoveryService {
     
     _discovery!.addListener(() {
       for (final service in _discovery!.services) {
-        if (service.host != null && service.port != null) {
+        final instanceId = service.name ?? 'unknown';
+        if (!_seenInstanceIds.contains(instanceId) && service.host != null && service.port != null) {
+          _seenInstanceIds.add(instanceId);
+          
           final txt = service.txt ?? {};
           final minV = txt['minV'] != null ? String.fromCharCodes(txt['minV']!) : 'unknown';
           final maxV = txt['maxV'] != null ? String.fromCharCodes(txt['maxV']!) : 'unknown';
@@ -64,7 +68,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
           final fp = txt['fp'] != null ? String.fromCharCodes(txt['fp']!) : null;
 
           final peer = DiscoveredPeer(
-            instanceId: service.name ?? 'unknown',
+            instanceId: instanceId,
             address: service.host!,
             port: service.port!,
             minVersion: minV,
@@ -83,6 +87,13 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_discovery != null) {
       await nsd.stopDiscovery(_discovery!);
       _discovery = null;
+      _seenInstanceIds.clear(); // Reset tracking when discovery stops
     }
+  }
+
+  Future<void> dispose() async {
+    await stopAdvertising();
+    await stopDiscovery();
+    await _peerStreamController.close();
   }
 }
