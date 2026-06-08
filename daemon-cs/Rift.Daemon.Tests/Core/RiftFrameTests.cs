@@ -1,0 +1,55 @@
+using System;
+using System.Text;
+using Xunit;
+using Rift.Daemon.Core.Protocol;
+
+namespace Rift.Daemon.Tests.Core;
+
+public class RiftFrameTests
+{
+    [Fact]
+    public void Encode_PrependsCorrectLengthAndPayload()
+    {
+        var payload = Encoding.UTF8.GetBytes("hello");
+        var frame = RiftFrame.Encode(payload);
+
+        Assert.Equal(9, frame.Length);
+        
+        // Length 5 in big endian: 00 00 00 05
+        Assert.Equal(0, frame[0]);
+        Assert.Equal(0, frame[1]);
+        Assert.Equal(0, frame[2]);
+        Assert.Equal(5, frame[3]);
+        
+        var decodedPayload = frame.AsSpan(4).ToArray();
+        Assert.Equal(payload, decodedPayload);
+    }
+    
+    [Fact]
+    public void Decode_ExtractsProperPayload()
+    {
+        var frame = new byte[] { 0, 0, 0, 5, (byte)'h', (byte)'e', (byte)'l', (byte)'l', (byte)'o' };
+        var payload = RiftFrame.Decode(frame);
+        
+        Assert.Equal(5, payload.Length);
+        Assert.Equal("hello", Encoding.UTF8.GetString(payload.Span));
+    }
+
+    [Fact]
+    public void Decode_RejectsOversizedPayloads()
+    {
+        // Indicate length 64 KiB + 1
+        var frame = new byte[] { 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 0 }; 
+        
+        Assert.Throws<InvalidOperationException>(() => 
+            RiftFrame.Decode(frame, maxSize: RiftFrame.MaxPreAuthSize)
+        );
+    }
+
+    [Fact]
+    public void Decode_RejectsIncompleteBuffer()
+    {
+        var frame = new byte[] { 0, 0, 0, 5, (byte)'h' }; // Says length 5, but contains 1 byte
+        Assert.Throws<InvalidOperationException>(() => RiftFrame.Decode(frame));
+    }
+}
