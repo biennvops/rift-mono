@@ -1,0 +1,33 @@
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number: 1 (0x1)
+        Signature Algorithm: ecdsa-with-SHA256
+        Issuer: CN=Rift Device
+        Validity
+            Not Before: Jan  1 00:00:00 2020 GMT
+            Not After : Jan  1 00:00:00 2030 GMT
+        Subject: CN=Rift Device
+        Subject Public Key Info:
+            Public Key Algorithm: id-ecPublicKey
+                Public-Key: (256 bit)
+                pub:
+                    04:4e:59:d3:d7:fe:4e:55:00:e7:07:85:b4:19:de:
+                    87:a1:45:90:9d:97:96:0e:35:02:07:13:df:0b:1e:
+                    39:94:da:d6:1f:13:bd:8c:f2:ef:84:21:00:4e:0a:
+                    b7:6c:c9:be:f5:04:11:d2:5a:74:52:cc:e5:2a:ea:
+                    2c:17:88:3f:9d
+                ASN1 OID: prime256v1
+                NIST CURVE: P-256
+        X509v3 extensions:
+            2.25.293029629918709742181702189012786017422: 
+                . .Z....
+..K...d.:..r......F......
+            X509v3 Subject Key Identifier: 
+                29:5A:6A:E1:35:42:51:90:88:1B:AF:63:63:B6:01:45:86:1D:B5:9F
+    Signature Algorithm: ecdsa-with-SHA256
+    Signature Value:
+        30:46:02:21:00:b4:c8:74:07:bc:24:d2:37:8c:61:28:2e:3d:
+        da:44:73:2e:05:1e:0c:b3:9e:f5:23:6f:f8:2a:fa:e6:42:5f:
+        08:02:21:00:80:d3:48:15:db:e1:60:6e:4a:bf:e9:a7:67:e9:
+        52:55:e8:1a:d3:12:22:0b:98:f7:09:01:33:42:3d:23:7d:e1

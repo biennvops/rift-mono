@@ -1,0 +1,69 @@
+{
+  "version": "0.1-draft",
+  "note": "Class 10 (valid structure, untrusted key) is a trust-layer check, not a DER parsing defect. It is intentionally excluded from this set.",
+  "classes": [
+    {
+      "id": 1,
+      "file": "malformed-01-ext-absent.der",
+      "defect": "Extension removed entirely",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 2,
+      "file": "malformed-02-ext-duplicated.der",
+      "defect": "Rift OID extension appears twice",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 3,
+      "file": "malformed-03-ext-critical.der",
+      "defect": "Extension marked critical",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 4,
+      "file": "malformed-04-wrong-oid.der",
+      "defect": "Different OID used",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 5,
+      "file": "malformed-05-key-too-short.der",
+      "defect": "Inner OCTET STRING is 31 bytes",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 6,
+      "file": "malformed-06-key-too-long.der",
+      "defect": "Inner OCTET STRING is 33 bytes",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 7,
+      "file": "malformed-07-wrong-tag.der",
+      "defect": "Inner tag 03 (BIT STRING) instead of 04",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 8,
+      "file": "malformed-08-truncated-der.der",
+      "defect": "Tag+length present but value bytes cut short",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    },
+    {
+      "id": 9,
+      "file": "malformed-09-oversized-extnvalue.der",
+      "defect": "Length field claims more bytes than exist",
+      "expectedFailure": "AuthenticationFailed",
+      "expectedEvent": "certificate.malformed"
+    }
+  ]
+}

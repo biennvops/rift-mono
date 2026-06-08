@@ -1,0 +1,10 @@
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = Rift Device
+
+[v3_req]
+2.25.293029629918709742181702189012786017422 = ASN1:FORMAT:HEX,OCTETSTRING:d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3
