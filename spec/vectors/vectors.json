@@ -9,7 +9,8 @@
   "extensionDer": {
     "oidHex": "06146983b8f3ba8cbabfcad1cd9aabf7888895fbe90e",
     "innerExtnValueHex": "0420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
-    "outerExtnValueHex": "04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+    "outerExtnValueHex": "04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+    "completeSequenceHex": "303a06146983b8f3ba8cbabfcad1cd9aabf7888895fbe90e04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
   },
   "clipboardHash": {
     "contentUtf8": "hello",

@@ -28,7 +28,7 @@
           "rift": "0.1-draft",
           "type": "presence.update",
           "messageId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
-          "sourceDeviceId": "rift-INVALID_ID_WITH_UPPERCASE",
+          "sourceDeviceId": "rift-CPGWO6WEFDKXWXFUGSVCJBWJ6MHP4GFQ",
           "payload": { "status": "online" }
         }
       },
