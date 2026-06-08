@@ -1,10 +1,70 @@
 {
   "suite": "certificate-parsing",
+  "description": "Verify X.509 custom extension parsing accepts valid certs and rejects each malformed class (protocol.md §15.2, Appendix B.3)",
+  "vectorsRef": "../../spec/vectors/malformed-vectors.json",
   "testCases": [
     {
+      "id": "cert-valid-001",
+      "description": "Conformant certificate with correct Rift extension",
+      "input": { "file": "../../spec/vectors/cert-valid.der" },
+      "expected": {
+        "result": "accept",
+        "ed25519PublicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+      }
+    },
+    {
       "id": "cert-malformed-01",
+      "description": "B.3 class 1: Extension absent — no Ed25519 identity bound",
       "input": { "file": "../../spec/vectors/malformed-01-ext-absent.der" },
-      "expected": { "result": "reject", "error": "AuthenticationFailed" }
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-02",
+      "description": "B.3 class 2: Extension duplicated — ambiguous identity",
+      "input": { "file": "../../spec/vectors/malformed-02-ext-duplicated.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-03",
+      "description": "B.3 class 3: Extension marked critical — violates spec requirement",
+      "input": { "file": "../../spec/vectors/malformed-03-ext-critical.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-04",
+      "description": "B.3 class 4: Wrong OID — extension not found",
+      "input": { "file": "../../spec/vectors/malformed-04-wrong-oid.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-05",
+      "description": "B.3 class 5: Inner OCTET STRING too short (31 bytes)",
+      "input": { "file": "../../spec/vectors/malformed-05-key-too-short.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-06",
+      "description": "B.3 class 6: Inner OCTET STRING too long (33 bytes)",
+      "input": { "file": "../../spec/vectors/malformed-06-key-too-long.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-07",
+      "description": "B.3 class 7: Wrong DER tag (BIT STRING 0x03 instead of OCTET STRING 0x04)",
+      "input": { "file": "../../spec/vectors/malformed-07-wrong-tag.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-08",
+      "description": "B.3 class 8: Truncated DER — tag and length present but value bytes missing",
+      "input": { "file": "../../spec/vectors/malformed-08-truncated-der.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
+    },
+    {
+      "id": "cert-malformed-09",
+      "description": "B.3 class 9: Oversized extnValue — length field exceeds remaining bytes",
+      "input": { "file": "../../spec/vectors/malformed-09-oversized-extnvalue.der" },
+      "expected": { "result": "reject", "error": "AuthenticationFailed", "eventType": "certificate.malformed" }
     }
   ]
 }

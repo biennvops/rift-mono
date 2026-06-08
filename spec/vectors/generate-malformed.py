@@ -1,6 +1,15 @@
+#!/usr/bin/env python3
 import json
 import os
+import sys
 from asn1crypto import x509, core
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+RIFT_OID = '2.25.293029629918709742181702189012786017422'
+EXTN_VALUE_PATTERN = bytes.fromhex(
+    '04220420d75a980182b10ab7d54bfed3c964073a'
+    '0ee172f3daa3f4a18446b0b8d183f8e3'
+)
 
 def load_cert(path):
     with open(path, 'rb') as f:
@@ -12,94 +21,93 @@ def save_cert(cert_obj, path):
 
 def find_rift_ext_index(extensions):
     for i, ext in enumerate(extensions):
-        if ext['extn_id'].native == '2.25.293029629918709742181702189012786017422':
+        if ext['extn_id'].native == RIFT_OID:
             return i
     return -1
 
+def out_path(filename):
+    return os.path.join(SCRIPT_DIR, filename)
+
 def generate_malformed(base_der_path):
-    os.makedirs('spec/vectors', exist_ok=True)
-    
-    # 1. Ext absent
+    # 1. Extension absent
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     del exts[idx]
-    save_cert(cert, 'spec/vectors/malformed-01-ext-absent.der')
-    
-    # 2. Ext duplicated
+    save_cert(cert, out_path('malformed-01-ext-absent.der'))
+
+    # 2. Extension duplicated
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     exts.append(exts[idx])
-    save_cert(cert, 'spec/vectors/malformed-02-ext-duplicated.der')
-    
-    # 3. Ext critical
+    save_cert(cert, out_path('malformed-02-ext-duplicated.der'))
+
+    # 3. Extension marked critical
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     exts[idx]['critical'] = True
-    save_cert(cert, 'spec/vectors/malformed-03-ext-critical.der')
-    
+    save_cert(cert, out_path('malformed-03-ext-critical.der'))
+
     # 4. Wrong OID
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     exts[idx]['extn_id'] = x509.ExtensionId('1.2.3.4')
-    save_cert(cert, 'spec/vectors/malformed-04-wrong-oid.der')
-    
+    save_cert(cert, out_path('malformed-04-wrong-oid.der'))
+
     # 5. Key too short (31 bytes)
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     exts[idx]['extn_value'] = core.ParsableOctetString(core.OctetString(b'\x00' * 31).dump())
-    save_cert(cert, 'spec/vectors/malformed-05-key-too-short.der')
-    
+    save_cert(cert, out_path('malformed-05-key-too-short.der'))
+
     # 6. Key too long (33 bytes)
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
     exts[idx]['extn_value'] = core.ParsableOctetString(core.OctetString(b'\x00' * 33).dump())
-    save_cert(cert, 'spec/vectors/malformed-06-key-too-long.der')
-    
-    # 7. Wrong tag
+    save_cert(cert, out_path('malformed-06-key-too-long.der'))
+
+    # 7. Wrong tag (BIT STRING 0x03 instead of OCTET STRING 0x04)
     cert = load_cert(base_der_path)
-    tbs = cert['tbs_certificate']
-    exts = tbs['extensions']
+    exts = cert['tbs_certificate']['extensions']
     idx = find_rift_ext_index(exts)
-    # Use BIT STRING (03) instead of OCTET STRING (04)
-    # Create BitString correctly: tuple of 1s and 0s
     bs = core.BitString((0,) * (32 * 8))
     exts[idx]['extn_value'] = core.ParsableOctetString(bs.dump())
-    save_cert(cert, 'spec/vectors/malformed-07-wrong-tag.der')
-    
-    # Generate 8 and 9 using raw byte manipulation
+    save_cert(cert, out_path('malformed-07-wrong-tag.der'))
+
+    # Cases 8 and 9 require raw byte manipulation of the golden cert DER.
     with open(base_der_path, 'rb') as f:
         der = bytearray(f.read())
-    
-    pattern = bytes.fromhex('04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3')
-    idx = der.find(pattern)
-    
-    if idx != -1:
-        # 8. Truncated DER (cut inside the extn_value)
-        trunc_der = der[:idx + 10]
-        with open('spec/vectors/malformed-08-truncated-der.der', 'wb') as f:
-            f.write(trunc_der)
-            
-        # 9. Oversized extnValue (length field is larger than actual bytes)
-        # Modify the 04 22 length byte to 04 40
-        oversized_der = bytearray(der)
-        oversized_der[idx + 1] = 0x40
-        with open('spec/vectors/malformed-09-oversized-extnvalue.der', 'wb') as f:
-            f.write(oversized_der)
+
+    idx = der.find(EXTN_VALUE_PATTERN)
+    if idx == -1:
+        print(
+            'ERROR: could not find outer extnValue pattern in golden cert. '
+            'Cases 8-9 will not be generated. '
+            'Regenerate cert-valid.der with the RFC 8032 test key.',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # 8. Truncated DER (cut inside the extnValue)
+    trunc_der = der[:idx + 10]
+    with open(out_path('malformed-08-truncated-der.der'), 'wb') as f:
+        f.write(trunc_der)
+
+    # 9. Oversized extnValue (outer length 0x40 instead of 0x22)
+    oversized_der = bytearray(der)
+    oversized_der[idx + 1] = 0x40
+    with open(out_path('malformed-09-oversized-extnvalue.der'), 'wb') as f:
+        f.write(oversized_der)
 
     # Output JSON catalog
     catalog = {
+        "version": "0.1-draft",
+        "note": "Class 10 (valid structure, untrusted key) is a trust-layer check, not a DER parsing defect. It is intentionally excluded from this set.",
         "classes": [
             {
                 "id": 1,
@@ -166,8 +174,11 @@ def generate_malformed(base_der_path):
             }
         ]
     }
-    with open('spec/vectors/malformed-vectors.json', 'w') as f:
+    with open(out_path('malformed-vectors.json'), 'w') as f:
         json.dump(catalog, f, indent=2)
+        f.write('\n')
+
+    print(f'Generated 9 malformed vectors and malformed-vectors.json in {SCRIPT_DIR}')
 
 if __name__ == '__main__':
-    generate_malformed('spec/vectors/cert-valid.der')
+    generate_malformed(os.path.join(SCRIPT_DIR, 'cert-valid.der'))

@@ -1,4 +1,6 @@
 {
+  "version": "0.1-draft",
+  "note": "Class 10 (valid structure, untrusted key) is a trust-layer check, not a DER parsing defect. It is intentionally excluded from this set.",
   "classes": [
     {
       "id": 1,

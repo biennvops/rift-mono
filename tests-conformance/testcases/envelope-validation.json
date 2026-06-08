@@ -1,0 +1,38 @@
+{
+  "suite": "envelope-validation",
+  "description": "Verify peer message envelope acceptance and rejection (protocol.md §15.4)",
+  "vectorsRef": "../../spec/vectors/vectors.json",
+  "testCases": [
+    {
+      "id": "envelope-valid-001",
+      "description": "Valid envelope with correct device ID format",
+      "input": {
+        "json": {
+          "rift": "0.1-draft",
+          "type": "presence.update",
+          "messageId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "payload": {
+            "status": "online",
+            "capabilities": ["clipboard.offer_fetch", "presence.basic"]
+          }
+        }
+      },
+      "expected": { "result": "accept" }
+    },
+    {
+      "id": "envelope-invalid-001",
+      "description": "Device ID with uppercase characters violates ^rift-[a-z2-7]{32}$",
+      "input": {
+        "json": {
+          "rift": "0.1-draft",
+          "type": "presence.update",
+          "messageId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+          "sourceDeviceId": "rift-INVALID_ID_WITH_UPPERCASE",
+          "payload": { "status": "online" }
+        }
+      },
+      "expected": { "result": "reject", "error": "MalformedMessage" }
+    }
+  ]
+}

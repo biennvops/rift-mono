@@ -12,8 +12,11 @@
     "outerExtnValueHex": "04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
   },
   "clipboardHash": {
-    "content": "Hello Rift",
-    "sha256Base64": "A5ByvErCB9O1B/xELZ+R9h5wX+Xj1M/8Xg5m+sP0mxg="
+    "contentUtf8": "hello",
+    "contentHex": "68656c6c6f",
+    "byteSize": 5,
+    "sha256Hex": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+    "contentBase64": "aGVsbG8="
   },
   "envelopeValidation": {
     "valid": {

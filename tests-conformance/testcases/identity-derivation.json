@@ -1,0 +1,20 @@
+{
+  "suite": "identity-derivation",
+  "description": "Verify Ed25519 public key to device ID and fingerprint derivation (protocol.md §15.1)",
+  "vectorsRef": "../../spec/vectors/vectors.json",
+  "testCases": [
+    {
+      "id": "identity-001",
+      "description": "RFC 8032 §7.1 Test Vector 1 public key",
+      "input": {
+        "ed25519PublicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+      },
+      "expected": {
+        "sha256Hex": "13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7",
+        "base32": "cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq",
+        "deviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ"
+      }
+    }
+  ]
+}

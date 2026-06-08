@@ -1,0 +1,20 @@
+{
+  "suite": "clipboard-hash",
+  "description": "Verify clipboard content hashing (protocol.md §15.3)",
+  "vectorsRef": "../../spec/vectors/vectors.json",
+  "testCases": [
+    {
+      "id": "clipboard-001",
+      "description": "SHA-256 of 'hello' content",
+      "input": {
+        "contentUtf8": "hello",
+        "contentHex": "68656c6c6f"
+      },
+      "expected": {
+        "byteSize": 5,
+        "sha256Hex": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+        "contentBase64": "aGVsbG8="
+      }
+    }
+  ]
+}
