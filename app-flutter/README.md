@@ -1,12 +1,13 @@
 # Flutter App
 
-This directory contains the Flutter app shell for Android and Windows used in Week 1.
+This directory contains the Flutter app shell and IPC client for Android and Windows used in Week 2.
 
 Installation and running (requires Flutter SDK installed):
 
 ```bash
 flutter pub get
 flutter run -d windows   # on Windows
+flutter run -d linux     # on Linux
 flutter run -d <device>  # on Android/emulator
 ```
 
@@ -16,13 +17,13 @@ Run tests:
 flutter test
 ```
 
-Verified output (local run, 2026-06-05):
+Verified output (local run, Week 2):
 
 ```
-00:26 +4: All tests passed!
+00:06 +8: All tests passed!
 ```
 
-The 4 tests that passed:
+The 8 tests that passed:
 
 | Test file | Test name | What it checks |
 | --- | --- | --- |
@@ -30,6 +31,10 @@ The 4 tests that passed:
 | `test/pairing_screen_test.dart` | `PairingScreen shows title` | `PairingScreen` renders `AppStrings.pairingTitle` |
 | `test/trusted_devices_screen_test.dart` | `TrustedDevicesScreen shows title` | `TrustedDevicesScreen` renders `AppStrings.trustedDevicesTitle` |
 | `test/event_log_screen_test.dart` | `EventLogScreen shows title` | `EventLogScreen` renders `AppStrings.eventLogTitle` |
+| `test/app_shell_test.dart` | `App shell boots up...` | Wraps app in `Provider` with mocked IPC client to verify decoupled UI. |
+| `test/app_shell_test.dart` | `MockClient getDeviceInfo...` | Tests `getDeviceInfo` method through Mocktail. |
+| `test/ipc_test.dart` | `...connect via transport` | Validates `JsonRpcRiftClient` successfully completes connect cycle over generic transport. |
+| `test/ipc_test.dart` | `...get device info...` | Validates exact JSON-RPC `rift.getDeviceInfo` payload exchange. |
 
 Notes:
 - UI strings are centralized in `lib/constants.dart` to avoid hardcoding.
@@ -122,3 +127,36 @@ Day 3 (done)
 - Screens display basic titles and tests check against values in `constants.dart` (no hardcoded strings in tests).
 - README updated with run/test instructions, directory structure, file review, and Week 1 plan.
 - No machine-specific or ephemeral files committed to the repository.
+
+## Week 2 Plan & Progress (app-flutter deliverables)
+
+Goal: Implement transport-agnostic IPC spike, dependency injection for JSON-RPC client, and integrate conformance testing CI.
+
+- **[x] IPC Spike**: Created `IpcTransport` interface with `NamedPipeTransport` (Windows), `UnixSocketTransport` (Linux/macOS), and `IsolateTransport` (Android).
+- **[x] Anti-OOM Framing**: Integrated NDJSON framing via a custom `BoundedLineSplitter` to strictly comply with `ipc.md` and prevent malicious 32+ MiB payloads from causing Out-Of-Memory crashes.
+- **[x] JSON-RPC Client**: Implemented `JsonRpcRiftClient` supporting reconnection and exponential backoff to handle daemon downtimes.
+- **[x] Dependency Injection & Factory**: Added `provider` package. `JsonRpcRiftClient` uses `TransportFactory.create()` to dynamically inject the correct platform transport at runtime without cluttering the UI code.
+- **[x] Widget Test Skeleton**: Updated `app_shell_test.dart` and `ipc_test.dart` using `mocktail`. Synced the mock schema to strictly match the 5 mandatory keys for `rift.getDeviceInfo` per protocol spec, eliminating real Daemon dependencies during CI.
+- **[x] CI Conformance**: Created `.github/workflows/conformance.yml` to automatically build standalone C# and Dart daemons and test against protocol vectors.
+
+## Week 2 File Review
+
+| File | Assessment | Comments |
+| --- | --- | --- |
+| `lib/src/ipc/ipc_transport.dart` | Good | Abstract interface for all platforms. |
+| `lib/src/ipc/transport_factory.dart` | Good | Centralized OS platform detection and instantiation. |
+| `lib/src/ipc/json_rpc_client.dart` | Good | Full JSON-RPC 2.0 with backoff and `getDeviceInfo`. |
+| `lib/src/ipc/bounded_line_splitter.dart` | Good | Stream filter preventing JSON frame OOM crashes. |
+| `lib/src/ipc/named_pipe_transport.dart` | Good | Windows Named Pipe using `BoundedLineSplitter`. |
+| `lib/src/ipc/unix_socket_transport.dart` | Good | Linux/macOS Unix Socket using `BoundedLineSplitter`. |
+| `lib/src/ipc/isolate_transport.dart` | Good | Android Isolate Send/Receive port spike. |
+| `test/ipc_test.dart` | Good | Validates Client behavior with simulated protocol streams. |
+| `test/app_shell_test.dart` | Good | Wraps App in `Provider` and injects `mocktail` client. |
+| `../.github/workflows/conformance.yml` | Good | Compiles both daemons autonomously for CI tests. |
+| `../daemon-dart/.gitignore` | Good | Blocks `daemon_runner` binary from leaking into Git. |
+
+## Week 2 Acceptance Criteria
+
+- `flutter test` completes successfully with mock JSON-RPC payloads mapping correctly to the Widget tree.
+- The IPC Transport adheres to the `protocol.md` and `ipc.md` security constraints (no private keys exposed, uses proper NDJSON framing bounded at 32 MiB).
+- The CI Conformance workflow passes validation without missing entry points for Dart/C#.
