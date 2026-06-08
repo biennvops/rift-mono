@@ -24,7 +24,7 @@ jobs:
 
       - name: Build C# Daemon
         working-directory: daemon-cs
-        run: dotnet build -c Release
+        run: dotnet build Rift.Daemon.Linux/Rift.Daemon.Linux.csproj -c Release
 
       - name: Build Dart Daemon
         working-directory: daemon-dart
