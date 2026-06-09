@@ -1,0 +1,20 @@
+{
+  "suite": "extension-der",
+  "description": "Verify DER encoding of the custom X.509 extension (protocol.md §15.2)",
+  "vectorsRef": "../../spec/vectors/vectors.json",
+  "testCases": [
+    {
+      "id": "ext-der-001",
+      "description": "OID encoding for 2.25.293029629918709742181702189012786017422",
+      "input": {
+        "ed25519PublicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+      },
+      "expected": {
+        "oidHex": "06146983b8f3ba8cbabfcad1cd9aabf7888895fbe90e",
+        "innerExtnValueHex": "0420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+        "outerExtnValueHex": "04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+        "completeSequenceHex": "303a06146983b8f3ba8cbabfcad1cd9aabf7888895fbe90e04220420d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3"
+      }
+    }
+  ]
+}

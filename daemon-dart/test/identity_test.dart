@@ -54,27 +54,16 @@ void main() {
       );
     });
 
-    test('Should correctly sign Proof of Possession and enforce 32-byte arguments', () async {
+    test('Should correctly sign Proof of Possession', () async {
       var manager = IdentityManagerImpl(tempDir.path);
       await manager.initialize();
 
       var validChannelBinding = Uint8List.fromList(List.generate(32, (i) => i));
-      var validCertHash = Uint8List.fromList(List.generate(32, (i) => 255 - i));
+      var validCertDer = Uint8List.fromList([1, 2, 3]);
 
       // Should sign successfully
-      var signature = await manager.signIdentityProof(validChannelBinding, validCertHash);
-      expect(signature.length, equals(64)); // Ed25519 signature is 64 bytes
-
-      // Should throw on invalid length
-      var invalidBuffer = Uint8List.fromList(List.generate(31, (i) => i));
-      expect(
-        () => manager.signIdentityProof(invalidBuffer, validCertHash),
-        throwsA(isA<ArgumentError>()),
-      );
-      expect(
-        () => manager.signIdentityProof(validChannelBinding, invalidBuffer),
-        throwsA(isA<ArgumentError>()),
-      );
+      var signatureHex = await manager.generateIdentityProof(validChannelBinding, validCertDer);
+      expect(signatureHex.length, equals(128)); // Ed25519 signature hex string is 128 chars
     });
 
     test('Should throw StateError if signing before initialize', () async {
@@ -82,23 +71,24 @@ void main() {
       var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
       
       expect(
-        () => manager.signIdentityProof(validBuffer, validBuffer),
+        () => manager.generateIdentityProof(validBuffer, validBuffer),
         throwsA(isA<StateError>()),
       );
     });
 
-    test('Contract Stub: signIdentityProof returns valid Future<Uint8List> signature asynchronously', () async {
+    test('Contract Stub: generateIdentityProof returns valid Future<String> signature asynchronously', () async {
       var manager = IdentityManagerImpl(tempDir.path);
       await manager.initialize();
       var cb = Uint8List(32);
-      var ch = Uint8List(32);
+      // Use a recognisable fake DER stub (not all-zeros, which looks like a hash)
+      var fakeCertDer = Uint8List.fromList([0x30, 0x03, 0x01, 0x01, 0x00]);
       
       // Verify it returns a Future correctly (async signature compliance)
-      var signatureFuture = manager.signIdentityProof(cb, ch);
-      expect(signatureFuture, isA<Future<Uint8List>>());
+      var signatureFuture = manager.generateIdentityProof(cb, fakeCertDer);
+      expect(signatureFuture, isA<Future<String>>());
       
-      var signature = await signatureFuture;
-      expect(signature.length, equals(64));
+      var signatureHex = await signatureFuture;
+      expect(signatureHex.length, equals(128));
     });
 
     test('Should clear memory on dispose', () async {
@@ -108,7 +98,7 @@ void main() {
       
       var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
       expect(
-        () => manager.signIdentityProof(validBuffer, validBuffer),
+        () => manager.generateIdentityProof(validBuffer, validBuffer),
         throwsA(isA<StateError>()),
       );
     });

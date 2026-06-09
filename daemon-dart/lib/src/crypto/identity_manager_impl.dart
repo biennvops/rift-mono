@@ -1,11 +1,14 @@
-
-
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
+import 'package:basic_utils/basic_utils.dart';
 import '../interfaces/identity_manager.dart';
+import 'cert_builder.dart';
+import 'base32_utils.dart';
+import 'pop_manager.dart';
 
 class IdentityManagerImpl implements IdentityManager {
   final String storagePath;
@@ -14,6 +17,10 @@ class IdentityManagerImpl implements IdentityManager {
   late String _deviceId;
   late Uint8List _fingerprintBytes;
   SimpleKeyPair? _cachedKeyPair;
+
+  late String _tlsCertificatePem;
+  late String _tlsPrivateKeyPem;
+  Uint8List? _tlsCertificateDer;
 
   IdentityManagerImpl(this.storagePath);
 
@@ -27,19 +34,29 @@ class IdentityManagerImpl implements IdentityManager {
       }
       await _derivePublicKey();
     } else {
-      // Generate new Ed25519 seed (private key)
       var random = Random.secure();
       _privateKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
       
-      // Save it durably using Atomic Write to prevent corruption on crash
+      // Atomic write: prevents a corrupted key file on crash mid-write.
       await keyFile.parent.create(recursive: true);
       var tempFile = File('${keyFile.path}.tmp');
       await tempFile.writeAsBytes(_privateKey, flush: true);
       await tempFile.rename(keyFile.path);
-      // TODO(Security): Integrate Android Keystore via Flutter channels to avoid plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
-      
+      // TODO(Security): Integrate Android Keystore via Flutter channels to avoid
+      // plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
+
       await _derivePublicKey();
     }
+
+    // Ephemeral TLS cert: trust root is Ed25519, so TLS cert can be regenerated each session.
+    final ecdsaKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
+    _tlsPrivateKeyPem = CryptoUtils.encodeEcPrivateKeyToPem(ecdsaKeyPair.privateKey as ECPrivateKey);
+    _tlsCertificatePem = RiftCertBuilder.generateSelfSignedCert(
+      ecdsaKeyPair,
+      _publicKey,
+      commonName: _deviceId,
+    );
+    _tlsCertificateDer = _pemToDer(_tlsCertificatePem);
   }
 
   Future<void> _derivePublicKey() async {
@@ -48,13 +65,12 @@ class IdentityManagerImpl implements IdentityManager {
     var pubKeyObj = await _cachedKeyPair!.extractPublicKey();
     _publicKey = Uint8List.fromList(pubKeyObj.bytes);
 
-    // Calculate Fingerprint: SHA-256(Ed25519 pubkey)
     var sha256 = Sha256();
     var hash = await sha256.hash(_publicKey);
     _fingerprintBytes = Uint8List.fromList(hash.bytes);
 
-    // Calculate Device ID: rift- + first 32 chars of lowercase Base32(fingerprint)
-    var base32Str = _encodeBase32(_fingerprintBytes).toLowerCase();
+    // Device ID: 'rift-' + first 32 chars of lowercase Base32(SHA-256(pubkey))
+    final base32Str = Base32Utils.encode(_fingerprintBytes).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
   }
 
@@ -67,49 +83,23 @@ class IdentityManagerImpl implements IdentityManager {
   @override
   String get deviceId => _deviceId;
 
-  /// Simple RFC 4648 Base32 Encoder without padding
-  static String _encodeBase32(Uint8List data) {
-    const String alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    int buffer = 0;
-    int bitsLeft = 0;
-    StringBuffer result = StringBuffer();
+  @override
+  String get tlsCertificatePem => _tlsCertificatePem;
 
-    for (int i = 0; i < data.length; i++) {
-      buffer = (buffer << 8) | data[i];
-      bitsLeft += 8;
-      while (bitsLeft >= 5) {
-        result.write(alphabet[(buffer >> (bitsLeft - 5)) & 0x1F]);
-        bitsLeft -= 5;
-      }
-    }
-    if (bitsLeft > 0) {
-      result.write(alphabet[(buffer << (5 - bitsLeft)) & 0x1F]);
-    }
-    return result.toString();
+  @override
+  Uint8List get tlsCertificateDer {
+    if (_tlsCertificateDer == null) throw StateError('IdentityManager not initialized');
+    return _tlsCertificateDer!;
   }
 
   @override
-  Future<Uint8List> signIdentityProof(Uint8List channelBinding, Uint8List certHash) async {
+  String get tlsPrivateKeyPem => _tlsPrivateKeyPem;
+
+  @override
+  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List localCertDer) async {
     if (_cachedKeyPair == null) throw StateError('IdentityManager not initialized');
-    if (channelBinding.length != 32) {
-      throw ArgumentError('channelBinding must be exactly 32 bytes');
-    }
-    if (certHash.length != 32) {
-      throw ArgumentError('certHash must be exactly 32 bytes');
-    }
-
-    // Protocol Section 5.3.1: RiftPoP-v2: + channelBinding + publicKey + certHash
-    final prefix = Uint8List.fromList('RiftPoP-v2:'.codeUnits);
-    final builder = BytesBuilder(copy: false);
-    builder.add(prefix);
-    builder.add(channelBinding);
-    builder.add(_publicKey);
-    builder.add(certHash);
-
-    final payload = builder.takeBytes();
-    final algorithm = Ed25519();
-    final signature = await algorithm.sign(payload, keyPair: _cachedKeyPair!);
-    return Uint8List.fromList(signature.bytes);
+    return await PoPManager.generateIdentityProof(
+        channelBinding, _publicKey, localCertDer, _privateKey);
   }
 
   @override
@@ -124,10 +114,28 @@ class IdentityManagerImpl implements IdentityManager {
       for (var i = 0; i < _fingerprintBytes.length; i++) {
         _fingerprintBytes[i] = 0;
       }
+      // Zeroize cert DER so it doesn't survive in a heap dump after shutdown.
+      if (_tlsCertificateDer != null) {
+        for (var i = 0; i < _tlsCertificateDer!.length; i++) {
+          _tlsCertificateDer![i] = 0;
+        }
+        _tlsCertificateDer = null;
+      }
       _deviceId = '';
-    } catch (_) {
+      _tlsCertificatePem = '';
+      _tlsPrivateKeyPem = '';
+    } catch (e) {
       // Ignore uninitialized fields
     }
     _cachedKeyPair = null;
+  }
+
+  /// Decodes a PEM certificate to DER bytes.
+  static Uint8List _pemToDer(String pem) {
+    final lines = pem.split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty && !l.startsWith('-----'))
+        .join();
+    return Uint8List.fromList(base64.decode(lines));
   }
 }
