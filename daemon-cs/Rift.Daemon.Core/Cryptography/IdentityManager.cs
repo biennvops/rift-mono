@@ -19,18 +19,14 @@ namespace Rift.Daemon.Core.Cryptography;
 
 public class IdentityManager : IIdentityManager
 {
-    private readonly string _persistencePath;
-    
     private Ed25519PublicKeyParameters _ed25519PublicKey = null!;
     private Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
     private X509Certificate2 _tlsCertificate = null!;
+    private readonly object _syncRoot = new();
 
-    public IdentityManager()
-    {
-        // Simple default for MVP, in real implementation this could be injected or use ITrustStore persistence
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        _persistencePath = Path.Combine(appData, "Rift", "identity_keys");
-    }
+    // Note: Identity persistence is currently deferred. For now, a new identity
+    // is generated on every process restart. This will be updated to load/save
+    // from a secure store in a future PR to maintain a stable device ID.
 
     public void EnsureIdentityInitialized()
     {
@@ -38,61 +34,69 @@ public class IdentityManager : IIdentityManager
         {
             return;
         }
+        
+        lock (_syncRoot)
+        {
+            if (_tlsCertificate != null && _ed25519PublicKey != null)
+            {
+                return;
+            }
 
-        // Generate Ed25519 keys
-        var random = new SecureRandom();
-        var ed25519Gen = new Ed25519KeyPairGenerator();
-        ed25519Gen.Init(new Ed25519KeyGenerationParameters(random));
-        var ed25519Pair = ed25519Gen.GenerateKeyPair();
-        
-        _ed25519PublicKey = (Ed25519PublicKeyParameters)ed25519Pair.Public;
-        _ed25519PrivateKey = (Ed25519PrivateKeyParameters)ed25519Pair.Private;
+            // Generate Ed25519 keys
+            var random = new SecureRandom();
+            var ed25519Gen = new Ed25519KeyPairGenerator();
+            ed25519Gen.Init(new Ed25519KeyGenerationParameters(random));
+            var ed25519Pair = ed25519Gen.GenerateKeyPair();
+            
+            _ed25519PublicKey = (Ed25519PublicKeyParameters)ed25519Pair.Public;
+            _ed25519PrivateKey = (Ed25519PrivateKeyParameters)ed25519Pair.Private;
 
-        // Generate ECDSA P-256 for TLS
-        var ecGen = new ECKeyPairGenerator("ECDSA");
-        ecGen.Init(new KeyGenerationParameters(random, 256));
-        var ecPair = ecGen.GenerateKeyPair();
+            // Generate ECDSA P-256 for TLS
+            var ecGen = new ECKeyPairGenerator("ECDSA");
+            ecGen.Init(new KeyGenerationParameters(random, 256));
+            var ecPair = ecGen.GenerateKeyPair();
 
-        var certGen = new X509V3CertificateGenerator();
-        
-        // Subject and Issuer (Self-signed)
-        var dnName = new X509Name("CN=RiftDevice");
-        certGen.SetIssuerDN(dnName);
-        certGen.SetSubjectDN(dnName);
-        
-        // Serial number
-        var serialNumber = BigInteger.ProbablePrime(120, random);
-        certGen.SetSerialNumber(serialNumber);
-        
-        // Validity (1 year)
-        var notBefore = DateTime.UtcNow.AddDays(-1);
-        var notAfter = notBefore.AddYears(1);
-        certGen.SetNotBefore(notBefore);
-        certGen.SetNotAfter(notAfter);
-        
-        // TLS Public Key
-        certGen.SetPublicKey(ecPair.Public);
+            var certGen = new X509V3CertificateGenerator();
+            
+            // Subject and Issuer (Self-signed)
+            var dnName = new X509Name("CN=RiftDevice");
+            certGen.SetIssuerDN(dnName);
+            certGen.SetSubjectDN(dnName);
+            
+            // Serial number
+            var serialNumber = BigInteger.ProbablePrime(120, random);
+            certGen.SetSerialNumber(serialNumber);
+            
+            // Validity (1 year)
+            var notBefore = DateTime.UtcNow.AddDays(-1);
+            var notAfter = notBefore.AddYears(1);
+            certGen.SetNotBefore(notBefore);
+            certGen.SetNotAfter(notAfter);
+            
+            // TLS Public Key
+            certGen.SetPublicKey(ecPair.Public);
 
-        // Custom Extension for Ed25519 Public Key
-        // OID: 2.25.293029629918709742181702189012786017422
-        var extOid = new DerObjectIdentifier("2.25.293029629918709742181702189012786017422");
-        var edKeyBytes = _ed25519PublicKey.GetEncoded();
-        var innerOctetString = new DerOctetString(edKeyBytes);
-        var innerBytes = innerOctetString.GetEncoded(); // 04 20 <32 bytes>
-        
-        certGen.AddExtension(extOid, false, innerBytes);
+            // Custom Extension for Ed25519 Public Key
+            // OID: 2.25.293029629918709742181702189012786017422
+            var extOid = new DerObjectIdentifier("2.25.293029629918709742181702189012786017422");
+            var edKeyBytes = _ed25519PublicKey.GetEncoded();
+            var innerOctetString = new DerOctetString(edKeyBytes);
+            var innerBytes = innerOctetString.GetEncoded(); // 04 20 <32 bytes>
+            
+            certGen.AddExtension(extOid, false, innerBytes);
 
-        // Sign certificate
-        var signatureFactory = new Asn1SignatureFactory("SHA256WITHECDSA", ecPair.Private, random);
-        var bouncyCert = certGen.Generate(signatureFactory);
+            // Sign certificate
+            var signatureFactory = new Asn1SignatureFactory("SHA256WITHECDSA", ecPair.Private, random);
+            var bouncyCert = certGen.Generate(signatureFactory);
 
-        // Convert to .NET X509Certificate2 with private key using pkcs12 format
-        var store = new Org.BouncyCastle.Pkcs.Pkcs12StoreBuilder().Build();
-        store.SetKeyEntry("rift", new Org.BouncyCastle.Pkcs.AsymmetricKeyEntry(ecPair.Private), new[] { new Org.BouncyCastle.Pkcs.X509CertificateEntry(bouncyCert) });
-        using var ms = new MemoryStream();
-        store.Save(ms, "password".ToCharArray(), random);
-        
-        _tlsCertificate = new X509Certificate2(ms.ToArray(), "password", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+            // Convert to .NET X509Certificate2 with private key using pkcs12 format
+            var store = new Org.BouncyCastle.Pkcs.Pkcs12StoreBuilder().Build();
+            store.SetKeyEntry("rift", new Org.BouncyCastle.Pkcs.AsymmetricKeyEntry(ecPair.Private), new[] { new Org.BouncyCastle.Pkcs.X509CertificateEntry(bouncyCert) });
+            using var ms = new MemoryStream();
+            store.Save(ms, "password".ToCharArray(), random);
+            
+            _tlsCertificate = new X509Certificate2(ms.ToArray(), "password", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+        }
     }
 
     public string GetDeviceId()

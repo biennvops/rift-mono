@@ -16,7 +16,6 @@ public static class Base32Encoding
 
         var sb = new StringBuilder((bytes.Length * 8 + 4) / 5);
         int bitIndex = 0;
-        int currentByte = bytes[0];
         
         while (bitIndex < bytes.Length * 8)
         {

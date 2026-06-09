@@ -23,7 +23,7 @@ public static class RiftFrame
         int totalLength = LengthPrefixBytes + utf8JsonPayload.Length;
         byte[] frame = new byte[totalLength];
         
-        BinaryPrimitives.WriteInt32BigEndian(frame.AsSpan(0, LengthPrefixBytes), utf8JsonPayload.Length);
+        BinaryPrimitives.WriteUInt32BigEndian(frame.AsSpan(0, LengthPrefixBytes), (uint)utf8JsonPayload.Length);
         utf8JsonPayload.CopyTo(frame.AsSpan(LengthPrefixBytes));
         
         return frame;
@@ -43,8 +43,8 @@ public static class RiftFrame
             throw new InvalidOperationException("Buffer is too small to contain a length prefix.");
         }
 
-        int payloadLength = BinaryPrimitives.ReadInt32BigEndian(buffer.Span.Slice(0, LengthPrefixBytes));
-        if (payloadLength < 0 || payloadLength > maxSize)
+        uint payloadLength = BinaryPrimitives.ReadUInt32BigEndian(buffer.Span.Slice(0, LengthPrefixBytes));
+        if (payloadLength > (uint)maxSize)
         {
             throw new InvalidOperationException($"PayloadTooLarge: Length {payloadLength} outside allowed limit [0, {maxSize}].");
         }
@@ -54,6 +54,6 @@ public static class RiftFrame
             throw new InvalidOperationException("Buffer is incomplete, missing payload data.");
         }
 
-        return buffer.Slice(LengthPrefixBytes, payloadLength);
+        return buffer.Slice(LengthPrefixBytes, (int)payloadLength);
     }
 }
