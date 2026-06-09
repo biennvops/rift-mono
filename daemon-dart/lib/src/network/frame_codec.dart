@@ -32,13 +32,8 @@ class RiftFrameCodec {
 
     var frame = Uint8List(4 + length);
     var byteData = ByteData.view(frame.buffer);
-    
-    // Write 4-byte big-endian length
     byteData.setUint32(0, length, Endian.big);
-    
-    // Write payload
     frame.setRange(4, frame.length, payloadBytes);
-    
     return frame;
   }
 
@@ -103,7 +98,9 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, 
 
   @override
   Stream<Map<String, dynamic>> bind(Stream<List<int>> stream) async* {
-    var buffer = BytesBuilder(copy: false);
+    // copy: true (default) avoids order-sensitive aliasing when takeBytes()
+    // returns internal storage and buffer.add() is called immediately after.
+    var buffer = BytesBuilder();
     int? expectedLength;
     int currentLimit = maxFrameSizeProvider() + 4; // Default safe limit
 
@@ -139,15 +136,15 @@ class RiftFrameTransformer extends StreamTransformerBase<List<int>, Map<String, 
           if (buffer.length >= expectedLength) {
             var bytes = buffer.takeBytes();
             var frameData = bytes.sublist(0, expectedLength);
-            buffer.add(bytes.sublist(expectedLength)); // Re-add the remaining bytes
+            buffer.add(bytes.sublist(expectedLength)); // keep remaining bytes for next frame
 
             yield RiftFrameCodec._validateAndDecodeJsonObject(
               Uint8List.fromList(frameData),
             );
-            expectedLength = null; // Reset for the next frame
+            expectedLength = null;
             currentLimit = maxFrameSizeProvider() + 4;
           } else {
-            break; // Wait for more bytes to complete the current frame
+            break;
           }
         }
       }

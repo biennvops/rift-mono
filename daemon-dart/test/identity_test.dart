@@ -80,10 +80,11 @@ void main() {
       var manager = IdentityManagerImpl(tempDir.path);
       await manager.initialize();
       var cb = Uint8List(32);
-      var ch = Uint8List(32);
+      // Use a recognisable fake DER stub (not all-zeros, which looks like a hash)
+      var fakeCertDer = Uint8List.fromList([0x30, 0x03, 0x01, 0x01, 0x00]);
       
       // Verify it returns a Future correctly (async signature compliance)
-      var signatureFuture = manager.generateIdentityProof(cb, ch);
+      var signatureFuture = manager.generateIdentityProof(cb, fakeCertDer);
       expect(signatureFuture, isA<Future<String>>());
       
       var signatureHex = await signatureFuture;

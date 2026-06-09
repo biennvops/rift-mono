@@ -19,6 +19,7 @@ class TransportImpl implements Transport {
   final Map<String, Uint8List> _peerCerts = {};
   final Set<String> _authenticatedPeers = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
+  final _disconnectController = StreamController<String>.broadcast();
 
   TransportImpl(this._identityManager, {required this.port});
 
@@ -47,11 +48,14 @@ class TransportImpl implements Transport {
     await _serverSocket?.close();
     _serverSocket = null;
     for (final socket in _peers.values) {
+      // Flush before closing to avoid dropping frames written by sendMessage() concurrently.
+      try { await socket.flush(); } catch (_) {}
       await socket.close();
     }
     _peers.clear();
     _peerCerts.clear();
     await _messageController.close();
+    await _disconnectController.close();
   }
 
   @override
@@ -81,7 +85,12 @@ class TransportImpl implements Transport {
             return false; // Fail-closed on invalid cert
           }
         }
-        return true; // Defer to post-handshake if expectedDeviceId is not provided
+        // Intentional deferral: when expectedDeviceId is null (e.g. incoming
+        // connections) we cannot pin the cert at TLS time. The peer MUST still
+        // pass session.hello PoP verification in SessionManager before any
+        // protected operation is permitted. The 10-second handshake timeout in
+        // _handleConnection limits the window for unauthenticated connections.
+        return true;
       },
     );
 
@@ -96,10 +105,7 @@ class TransportImpl implements Transport {
     }
 
     try {
-      // RIsk 3 Enforced: Identity is STRICTLY extracted from the Certificate, not the payload!
       final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(peerCert.pem);
-      
-      // Compute expected peer device ID based on the key
       final hash = sha256.convert(peerEd25519Key);
       final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
@@ -131,15 +137,15 @@ class TransportImpl implements Transport {
         cancelOnError: true,
       );
 
-      // Handshake Timeout: Mitigate connection slot exhaustion
+      // Disconnect unauthenticated peers after 10 s to prevent connection-slot exhaustion.
       Timer(const Duration(seconds: 10), () {
         if (_peers.containsKey(peerDeviceId) && !_authenticatedPeers.contains(peerDeviceId)) {
-          disconnect(peerDeviceId); // Timeout reached, peer hasn't authenticated
+          disconnect(peerDeviceId);
         }
       });
 
     } catch (e) {
-      // Invalid cert or missing extension -> Fail-Closed Authentication
+      // Fail-closed: destroy socket if cert is missing the Rift extension.
       socket.destroy();
     }
   }
@@ -150,6 +156,9 @@ class TransportImpl implements Transport {
     _peers.remove(peerDeviceId);
     _peerCerts.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
+    if (!_disconnectController.isClosed) {
+      _disconnectController.add(peerDeviceId);
+    }
   }
 
   @override
@@ -163,6 +172,9 @@ class TransportImpl implements Transport {
   Stream<TransportMessage> get onMessageReceived => _messageController.stream;
 
   @override
+  Stream<String> get onPeerDisconnected => _disconnectController.stream;
+
+  @override
   Future<void> sendMessage(String deviceId, Uint8List message) async {
     final socket = _peers[deviceId];
     if (socket != null) {
@@ -173,7 +185,6 @@ class TransportImpl implements Transport {
         socket.add(frame);
         await socket.flush();
       } catch (e) {
-        // Encoding errors or closed socket
         disconnect(deviceId);
       }
     }

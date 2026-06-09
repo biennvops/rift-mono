@@ -15,6 +15,14 @@ class PoPException implements Exception {
 class PoPManager {
   static const String popPrefix = 'RiftPoP-v2:';
 
+  // Signing input breakdown (Spec §5.3.1):
+  //   prefix                        : 11 bytes  ('RiftPoP-v2:')
+  //   [len(2)] + channelBinding     : 2 + 32 = 34 bytes
+  //   [len(2)] + ed25519PublicKey   : 2 + 32 = 34 bytes
+  //   [len(2)] + sha256(certDer)    : 2 + 32 = 34 bytes
+  //   Total                         : 11 + 34 + 34 + 34 = 113 bytes
+  static const int _expectedSigningInputLength = 113;
+
   /// Constructs the PoP signing input exactly as per Spec Section 5.3.1
   static Uint8List buildSigningInput(
       Uint8List channelBinding, Uint8List ed25519PublicKey, Uint8List certDer) {
@@ -42,8 +50,8 @@ class PoPManager {
     input.add(certHash);
 
     final result = input.takeBytes();
-    if (result.length != 113) {
-      throw PoPException('Signing input length mismatch. Expected 113, got ${result.length}');
+    if (result.length != _expectedSigningInputLength) {
+      throw PoPException('Signing input length mismatch. Expected $_expectedSigningInputLength, got ${result.length}');
     }
     return result;
   }

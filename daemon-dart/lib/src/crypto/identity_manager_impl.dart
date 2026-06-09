@@ -1,5 +1,4 @@
-
-
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -21,6 +20,7 @@ class IdentityManagerImpl implements IdentityManager {
 
   late String _tlsCertificatePem;
   late String _tlsPrivateKeyPem;
+  Uint8List? _tlsCertificateDer;
 
   IdentityManagerImpl(this.storagePath);
 
@@ -34,30 +34,29 @@ class IdentityManagerImpl implements IdentityManager {
       }
       await _derivePublicKey();
     } else {
-      // Generate new Ed25519 seed (private key)
       var random = Random.secure();
       _privateKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
       
-      // Save it durably using Atomic Write to prevent corruption on crash
+      // Atomic write: prevents a corrupted key file on crash mid-write.
       await keyFile.parent.create(recursive: true);
       var tempFile = File('${keyFile.path}.tmp');
       await tempFile.writeAsBytes(_privateKey, flush: true);
       await tempFile.rename(keyFile.path);
-      // TODO(Security): Integrate Android Keystore via Flutter channels to avoid plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
-      
+      // TODO(Security): Integrate Android Keystore via Flutter channels to avoid
+      // plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
+
       await _derivePublicKey();
     }
 
-    // Generate Ephemeral TLS Certificate for the session
-    // Because the trust root is Ed25519, the TLS certificate can be ephemeral.
+    // Ephemeral TLS cert: trust root is Ed25519, so TLS cert can be regenerated each session.
     final ecdsaKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
     _tlsPrivateKeyPem = CryptoUtils.encodeEcPrivateKeyToPem(ecdsaKeyPair.privateKey as ECPrivateKey);
-    
     _tlsCertificatePem = RiftCertBuilder.generateSelfSignedCert(
       ecdsaKeyPair,
       _publicKey,
       commonName: _deviceId,
     );
+    _tlsCertificateDer = _pemToDer(_tlsCertificatePem);
   }
 
   Future<void> _derivePublicKey() async {
@@ -66,12 +65,11 @@ class IdentityManagerImpl implements IdentityManager {
     var pubKeyObj = await _cachedKeyPair!.extractPublicKey();
     _publicKey = Uint8List.fromList(pubKeyObj.bytes);
 
-    // Calculate Fingerprint: SHA-256(Ed25519 pubkey)
     var sha256 = Sha256();
     var hash = await sha256.hash(_publicKey);
     _fingerprintBytes = Uint8List.fromList(hash.bytes);
 
-    // Calculate Device ID: rift- + first 32 chars of lowercase Base32(fingerprint)
+    // Device ID: 'rift-' + first 32 chars of lowercase Base32(SHA-256(pubkey))
     final base32Str = Base32Utils.encode(_fingerprintBytes).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
   }
@@ -89,13 +87,19 @@ class IdentityManagerImpl implements IdentityManager {
   String get tlsCertificatePem => _tlsCertificatePem;
 
   @override
+  Uint8List get tlsCertificateDer {
+    if (_tlsCertificateDer == null) throw StateError('IdentityManager not initialized');
+    return _tlsCertificateDer!;
+  }
+
+  @override
   String get tlsPrivateKeyPem => _tlsPrivateKeyPem;
 
   @override
-  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List peerCertDer) async {
+  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List localCertDer) async {
     if (_cachedKeyPair == null) throw StateError('IdentityManager not initialized');
     return await PoPManager.generateIdentityProof(
-        channelBinding, _publicKey, peerCertDer, _privateKey);
+        channelBinding, _publicKey, localCertDer, _privateKey);
   }
 
   @override
@@ -110,6 +114,13 @@ class IdentityManagerImpl implements IdentityManager {
       for (var i = 0; i < _fingerprintBytes.length; i++) {
         _fingerprintBytes[i] = 0;
       }
+      // Zeroize cert DER so it doesn't survive in a heap dump after shutdown.
+      if (_tlsCertificateDer != null) {
+        for (var i = 0; i < _tlsCertificateDer!.length; i++) {
+          _tlsCertificateDer![i] = 0;
+        }
+        _tlsCertificateDer = null;
+      }
       _deviceId = '';
       _tlsCertificatePem = '';
       _tlsPrivateKeyPem = '';
@@ -117,5 +128,14 @@ class IdentityManagerImpl implements IdentityManager {
       // Ignore uninitialized fields
     }
     _cachedKeyPair = null;
+  }
+
+  /// Decodes a PEM certificate to DER bytes.
+  static Uint8List _pemToDer(String pem) {
+    final lines = pem.split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty && !l.startsWith('-----'))
+        .join();
+    return Uint8List.fromList(base64.decode(lines));
   }
 }

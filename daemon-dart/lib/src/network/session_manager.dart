@@ -28,16 +28,21 @@ class SessionManager {
   final Uint8List _dummyChannelBinding = Uint8List.fromList(List.generate(32, (_) => 0));
 
   SessionManager(this._transport, this._identityManager) {
-    _transport.onMessageReceived.listen(_handleMessage);
+    _transport.onMessageReceived.listen(
+      (msg) => _handleMessage(msg).catchError((Object e) {
+        _transport.disconnect(msg.peerDeviceId);
+      }),
+    );
+    // Prune stale session state on disconnect so a reconnecting peer isn't
+    // rejected by the double-hello guard.
+    _transport.onPeerDisconnected.listen(_sessions.remove);
   }
 
   Future<void> sendSessionHello(String peerDeviceId) async {
-    final peerCertDer = _transport.getPeerCert(peerDeviceId);
-    if (peerCertDer == null) {
-      throw SessionException('Cannot send session.hello: Peer certificate not found for $peerDeviceId');
-    }
-    
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, peerCertDer);
+    // Sign over the local cert DER — the verifier reconstructs the same input
+    // from the peer's cert carried in the TLS handshake (spec §5.3).
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
 
     final payload = {
       'rift': '0.1-draft',
@@ -56,7 +61,7 @@ class SessionManager {
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
   }
 
-  void _handleMessage(TransportMessage msg) async {
+  Future<void> _handleMessage(TransportMessage msg) async {
     final payloadStr = utf8.decode(msg.payload);
     final jsonMap = json.decode(payloadStr) as Map<String, dynamic>;
 
@@ -73,11 +78,8 @@ class SessionManager {
     if (type == 'session.hello') {
       await _handleSessionHello(msg, jsonMap);
     } else {
-      // If state is not established, we must drop other messages
       if (_sessions[peerDeviceId] != SessionState.established) {
         await _rejectSession(peerDeviceId, 'Unauthorized', 'Session not established');
-      } else {
-        // Process established messages
       }
     }
   }
@@ -86,7 +88,7 @@ class SessionManager {
     final payload = {
       'rift': '0.1-draft',
       'type': 'session.reject',
-      'messageId': const Uuid().v4(),
+      'id': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
@@ -139,22 +141,21 @@ class SessionManager {
       throw SessionException('SecurityError: Identity Misbinding / Invalid PoP Signature');
     }
 
-    // Handshake successful!
     _sessions[peerDeviceId] = SessionState.established;
     _transport.setPeerAuthenticated(peerDeviceId);
-    
-    // Spec §6: Send session.accept to confirm the session
     await _sendSessionAccept(msg);
   }
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, msg.peerCertDer!);
+    // Same PoP binding: sign over the local cert DER (spec §5.3).
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
 
     final payload = {
       'rift': '0.1-draft',
       'type': 'session.accept',
-      'messageId': const Uuid().v4(),
+      'id': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {

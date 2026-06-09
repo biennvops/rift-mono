@@ -56,9 +56,23 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _discovery = await nsd.startDiscovery('_rift._tcp');
     
     _discovery!.addListener(() {
+      // Compute the set of currently-active instance IDs.
+      final currentIds = {
+        for (final s in _discovery!.services)
+          if (s.name != null) s.name!,
+      };
+
+      // Evict removed instances so they can be re-discovered after a mDNS flap.
+      _seenInstanceIds.removeWhere((id) => !currentIds.contains(id));
+
       for (final service in _discovery!.services) {
-        final instanceId = service.name ?? 'unknown';
-        if (!_seenInstanceIds.contains(instanceId) && service.host != null && service.port != null) {
+        final instanceId = service.name;
+        // Skip services without a name — using a fallback would collapse all
+        // null-named peers into one dedup entry and suppress re-discovery.
+        if (instanceId == null || service.host == null || service.port == null) {
+          continue;
+        }
+        if (!_seenInstanceIds.contains(instanceId)) {
           _seenInstanceIds.add(instanceId);
           
           final txt = service.txt ?? {};
@@ -91,6 +105,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     }
   }
 
+  @override
   Future<void> dispose() async {
     await stopAdvertising();
     await stopDiscovery();

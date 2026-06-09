@@ -24,4 +24,6 @@ abstract class DiscoveryService {
   Stream<DiscoveredPeer> get onDeviceDiscovered;
   Future<void> startDiscovery();
   Future<void> stopDiscovery();
+  /// Stops all discovery/advertising and closes internal stream controllers.
+  Future<void> dispose();
 }

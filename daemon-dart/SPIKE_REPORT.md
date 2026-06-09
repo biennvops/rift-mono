@@ -14,27 +14,28 @@ daemon-dart/
 │   ├── daemon_dart.dart                    # Exporter
 │   └── src/
 │       ├── crypto/
-│       │   ├── cert_builder.dart           # Generates mTLS X.509 certificate containing custom Ed25519 OID
+│       │   ├── base32_utils.dart           # RFC 4648 Base32 encoder with Web/JS float bit-clamping
+│       │   ├── cert_builder.dart           # Generates mTLS X.509 certificate with random 64-bit entropy serials
 │       │   ├── cert_decoder.dart           # Fail-Closed Parser to extract Ed25519 from ASN.1
-│       │   ├── identity_manager_impl.dart  # Implements generation and storage of Ed25519 key (cryptography)
-│       │   └── pop_manager.dart            # PoP static payload builder & verifier
+│       │   ├── identity_manager_impl.dart  # Generates/stores Ed25519 key, handles Atomic Write and heap zeroing
+│       │   └── pop_manager.dart            # PoP static 113-byte payload builder & verifier
 │       ├── interfaces/
 │       │   ├── clipboard_service.dart      # Abstract Interface managing Clipboard
-│       │   ├── discovery_service.dart      # Abstract Interface managing mDNS
+│       │   ├── discovery_service.dart      # Abstract Interface managing mDNS with explicit dispose()
 │       │   ├── identity_manager.dart       # Abstract Interface defining Identity info
-│       │   ├── transport.dart              # Abstract Interface managing Network connection
+│       │   ├── transport.dart              # Abstract Interface managing Network connection and disconnect streams
 │       │   └── trust_store.dart            # Abstract Interface managing trust list
 │       ├── network/
-│       │   ├── frame_codec.dart            # Frame packaging format 4-byte length prefix
-│       │   ├── discovery_service_impl.dart # nsd mDNS Discovery service implementation
-│       │   ├── transport_impl.dart         # mTLS SecureServerSocket and connection handlers
-│       │   └── session_manager.dart        # Session Orchestrator & state machine for session.hello
-│       └── daemon.dart                     # Isolate Orchestrator entry point for background service
+│       │   ├── discovery_service_impl.dart # nsd mDNS Discovery robustly handling network flaps
+│       │   ├── frame_codec.dart            # Stream transformer locking chunks to 64 KiB / 32 MiB bounds
+│       │   ├── session_manager.dart        # Session Orchestrator & PoP validation with active Zone exception catching
+│       │   └── transport_impl.dart         # mTLS SecureServerSocket with socket flush and peer disconnect tracking
+│       └── daemon.dart                     # IPC try/catch boundary and Isolate orchestrator for Flutter
 ├── test/
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
-│   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB limit and Frame structure
-│   ├── identity_test.dart                  # Unit test to verify valid Device ID and Base32 generation
+│   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
+│   ├── identity_test.dart                  # Unit test to verify valid Device ID, Base32, and key zeroing
 │   └── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
 ├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
 └── README.md                               # Guide for running tests, linter and overall architecture
@@ -65,12 +66,20 @@ daemon-dart/
   - **Assessment:** **PASSED (100%)** 31/31 Security Unit Tests passing.
 
 - **`[daemon-dart] mDNS, Transport, Session Orchestration` (Week 4):** Finalize Network.
-  - Implemented **mDNS Discovery (`discovery_service_impl.dart`)** using `nsd`. Opaque Instance IDs are bound to the daemon session lifecycle to mitigate passive tracking. **Fix:** Added `_seenInstanceIds` tracking to eliminate duplicate peer emissions.
-  - Implemented **mTLS Transport (`transport_impl.dart`)** with `SecureServerSocket`. **Security Hardening:** Strictly extracts Ed25519 identity from custom X.509 extension; enforced Memory Exhaustion protection (64 KiB/32 MiB) with strict chunking limits. Added 10-second Handshake Timeout to mitigate Connection Slot Exhaustion. **Fix:** Eliminated MITM window by enforcing `expectedDeviceId` immediately inside `onBadCertificate` during the TLS Handshake.
-  - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6, Envelope Identity validation (`sourceDeviceId`), and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure with 2-byte length-prefixing to mitigate Canonicalization Attacks. **Fix:** Synchronized signing paths by exposing `getPeerCert` from Transport.
+  - Implemented **mDNS Discovery (`discovery_service_impl.dart`)** using `nsd`. Opaque Instance IDs are bound to the daemon session lifecycle to mitigate passive tracking. **Network Flap Fix:** Enhanced `_seenInstanceIds` with diff-based eviction logic. Services that disappear during network flaps are actively removed from the tracker, ensuring they are automatically re-discovered when the connection stabilizes.
+  - Implemented **mTLS Transport (`transport_impl.dart`)** with `SecureServerSocket`. **Security Hardening:** Strictly extracts Ed25519 identity from custom X.509 extension; enforced Memory Exhaustion protection (64 KiB/32 MiB) with strict chunking limits. Added 10-second Handshake Timeout to mitigate Connection Slot Exhaustion. **Security Deferral:** Purposefully returns `true` inside `onBadCertificate` when `expectedDeviceId` is null to allow incoming peers, passing the absolute verification burden down to the Ed25519 PoP validation layer.
+  - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6, Envelope Identity validation (`sourceDeviceId`), and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure to mitigate Canonicalization Attacks. **Fix (Critical):** Resolved a critical verification mismatch by enforcing that PoP signatures are generated using the **signer's own local certificate DER**. This guarantees the payload mathematically matches the certificate extracted by the verifier's TLS context.
   - Created the Root Daemon Orchestrator **`daemon.dart`** with `isolateEntryPoint` to encapsulate Android Background Services. **Resilience:** Implemented `Isolate.current.addErrorListener` to propagate fatal isolate crashes to the UI layer. **Fix:** Replaced auto-connect privacy risk with a bidirectional IPC `commandPort`, allowing the Flutter UI to explicitly trigger `connect` and `stop` commands.
   - **BLOCKER (High Risk):** Due to Dart `SecureSocket` limitations, `tls-exporter` (TLS 1.3) and Extended Master Secret (TLS 1.2) are unavailable. PoP signatures currently bind to a `_dummyChannelBinding` (32 bytes of zeros). This leaves the protocol vulnerable to Triple Handshake Attacks. Awaiting Architect Decision (ADR) on whether to downgrade spec to use Application Nonces or write a JNI/BoringSSL native plugin.
   - **Assessment:** Code structurally compliant, but pending Architect ADR for the TLS Channel Binding blocker.
+
+- **`[daemon-dart] Security Audit & Hardening` (End of Week 4):** Conducted a deep-dive 16-point security and conformance audit across all Dart implementation files.
+  - **Critical (C-1/C-2):** Resolved a severe Integer Overflow vulnerability in `Base32Utils` affecting Dart Web/JS builds (53-bit float limits) by implementing explicit bit clamping. Enforced strict memory zeroing of ephemeral TLS Certificates (`_tlsCertificateDer`) during daemon shutdown to prevent extraction from heap dumps.
+  - **High (H-1 to H-4):** Eradicated silent `async void` error-swallowing in `SessionManager`, ensuring unhandled PoP verification exceptions immediately disconnect rogue peers. Mitigated stream aliasing hazards in `RiftFrameTransformer` by switching to `copy: true` buffers. Prevented racing data loss during shutdown by forcing kernel `socket.flush()`. Lifted `dispose()` abstractions to root interfaces to close leakage gaps.
+  - **Medium (M-1 to M-5):** Solved a silent session starvation state where disconnected peers were locked out from reconnecting by integrating a reactive `onPeerDisconnected` stream. Bounded IPC `ReceivePort` lifecycles in `daemon.dart` behind `try/catch` logic to prevent headless port leaks on startup failures. Implemented dedicated unit tests for pre-auth (64 KiB) and post-auth (32 MiB) promotion boundaries.
+  - **Low/Conformance (L-1 to L-5):** Corrected `session.reject` and `session.accept` envelope payloads to use the spec-compliant `id` instead of the legacy `messageId`. Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
+  - **Documentation & Technical Debt:** Executed a massive comment cleanup across 7 core files (`session_manager.dart`, `cert_builder.dart`, `base32_utils.dart`, etc.). Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
+  - **Assessment:** **PASSED (100%)** Zero linter warnings. 35/35 Unit Tests passing (including 2 new frame boundary coverage tests).
 
 ---
 

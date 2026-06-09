@@ -21,6 +21,8 @@ abstract class Transport {
   void disconnect(String peerDeviceId);
   void setPeerAuthenticated(String peerDeviceId);
   Stream<TransportMessage> get onMessageReceived;
+  /// Emits a peer's deviceId whenever that peer is disconnected.
+  Stream<String> get onPeerDisconnected;
   Future<void> sendMessage(String deviceId, Uint8List message);
   Uint8List? getPeerCert(String peerDeviceId);
 }
