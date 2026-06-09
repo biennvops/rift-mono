@@ -41,9 +41,26 @@ public class RiftFrameTests
         // Indicate length 64 KiB + 1
         var frame = new byte[] { 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 0 }; 
         
-        Assert.Throws<InvalidOperationException>(() => 
+        var ex = Assert.Throws<InvalidOperationException>(() => 
             RiftFrame.Decode(frame, maxSize: RiftFrame.MaxPreAuthSize)
         );
+        Assert.Contains("PayloadTooLarge", ex.Message);
+    }
+
+    [Fact]
+    public void Decode_RejectsOversizedPayloads_LargeBuffer()
+    {
+        // Indicate length 64 KiB + 1, and ensure the buffer actually contains that many bytes
+        var frame = new byte[RiftFrame.MaxPreAuthSize + 1 + RiftFrame.LengthPrefixBytes];
+        frame[0] = 0x00;
+        frame[1] = 0x01;
+        frame[2] = 0x00;
+        frame[3] = 0x01; // 65537
+
+        var ex = Assert.Throws<InvalidOperationException>(() => 
+            RiftFrame.Decode(frame, maxSize: RiftFrame.MaxPreAuthSize)
+        );
+        Assert.Contains("PayloadTooLarge", ex.Message);
     }
 
     [Fact]

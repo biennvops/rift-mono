@@ -83,6 +83,8 @@ public class IdentityManager : IIdentityManager
             var innerOctetString = new DerOctetString(edKeyBytes);
             var innerBytes = innerOctetString.GetEncoded(); // 04 20 <32 bytes>
             
+            // AddExtension implicitly wraps the inner bytes in an outer OCTET STRING,
+            // resulting in the required `04 22 04 20 <32 bytes>` on the wire.
             certGen.AddExtension(extOid, false, innerBytes);
 
             // Sign certificate
