@@ -4,6 +4,7 @@ import 'package:stream_channel/isolate_channel.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'ipc_transport.dart';
 
+// Skeleton for future implementation
 class IsolateTransport implements IpcTransport {
   final SendPort daemonSendPort;
   ReceivePort? _receivePort;

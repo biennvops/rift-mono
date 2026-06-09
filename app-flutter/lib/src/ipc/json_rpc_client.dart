@@ -71,19 +71,18 @@ class JsonRpcRiftClient {
     if (_isReconnecting) return;
     _isReconnecting = true;
     
+    _isConnected = false;
+    _client = null;
+    
+    // Fire and forget closures to prevent hanging in async tests
+    unawaited(_outController?.close());
+    _outController = null;
+    
     try {
-      _isConnected = false;
-      _client = null;
-      
-      // Fire and forget closures to prevent hanging in async tests
-      unawaited(_outController?.close());
-      _outController = null;
-      
-      try {
-        await _transport.disconnect();
-      } catch (e) {
-        _log.warning('Error during disconnect: $e');
-      }
+      await _transport.disconnect();
+    } catch (e) {
+      _log.warning('Error during disconnect: $e');
+    }
 
     // Exponential Backoff Reconnect
     if (_reconnectAttempts < 5) {
@@ -94,13 +93,12 @@ class JsonRpcRiftClient {
         _reconnectAttempts++;
         connect().catchError((e) {
           _log.severe('Reconnect failed: $e');
+        }).whenComplete(() {
+          _isReconnecting = false;
         });
       });
     } else {
       _log.severe('Max reconnect attempts reached. Giving up.');
-    }
-    
-    } finally {
       _isReconnecting = false;
     }
   }
@@ -109,6 +107,7 @@ class JsonRpcRiftClient {
     _reconnectTimer?.cancel();
     _reconnectAttempts = 0;
     _isConnected = false;
+    _isReconnecting = false;
     await _client?.close();
     _client = null;
     await _outController?.close();

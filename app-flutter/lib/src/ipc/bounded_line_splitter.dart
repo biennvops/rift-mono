@@ -20,14 +20,15 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
         final index = chunk.indexOf('\n', i);
         if (index != -1) {
           final part = chunk.substring(i, index);
-          buffer.write(part);
-          currentBytes += part.runes.fold(0, (int sum, int c) {
+          final partBytes = part.runes.fold(0, (int sum, int c) {
             if (c < 0x80) return sum + 1;
             if (c < 0x800) return sum + 2;
             if (c < 0x10000) return sum + 3;
             return sum + 4;
           });
-          _checkLength(currentBytes);
+          _checkLength(currentBytes + partBytes);
+          currentBytes += partBytes;
+          buffer.write(part);
           
           var line = buffer.toString();
           if (line.endsWith('\r')) {
@@ -41,14 +42,15 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
           i = index + 1;
         } else {
           final part = chunk.substring(i);
-          buffer.write(part);
-          currentBytes += part.runes.fold(0, (int sum, int c) {
+          final partBytes = part.runes.fold(0, (int sum, int c) {
             if (c < 0x80) return sum + 1;
             if (c < 0x800) return sum + 2;
             if (c < 0x10000) return sum + 3;
             return sum + 4;
           });
-          _checkLength(currentBytes);
+          _checkLength(currentBytes + partBytes);
+          currentBytes += partBytes;
+          buffer.write(part);
           break;
         }
       }

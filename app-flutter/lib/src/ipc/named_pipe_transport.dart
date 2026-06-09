@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:stream_channel/stream_channel.dart';
 import 'ipc_transport.dart';
 
+// Skeleton for future implementation
 class NamedPipeTransport implements IpcTransport {
   final String pipeName;
   Socket? _socket;
