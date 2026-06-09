@@ -23,8 +23,8 @@ class JsonRpcRiftClient {
       final channel = await _transport.connect();
 
       // Wrap channel to log raw payload (Risk Mitigation: behavior mismatch)
-      final outController = StreamController<String>(sync: true);
-      outController.stream.listen((event) {
+      _outController = StreamController<String>(sync: true);
+      _outController!.stream.listen((event) {
         _log.fine('SEND: $event');
         channel.sink.add(event);
       },
@@ -36,7 +36,7 @@ class JsonRpcRiftClient {
           _log.fine('RECV: $event');
           return event;
         }),
-        outController.sink,
+        _outController!.sink,
       );
 
       _client = json_rpc.Client(loggingChannel);
@@ -44,13 +44,14 @@ class JsonRpcRiftClient {
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
         _log.warning('RPC Connection closed');
-        _handleDisconnect();
+        unawaited(_handleDisconnect());
       }).catchError((e) {
         _log.severe('RPC Connection error: $e');
-        _handleDisconnect();
+        unawaited(_handleDisconnect());
       }));
 
       _isConnected = true;
+      _reconnectAttempts = 0;
       _log.info('Connected to daemon successfully');
     } catch (e) {
       _log.severe('Failed to connect: $e');
@@ -62,10 +63,27 @@ class JsonRpcRiftClient {
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
 
-  void _handleDisconnect() {
-    _isConnected = false;
-    _client = null;
-    _transport.disconnect();
+  StreamController<String>? _outController;
+
+  bool _isReconnecting = false;
+
+  Future<void> _handleDisconnect() async {
+    if (_isReconnecting) return;
+    _isReconnecting = true;
+    
+    try {
+      _isConnected = false;
+      _client = null;
+      
+      // Fire and forget closures to prevent hanging in async tests
+      unawaited(_outController?.close());
+      _outController = null;
+      
+      try {
+        await _transport.disconnect();
+      } catch (e) {
+        _log.warning('Error during disconnect: $e');
+      }
 
     // Exponential Backoff Reconnect
     if (_reconnectAttempts < 5) {
@@ -81,6 +99,10 @@ class JsonRpcRiftClient {
     } else {
       _log.severe('Max reconnect attempts reached. Giving up.');
     }
+    
+    } finally {
+      _isReconnecting = false;
+    }
   }
 
   Future<void> disconnect() async {
@@ -89,6 +111,8 @@ class JsonRpcRiftClient {
     _isConnected = false;
     await _client?.close();
     _client = null;
+    await _outController?.close();
+    _outController = null;
     await _transport.disconnect();
   }
 

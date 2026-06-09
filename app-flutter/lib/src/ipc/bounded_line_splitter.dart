@@ -12,25 +12,43 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
   @override
   Stream<String> bind(Stream<String> stream) async* {
     final buffer = StringBuffer();
+    int currentBytes = 0;
 
     await for (final chunk in stream) {
       var i = 0;
       while (i < chunk.length) {
         final index = chunk.indexOf('\n', i);
         if (index != -1) {
-          buffer.write(chunk.substring(i, index));
-          _checkLength(buffer);
+          final part = chunk.substring(i, index);
+          buffer.write(part);
+          currentBytes += part.runes.fold(0, (int sum, int c) {
+            if (c < 0x80) return sum + 1;
+            if (c < 0x800) return sum + 2;
+            if (c < 0x10000) return sum + 3;
+            return sum + 4;
+          });
+          _checkLength(currentBytes);
           
           var line = buffer.toString();
           if (line.endsWith('\r')) {
             line = line.substring(0, line.length - 1);
           }
-          yield line;
+          if (line.isNotEmpty) {
+            yield line;
+          }
           buffer.clear();
+          currentBytes = 0;
           i = index + 1;
         } else {
-          buffer.write(chunk.substring(i));
-          _checkLength(buffer);
+          final part = chunk.substring(i);
+          buffer.write(part);
+          currentBytes += part.runes.fold(0, (int sum, int c) {
+            if (c < 0x80) return sum + 1;
+            if (c < 0x800) return sum + 2;
+            if (c < 0x10000) return sum + 3;
+            return sum + 4;
+          });
+          _checkLength(currentBytes);
           break;
         }
       }
@@ -41,13 +59,15 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
       if (line.endsWith('\r')) {
         line = line.substring(0, line.length - 1);
       }
-      yield line;
+      if (line.isNotEmpty) {
+        yield line;
+      }
       buffer.clear();
     }
   }
 
-  void _checkLength(StringBuffer buffer) {
-    if (buffer.length > maxLength) {
+  void _checkLength(int currentBytes) {
+    if (currentBytes > maxLength) {
       throw FormatException('NDJSON line exceeded max length of $maxLength bytes.');
     }
   }

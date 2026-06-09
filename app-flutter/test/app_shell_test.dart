@@ -48,7 +48,7 @@ void main() {
     // Verify IPC connection state icon or text if we add it to the shell.
   });
 
-  testWidgets('MockClient getDeviceInfo test', (WidgetTester tester) async {
+  test('MockClient getDeviceInfo test', () async {
     // Test the mock setup directly
     expect(mockClient.isConnected, isTrue);
     final result = await mockClient.getDeviceInfo();

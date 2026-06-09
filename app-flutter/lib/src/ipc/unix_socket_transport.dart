@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:stream_channel/stream_channel.dart';
+import 'package:logging/logging.dart';
 import 'ipc_transport.dart';
 import 'bounded_line_splitter.dart';
 
@@ -28,7 +29,11 @@ class UnixSocketTransport implements IpcTransport {
       _socket?.add(data);
     }, onDone: () {
       _socket?.close();
-    }, onError: (e) {
+    }, onError: (e, stackTrace) {
+      final log = Logger('UnixSocketTransport');
+      log.severe('socket sink error: $e\n$stackTrace');
+      // Destroying the socket forces the stream to close, which will trigger
+      // the JSON-RPC client's .listen() onDone/onError and start reconnect flow.
       _socket?.destroy();
     });
 

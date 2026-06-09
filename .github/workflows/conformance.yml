@@ -32,8 +32,10 @@ jobs:
 
       - name: Run Conformance Test Vectors
         working-directory: tests-conformance
+        continue-on-error: true
         run: |
           # TODO: Integrate Bien's test runner harness here.
           # Example:
           # ./run_conformance.sh --cs ../daemon-cs/bin/Release/net10.0/Rift.Daemon.Console --dart ../daemon-dart/daemon_runner
-          echo "Placeholder for Conformance runner harness execution"
+          echo "Placeholder for Conformance runner harness execution pending integration"
+          exit 1
