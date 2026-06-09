@@ -165,5 +165,44 @@ void main() {
         ),
       );
     });
+
+    // M-5: Pre-auth / post-auth size-promotion boundary tests
+    test('pre-auth transformer rejects frame exceeding 64 KiB limit', () async {
+      // Build a frame header claiming maxFrameSizePreAuth + 1 bytes
+      final oversize = RiftFrameCodec.maxFrameSizePreAuth + 1;
+      final header = Uint8List(4);
+      ByteData.view(header.buffer).setUint32(0, oversize, Endian.big);
+
+      Stream<List<int>> stream = Stream.value(header);
+      // Default transformer uses pre-auth limit
+      expect(
+        () async => await stream.transform(RiftFrameTransformer()).toList(),
+        throwsA(isA<FrameCodecException>().having(
+          (e) => e.message, 'message', contains('PayloadTooLarge'),
+        )),
+      );
+    });
+
+    test('post-auth transformer accepts frame up to 32 MiB limit', () async {
+      // A frame at exactly maxFrameSizePostAuth should pass the size check.
+      // We only check that the size check passes (payload itself is invalid JSON,
+      // so it will throw MalformedMessage, NOT PayloadTooLarge).
+      final limit = RiftFrameCodec.maxFrameSizePostAuth;
+      final header = Uint8List(4);
+      ByteData.view(header.buffer).setUint32(0, limit, Endian.big);
+
+      bool postAuth = false;
+      Stream<List<int>> stream = Stream.value(header);
+      try {
+        await stream
+            .transform(RiftFrameTransformer(maxFrameSizeProvider: () => limit))
+            .toList();
+      } on FrameCodecException catch (e) {
+        // Must NOT be a PayloadTooLarge — the size check should pass.
+        expect(e.message, isNot(contains('PayloadTooLarge')));
+        postAuth = true;
+      }
+      expect(postAuth, isTrue);
+    });
   });
 }

@@ -14,12 +14,12 @@ class CertificateBuilderException implements Exception {
 }
 
 class RiftCertBuilder {
-  // TODO(Biên): Kiểm tra chéo với ADR-0001. Có thể phải đổi sang OID nhánh PEN (1.3.6.1.4.1.XXXXX) nếu protocol thay đổi.
-  // Custom OID for Rift Device ID
+  // TODO(Biên): Cross-check with ADR-0001. May need to switch to PEN branch
+  // (1.3.6.1.4.1.XXXXX) if the protocol OID assignment changes.
   static const String riftCustomOid =
       '2.25.293029629918709742181702189012786017422';
 
-  // Encoded Base-128 bytes of the Custom OID (0x06 is OID tag, 0x14 is length 20 bytes)
+  // Base-128 DER encoding of riftCustomOid (tag 0x06, length 0x14 = 20 bytes).
   static final Uint8List riftCustomOidBytes = Uint8List.fromList([
     0x06,
     0x14,
@@ -45,7 +45,6 @@ class RiftCertBuilder {
     0x0E,
   ]);
 
-  // Cấu hình mặc định, tránh hardcode business rules (Tuân thủ Mục 2.3)
   static const String defaultCn = 'RiftDevice';
   static const String defaultSerial = '1';
   static const int defaultValidityDays = 365;
@@ -75,12 +74,11 @@ class RiftCertBuilder {
     }
     var extension = ASN1Sequence();
 
-    // Dùng hằng số mảng byte đã được khai báo ở đầu class
     extension.add(ASN1ObjectIdentifier.fromBytes(riftCustomOidBytes));
 
-    // Note: 'critical' is DEFAULT FALSE in X.509, so DER encoding rules require omitting it entirely.
+    // 'critical' is DEFAULT FALSE in X.509; DER requires omitting it entirely.
 
-    // Double OCTET STRING wrapping for X.509 extnValue
+    // Double OCTET STRING wrapping required by X.509 extnValue encoding.
     var innerOctetString = ASN1OctetString(ed25519PubKey);
     var outerOctetString = ASN1OctetString(innerOctetString.encodedBytes);
 
@@ -94,7 +92,8 @@ class RiftCertBuilder {
     AsymmetricKeyPair<PublicKey, PrivateKey> ecdsaKeyPair,
     Uint8List ed25519PubKey, {
     String commonName = defaultCn,
-    String serialNumber = defaultSerial,
+    /// Pass null (default) to generate a random RFC 5280-compliant 64-bit serial.
+    String? serialNumber,
     int validityDays = defaultValidityDays,
   }) {
     if (ed25519PubKey.length != 32) {
@@ -108,27 +107,18 @@ class RiftCertBuilder {
 
       // RFC 5280: Serial numbers must be unique to prevent caching issues.
       var actualSerialNumber = serialNumber;
-      if (actualSerialNumber == defaultSerial) {
+      if (actualSerialNumber == null) {
         var random = Random.secure();
         var bytes = List.generate(8, (_) => random.nextInt(256));
         var hexStr = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
         actualSerialNumber = BigInt.parse(hexStr, radix: 16).toString();
       }
 
-      // 1. Generate base self-signed certificate using basic_utils
-      var csr = X509Utils.generateEccCsrPem(
-        {'CN': commonName},
-        privKey,
-        pubKey,
-      );
+      var csr = X509Utils.generateEccCsrPem({'CN': commonName}, privKey, pubKey);
       var baseCertPem = X509Utils.generateSelfSignedCertificate(
-        privKey,
-        csr,
-        validityDays,
-        serialNumber: actualSerialNumber,
+        privKey, csr, validityDays, serialNumber: actualSerialNumber,
       );
 
-      // 2. Decode the base cert to inject the custom extension
       var certBytes = CryptoUtils.getBytesFromPEMString(baseCertPem);
       var parser = ASN1Parser(certBytes);
       var certObj = parser.nextObject();
@@ -137,26 +127,25 @@ class RiftCertBuilder {
         throw CertificateBuilderException('Invalid base certificate structure');
       }
       var certSeq = certObj;
-
       var tbsObj = certSeq.elements[0];
       if (tbsObj is! ASN1Sequence) {
         throw CertificateBuilderException('Invalid TBS certificate structure');
       }
       var tbsSeq = tbsObj;
 
+      // sigAlg is taken verbatim from the base cert (basic_utils, SHA-256/ECDSA).
+      // If basic_utils changes the algorithm, verify this field stays consistent.
       var sigAlg = certSeq.elements[1];
 
-      // 3. Build the extensions container
       var extSequence = createEd25519Extension(ed25519PubKey);
       var extensionsContainer = ASN1Sequence();
       extensionsContainer.add(extSequence);
       var extBytes = extensionsContainer.encodedBytes;
 
-      // 4. Wrap with Context specific tag [3] Constructed = 0xA3
+      // Wrap with [3] EXPLICIT context tag (0xA3) as required by X.509.
       var lengthBytes = _encodeLength(extBytes.length);
       var tagBytes = Uint8List.fromList([0xA3, ...lengthBytes, ...extBytes]);
 
-      // 5. Create a new TBS Certificate by appending the extensions tag to the inner bytes
       var tbsBuilder = BytesBuilder(copy: false);
       for (var e in tbsSeq.elements) {
         tbsBuilder.add(e.encodedBytes);
@@ -166,36 +155,26 @@ class RiftCertBuilder {
 
       var newTbsLengthBytes = _encodeLength(tbsInnerBytes.length);
       var newTbsBytes = Uint8List.fromList([
-        0x30,
-        ...newTbsLengthBytes,
-        ...tbsInnerBytes,
+        0x30, ...newTbsLengthBytes, ...tbsInnerBytes,
       ]);
 
-      // 6. Sign the new TBS Certificate bytes
       var signature = CryptoUtils.ecSign(
-        privKey,
-        newTbsBytes,
-        algorithmName: signatureAlgorithm,
+        privKey, newTbsBytes, algorithmName: signatureAlgorithm,
       );
 
       var sigSeq = ASN1Sequence();
       sigSeq.add(ASN1Integer(signature.r));
       sigSeq.add(ASN1Integer(signature.s));
 
-      // X.509 BIT STRING requires a leading zero byte indicating 0 unused bits
+      // BIT STRING requires a leading 0x00 byte (0 unused bits).
       var sigBytes = Uint8List(sigSeq.encodedBytes.length + 1);
       sigBytes[0] = 0;
       sigBytes.setRange(1, sigBytes.length, sigSeq.encodedBytes);
 
-      var bitStringHeader = <int>[0x03];
-      var bitStringLength = _encodeLength(sigBytes.length);
       var bitStringEncoded = Uint8List.fromList([
-        ...bitStringHeader,
-        ...bitStringLength,
-        ...sigBytes,
+        0x03, ..._encodeLength(sigBytes.length), ...sigBytes,
       ]);
 
-      // 7. Assemble the final Certificate Sequence
       var certBuilder = BytesBuilder(copy: false);
       certBuilder.add(newTbsBytes);
       certBuilder.add(sigAlg.encodedBytes);
@@ -204,32 +183,21 @@ class RiftCertBuilder {
 
       var newCertLength = _encodeLength(newCertInner.length);
       var newCertBytes = Uint8List.fromList([
-        0x30,
-        ...newCertLength,
-        ...newCertInner,
+        0x30, ...newCertLength, ...newCertInner,
       ]);
 
-      // 8. Base64 encode and wrap in PEM headers
       var base64Cert = base64Encode(newCertBytes);
       var lines = <String>['-----BEGIN CERTIFICATE-----'];
       for (var i = 0; i < base64Cert.length; i += 64) {
         lines.add(
-          base64Cert.substring(
-            i,
-            i + 64 < base64Cert.length ? i + 64 : base64Cert.length,
-          ),
+          base64Cert.substring(i, i + 64 < base64Cert.length ? i + 64 : base64Cert.length),
         );
       }
       lines.add('-----END CERTIFICATE-----');
-
       return lines.join('\n');
     } catch (e) {
       if (e is CertificateBuilderException) rethrow;
-      // Tuân thủ Mục 4 & 7: Minh bạch lỗi, ghi log nguyên nhân và bắt Exception
-      throw CertificateBuilderException(
-        'Failed to generate self-signed certificate',
-        e,
-      );
+      throw CertificateBuilderException('Failed to generate self-signed certificate', e);
     }
   }
 }
