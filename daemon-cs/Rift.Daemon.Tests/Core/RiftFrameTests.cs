@@ -69,4 +69,21 @@ public class RiftFrameTests
         var frame = new byte[] { 0, 0, 0, 5, (byte)'h' }; // Says length 5, but contains 1 byte
         Assert.Throws<InvalidOperationException>(() => RiftFrame.Decode(frame));
     }
+
+    [Fact]
+    public void EmptyPayload_EncodeDecode_RoundTrip()
+    {
+        var payload = Array.Empty<byte>();
+        var frame = RiftFrame.Encode(payload);
+
+        // Frame should just be 4 bytes of zeroes
+        Assert.Equal(4, frame.Length);
+        Assert.Equal(0, frame[0]);
+        Assert.Equal(0, frame[1]);
+        Assert.Equal(0, frame[2]);
+        Assert.Equal(0, frame[3]);
+
+        var decoded = RiftFrame.Decode(frame);
+        Assert.Equal(0, decoded.Length);
+    }
 }

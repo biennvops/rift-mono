@@ -61,4 +61,23 @@ public class IdentityManagerTests
         var embeddedKeyBytes = rawData.AsSpan(4).ToArray();
         Assert.True(edKey.SequenceEqual(embeddedKeyBytes));
     }
+
+    [Fact]
+    public void Test_SignEd25519_RoundTrip_SignatureVerifies()
+    {
+        var manager = new IdentityManager();
+        var dataToSign = System.Text.Encoding.UTF8.GetBytes("Rift protocol test payload");
+
+        var signature = manager.SignEd25519(dataToSign);
+        var pubKeyBytes = manager.GetEd25519PublicKey();
+
+        // Verify with BouncyCastle
+        var pubKeyParams = new Org.BouncyCastle.Crypto.Parameters.Ed25519PublicKeyParameters(pubKeyBytes, 0);
+        var verifier = Org.BouncyCastle.Security.SignerUtilities.GetSigner("Ed25519");
+        verifier.Init(false, pubKeyParams);
+        verifier.BlockUpdate(dataToSign, 0, dataToSign.Length);
+        
+        var isValid = verifier.VerifySignature(signature);
+        Assert.True(isValid);
+    }
 }
