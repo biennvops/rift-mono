@@ -76,6 +76,49 @@ A clean set of interfaces was added to `Core/Interfaces/` to abstract the system
 5.  **`IClipboardService` (Clipboard Operations)**
     *   **Responsibilities:** Manages the broadcasting and reception of Clipboard Offers (metadata only) across trusted connections without hooking local desktop boundaries natively inside Session 0.
 
-## Execution (Week 2 Tests)
+## Execution (Week 2 Interfaces)
 
 The system successfully builds. The architecture integrates natively, and execution flows through the `xUnit` test suite where test skeletons run and pass without errors.
+
+---
+
+# Windows Daemon (riftd) - Week 2 Implementation: Cryptography & Framing
+
+**Assignee:** Thạo
+**Task:** `[daemon-cs][identity] Identity manager, certificate generation, and frame codec`
+
+This section summarizes the implementation of the core cryptographic identity and transport framing modules, ensuring full compliance with the Rift Protocol v0.1-draft.
+
+## Cryptographic Identity (IdentityManager)
+
+The `IdentityManager` has been implemented using **BouncyCastle.NET** and native **.NET Cryptography** to satisfy the protocol's dual-keypair requirement:
+
+1. **Ed25519 Identity:**
+   - Generates a long-term Ed25519 keypair for device identification.
+   - Derives the 32-character `rift-` prefixed Device ID and the 8x4 character pairing Fingerprint (e.g., `ABCD-EFGH-...`) using a SHA-256 + Base32 (RFC 4648) pipeline.
+   - Validated against **RFC 8032 Test Vector 1** to ensure cross-platform consistency.
+
+2. **TLS Certificate Generation:**
+   - Generates a self-signed **ECDSA P-256** certificate for mutual TLS.
+   - **Custom Extension Binding:** Embeds the Ed25519 public key in a non-critical X.509 extension with OID `2.25.293029629918709742181702189012786017422`.
+   - The extension follows the exact DER encoding structure defined in `spec §15.2` (`04 22 04 20 <32-bytes>`), ensuring the Ed25519 identity is cryptographically bound to the TLS session.
+
+3. **Proof of Possession:**
+   - Exposes signing capabilities for the post-handshake Ed25519 Proof of Possession (PoP) required by `spec §5.3`.
+
+## Transport Framing (RiftFrame)
+
+A dedicated frame codec was implemented to handle the protocol's wire format (`spec §1`):
+
+1. **Format:** 4-byte big-endian length prefix followed by a UTF-8 JSON object.
+2. **Security Limits:**
+   - **Pre-authentication:** 64 KiB (strictly enforced).
+   - **Post-authentication:** 32 MiB.
+3. **Logic:** The `RiftFrame` utility provides `Encode` and `Decode` methods that validate buffer bounds and payload sizes, ensuring malformed or oversized frames cause immediate session termination.
+
+## Verification & Testing
+
+1. **Unit Tests:**
+   - `IdentityManagerTests`: Verifies Device ID/Fingerprint derivation against protocol test vectors and validates the binary structure of the X.509 extension.
+   - `RiftFrameTests`: Verifies framing logic, big-endian byte order, and size-limit enforcement.
+2. **Success:** All unit tests pass, confirming the C# daemon correctly implements the security-critical identity and transport layers.
