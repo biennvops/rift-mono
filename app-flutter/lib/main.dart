@@ -1,12 +1,29 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
 
+import 'src/ipc/json_rpc_client.dart';
+import 'src/ipc/transport_factory.dart';
+
 void main() {
-  runApp(const RiftApp());
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final client = JsonRpcRiftClient(TransportFactory.create());
+  // Start the connection immediately in the background
+  client.connect().catchError((Object error, StackTrace stackTrace) {
+    debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
+  });
+
+  runApp(
+    Provider<JsonRpcRiftClient>.value(
+      value: client,
+      child: const RiftApp(),
+    ),
+  );
 }
 
 class RiftApp extends StatelessWidget {
@@ -73,4 +90,3 @@ class HomeScreen extends StatelessWidget {
     );
   }
 }
-

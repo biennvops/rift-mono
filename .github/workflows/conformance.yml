@@ -1,0 +1,42 @@
+name: Conformance Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Build C# Daemon
+        working-directory: daemon-cs
+        run: dotnet build Rift.Daemon.Linux/Rift.Daemon.Linux.csproj -c Release
+
+      - name: Build Dart Daemon
+        working-directory: daemon-dart
+        run: flutter pub get && dart compile exe bin/daemon.dart -o daemon_runner
+
+      - name: Run Conformance Test Vectors
+        working-directory: tests-conformance
+        continue-on-error: true
+        run: |
+          # TODO: Integrate Bien's test runner harness here.
+          # Example:
+          # ./run_conformance.sh --cs ../daemon-cs/bin/Release/net10.0/Rift.Daemon.Console --dart ../daemon-dart/daemon_runner
+          echo "Placeholder for Conformance runner harness execution pending integration"
+          exit 0
