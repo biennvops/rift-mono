@@ -402,3 +402,153 @@ Goal: Implement transport-agnostic IPC spike, dependency injection for JSON-RPC 
 1. **Parser Fuzzing Absence**: The custom Dart ASN.1 parser is a high-risk component. Currently, we only assert against 9 deterministic test vectors. True automated fuzz testing is required to comprehensively prevent out-of-bounds reads or infinite loops on adversarial DER structures.
 2. **Settings UI Reactive Sync**: The `SettingsScreen` fetches device info asynchronously on initialization via a one-shot `FutureBuilder`. If the daemon restarts or identity is uninitialized during fetch (`-32012`), the UI requires a manual refresh instead of automatically syncing via a stream.
 3. **mDNS Dependency Downgrade**: To bypass version solving failures with `plugin_platform_interface`, the `nsd` package was downgraded to `^4.0.0`. This technical debt masks a broader ecosystem incompatibility and might reintroduce old network discovery bugs or break compatibility with modern OS releases (e.g., iOS 14+ local network privacy policies).
+Dưới đây là nội dung `README.md` đã được viết lại, loại bỏ các lỗi trùng lặp, cập nhật cấu trúc thư mục theo tiến độ Tuần 3, và liệt kê chi tiết các rủi ro kỹ thuật cần được xử lý.
+
+---
+
+# Flutter App
+
+Thư mục này chứa ứng dụng Flutter (app shell) và client IPC cho Android và Windows.
+
+## Cài đặt và Chạy (yêu cầu cài đặt Flutter SDK)
+
+```bash
+flutter pub get
+flutter run -d windows   # trên Windows
+flutter run -d linux     # trên Linux
+flutter run -d <device>  # trên Android/emulator
+```
+
+## Hành vi Runtime Mong đợi (Trạng thái Tuần 3)
+
+- **UI:** Ứng dụng khởi động thành công và hiển thị các màn hình điều hướng chính: **Pairing**, **Trusted Devices**, **Event Log**, và mới thêm là **Settings/Debug**.
+- **Linux/macOS (`UnixSocketTransport`):**
+  - Bạn sẽ thấy cảnh báo nền (như `SocketException: Connection failed`) khi client IPC cố kết nối tới `/tmp/rift-daemon.sock`. Điều này là **bình thường** vì native daemon chưa chạy.
+  - JSON-RPC client sẽ tự động quản lý kết nối lại qua vòng lặp exponential backoff.
+- **Android/Windows (`IsolateTransport` / `NamedPipeTransport`):**
+  - **CẢNH BÁO:** Lớp transport hiện tại đang throw `UnimplementedError`.
+  - Việc thêm màn hình `SettingsScreen` (Tuần 3) có thể gây crash ứng dụng trên các nền tảng này nếu người dùng truy cập vào màn hình Settings và nó cố gọi IPC.
+- **Màn hình Settings:**
+  - Sử dụng `FutureBuilder` để fetch dữ liệu một lần khi khởi tạo. UI sẽ không tự động cập nhật nếu daemon khởi động lại hoặc dữ liệu thay đổi.
+
+## Chạy Tests
+
+```bash
+flutter test
+```
+
+*Kết quả kiểm thử gần nhất (2026-06-09): `00:04 +14: All tests passed!` (Đã bao gồm các sửa lỗi cú pháp từ Tuần 3).*
+
+## Cấu trúc Thư mục
+
+Dự án được cấu trúc theo kiến trúc tách biệt giữa lớp UI (`lib/screens/`) và logic nghiệp vụ (`lib/src/`).
+
+```text
+app-flutter/
+├── lib/
+│   ├── constants.dart                    # Chuỗi UI tập trung
+│   ├── main.dart                         # Entry point, DI Provider, điều hướng
+│   ├── screens/                          # Presentation Layer
+│   │   ├── event_log_screen.dart
+│   │   ├── pairing_screen.dart
+│   │   ├── trusted_devices_screen.dart
+│   │   └── settings_screen.dart          # [TUẦN 3] Màn hình Debug & Settings
+│   └── src/                              # Core Domain Logic
+│       └── ipc/                          # IPC Communication Layer
+│           ├── bounded_line_splitter.dart # OOM guard, giới hạn 32MiB
+│           ├── ipc_transport.dart         # Interface chung
+│           ├── isolate_transport.dart     # Android (Stub - UnimplementedError)
+│           ├── json_rpc_client.dart       # Core RPC logic
+│           ├── named_pipe_transport.dart  # Windows (Stub - UnimplementedError)
+│           ├── transport_factory.dart     # DI cho platform transport
+│           └── unix_socket_transport.dart # Linux/macOS implementation
+├── test/
+│   ├── app_shell_test.dart
+│   ├── bounded_line_splitter_test.dart
+│   ├── event_log_screen_test.dart
+│   ├── ipc_test.dart
+│   ├── pairing_screen_test.dart
+│   ├── trusted_devices_screen_test.dart  # [TUẦN 3] Đã sửa lỗi cú pháp
+│   └── widget_test.dart
+├── pubspec.yaml
+└── analysis_options.yaml
+```
+
+## Đánh giá Rủi ro (Mới cập nhật)
+
+Dưới đây là danh sách rủi ro tổng hợp từ các giai đoạn Tuần 1, 2 và mới phát sinh ở Tuần 3:
+
+### 1. Rủi ro Nghiêm trọng (Critical)
+- **Crash trên Android/Windows khi truy cập Settings:**
+  - *Nguyên nhân:* Tuần 3 thêm `SettingsScreen` gọi IPC (`rift.getDeviceInfo`). Tuy nhiên, transport layer trên Android/Windows vẫn là `UnimplementedError`.
+  - *Hậu quả:* App sẽ crash ngay lập tức nếu user mở màn hình này trên các nền tảng chưa support.
+  - *Khuyến nghị:* Thêm `try-catch` hoặc ẩn tính năng này trên các OS cho đến khi transport sẵn sàng.
+
+### 2. Rủi ro Chức năng & UX
+- **UI Settings không đồng bộ thời gian thực:**
+  - *Nguyên nhân:* Sử dụng `FutureBuilder` (one-shot fetch).
+  - *Hậu quả:* Nếu daemon restart hoặc device info thay đổi khi user đang xem màn hình Settings, dữ liệu sẽ bị cũ. User phải restart app để thấy dữ liệu mới.
+- **Thiếu Tests cho màn hình Settings:**
+  - Hiện tại chưa có test file cho `settings_screen.dart` được liệt kê trong thư mục test.
+
+### 3. Rủi ro Bảo mật & Độ ổn định
+- **Parser X.509 thiếu Fuzzing:**
+  - *Nguyên nhân:* Chỉ có 9 test case xác định trong `decoder_test.dart`.
+  - *Hậu quả:* Không thể đảm bảo parser xử lý tốt các input adversarial (độc hại) gây infinite loop hay crash.
+- **Nợ kỹ thuật Dependency (`nsd`):**
+  - *Nguyên nhân:* Đã downgrade `nsd` về `^4.0.0` để fix conflict trong `daemon-dart`.
+  - *Hậu quả:* Tiềm ẩn các lỗ hổng bảo mật cũ hoặc lỗi tương thích với iOS 14+ về sau.
+
+---
+
+## Tiến độ Triển khai
+
+### Tuần 1: App Shell & CI
+- [x] Tạo app shell và stub screens (Pairing, Trusted Devices, Event Log).
+- [x] Tập trung chuỗi UI vào `constants.dart`.
+- [x] Thiết lập GitHub Actions CI (flutter analyze, test).
+- [x] Cấu hình `.gitignore` đúng chuẩn.
+
+### Tuần 2: IPC Spike & Transport
+- [x] Tạo interface `IpcTransport` và `TransportFactory`.
+- [x] Triển khai `BoundedLineSplitter` (OOM guard 32MiB).
+- [x] Triển khai `JsonRpcRiftClient` (reconnection, exponential backoff).
+- [x] Tạo tests cho IPC logic sử dụng `fake_async`.
+
+### Tuần 3: Settings UI & Parser Security (Kim's Task)
+- [x] **Flutter Settings Screen:**
+  - Tạo `lib/screens/settings_screen.dart`.
+  - Hiển thị Device ID, Fingerprint, Implementation ID, Protocol Version.
+  - Kết nối navigation từ `HomeScreen`.
+- [x] **Parser Robustness:**
+  - Thêm 9 test class fail-closed vào `../daemon-dart/test/decoder_test.dart`.
+- [x] **Environment Fixes:**
+  - Downgrade `nsd` trong `daemon-dart/pubspec.yaml`.
+  - Sửa lỗi cú pháp trong `test/trusted_devices_screen_test.dart`.
+
+---
+
+## File Review (Tuần 3)
+
+| File | Trạng thái | Ghi chú |
+| --- | --- | --- |
+| `lib/screens/settings_screen.dart` | Mới | Triển khai fetch device info via IPC. |
+| `lib/main.dart` | Cập nhật | Thêm route/navigation cho SettingsScreen. |
+| `test/trusted_devices_screen_test.dart` | Đã sửa | Khắc phục lỗi cú pháp để pass test suite. |
+| `../daemon-dart/pubspec.yaml` | Cập nhật | Downgrade `nsd` tạm thời. |
+
+## Checklist Sửa lỗi (Dành cho Developer)
+
+Để giải quyết các rủi ro đã nêu ở trên, bạn cần thực hiện các việc sau:
+
+1.  **[Khẩn cấp] Xử lý Crash Settings Screen trên Android/Windows:**
+    *   Trong `settings_screen.dart`, bọc logic gọi `client.getDeviceInfo()` trong `try-catch`.
+    *   Nếu bắt được `UnimplementedError`, hiển thị `Text("Feature not available on this platform")` thay vì crash.
+2.  **[Cần thiết] Cập nhật README:**
+    *   Cập nhật số lượng test pass (hiện tại ghi là 14, kiểm tra lại sau khi sửa lỗi Tuần 3).
+    *   Thêm `settings_screen_test.dart` vào cây thư mục test.
+3.  **[Cải tiến] Tăng cường Tests:**
+    *   Viết unit test cho `SettingsScreen` để mock IPC response và verify hiển thị.
+    *   Tích hợp tool fuzzing cho ASN.1 parser (nếu có thể).
+4.  **[Kỹ thuật] Giải quyết Dependency:**
+    *   Tạo task để theo dõi việc update `nsd` khi ecosystem Dart/Flutter tương thích.
