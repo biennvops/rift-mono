@@ -44,4 +44,19 @@ void main() {
     expect(find.text('riftd-test/0.1.0'), findsOneWidget);
     expect(find.text('0.1-test'), findsOneWidget);
   });
+
+  testWidgets('SettingsScreen handles UnimplementedError (Android/Windows stub)', (WidgetTester tester) async {
+    when(() => mockClient.getDeviceInfo()).thenAnswer((_) => Future.error(UnimplementedError('Stub')));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Feature not available on this platform'), findsOneWidget);
+  });
 }

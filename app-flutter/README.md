@@ -24,9 +24,9 @@ flutter run -d <device>  # on Android/emulator
 flutter test
 ```
 
-*Latest test result (2026-06-09): `00:04 +15: All tests passed!`*
+*Latest test result (2026-06-12): `00:03 +16: All tests passed!`*
 
-The core tests (15 total) cover:
+The core tests (16 total) cover:
 - UI rendering and stub checks (`widget_test.dart`, `pairing_screen_test.dart`, `trusted_devices_screen_test.dart`, `event_log_screen_test.dart`).
 - IPC error handling in UI (`settings_screen_test.dart`).
 - Decoupled UI injection via Provider (`app_shell_test.dart`).

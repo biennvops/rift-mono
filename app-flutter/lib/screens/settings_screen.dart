@@ -17,9 +17,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _fetchDeviceInfo();
-    });
+    _fetchDeviceInfo();
   }
 
   void _fetchDeviceInfo() {
@@ -47,6 +45,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           } else if (snapshot.hasError) {
+            if (snapshot.error is UnimplementedError) {
+              return const Center(
+                child: Text('Feature not available on this platform'),
+              );
+            }
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
