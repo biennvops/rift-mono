@@ -59,4 +59,54 @@ void main() {
 
     expect(find.text('Feature not available on this platform'), findsOneWidget);
   });
+
+  testWidgets('SettingsScreen shows error message for generic error', (WidgetTester tester) async {
+    when(() => mockClient.getDeviceInfo()).thenAnswer((_) => Future.error(Exception('Generic failure')));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Error fetching device info:'), findsOneWidget);
+    expect(find.textContaining('Generic failure'), findsOneWidget);
+  });
+
+  testWidgets('SettingsScreen shows loading spinner while waiting', (WidgetTester tester) async {
+    // Create a delayed future to keep it in the waiting state
+    when(() => mockClient.getDeviceInfo())
+        .thenAnswer((_) => Future.delayed(const Duration(seconds: 1), () => mockDeviceInfo));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await tester.pump(); // Pump once to trigger FutureBuilder, but don't settle yet
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    
+    await tester.pumpAndSettle(); // Finish the future to clean up
+  });
+
+  testWidgets('SettingsScreen shows No data available when data is null', (WidgetTester tester) async {
+    when(() => mockClient.getDeviceInfo()).thenAnswer((_) async => null);
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('No data available.'), findsOneWidget);
+  });
 }

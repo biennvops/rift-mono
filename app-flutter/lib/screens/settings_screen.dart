@@ -12,7 +12,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  Future<dynamic>? _deviceInfoFuture;
+  Future<Map<String, dynamic>?>? _deviceInfoFuture;
 
   @override
   void initState() {
@@ -23,7 +23,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _fetchDeviceInfo() {
     final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     setState(() {
-      _deviceInfoFuture = client.getDeviceInfo();
+      _deviceInfoFuture = client.getDeviceInfo().then((data) {
+        if (data == null) return null;
+        if (data is Map<String, dynamic>) {
+          return data;
+        }
+        throw Exception('Invalid device info format: expected Map, got ${data.runtimeType}');
+      });
     });
   }
 
@@ -39,7 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      body: FutureBuilder<dynamic>(
+      body: FutureBuilder<Map<String, dynamic>?>(
         future: _deviceInfoFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -61,7 +67,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             );
           } else if (snapshot.hasData) {
-            final data = snapshot.data as Map<String, dynamic>;
+            final data = snapshot.data!;
             final deviceId = data['deviceId'] ?? 'Unknown';
             final fingerprint = data['fingerprint'] ?? 'Unknown';
             final implId = data['implementationId'] ?? 'Unknown';
