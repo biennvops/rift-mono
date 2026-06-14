@@ -82,7 +82,7 @@ The system successfully builds. The architecture integrates natively, and execut
 
 ---
 
-# Windows Daemon (riftd) - Week 2 Implementation: Cryptography & Framing
+# Windows Daemon (riftd) - Week 3 Implementation: Cryptography & Framing
 
 **Assignee:** Thạo
 **Task:** `[daemon-cs][identity] Identity manager, certificate generation, and frame codec`
@@ -122,3 +122,31 @@ A dedicated frame codec was implemented to handle the protocol's wire format (`s
    - `IdentityManagerTests`: Verifies Device ID/Fingerprint derivation against protocol test vectors and validates the binary structure of the X.509 extension.
    - `RiftFrameTests`: Verifies framing logic, big-endian byte order, and size-limit enforcement.
 2. **Success:** All unit tests pass, confirming the C# daemon correctly implements the security-critical identity and transport layers.
+
+---
+
+# Windows Daemon (riftd) - Week 4 Implementation: Discovery & TLS Transport
+
+**Assignee:** Thạo
+**Task:** `[daemon-cs][network] Windows mDNS advertise + discover, TLS server/client, Session bootstrap`
+
+This section details the implementation of the core networking layers and session management, integrating the previously built cryptographic primitives.
+
+## Local Discovery (MakaretuDiscoveryService)
+
+Implemented `IDiscoveryService` using the `Makaretu.Dns.Multicast` library for mDNS-SD peer discovery and advertisement.
+1. **Advertisement**: Advertises the `deviceId` generated via the Ed25519 key on the `_rift._tcp` service type. 
+2. **Privacy**: Only minimal non-sensitive metadata (e.g., protocol capabilities version bounds) is broadcasted, strictly avoiding unauthenticated leakage as required by the KDE Connect CVE mitigations.
+
+## Encrypted Transport (TlsTransport)
+
+Implemented `ITransport` to facilitate standard mutual TLS connections and wire-level protocol framing.
+1. **Mutual TLS**: Leveraged `SslStream` backed by `TcpClient` / `TcpListener`, preferring TLS 1.3 with a fallback to TLS 1.2.
+2. **Certificate Authentication**: ECDSA P-256 self-signed certificates are successfully negotiated for authentication bounding.
+3. **Identity Binding Verification**: Immediately post-handshake, the custom X.509 ASN.1 extension (OID `2.25.293029629918709742181702189012786017422`) is cleanly extracted from the peer certificate, hashed using SHA-256, and encoded via Base32 to rigorously recover and validate the authenticated Ed25519 `rift-` `deviceId`.
+4. **Stream Framing**: Fully delegates to `RiftFrame` helper methods. Malicious or malformed length-prefixed protocol spans that exceed the 32 MiB post-auth limits throw hard validation faults terminating the TCP link dynamically.
+
+## Session Orchestration (SessionBootstrap)
+
+1. A background orchestration loop `SessionBootstrap` was provisioned.
+2. Ties the local daemon Identity initialization with starting mDNS discovery and listening on the designated `ITransport` TCP endpoints, completing the daemon entry flow.
