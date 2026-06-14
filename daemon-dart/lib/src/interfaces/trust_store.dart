@@ -21,26 +21,42 @@ enum TrustState {
   }
 }
 
-class TrustRecord {
+class PeerRecord {
   final String deviceId;
-  final Uint8List ed25519PublicKey;
-  final String fingerprint;
+  final String? displayName;
+  final Uint8List certDer;
   final TrustState state;
+  final DateTime? pairedAt;
+  final DateTime updatedAt;
 
-  TrustRecord({
+  PeerRecord({
     required this.deviceId,
-    required this.ed25519PublicKey,
-    required this.fingerprint,
+    this.displayName,
+    required this.certDer,
     required this.state,
+    this.pairedAt,
+    required this.updatedAt,
   });
+
+  /// Creates a defensive copy of this PeerRecord to prevent mutation of internal state,
+  /// especially the certDer Uint8List.
+  PeerRecord copy() {
+    return PeerRecord(
+      deviceId: deviceId,
+      displayName: displayName,
+      certDer: Uint8List.fromList(certDer),
+      state: state,
+      pairedAt: pairedAt,
+      updatedAt: updatedAt,
+    );
+  }
 }
 
 abstract class TrustStore {
   Future<void> initialize();
-  Future<void> saveTrustRecord(TrustRecord record);
-  Future<TrustRecord?> getTrustRecord(String deviceId);
-  Future<TrustState> getTrustState(String deviceId);
-  Future<void> blockDevice(String deviceId);
-  Future<void> revokeDevice(String deviceId, {required String reason});
-  Future<void> unblockDevice(String deviceId);
+  Future<void> upsertPeer(PeerRecord record);
+  Future<PeerRecord?> getPeer(String deviceId);
+  Future<List<PeerRecord>> getPeersByState(TrustState state);
+  Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt});
+  Future<void> deletePeer(String deviceId);
 }

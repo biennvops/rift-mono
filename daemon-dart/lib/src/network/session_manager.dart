@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
@@ -5,6 +6,14 @@ import 'package:uuid/uuid.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/pop_manager.dart';
+
+class ProtocolMessage {
+  final String peerDeviceId;
+  final Uint8List? peerCertDer;
+  final Map<String, dynamic> payload;
+
+  ProtocolMessage(this.peerDeviceId, this.peerCertDer, this.payload);
+}
 
 enum SessionState {
   handshaking,
@@ -24,6 +33,11 @@ class SessionManager {
   final IdentityManager _identityManager;
   final Map<String, SessionState> _sessions = {};
   
+  // Stream to broadcast established protocol messages to higher layers (PairingManager, etc.)
+  final _messageController = StreamController<ProtocolMessage>.broadcast();
+  Stream<ProtocolMessage> get onMessage => _messageController.stream;
+  Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
+
   // TODO(Blocker): Dart lacks tls-exporter, using a placeholder until ADR resolves Risk 1
   final Uint8List _dummyChannelBinding = Uint8List.fromList(List.generate(32, (_) => 0));
 
@@ -61,6 +75,13 @@ class SessionManager {
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
   }
 
+  Future<void> sendMessage(String peerDeviceId, Map<String, dynamic> payload) async {
+    if (_sessions[peerDeviceId] != SessionState.established) {
+      throw SessionException('Cannot send message: Session not established with $peerDeviceId');
+    }
+    await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+
   Future<void> _handleMessage(TransportMessage msg) async {
     final payloadStr = utf8.decode(msg.payload);
     final jsonMap = json.decode(payloadStr) as Map<String, dynamic>;
@@ -77,10 +98,45 @@ class SessionManager {
 
     if (type == 'session.hello') {
       await _handleSessionHello(msg, jsonMap);
+    } else if (type == 'session.accept' || type == 'session.reject') {
+      if (type == 'session.accept') {
+        final payload = jsonMap['payload'] as Map<String, dynamic>?;
+        final identityProofHex = payload?['identityProof'] as String?;
+        if (identityProofHex == null || msg.peerEd25519Key == null || msg.peerCertDer == null) {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identity proof or cert');
+          return;
+        }
+        
+        final isValidPoP = await PoPManager.verifyIdentityProof(
+          identityProofHex,
+          _dummyChannelBinding,
+          msg.peerEd25519Key!,
+          msg.peerCertDer!,
+        );
+
+        if (!isValidPoP) {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Invalid PoP Signature');
+          throw SessionException('SecurityError: Invalid PoP Signature on session.accept');
+        }
+
+        _sessions[peerDeviceId] = SessionState.established;
+        _transport.setPeerAuthenticated(peerDeviceId);
+      } else {
+        _sessions.remove(peerDeviceId);
+        _transport.disconnect(peerDeviceId);
+      }
     } else {
       if (_sessions[peerDeviceId] != SessionState.established) {
         await _rejectSession(peerDeviceId, 'Unauthorized', 'Session not established');
+        return;
       }
+      
+      // Dispatch established messages to higher layers
+      _messageController.add(ProtocolMessage(
+        msg.peerDeviceId,
+        msg.peerCertDer,
+        jsonMap,
+      ));
     }
   }
 
@@ -173,5 +229,9 @@ class SessionManager {
     };
 
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+  
+  void dispose() {
+    _messageController.close();
   }
 }

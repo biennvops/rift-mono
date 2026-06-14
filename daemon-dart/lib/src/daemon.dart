@@ -3,6 +3,9 @@ import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/network/discovery_service_impl.dart';
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
+import 'package:daemon_dart/src/storage/trust_store_impl.dart';
+import 'package:daemon_dart/src/pairing/pairing_manager.dart';
+import 'package:path/path.dart' as p;
 
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
@@ -13,11 +16,14 @@ class RiftDaemon {
   DiscoveryServiceImpl? _discoveryService;
   TransportImpl? _transport;
   SessionManager? _sessionManager;
+  TrustStoreImpl? _trustStore;
+  PairingManager? _pairingManager;
 
   final String storagePath;
   final int port;
+  final void Function(Map<String, dynamic>)? onIpcEvent;
 
-  RiftDaemon({required this.storagePath, this.port = 11112});
+  RiftDaemon({required this.storagePath, this.port = 11112, this.onIpcEvent});
 
   Future<void> start() async {
     _identityManager = IdentityManagerImpl(storagePath);
@@ -27,6 +33,18 @@ class RiftDaemon {
     await _transport!.startServer();
 
     _sessionManager = SessionManager(_transport!, _identityManager!);
+
+    _trustStore = TrustStoreImpl(p.join(storagePath, 'trust_store.db'));
+    await _trustStore!.initialize();
+
+    _pairingManager = PairingManager(
+      trustStore: _trustStore!,
+      sessionManager: _sessionManager!,
+      identityManager: _identityManager!,
+      onIpcEvent: (event) {
+        onIpcEvent?.call(event);
+      },
+    );
 
     _discoveryService = DiscoveryServiceImpl(port: port);
     await _discoveryService!.startAdvertising();
@@ -39,13 +57,22 @@ class RiftDaemon {
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
     await _transport?.stopServer();
+    _sessionManager?.dispose();
+    _trustStore?.dispose();
     await _identityManager?.dispose();
   }
 
   /// The static entry point for spawning the Isolate from Flutter
   static void isolateEntryPoint(Map<String, dynamic> args) async {
     final storagePath = args['storagePath'] as String;
-    final daemon = RiftDaemon(storagePath: storagePath);
+    final sendPort = args.containsKey('sendPort') ? args['sendPort'] as SendPort : null;
+    final port = args['port'] as int? ?? 11112;
+    
+    final daemon = RiftDaemon(
+      storagePath: storagePath,
+      port: port,
+      onIpcEvent: (event) => sendPort?.send(event),
+    );
     
     try {
       await daemon.start();
@@ -76,6 +103,18 @@ class RiftDaemon {
                   }
                 } catch (e) {
                   sendPort.send({'event': 'connection_error', 'error': e.toString()});
+                }
+              } else if (cmd != null && cmd.toString().startsWith('rift.')) {
+                try {
+                  await daemon._pairingManager?.handleIpcCommand({
+                    'method': cmd,
+                    'params': message,
+                  });
+                } catch (e) {
+                  sendPort.send({
+                    'jsonrpc': '2.0',
+                    'error': {'code': -32603, 'message': e.toString()}
+                  });
                 }
               }
             }

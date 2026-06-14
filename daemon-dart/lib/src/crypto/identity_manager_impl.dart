@@ -43,7 +43,7 @@ class IdentityManagerImpl implements IdentityManager {
       await tempFile.writeAsBytes(_privateKey, flush: true);
       await tempFile.rename(keyFile.path);
       // TODO(Security): Integrate Android Keystore via Flutter channels to avoid
-      // plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
+      // plaintext Ed25519 seed storage. (Target: M3 - Week 5)
 
       await _derivePublicKey();
     }

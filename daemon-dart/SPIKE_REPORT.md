@@ -1,4 +1,4 @@
-# Dart Daemon Assessment & Analysis Report (Week 1-4)
+# Dart Daemon Assessment & Analysis Report (Week 1-5)
 
 **Reference Standard:** `フィナーレ.md` (Master Plan)
 **Component:** Android Daemon (`daemon-dart`)
@@ -6,7 +6,7 @@
 
 ---
 
-## Directory Structure & Important Files (As of Week 4)
+## Directory Structure & Important Files (As of Week 5)
 
 ```text
 daemon-dart/
@@ -30,13 +30,20 @@ daemon-dart/
 │       │   ├── frame_codec.dart            # Stream transformer locking chunks to 64 KiB / 32 MiB bounds
 │       │   ├── session_manager.dart        # Session Orchestrator & PoP validation with active Zone exception catching
 │       │   └── transport_impl.dart         # mTLS SecureServerSocket with socket flush and peer disconnect tracking
+│       ├── pairing/
+│       │   └── pairing_manager.dart        # Pairing State Machine, timeouts, and Double-Approve prevention
+│       ├── storage/
+│       │   └── trust_store_impl.dart       # SQLite ACID Trust Store with WAL mode and Exhaustive Edge Validation
 │       └── daemon.dart                     # IPC try/catch boundary and Isolate orchestrator for Flutter
 ├── test/
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
 │   ├── identity_test.dart                  # Unit test to verify valid Device ID, Base32, and key zeroing
-│   └── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
+│   ├── pairing_manager_test.dart           # Pairing test: Timeout, UI spoofing, Double-Approve Bypass
+│   ├── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
+│   ├── session_manager_test.dart           # Session bounds test: Client-side Auth Bypass prevention
+│   └── trust_store_test.dart               # SQLite database persistence and ACID transitions test
 ├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
 └── README.md                               # Guide for running tests, linter and overall architecture
 ```
@@ -73,13 +80,19 @@ daemon-dart/
   - **BLOCKER (High Risk):** Due to Dart `SecureSocket` limitations, `tls-exporter` (TLS 1.3) and Extended Master Secret (TLS 1.2) are unavailable. PoP signatures currently bind to a `_dummyChannelBinding` (32 bytes of zeros). This leaves the protocol vulnerable to Triple Handshake Attacks. Awaiting Architect Decision (ADR) on whether to downgrade spec to use Application Nonces or write a JNI/BoringSSL native plugin.
   - **Assessment:** Code structurally compliant, but pending Architect ADR for the TLS Channel Binding blocker.
 
+- **`[daemon-dart] Pairing State Machine & Storage` (Week 5 / M3):** Finalize Trust boundaries.
+  - Implemented **`TrustStoreImpl`**: Replaced mock data with a physical SQLite database (`sqlite3` FFI). **Database Hardening:** Enabled WAL mode to prevent lock contention between the Isolate and potential future readers. Enforced **Exhaustive Edge Validation** directly in `transitionState` to block invalid state jumps (e.g., `revoked` -> `trusted`). Implemented explicit `ON CONFLICT` constraints to prevent mDNS discovery mechanisms from automatically downgrading a `trusted` peer back to `discovered`.
+  - Implemented **`PairingManager`**: Built the strict State Machine orchestrating trust workflows. **Security Hardening:** Mitigated **Double-Approve Bypass** by maintaining an `_outboundPairings` set, silently dropping unsolicited `pairing.approve` packets from rogue peers. Mitigated **UI Spoofing** by deriving the fingerprint mathematically from the TLS Context instead of trusting the packet payload. Enforced a rigid 30s timeout via an explicit `pairing.reject` broadcast and timer cleanup.
+  - Finalized **Client-side PoP Verification**: Hardened `SessionManager.accept` by validating the inbound PoP signature on the client side before allowing connection completion.
+  - **Assessment:** **PASSED (100%)** M3 milestones achieved. SQLite storage and complete Trust lifecycle successfully bridged with IPC layer. Added 13 new unit tests (7 for `trust_store` + 6 for `pairing`), bringing the total to 48/48 Security Unit Tests passing.
+
 - **`[daemon-dart] Security Audit & Hardening` (End of Week 4):** Conducted a deep-dive 16-point security and conformance audit across all Dart implementation files.
   - **Critical (C-1/C-2):** Resolved a severe Integer Overflow vulnerability in `Base32Utils` affecting Dart Web/JS builds (53-bit float limits) by implementing explicit bit clamping. Enforced strict memory zeroing of ephemeral TLS Certificates (`_tlsCertificateDer`) during daemon shutdown to prevent extraction from heap dumps.
   - **High (H-1 to H-4):** Eradicated silent `async void` error-swallowing in `SessionManager`, ensuring unhandled PoP verification exceptions immediately disconnect rogue peers. Mitigated stream aliasing hazards in `RiftFrameTransformer` by switching to `copy: true` buffers. Prevented racing data loss during shutdown by forcing kernel `socket.flush()`. Lifted `dispose()` abstractions to root interfaces to close leakage gaps.
   - **Medium (M-1 to M-5):** Solved a silent session starvation state where disconnected peers were locked out from reconnecting by integrating a reactive `onPeerDisconnected` stream. Bounded IPC `ReceivePort` lifecycles in `daemon.dart` behind `try/catch` logic to prevent headless port leaks on startup failures. Implemented dedicated unit tests for pre-auth (64 KiB) and post-auth (32 MiB) promotion boundaries.
   - **Low/Conformance (L-1 to L-5):** Corrected `session.reject` and `session.accept` envelope payloads to use the spec-compliant `id` instead of the legacy `messageId`. Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
-  - **Documentation & Technical Debt:** Executed a massive comment cleanup across 7 core files (`session_manager.dart`, `cert_builder.dart`, `base32_utils.dart`, etc.). Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
-  - **Assessment:** **PASSED (100%)** Zero linter warnings. 35/35 Unit Tests passing (including 2 new frame boundary coverage tests).
+  - **Documentation & Technical Debt:** Executed a massive comment cleanup across the repository to ensure all code is strictly English-first. Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
+  - **Assessment:** **PASSED (100%)** Zero linter warnings. 48/48 Unit Tests passing.
 
 ---
 
@@ -97,7 +110,7 @@ All architectural decisions in Week 1 and Week 2 are strictly designed to meet t
 
 ---
 
-## 3. Risk Assessment & Blockers (Post-Week 4)
+## 3. Risk Assessment & Blockers (Post-Week 5)
 
 1. **TLS-Exporter Blocker (Risk 1 / TLS Downgrade):**
    `dart:io` `SecureSocket` does not expose `tls-exporter` (RFC 9266) or Extended Master Secret (EMS) status. Falling back to an Application-Layer Nonce exposes the protocol to Triple Handshake Attacks (CVE-2014-1295), which is an unacceptable downgrade. **Action Required:** Pending Architecture Decision Record (ADR) from the Protocol Lead to either adopt a Native JNI/Kotlin BoringSSL plugin or revise the protocol spec. A dummy `_dummyChannelBinding` array is temporarily used.
@@ -107,3 +120,6 @@ All architectural decisions in Week 1 and Week 2 are strictly designed to meet t
 
 3. **Plaintext Key Storage Risk (Future/Backlog):**
    Currently, `identity_manager_impl.dart` stores `identity.key` in plaintext. While protected by the Android App Sandbox (chmod 700), it remains vulnerable on rooted devices. Future iterations should explore Android Keystore integration via Flutter channels.
+
+4. **TLS Cert Extraction Race Condition (Technical Debt):**
+   Currently, `session.accept` triggers PoP validation by fetching the peer's certificate from `_transport.getPeerCert()`. If the connection flaps (drops and reconnects immediately) between the packet arrival and cert extraction, it may fetch the certificate of the new connection while validating the signature of the old connection. **Action Required:** Architectural refactor needed to bind the TLS Leaf Certificate directly to the `TransportMessage` frame when it is emitted from the socket, rather than querying it lazily.
