@@ -59,7 +59,7 @@ class TransportImpl implements Transport {
   }
 
   @override
-  Future<void> connectTo(String host, int port, {String? expectedDeviceId}) async {
+  Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
@@ -94,14 +94,14 @@ class TransportImpl implements Transport {
       },
     );
 
-    _handleConnection(socket, isServer: false);
+    return _handleConnection(socket, isServer: false);
   }
 
-  void _handleConnection(SecureSocket socket, {required bool isServer}) async {
+  Future<String> _handleConnection(SecureSocket socket, {required bool isServer}) async {
     final peerCert = socket.peerCertificate;
     if (peerCert == null) {
       socket.destroy();
-      return;
+      throw StateError('Peer certificate missing');
     }
 
     try {
@@ -144,9 +144,11 @@ class TransportImpl implements Transport {
         }
       });
 
+      return peerDeviceId;
     } catch (e) {
       // Fail-closed: destroy socket if cert is missing the Rift extension.
       socket.destroy();
+      rethrow;
     }
   }
 

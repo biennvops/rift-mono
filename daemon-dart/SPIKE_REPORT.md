@@ -1,6 +1,6 @@
 # Dart Daemon Assessment & Analysis Report (Week 1-5)
 
-**Reference Standard:** `フィナーレ.md` (Master Plan)
+**Reference Standards:** `spec/doc/protocol.md`, `spec/doc/ipc.md`, and the current `daemon-dart` implementation
 **Component:** Android Daemon (`daemon-dart`)
 **Assessed by:** System Review
 
@@ -50,12 +50,12 @@ daemon-dart/
 
 ---
 
-## 1. Task Compliance Level (According to `フィナーレ.md`)
+## 1. Implementation Summary (Current `daemon-dart` State)
 
 - **`[daemon-dart][infra]` (Week 1):** Initialize basic Dart daemon structure.
   - Installed and verified the usability of cryptography packages `pointycastle` and `asn1lib`.
   - Clearly shaped the directory planning in preparation for protocol modules.
-  - **Assessment:** **PASSED (100%)**
+  - **Assessment:** Infrastructure established.
 
 - **`[daemon-dart] Module interfaces & [test]` (Week 2):** Build communication and certificate foundations.
   - Set up all 5 Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`).
@@ -63,14 +63,14 @@ daemon-dart/
   - Passed the mTLS certificate security Unit Test.
   - **Optimization:** Used `BytesBuilder` to prevent memory fragmentation during ASN.1 byte manipulation; Removed `dynamic` (replaced with `DiscoveredPeer`) to ensure absolute Type-Safety for the Interface architecture.
   - **Security & Refactoring (Leader's Review):** Upgraded `TrustState` to Enhanced Enums, fixed Exception double-wrapping in `cert_builder.dart`, added `signIdentityProof` for Ed25519 PoP compliance, added connection lifecycle methods to `Transport`, and expanded `crypto_test.dart` with robust negative testing (ASN.1 parsing and invalid key handling).
-  - **Assessment:** **PASSED (100%)**
+  - **Assessment:** Core certificate and interface groundwork established.
 
 - **`[daemon-dart] Identity, Certificates, Frame Parsing` (Week 3):** Finalize core security.
   - Successfully built the standard Fail-Closed **X.509 Decoder (`cert_decoder.dart`)**. Safely extracted the Ed25519 key from the ASN.1 structure. **Security Hardening:** Passed 10 comprehensive attack vectors (missing OID, duplicate OID, unsupported critical flags, length anomalies, truncated DER, and fragile OID alteration) in `decoder_test.dart`. Fixed a critical Fail-Open bug to strictly reject unknown critical extensions.
   - Implemented the **Frame Codec (`frame_codec.dart`)** with a 4-byte length prefix structure. **Improvement:** Integrated `RiftFrameTransformer` (StreamTransformer) with a `try/finally` block to process data in chunks and guarantee memory zeroing on error. Optimized JSON parsing to return Map directly, completely preventing memory exhaustion (OOM) attacks and double-parsing overhead.
   - Finalized **`IdentityManagerImpl`**: Integrated the `cryptography` package to generate and store the Ed25519 key, calculating the standard `rift- + Base32` Device ID. **Security Hardening:** Added strict 32-byte length validation to `signIdentityProof`, verified async compliance via Contract Stubs, implemented `KeyPair` caching for extreme performance, and added memory clearing via `dispose()` to mitigate RAM scraping.
   - Fixed X.509 standard compliance in **`cert_builder.dart`** by generating cryptographically random 64-bit entropy serial numbers to prevent TLS caching collisions.
-  - **Assessment:** **PASSED (100%)** 31/31 Security Unit Tests passing.
+  - **Assessment:** Core crypto, identity, and framing pieces implemented.
 
 - **`[daemon-dart] mDNS, Transport, Session Orchestration` (Week 4):** Finalize Network.
   - Implemented **mDNS Discovery (`discovery_service_impl.dart`)** using `nsd`. Opaque Instance IDs are bound to the daemon session lifecycle to mitigate passive tracking. **Network Flap Fix:** Enhanced `_seenInstanceIds` with diff-based eviction logic. Services that disappear during network flaps are actively removed from the tracker, ensuring they are automatically re-discovered when the connection stabilizes.
@@ -78,35 +78,38 @@ daemon-dart/
   - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6, Envelope Identity validation (`sourceDeviceId`), and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure to mitigate Canonicalization Attacks. **Fix (Critical):** Resolved a critical verification mismatch by enforcing that PoP signatures are generated using the **signer's own local certificate DER**. This guarantees the payload mathematically matches the certificate extracted by the verifier's TLS context.
   - Created the Root Daemon Orchestrator **`daemon.dart`** with `isolateEntryPoint` to encapsulate Android Background Services. **Resilience:** Implemented `Isolate.current.addErrorListener` to propagate fatal isolate crashes to the UI layer. **Fix:** Replaced auto-connect privacy risk with a bidirectional IPC `commandPort`, allowing the Flutter UI to explicitly trigger `connect` and `stop` commands.
   - **BLOCKER (High Risk):** Due to Dart `SecureSocket` limitations, `tls-exporter` (TLS 1.3) and Extended Master Secret (TLS 1.2) are unavailable. PoP signatures currently bind to a `_dummyChannelBinding` (32 bytes of zeros). This leaves the protocol vulnerable to Triple Handshake Attacks. Awaiting Architect Decision (ADR) on whether to downgrade spec to use Application Nonces or write a JNI/BoringSSL native plugin.
-  - **Assessment:** Code structurally compliant, but pending Architect ADR for the TLS Channel Binding blocker.
+  - **Assessment:** Transport and session flow implemented, but not fully protocol-compliant because TLS channel binding is still blocked.
 
 - **`[daemon-dart] Pairing State Machine & Storage` (Week 5 / M3):** Finalize Trust boundaries.
   - Implemented **`TrustStoreImpl`**: Replaced mock data with a physical SQLite database (`sqlite3` FFI). **Database Hardening:** Enabled WAL mode to prevent lock contention between the Isolate and potential future readers. Enforced **Exhaustive Edge Validation** directly in `transitionState` to block invalid state jumps (e.g., `revoked` -> `trusted`). Implemented explicit `ON CONFLICT` constraints to prevent mDNS discovery mechanisms from automatically downgrading a `trusted` peer back to `discovered`.
   - Implemented **`PairingManager`**: Built the strict State Machine orchestrating trust workflows. **Security Hardening:** Mitigated **Double-Approve Bypass** by maintaining an `_outboundPairings` set, silently dropping unsolicited `pairing.approve` packets from rogue peers. Mitigated **UI Spoofing** by deriving the fingerprint mathematically from the TLS Context instead of trusting the packet payload. Enforced a rigid 30s timeout via an explicit `pairing.reject` broadcast and timer cleanup.
   - Finalized **Client-side PoP Verification**: Hardened `SessionManager.accept` by validating the inbound PoP signature on the client side before allowing connection completion.
-  - **Assessment:** **PASSED (100%)** M3 milestones achieved. SQLite storage and complete Trust lifecycle successfully bridged with IPC layer. Added 13 new unit tests (7 for `trust_store` + 6 for `pairing`), bringing the total to 48/48 Security Unit Tests passing.
+  - **Assessment:** Pairing and trust persistence are implemented in code. At the time of this report update, `dart test` passes with 65 tests.
 
 - **`[daemon-dart] Security Audit & Hardening` (End of Week 4):** Conducted a deep-dive 16-point security and conformance audit across all Dart implementation files.
   - **Critical (C-1/C-2):** Resolved a severe Integer Overflow vulnerability in `Base32Utils` affecting Dart Web/JS builds (53-bit float limits) by implementing explicit bit clamping. Enforced strict memory zeroing of ephemeral TLS Certificates (`_tlsCertificateDer`) during daemon shutdown to prevent extraction from heap dumps.
   - **High (H-1 to H-4):** Eradicated silent `async void` error-swallowing in `SessionManager`, ensuring unhandled PoP verification exceptions immediately disconnect rogue peers. Mitigated stream aliasing hazards in `RiftFrameTransformer` by switching to `copy: true` buffers. Prevented racing data loss during shutdown by forcing kernel `socket.flush()`. Lifted `dispose()` abstractions to root interfaces to close leakage gaps.
   - **Medium (M-1 to M-5):** Solved a silent session starvation state where disconnected peers were locked out from reconnecting by integrating a reactive `onPeerDisconnected` stream. Bounded IPC `ReceivePort` lifecycles in `daemon.dart` behind `try/catch` logic to prevent headless port leaks on startup failures. Implemented dedicated unit tests for pre-auth (64 KiB) and post-auth (32 MiB) promotion boundaries.
-  - **Low/Conformance (L-1 to L-5):** Corrected `session.reject` and `session.accept` envelope payloads to use the spec-compliant `id` instead of the legacy `messageId`. Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
+  - **Low/Conformance (L-1 to L-5):** Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
   - **Documentation & Technical Debt:** Executed a massive comment cleanup across the repository to ensure all code is strictly English-first. Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
-  - **Assessment:** **PASSED (100%)** Zero linter warnings. 48/48 Unit Tests passing.
+  - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 65 tests.
 
 ---
 
 ## 2. System Specification Alignment (Protocol & IPC)
 
-All architectural decisions in Week 1 and Week 2 are strictly designed to meet the two core specifications of the project:
+The implementation is clearly derived from the two core specifications, but it should be described as **partially aligned** rather than fully conformant:
 
 ### 2.1. Compliance with `spec/doc/protocol.md` (Network Protocol & Security)
-- **Application in Week 1:** The specification strictly requires the ECDSA P-256 signature standard and X.509 extension. Since the Dart SDK is not powerful enough to manipulate custom OIDs, Week 1 finalized the infrastructure approach: installing 2 low-level libraries, `pointycastle` and `asn1lib`.
-- **Application in Week 2 & 3:** Exactly executed Section 3.4 of the Protocol. Wrote `cert_builder.dart` to embed the custom OID (`2.25...`) containing the Ed25519 key, and `cert_decoder.dart` to decode it back with the secure Fail-Closed standard. The Device ID format was also strictly adhered to the `rift- + lowercase Base32` standard via `IdentityManagerImpl`. The `frame_codec.dart` framework strictly limits messages to 32 MiB according to the specification.
+- **Implemented and aligned:** The code embeds the custom Ed25519 extension in the TLS certificate, parses it fail-closed, derives the device ID from the Ed25519 public key, and enforces pre-auth/post-auth frame size limits.
+- **Implemented but not fully aligned:** Session bootstrap, `session.accept` verification, and pairing security checks exist, but the message envelope currently uses `id` in code where `protocol.md` still defines `messageId`.
+- **Blocked:** Proper channel binding for PoP cannot currently be implemented with `dart:io` alone because `tls-exporter` / EMS state is unavailable.
+- **Net assessment:** Security architecture is visible in code, but peer-protocol conformance is incomplete.
 
 ### 2.2. Compliance with `spec/doc/ipc.md` (Flutter Client Communication)
-- **Application in Week 1:** Built a strict directory framework, separating the communication code area (`ipc/`) and core business code (`interfaces/`, `crypto/`).
-- **Application in Week 2 & 3:** The IPC specification requires connections via JSON-RPC 2.0 over a Transport-agnostic binding. As a foundation, Week 2 & 3 created 5 Abstract Interfaces (`IdentityManager`, `DiscoveryService`...). This is the Abstraction Layer that forces future JSON-RPC communication code to interact through it, keeping the Daemon from being hard-coded to any rigid connection protocol.
+- **Implemented and aligned:** The daemon exposes an isolate entrypoint and the pairing/trust notifications needed for the Flutter app to drive the flow.
+- **Implemented but not fully aligned:** The current isolate bridge mixes JSON-RPC-like notifications with custom command/event payloads such as `status` and `peer_discovered`, so it should not be described as a complete JSON-RPC 2.0 IPC surface yet.
+- **Net assessment:** The IPC direction is correct, but the implementation is still a bridge layer rather than a finished `ipc.md` contract.
 
 ---
 
@@ -122,4 +125,14 @@ All architectural decisions in Week 1 and Week 2 are strictly designed to meet t
    Currently, `identity_manager_impl.dart` stores `identity.key` in plaintext. While protected by the Android App Sandbox (chmod 700), it remains vulnerable on rooted devices. Future iterations should explore Android Keystore integration via Flutter channels.
 
 4. **TLS Cert Extraction Race Condition (Technical Debt):**
-   Currently, `session.accept` triggers PoP validation by fetching the peer's certificate from `_transport.getPeerCert()`. If the connection flaps (drops and reconnects immediately) between the packet arrival and cert extraction, it may fetch the certificate of the new connection while validating the signature of the old connection. **Action Required:** Architectural refactor needed to bind the TLS Leaf Certificate directly to the `TransportMessage` frame when it is emitted from the socket, rather than querying it lazily.
+   This was an earlier concern, but the current `SessionManager` already receives `peerCertDer` on each `TransportMessage` and validates PoP against that message-bound certificate context. This item should be considered resolved in the current code unless a new race is demonstrated elsewhere.
+
+## 4. Reality Check Against the Repository
+
+- `dart analyze` currently reports `No issues found!`.
+- `dart test` currently passes with 65 tests.
+- Latest local verification snapshot:
+  `dart analyze` -> `No issues found!`
+  `dart test` -> `00:01 +65: All tests passed!`
+- `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
+- `bin/daemon.dart` exists, but it is still a standalone runner stub and not a full daemon launcher for conformance use yet.

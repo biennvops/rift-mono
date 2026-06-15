@@ -18,6 +18,8 @@ class PairingManager {
   final IdentityManager identityManager;
   final Map<String, Timer> _pairingTimeouts = {};
   final Set<String> _outboundPairings = {};
+  StreamSubscription<ProtocolMessage>? _messageSubscription;
+  StreamSubscription<String>? _disconnectSubscription;
 
   /// Callback to send IPC events back to Flutter UI (via SendPort/Stream)
   final void Function(Map<String, dynamic>) onIpcEvent;
@@ -28,8 +30,8 @@ class PairingManager {
     required this.identityManager,
     required this.onIpcEvent,
   }) {
-    sessionManager.onMessage.listen(_handleNetworkMessage);
-    sessionManager.onPeerDisconnected.listen(_handlePeerDisconnected);
+    _messageSubscription = sessionManager.onMessage.listen(_handleNetworkMessage);
+    _disconnectSubscription = sessionManager.onPeerDisconnected.listen(_handlePeerDisconnected);
   }
 
   void _handlePeerDisconnected(String peerDeviceId) async {
@@ -69,6 +71,9 @@ class PairingManager {
   Future<void> _startPairing(String peerDeviceId) async {
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) throw StateError('Peer not found in TrustStore');
+    if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
+      throw StateError('Peer is blocked or revoked');
+    }
     
     // Transition state to pairingPending
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.pairingPending);
@@ -77,17 +82,24 @@ class PairingManager {
     _startTimeoutTimer(peerDeviceId);
     _outboundPairings.add(peerDeviceId);
 
-    // Send pairing.start packet via SessionManager
-    await sessionManager.sendMessage(peerDeviceId, {
-      'rift': '0.1-draft',
-      'id': const Uuid().v4(),
-      'type': 'pairing.start',
-      'sourceDeviceId': identityManager.deviceId,
-      'destinationDeviceId': peerDeviceId,
-      'payload': {
-        'displayName': 'Rift Device', // TODO: Retrieve from system settings later
-      }
-    });
+    try {
+      // Send pairing.start packet via SessionManager
+      await sessionManager.sendMessage(peerDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'pairing.start',
+        'sourceDeviceId': identityManager.deviceId,
+        'destinationDeviceId': peerDeviceId,
+        'payload': {
+          'expiresInMs': 30000,
+          'displayName': 'Rift Device', // TODO: Retrieve from system settings later
+        }
+      });
+    } catch (e) {
+      _cancelTimeoutTimer(peerDeviceId);
+      await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
+      rethrow;
+    }
   }
 
   /// Called by Flutter App when User clicks "Approve"
@@ -107,39 +119,45 @@ class PairingManager {
     }
 
     final now = DateTime.now().toUtc();
-    
-    // Update state DB
+
+    try {
+      // Notify network first; local trust persists only after pairing completion messages are sent.
+      await sessionManager.sendMessage(peerDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'pairing.approve',
+        'sourceDeviceId': identityManager.deviceId,
+        'destinationDeviceId': peerDeviceId,
+        'payload': {
+          'approvedAt': now.toIso8601String(),
+        }
+      });
+
+      await sessionManager.sendMessage(peerDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'pairing.complete',
+        'sourceDeviceId': identityManager.deviceId,
+        'destinationDeviceId': peerDeviceId,
+        'payload': {
+          'trustedDeviceId': identityManager.deviceId,
+          'persistedAt': now.toIso8601String(),
+        }
+      });
+    } catch (e) {
+      final currentRecord = await trustStore.getPeer(peerDeviceId);
+      if (currentRecord?.state == TrustState.pairingPending) {
+        _startTimeoutTimer(peerDeviceId);
+      }
+      rethrow;
+    }
+
     await trustStore.transitionState(
-      peerDeviceId, 
-      record.state, 
-      TrustState.trusted, 
+      peerDeviceId,
+      record.state,
+      TrustState.trusted,
       pairedAt: now,
     );
-
-    // Notify network
-    await sessionManager.sendMessage(peerDeviceId, {
-      'rift': '0.1-draft',
-      'id': const Uuid().v4(),
-      'type': 'pairing.approve',
-      'sourceDeviceId': identityManager.deviceId,
-      'destinationDeviceId': peerDeviceId,
-      'payload': {
-        'approvedAt': now.toIso8601String(),
-      }
-    });
-    
-    // Notify peer of pairing.complete
-    await sessionManager.sendMessage(peerDeviceId, {
-      'rift': '0.1-draft',
-      'id': const Uuid().v4(),
-      'type': 'pairing.complete',
-      'sourceDeviceId': identityManager.deviceId,
-      'destinationDeviceId': peerDeviceId,
-      'payload': {
-        'trustedDeviceId': identityManager.deviceId,
-        'persistedAt': now.toIso8601String(),
-      }
-    });
 
     // Emit event to Flutter UI
     onIpcEvent({
@@ -167,12 +185,13 @@ class PairingManager {
     try {
       await sessionManager.sendMessage(peerDeviceId, {
         'rift': '0.1-draft',
-        'id': const Uuid().v4(),
+        'messageId': const Uuid().v4(),
         'type': 'pairing.reject',
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
         'payload': {
-          'reason': 'UserRejected',
+          'failureReason': 'PolicyDenied',
+          'message': 'User rejected pairing',
         }
       });
     } catch (e) {
@@ -185,6 +204,7 @@ class PairingManager {
     if (record == null) return;
     // Transition to revoked
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.revoked);
+    sessionManager.disconnectPeer(peerDeviceId);
     
     onIpcEvent({
       'jsonrpc': '2.0',
@@ -210,21 +230,31 @@ class PairingManager {
       case 'pairing.start':
         // Peer requested pairing with us
         final record = await trustStore.getPeer(peerDeviceId);
+        final payload = msg.payload['payload'];
+        if (payload is! Map<String, dynamic> ||
+            payload['expiresInMs'] is! int ||
+            (payload['expiresInMs'] as int) <= 0 ||
+            payload.containsKey('fingerprint')) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
         
-        // If blocked, silently drop the packet
-        if (record!.state == TrustState.blocked) {
+        // If blocked or revoked, silently drop the packet
+        if (record!.state == TrustState.blocked || record.state == TrustState.revoked) {
+          return;
+        }
+
+        if (record.state != TrustState.discovered) {
           return;
         }
 
         // According to State Machine, must transition from discovered to pairingPending
-        if (record.state == TrustState.discovered) {
-          await trustStore.transitionState(peerDeviceId, TrustState.discovered, TrustState.pairingPending);
-        }
+        await trustStore.transitionState(peerDeviceId, TrustState.discovered, TrustState.pairingPending);
         
         _startTimeoutTimer(peerDeviceId);
         
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final displayName = msg.payload['payload']?['displayName'] as String? ?? 'Unknown Device';
+        final displayName = payload['displayName'] as String? ?? 'Unknown Device';
 
         // Emit event to UI to show popup
         onIpcEvent({
@@ -240,8 +270,13 @@ class PairingManager {
         break;
 
       case 'pairing.approve':
-        _cancelTimeoutTimer(peerDeviceId);
-        
+        final approvePayload = msg.payload['payload'];
+        if (approvePayload is! Map<String, dynamic> ||
+            approvePayload['approvedAt'] is! String ||
+            approvePayload.containsKey('fingerprint')) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
         // SECURITY: Prevent Double-Approve Bypass
         // Only process pairing.approve if we initiated pairing (Outbound)
         if (!_outboundPairings.contains(peerDeviceId)) {
@@ -250,32 +285,22 @@ class PairingManager {
           return;
         }
 
+        _cancelTimeoutTimer(peerDeviceId, clearOutbound: false);
+
         final record = await trustStore.getPeer(peerDeviceId);
         if (record?.state == TrustState.pairingPending) {
-           final now = DateTime.now().toUtc();
-           await trustStore.transitionState(
-             peerDeviceId, 
-             TrustState.pairingPending, 
-             TrustState.trusted, 
-             pairedAt: now
-           );
-           
-           _outboundPairings.remove(peerDeviceId);
-           final derivedFingerprint = _deriveFingerprint(record!.certDer);
-           
-           onIpcEvent({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPairingComplete',
-              'params': {
-                'deviceId': peerDeviceId,
-                'fingerprint': derivedFingerprint,
-                'persistedAt': now.toIso8601String(),
-              }
-           });
+          _startTimeoutTimer(peerDeviceId);
         }
         break;
 
       case 'pairing.reject':
+        final rejectPayload = msg.payload['payload'];
+        if (rejectPayload is! Map<String, dynamic> ||
+            rejectPayload['failureReason'] is! String ||
+            rejectPayload.containsKey('fingerprint')) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
         _cancelTimeoutTimer(peerDeviceId);
         _outboundPairings.remove(peerDeviceId);
         final record = await trustStore.getPeer(peerDeviceId);
@@ -286,7 +311,46 @@ class PairingManager {
         break;
         
       case 'pairing.complete':
-        // Cross-verify persistence timestamp, or update meta info
+        final record = await trustStore.getPeer(peerDeviceId);
+        if (record == null) {
+          return;
+        }
+
+        final completePayload = msg.payload['payload'];
+        if (completePayload is! Map<String, dynamic> ||
+            completePayload['trustedDeviceId'] is! String ||
+            completePayload['persistedAt'] is! String ||
+            completePayload.containsKey('fingerprint')) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
+
+        final trustedDeviceId = completePayload['trustedDeviceId'] as String;
+        if (trustedDeviceId != peerDeviceId) {
+          await _rejectPairing(peerDeviceId);
+          return;
+        }
+
+        if (record.state == TrustState.pairingPending) {
+          _cancelTimeoutTimer(peerDeviceId);
+          _outboundPairings.remove(peerDeviceId);
+          final now = DateTime.now().toUtc();
+          await trustStore.transitionState(
+            peerDeviceId,
+            TrustState.pairingPending,
+            TrustState.trusted,
+            pairedAt: now,
+          );
+          onIpcEvent({
+            'jsonrpc': '2.0',
+            'method': 'rift.onPairingComplete',
+            'params': {
+              'deviceId': peerDeviceId,
+              'fingerprint': _deriveFingerprint(record.certDer),
+              'persistedAt': now.toIso8601String(),
+            }
+          });
+        }
         break;
     }
   }
@@ -325,10 +389,22 @@ class PairingManager {
     });
   }
 
-  void _cancelTimeoutTimer(String peerDeviceId) {
+  void _cancelTimeoutTimer(String peerDeviceId, {bool clearOutbound = true}) {
     _pairingTimeouts[peerDeviceId]?.cancel();
     _pairingTimeouts.remove(peerDeviceId);
-    _outboundPairings.remove(peerDeviceId);
+    if (clearOutbound) {
+      _outboundPairings.remove(peerDeviceId);
+    }
+  }
+
+  Future<void> dispose() async {
+    for (final timer in _pairingTimeouts.values) {
+      timer.cancel();
+    }
+    _pairingTimeouts.clear();
+    _outboundPairings.clear();
+    await _messageSubscription?.cancel();
+    await _disconnectSubscription?.cancel();
   }
 
   String _deriveFingerprint(Uint8List certDer) {
