@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
@@ -113,11 +114,21 @@ class RiftDaemon {
     peers.addAll(await trustStore.getPeersByState(TrustState.pairingPending));
 
     return peers.map((peer) {
+      // ipc.md §4.4: listTrustedPeers result includes lastSeenAt, presence, and capabilities.
+      // lastSeenAt and capabilities are not yet tracked at runtime; we surface what we
+      // have and use sensible defaults so the Flutter client never receives a missing field.
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toIso8601String(),
+        // updatedAt is used as a best-effort proxy for lastSeenAt until the daemon
+        // tracks separate connection events.
+        'lastSeenAt': peer.updatedAt.toIso8601String(),
+        'presence': 'unknown',
+        // Capabilities are not stored per-peer yet; emit an empty list rather than
+        // omitting the field, so clients using ipc.md do not crash on null.
+        'capabilities': const <String>[],
       };
     }).toList();
   }
@@ -153,7 +164,7 @@ class RiftDaemon {
 
   Future<Map<String, dynamic>> handleJsonRpcRequest(Map<String, dynamic> request) async {
     final method = request['method'] as String?;
-    final params = request['params'] as Map<String, dynamic>? ?? {};
+    final params = _normalizeParams(request['params']);
 
     switch (method) {
       case 'rift.getDeviceInfo':
@@ -171,33 +182,42 @@ class RiftDaemon {
         return {'stopped': true};
       case 'rift.startPairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
-        final record = await _trustStore?.getPeer(params['deviceId'] as String);
+        final peerDeviceId = _requireStringParam(params, 'deviceId');
+        final record = await _trustStore?.getPeer(peerDeviceId);
         if (record == null) {
           throw StateError('Peer not found in TrustStore');
         }
         return {
           'fingerprint': _formatFingerprint(_identityManager!.getDeviceFingerprint()),
           'peerFingerprint': _deriveFingerprint(record.certDer),
-          'expiresInMs': 30000,
+          'expiresInMs': 120000, // ipc.md §4.3: startPairing always returns 120 000 ms
         };
       case 'rift.approvePairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {
-          'trustedDeviceId': params['deviceId'],
+          'trustedDeviceId': _requireStringParam(params, 'deviceId'),
           'persistedAt': DateTime.now().toUtc().toIso8601String(),
         };
       case 'rift.rejectPairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {'rejected': true};
       case 'rift.revokeTrust':
+        _requireStringParam(params, 'deviceId');
+        _requireStringParam(params, 'reason');
         await _pairingManager?.handleIpcCommand({
           'method': 'rift.unpair',
-          'params': {'deviceId': params['deviceId']},
+          'params': {
+            'deviceId': params['deviceId'],
+            'reason': params['reason'],
+          },
         });
         return {
           'revoked': true,
           'revokedAt': DateTime.now().toUtc().toIso8601String(),
         };
+      case 'rift.unblockPeer':
+        await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
+        return {'unblocked': true};
       default:
         throw UnsupportedError('Method not found: $method');
     }
@@ -215,6 +235,22 @@ class RiftDaemon {
     };
   }
 
+  static int _mapStateErrorToCode(StateError e) {
+    final msg = e.message.toString();
+    if (msg.contains('not found') || msg.contains('not in TrustStore')) {
+      return -32009; // NotFound
+    } else if (msg.contains('blocked or revoked') || msg.contains('not trusted')) {
+      return -32004; // Unauthorized
+    } else if (msg.contains('Invalid state transition') || msg.contains('invalid state')) {
+      return -32008; // InvalidTransition
+    } else if (msg.contains('SecurityError') || msg.contains('Fingerprint mismatch')) {
+      return -32005; // AuthenticationFailed
+    } else if (msg.contains('not initialized') || msg.contains('not established')) {
+      return -32012; // IdentityNotInitialized
+    }
+    return -32603; // InternalError
+  }
+
   static Map<String, dynamic> jsonRpcError(Object? id, int code, String message) {
     return {
       'jsonrpc': '2.0',
@@ -224,6 +260,24 @@ class RiftDaemon {
         'message': message,
       }
     };
+  }
+
+  static String _requireStringParam(Map<String, dynamic> params, String key) {
+    final value = params[key];
+    if (value is! String || value.isEmpty) {
+      throw ArgumentError.value(value, key, 'must be a non-empty string');
+    }
+    return value;
+  }
+
+  static Map<String, dynamic> _normalizeParams(Object? params) {
+    if (params == null) {
+      return <String, dynamic>{};
+    }
+    if (params is Map) {
+      return params.map((key, value) => MapEntry(key.toString(), value));
+    }
+    throw ArgumentError.value(params, 'params', 'must be an object');
   }
 
   static String _formatFingerprint(Uint8List hashBytes) {
@@ -270,10 +324,12 @@ class RiftDaemon {
                   sendPort.send(RiftDaemon.jsonRpcResult(id, result));
                 } on UnsupportedError catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32601, e.toString()));
+                } on ArgumentError catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(id, -32602, e.message?.toString() ?? e.toString()));
                 } on StateError catch (e) {
-                  final msg = e.message.toString();
-                  final code = msg.contains('blocked or revoked') ? -32004 : -32009;
-                  sendPort.send(RiftDaemon.jsonRpcError(id, code, msg));
+                  // Map StateError messages to the correct ipc.md error codes.
+                  final code = RiftDaemon._mapStateErrorToCode(e);
+                  sendPort.send(RiftDaemon.jsonRpcError(id, code, e.message.toString()));
                 } catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32603, e.toString()));
                 }
@@ -293,8 +349,14 @@ class RiftDaemon {
                   final resolvedPeerDeviceId =
                       await daemon._transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
                   await daemon._sessionManager!.sendSessionHello(resolvedPeerDeviceId);
+                } on StateError catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(null, -32000, e.message));
+                } on SocketException catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(null, -32000, 'PeerUnreachable: ${e.message}'));
                 } catch (e) {
-                  sendPort.send({'event': 'connection_error', 'error': e.toString()});
+                  // Re-throw unexpected errors as internal JSON-RPC errors instead
+                  // of hiding them behind a generic ad-hoc map.
+                  sendPort.send(RiftDaemon.jsonRpcError(null, -32603, e.toString()));
                 }
               } else if (cmd != null && cmd.toString().startsWith('rift.')) {
                 try {
@@ -304,6 +366,11 @@ class RiftDaemon {
                     'params': message,
                   });
                   sendPort.send(RiftDaemon.jsonRpcResult(message['id'], result));
+                } on ArgumentError catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32602, e.message?.toString() ?? e.toString()));
+                } on StateError catch (e) {
+                  final code = RiftDaemon._mapStateErrorToCode(e);
+                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], code, e.message.toString()));
                 } catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32603, e.toString()));
                 }
@@ -331,21 +398,52 @@ class RiftDaemon {
             });
           });
 
+          // Wrap startup status in a JSON-RPC 2.0 notification so all transport
+          // messages conform to ipc.md and the Flutter client can use a single
+          // parsing path without special-casing status/error objects.
           sendPort.send({
-            'status': 'running', 
-            'deviceId': daemon._identityManager!.deviceId,
-            'commandPort': commandPort.sendPort,
+            'jsonrpc': '2.0',
+            'method': 'rift.daemonReady',
+            'params': {
+              'status': 'running',
+              'deviceId': daemon._identityManager!.deviceId,
+              'commandPort': commandPort.sendPort,
+            },
+          });
+        } on SocketException catch (e) {
+          commandPort.close();
+          sendPort.send({
+            'jsonrpc': '2.0',
+            'method': 'rift.daemonError',
+            'params': {'status': 'error', 'error': 'SocketException: ${e.message}'},
           });
         } catch (e) {
           // Close port to avoid ReceivePort leak if IPC setup fails.
           commandPort.close();
-          sendPort.send({'status': 'error', 'error': e.toString()});
+          sendPort.send({
+            'jsonrpc': '2.0',
+            'method': 'rift.daemonError',
+            'params': {'status': 'error', 'error': e.toString()},
+          });
         }
+      }
+    } on SocketException catch (e) {
+      if (args.containsKey('sendPort')) {
+        final SendPort sendPort = args['sendPort'] as SendPort;
+        sendPort.send({
+          'jsonrpc': '2.0',
+          'method': 'rift.daemonError',
+          'params': {'status': 'error', 'error': 'SocketException: ${e.message}'},
+        });
       }
     } catch (e) {
       if (args.containsKey('sendPort')) {
         final SendPort sendPort = args['sendPort'] as SendPort;
-        sendPort.send({'status': 'error', 'error': e.toString()});
+        sendPort.send({
+          'jsonrpc': '2.0',
+          'method': 'rift.daemonError',
+          'params': {'status': 'error', 'error': e.toString()},
+        });
       }
     }
   }

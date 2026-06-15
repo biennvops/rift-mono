@@ -2,7 +2,9 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import '../interfaces/transport.dart';
@@ -53,8 +55,30 @@ class SessionManager {
   Stream<ProtocolMessage> get onMessage => _messageController.stream;
   Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
-  // TODO(Blocker): Dart lacks tls-exporter, using a placeholder until ADR resolves Risk 1
-  final Uint8List _dummyChannelBinding = Uint8List.fromList(List.generate(32, (_) => 0));
+  // Risk-1 Mitigation (ADR-0002 fallback): dart:io SecureSocket does not expose
+  // tls-exporter (RFC 9266) or tls-unique (RFC 5929). As the best available
+  // platform-level substitute, we implement an Application Nonce fallback:
+  //   channelBinding = SHA-256(sessionNonce || localCertDer || peerCertDer)
+  // This value is:
+  //   • per-session unique (via the securely generated 32-byte sessionNonce),
+  //   • tied to the specific cert pair (preventing cross-identity replay),
+  //   • effectively preventing cross-session replay of PoP signatures.
+  // If dart:io ever exposes tls-exporter this method should be replaced with the
+  // RFC 9266 label "EXPORTER-RIFT-Ed25519-PoP" derivation.
+  Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);
+    input.setRange(0, sessionNonce.length, sessionNonce);
+    input.setRange(sessionNonce.length, sessionNonce.length + localCertDer.length, localCertDer);
+    input.setRange(sessionNonce.length + localCertDer.length, input.length, peerCertDer);
+    return Uint8List.fromList(sha256.convert(input).bytes);
+  }
+
+  Uint8List _generateSessionNonce() {
+    final random = Random.secure();
+    return Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+  }
+
   final Set<String> _requiredCapabilityNames = const {
     'clipboard.offer_fetch',
     'presence.basic',
@@ -84,8 +108,15 @@ class SessionManager {
 
     // Sign over the local cert DER — the verifier reconstructs the same input
     // from the peer's cert carried in the TLS handshake (spec §5.3).
+    // Channel binding is computed from both certs (Risk-1 ADR-0002 fallback).
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw SessionException('Cannot compute channel binding: peer cert not available for $peerDeviceId');
+    }
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': _protocolVersion,
@@ -98,6 +129,7 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'implementationId': _implementationId,
         'capabilities': _capabilities,
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
     };
@@ -129,7 +161,7 @@ class SessionManager {
         return;
       }
       jsonMap = parsed;
-    } catch (_) {
+    } on FormatException {
       await _rejectSession(msg.peerDeviceId, 'MalformedMessage', 'Invalid JSON payload');
       return;
     }
@@ -161,9 +193,14 @@ class SessionManager {
       return;
     }
 
-    if (requiredExtensions is List && requiredExtensions.isNotEmpty) {
-      await _rejectSession(peerDeviceId, 'ProtocolError', 'Unknown requiredExtensions');
-      return;
+    if (requiredExtensions != null) {
+      if (requiredExtensions is! List) {
+        await _rejectSession(peerDeviceId, 'ProtocolError', 'requiredExtensions must be an array');
+        return;
+      } else if (requiredExtensions.isNotEmpty) {
+        await _rejectSession(peerDeviceId, 'ProtocolError', 'Unknown requiredExtensions');
+        return;
+      }
     }
 
     // ENVELOPE VALIDATION: §6 - device ID MUST match the authenticated TLS identity
@@ -181,8 +218,14 @@ class SessionManager {
         final payloadDeviceId = payload?['deviceId'] as String?;
         final identityProofHex = payload?['identityProof'] as String?;
         final capabilities = payload?['capabilities'] as List?;
+        final identityVerified = payload?['identityVerified'];
+        final sessionNonceStr = payload?['sessionNonce'] as String?;
         if (selectedVersion != _protocolVersion) {
           await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
+          return;
+        }
+        if (identityVerified != true) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'session.accept missing identityVerified: true');
           return;
         }
         if (payloadDeviceId != peerDeviceId) {
@@ -197,12 +240,47 @@ class SessionManager {
           await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identity proof or cert');
           return;
         }
+
+        // Reconstruct the same channel binding the peer used when signing:
+        // SHA-256(peerCertDer || localCertDer) — note the order is swapped
+        // because from the peer's perspective, their cert is "local" and ours
+        // is "peer". We reverse here to match.
+        final localCertDer = _identityManager.tlsCertificateDer;
+        final peerCertDer = msg.peerCertDer!;
         
+        if (sessionNonceStr == null) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+          return;
+        }
+
+        late final Uint8List peerNonce;
+        try {
+          peerNonce = base64.decode(sessionNonceStr);
+        } on FormatException {
+          await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+          return;
+        }
+
+        if (peerNonce.length != 32) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+          return;
+        }
+
+        final channelBindingForVerify = Uint8List(
+            peerNonce.length + peerCertDer.length + localCertDer.length);
+        channelBindingForVerify.setRange(0, peerNonce.length, peerNonce);
+        channelBindingForVerify.setRange(
+            peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+        channelBindingForVerify.setRange(
+            peerNonce.length + peerCertDer.length, channelBindingForVerify.length, localCertDer);
+        final channelBinding = Uint8List.fromList(
+            sha256.convert(channelBindingForVerify).bytes);
+
         final isValidPoP = await PoPManager.verifyIdentityProof(
           identityProofHex,
-          _dummyChannelBinding,
+          channelBinding,
           msg.peerEd25519Key!,
-          msg.peerCertDer!,
+          peerCertDer,
         );
 
         if (!isValidPoP) {
@@ -303,11 +381,41 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
+    // Reconstruct channel binding: from the peer's perspective their cert is
+    // "local" and ours is "peer", so we reverse the concatenation order.
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final peerCertDer = msg.peerCertDer!;
+    final sessionNonceStr = payload['sessionNonce'] as String?;
+
+    if (sessionNonceStr == null) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+      return;
+    }
+
+    late final Uint8List peerNonce;
+    try {
+      peerNonce = base64.decode(sessionNonceStr);
+    } on FormatException {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+      return;
+    }
+
+    if (peerNonce.length != 32) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+      return;
+    }
+
+    final cbInput = Uint8List(peerNonce.length + peerCertDer.length + localCertDer.length);
+    cbInput.setRange(0, peerNonce.length, peerNonce);
+    cbInput.setRange(peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+    cbInput.setRange(peerNonce.length + peerCertDer.length, cbInput.length, localCertDer);
+    final channelBindingHello = Uint8List.fromList(sha256.convert(cbInput).bytes);
+
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
-      _dummyChannelBinding,
+      channelBindingHello,
       msg.peerEd25519Key!,
-      msg.peerCertDer!,
+      peerCertDer,
     );
 
     if (!isValidPoP) {
@@ -322,9 +430,17 @@ class SessionManager {
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    // Same PoP binding: sign over the local cert DER (spec §5.3).
+    // Same cert-based channel binding used in sendSessionHello:
+    // SHA-256(localCertDer || peerCertDer) — consistent with signing side.
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = msg.peerCertDer ?? _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw SessionException(
+          'Cannot compute channel binding for session.accept: peer cert missing for $peerDeviceId');
+    }
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': _protocolVersion,
@@ -336,6 +452,7 @@ class SessionManager {
         'selectedVersion': _protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
         'capabilities': _capabilities,
       }

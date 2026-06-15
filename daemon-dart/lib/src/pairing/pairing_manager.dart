@@ -1,6 +1,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:uuid/uuid.dart';
 import 'package:crypto/crypto.dart';
@@ -45,24 +46,30 @@ class PairingManager {
   /// Handles IPC commands received from the Flutter Client
   Future<void> handleIpcCommand(Map<String, dynamic> command) async {
     final method = command['method'] as String?;
-    final params = command['params'] as Map<String, dynamic>? ?? {};
+    final params = _normalizeParams(command['params']);
 
     switch (method) {
       case 'rift.startPairing':
-        await _startPairing(params['deviceId'] as String);
+        await _startPairing(_requireStringParam(params, 'deviceId'));
         break;
       case 'rift.approvePairing':
         await _approvePairing(
-          params['deviceId'] as String,
-          params['fingerprint'] as String,
+          _requireStringParam(params, 'deviceId'),
+          _requireStringParam(params, 'fingerprint'),
         );
         break;
       case 'rift.rejectPairing':
-        await _rejectPairing(params['deviceId'] as String);
+        await _rejectPairing(_requireStringParam(params, 'deviceId'));
         break;
       case 'rift.unpair':
         // Handle trust revocation (revoked)
-        await _unpair(params['deviceId'] as String);
+        await _unpair(
+          _requireStringParam(params, 'deviceId'),
+          reason: _requireStringParam(params, 'reason'),
+        );
+        break;
+      case 'rift.unblockPeer':
+        await _unblockPeer(_requireStringParam(params, 'deviceId'));
         break;
     }
   }
@@ -78,7 +85,7 @@ class PairingManager {
     // Transition state to pairingPending
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.pairingPending);
 
-    // Start 30s timeout countdown
+    // Start 120s timeout countdown
     _startTimeoutTimer(peerDeviceId);
     _outboundPairings.add(peerDeviceId);
 
@@ -91,11 +98,15 @@ class PairingManager {
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
         'payload': {
-          'expiresInMs': 30000,
+          'expiresInMs': 120000,
           'displayName': 'Rift Device', // TODO: Retrieve from system settings later
         }
       });
-    } catch (e) {
+    } on StateError {
+      _cancelTimeoutTimer(peerDeviceId);
+      await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
+      rethrow;
+    } on SocketException {
       _cancelTimeoutTimer(peerDeviceId);
       await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
       rethrow;
@@ -144,7 +155,13 @@ class PairingManager {
           'persistedAt': now.toIso8601String(),
         }
       });
-    } catch (e) {
+    } on StateError {
+      final currentRecord = await trustStore.getPeer(peerDeviceId);
+      if (currentRecord?.state == TrustState.pairingPending) {
+        _startTimeoutTimer(peerDeviceId);
+      }
+      rethrow;
+    } on SocketException {
       final currentRecord = await trustStore.getPeer(peerDeviceId);
       if (currentRecord?.state == TrustState.pairingPending) {
         _startTimeoutTimer(peerDeviceId);
@@ -194,14 +211,41 @@ class PairingManager {
           'message': 'User rejected pairing',
         }
       });
-    } catch (e) {
+    } on StateError {
+      // Ignore state errors when rejecting (session may already be gone)
+    } on SocketException {
       // Ignore network errors when rejecting
     }
   }
   
-  Future<void> _unpair(String peerDeviceId) async {
+  Future<void> _unblockPeer(String peerDeviceId) async {
     final record = await trustStore.getPeer(peerDeviceId);
-    if (record == null) return;
+    if (record == null) throw StateError('Peer not found in TrustStore');
+    if (record.state != TrustState.blocked) {
+      throw StateError('Invalid state transition from ${record.state.name} to discovered.');
+    }
+
+    await trustStore.transitionState(peerDeviceId, TrustState.blocked, TrustState.discovered);
+
+    onIpcEvent({
+      'jsonrpc': '2.0',
+      'method': 'rift.onTrustChanged',
+      'params': {
+        'deviceId': peerDeviceId,
+        'previousState': TrustState.blocked.toJson(),
+        'newState': TrustState.discovered.toJson(),
+        'reason': 'Peer unblocked by user',
+      }
+    });
+  }
+
+  Future<void> _unpair(String peerDeviceId, {required String reason}) async {
+    final record = await trustStore.getPeer(peerDeviceId);
+    // Issue 2 fix: throw NotFound so the IPC layer returns -32009 instead of
+    // silently reporting success when the peer does not exist in the trust store.
+    if (record == null) {
+      throw StateError('Peer not found in TrustStore: $peerDeviceId');
+    }
     // Transition to revoked
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.revoked);
     sessionManager.disconnectPeer(peerDeviceId);
@@ -213,7 +257,7 @@ class PairingManager {
         'deviceId': peerDeviceId,
         'previousState': record.state.toJson(),
         'newState': TrustState.revoked.toJson(),
-        'reason': 'User requested unpair',
+        'reason': reason,
       }
     });
   }
@@ -238,9 +282,13 @@ class PairingManager {
           sessionManager.disconnectPeer(peerDeviceId);
           return;
         }
+        if (record == null) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
         
         // If blocked or revoked, silently drop the packet
-        if (record!.state == TrustState.blocked || record.state == TrustState.revoked) {
+        if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
           return;
         }
 
@@ -253,6 +301,10 @@ class PairingManager {
         
         _startTimeoutTimer(peerDeviceId);
         
+        // Issue 4 fix: use the peer's actual expiresInMs rather than a hard-coded 30 000.
+        // Clamp to [1 000, 300 000] to guard against pathological values from untrusted peers.
+        final rawExpiry = payload['expiresInMs'] as int;
+        final clampedExpiry = rawExpiry.clamp(1000, 300000);
         final derivedFingerprint = _deriveFingerprint(record.certDer);
         final displayName = payload['displayName'] as String? ?? 'Unknown Device';
 
@@ -264,7 +316,7 @@ class PairingManager {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
             'displayName': displayName,
-            'expiresInMs': 30000, // 30 seconds timeout
+            'expiresInMs': clampedExpiry,
           }
         });
         break;
@@ -369,11 +421,20 @@ class PairingManager {
       );
       await trustStore.upsertPeer(record);
     } else {
-      // Update cert if peer reconnected with a new one
+      // Trusted, blocked, and revoked peers keep their pinned certificate until
+      // an explicit re-pair / trust-state reset occurs.
+      if (record.state == TrustState.trusted ||
+          record.state == TrustState.blocked ||
+          record.state == TrustState.revoked) {
+        return;
+      }
+
+      // Discovered and pairing-pending peers may still refresh their transient
+      // certificate context before trust is finalized.
       final updatedRecord = PeerRecord(
         deviceId: record.deviceId,
         displayName: record.displayName,
-        certDer: certDer, // Cert may change (TLS rotating)
+        certDer: certDer,
         state: record.state,
         pairedAt: record.pairedAt,
         updatedAt: DateTime.now().toUtc(),
@@ -384,8 +445,8 @@ class PairingManager {
 
   void _startTimeoutTimer(String peerDeviceId) {
     _cancelTimeoutTimer(peerDeviceId);
-    _pairingTimeouts[peerDeviceId] = Timer(const Duration(seconds: 30), () {
-      _rejectPairing(peerDeviceId); // Auto reject after 30 seconds
+    _pairingTimeouts[peerDeviceId] = Timer(const Duration(seconds: 120), () {
+      _rejectPairing(peerDeviceId); // Auto reject after 120 seconds
     });
   }
 
@@ -405,6 +466,24 @@ class PairingManager {
     _outboundPairings.clear();
     await _messageSubscription?.cancel();
     await _disconnectSubscription?.cancel();
+  }
+
+  String _requireStringParam(Map<String, dynamic> params, String key) {
+    final value = params[key];
+    if (value is! String || value.isEmpty) {
+      throw ArgumentError.value(value, key, 'must be a non-empty string');
+    }
+    return value;
+  }
+
+  Map<String, dynamic> _normalizeParams(Object? params) {
+    if (params == null) {
+      return <String, dynamic>{};
+    }
+    if (params is Map) {
+      return params.map((key, value) => MapEntry(key.toString(), value));
+    }
+    throw ArgumentError.value(params, 'params', 'must be an object');
   }
 
   String _deriveFingerprint(Uint8List certDer) {

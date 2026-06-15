@@ -15,6 +15,8 @@ class FakeTransport implements Transport {
   final List<Map<String, dynamic>> sentMessages = [];
   final List<String> disconnectedPeers = [];
   bool isDisconnected = false;
+  // Track certs so getPeerCert works once simulateIncomingMessage is called.
+  final Map<String, Uint8List> _peerCerts = {};
 
   @override Stream<TransportMessage> get onMessageReceived => _onMessage.stream;
   @override Stream<String> get onPeerDisconnected => _onDisconnect.stream;
@@ -22,7 +24,7 @@ class FakeTransport implements Transport {
   @override Future<void> stopServer() async {}
   @override Future<String> connectTo(String h, int p, {String? expectedDeviceId}) async => expectedDeviceId ?? 'rift-peer';
   @override void setPeerAuthenticated(String d) {}
-  @override Uint8List? getPeerCert(String peerDeviceId) => null;
+  @override Uint8List? getPeerCert(String peerDeviceId) => _peerCerts[peerDeviceId];
   
   @override void disconnect(String d) {
     isDisconnected = true;
@@ -34,6 +36,7 @@ class FakeTransport implements Transport {
   }
 
   void simulateIncomingMessage(String d, Uint8List cert, Uint8List key, Map<String, dynamic> payload) {
+    _peerCerts[d] = cert; // register so getPeerCert works
     _onMessage.add(TransportMessage(
       peerDeviceId: d,
       payload: Uint8List.fromList(utf8.encode(json.encode(payload))),
@@ -43,12 +46,18 @@ class FakeTransport implements Transport {
   }
 
   void simulateIncomingRawPayload(String d, Uint8List cert, Uint8List key, String payload) {
+    _peerCerts[d] = cert;
     _onMessage.add(TransportMessage(
       peerDeviceId: d,
       payload: Uint8List.fromList(utf8.encode(payload)),
       peerEd25519Key: key,
       peerCertDer: cert,
     ));
+  }
+
+  // Pre-register a cert for a peer before sending session.hello (client-side tests).
+  void registerPeerCert(String peerDeviceId, Uint8List cert) {
+    _peerCerts[peerDeviceId] = cert;
   }
 }
 
@@ -57,11 +66,12 @@ class FakeIdentityManager implements IdentityManager {
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => Uint8List(32);
   @override String get tlsCertificatePem => '';
-  @override Uint8List get tlsCertificateDer => Uint8List(0);
+  // Non-empty local cert DER so SHA-256 channel binding produces a real hash.
+  @override Uint8List get tlsCertificateDer => Uint8List.fromList(List.generate(64, (i) => i & 0xFF));
   @override String get tlsPrivateKeyPem => '';
   @override Future<void> dispose() async {}
   @override Future<void> initialize() async {}
-  @override Future<String> generateIdentityProof(Uint8List c, Uint8List l) async => 'proof';
+  @override Future<String> generateIdentityProof(Uint8List c, Uint8List l) async => 'a' * 128;
 }
 
 void main() {
@@ -96,6 +106,10 @@ void main() {
     });
 
     test('Client-side session.accept invalid PoP is disconnected and throws exception', () async {
+      // Register the peer cert BEFORE calling sendSessionHello so the channel
+      // binding can be computed (mimics the transport having seen the peer TLS cert).
+      transport.registerPeerCert('rift-peer', testCertDer);
+
       // 1. Client initiates connection:
       await sessionManager.sendSessionHello('rift-peer');
       expect(transport.sentMessages.single['messageId'], isNotNull);
@@ -244,6 +258,8 @@ void main() {
     });
 
     test('sendSessionHello rejects duplicate local hello on same connection', () async {
+      // Register peer cert so the first call can compute channel binding.
+      transport.registerPeerCert('rift-peer', testCertDer);
       await sessionManager.sendSessionHello('rift-peer');
 
       await expectLater(
@@ -258,6 +274,180 @@ void main() {
 
       expect(transport.isDisconnected, isTrue);
       expect(transport.sentMessages.single['payload']['failureReason'], 'MalformedMessage');
+    });
+    test('session.hello rejects missing sessionNonce', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': '99999999-9999-4999-8999-999999999999',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+        }
+      });
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('session.hello rejects malformed base64 sessionNonce', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'sessionNonce': 'not-base-64!@#',
+        }
+      });
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'MalformedMessage');
+    });
+
+    test('session.hello rejects invalid length sessionNonce', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(16)), // Only 16 bytes
+        }
+      });
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('session.accept rejects missing identityVerified', () async {
+      // First, simulate sending session.hello to set the local state to expecting session.accept
+      transport.registerPeerCert('rift-peer', testCertDer);
+      await sessionManager.sendSessionHello('rift-peer');
+      transport.sentMessages.clear();
+      transport.isDisconnected = false;
+
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        'type': 'session.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'selectedVersion': '0.1-draft',
+          'deviceId': 'rift-peer',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(32)),
+          // identityVerified is intentionally omitted
+        }
+      });
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('session.accept rejects malformed base64 sessionNonce', () async {
+      transport.registerPeerCert('rift-peer', testCertDer);
+      await sessionManager.sendSessionHello('rift-peer');
+      transport.sentMessages.clear();
+      transport.isDisconnected = false;
+
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        'type': 'session.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'selectedVersion': '0.1-draft',
+          'deviceId': 'rift-peer',
+          'identityVerified': true,
+          'capabilities': const [
+            {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'presence.basic', 'version': 1},
+            {'name': 'operation.lifecycle', 'version': 1},
+            {'name': 'security.event_log', 'version': 1},
+          ],
+          'identityProof': '0' * 128,
+          'sessionNonce': 'not-base-64!@#',
+        }
+      });
+
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'MalformedMessage');
+    });
+
+    test('session.accept rejects invalid length sessionNonce', () async {
+      transport.registerPeerCert('rift-peer', testCertDer);
+      await sessionManager.sendSessionHello('rift-peer');
+      transport.sentMessages.clear();
+      transport.isDisconnected = false;
+
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        'type': 'session.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'selectedVersion': '0.1-draft',
+          'deviceId': 'rift-peer',
+          'identityVerified': true,
+          'capabilities': const [
+            {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'presence.basic', 'version': 1},
+            {'name': 'operation.lifecycle', 'version': 1},
+            {'name': 'security.event_log', 'version': 1},
+          ],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(16)),
+        }
+      });
+
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('rejects requiredExtensions if it is not a list', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'requiredExtensions': 'not-a-list', // Invalid type
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(32)),
+        }
+      });
+      await Future.delayed(Duration.zero);
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
     });
   });
 }
