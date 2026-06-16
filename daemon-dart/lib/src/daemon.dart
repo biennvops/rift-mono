@@ -7,6 +7,7 @@ import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/crypto/base32_utils.dart';
 import 'package:daemon_dart/src/core/rift_constants.dart';
 import 'package:daemon_dart/src/core/rift_exceptions.dart';
+import 'package:daemon_dart/src/core/rpc_utils.dart';
 import 'package:daemon_dart/src/network/discovery_service_impl.dart';
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
@@ -157,7 +158,7 @@ class RiftDaemon {
 
   Future<Map<String, dynamic>> handleJsonRpcRequest(Map<String, dynamic> request) async {
     final method = request['method'] as String?;
-    final params = _normalizeParams(request['params']);
+    final params = RpcUtils.normalizeParams(request['params']);
 
     switch (method) {
       case 'rift.getDeviceInfo':
@@ -175,7 +176,7 @@ class RiftDaemon {
         return {'stopped': true};
       case 'rift.startPairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
-        final peerDeviceId = _requireStringParam(params, 'deviceId');
+        final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
         final record = await _trustStore?.getPeer(peerDeviceId);
         if (record == null) {
           throw const RiftNotFoundException('Peer not found in TrustStore');
@@ -188,15 +189,15 @@ class RiftDaemon {
       case 'rift.approvePairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {
-          'trustedDeviceId': _requireStringParam(params, 'deviceId'),
+          'trustedDeviceId': RpcUtils.requireStringParam(params, 'deviceId'),
           'persistedAt': DateTime.now().toUtc().toIso8601String(),
         };
       case 'rift.rejectPairing':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {'rejected': true};
       case 'rift.revokeTrust':
-        _requireStringParam(params, 'deviceId');
-        _requireStringParam(params, 'reason');
+        RpcUtils.requireStringParam(params, 'deviceId');
+        RpcUtils.requireStringParam(params, 'reason');
         await _pairingManager?.handleIpcCommand({
           'method': 'rift.unpair',
           'params': {
@@ -212,8 +213,11 @@ class RiftDaemon {
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {'unblocked': true};
       case 'rift.connect':
-        final host = _requireStringParam(params, 'host');
-        final port = params['port'] as int;
+        final host = RpcUtils.requireStringParam(params, 'host');
+        final port = params['port'];
+        if (port is! int) {
+          throw ArgumentError.value(port, 'port', 'must be an integer');
+        }
         final peerDeviceId = params['peerDeviceId'] as String?;
         final resolvedPeerDeviceId = await _transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
         await _sessionManager!.sendSessionHello(resolvedPeerDeviceId);
@@ -249,23 +253,6 @@ class RiftDaemon {
     };
   }
 
-  static String _requireStringParam(Map<String, dynamic> params, String key) {
-    final value = params[key];
-    if (value is! String || value.isEmpty) {
-      throw ArgumentError.value(value, key, 'must be a non-empty string');
-    }
-    return value;
-  }
-
-  static Map<String, dynamic> _normalizeParams(Object? params) {
-    if (params == null) {
-      return <String, dynamic>{};
-    }
-    if (params is Map) {
-      return params.map((key, value) => MapEntry(key.toString(), value));
-    }
-    throw ArgumentError.value(params, 'params', 'must be an object');
-  }
 
   static String _formatFingerprint(Uint8List hashBytes) {
     final base32Str = Base32Utils.encode(hashBytes).toUpperCase().replaceAll('=', '');

@@ -12,6 +12,7 @@ import '../interfaces/identity_manager.dart';
 import '../network/session_manager.dart';
 import '../crypto/base32_utils.dart';
 import '../crypto/cert_decoder.dart';
+import '../core/rpc_utils.dart';
 
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
@@ -52,30 +53,30 @@ class PairingManager {
   /// Handles IPC commands received from the Flutter Client
   Future<void> handleIpcCommand(Map<String, dynamic> command) async {
     final method = command['method'] as String?;
-    final params = _normalizeParams(command['params']);
+    final params = RpcUtils.normalizeParams(command['params']);
 
     switch (method) {
       case 'rift.startPairing':
-        await _startPairing(_requireStringParam(params, 'deviceId'));
+        await _startPairing(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
       case 'rift.approvePairing':
         await _approvePairing(
-          _requireStringParam(params, 'deviceId'),
-          _requireStringParam(params, 'fingerprint'),
+          RpcUtils.requireStringParam(params, 'deviceId'),
+          RpcUtils.requireStringParam(params, 'fingerprint'),
         );
         break;
       case 'rift.rejectPairing':
-        await _rejectPairing(_requireStringParam(params, 'deviceId'));
+        await _rejectPairing(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
       case 'rift.unpair':
         // Handle trust revocation (revoked)
         await _unpair(
-          _requireStringParam(params, 'deviceId'),
-          reason: _requireStringParam(params, 'reason'),
+          RpcUtils.requireStringParam(params, 'deviceId'),
+          reason: RpcUtils.requireStringParam(params, 'reason'),
         );
         break;
       case 'rift.unblockPeer':
-        await _unblockPeer(_requireStringParam(params, 'deviceId'));
+        await _unblockPeer(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
     }
   }
@@ -163,13 +164,7 @@ class PairingManager {
           'persistedAt': now.toIso8601String(),
         }
       });
-    } on StateError {
-      final currentRecord = await trustStore.getPeer(peerDeviceId);
-      if (currentRecord?.state == TrustState.pairingPending) {
-        _startTimeoutTimer(peerDeviceId);
-      }
-      rethrow;
-    } on SocketException {
+    } catch (e) {
       final currentRecord = await trustStore.getPeer(peerDeviceId);
       if (currentRecord?.state == TrustState.pairingPending) {
         _startTimeoutTimer(peerDeviceId);
@@ -486,23 +481,6 @@ class PairingManager {
     await _disconnectSubscription?.cancel();
   }
 
-  String _requireStringParam(Map<String, dynamic> params, String key) {
-    final value = params[key];
-    if (value is! String || value.isEmpty) {
-      throw ArgumentError.value(value, key, 'must be a non-empty string');
-    }
-    return value;
-  }
-
-  Map<String, dynamic> _normalizeParams(Object? params) {
-    if (params == null) {
-      return <String, dynamic>{};
-    }
-    if (params is Map) {
-      return params.map((key, value) => MapEntry(key.toString(), value));
-    }
-    throw ArgumentError.value(params, 'params', 'must be an object');
-  }
 
   String _deriveFingerprint(Uint8List certDer) {
     final peerPublicKey = RiftCertDecoder.extractEd25519PublicKeyFromDer(certDer);

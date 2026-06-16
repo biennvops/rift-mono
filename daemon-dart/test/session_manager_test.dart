@@ -105,7 +105,7 @@ void main() {
       await sessionManager.dispose();
     });
 
-    test('Client-side session.accept invalid PoP is disconnected and throws exception', () async {
+    test('Client-side session.accept missing identityVerified fails before PoP validation', () async {
       // Register the peer cert BEFORE calling sendSessionHello so the channel
       // binding can be computed (mimics the transport having seen the peer TLS cert).
       transport.registerPeerCert('rift-peer', testCertDer);

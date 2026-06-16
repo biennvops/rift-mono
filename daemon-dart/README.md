@@ -24,8 +24,9 @@ This is the core background module (daemon) on Android for the Rift project, dev
 - `lib/src/core/`:
   - `rift_constants.dart`: Shared source of truth for protocol version, implementation ID, and capability advertisement metadata used by both handshake and IPC-facing surfaces.
   - `rift_exceptions.dart`: Typed Rift application exceptions carrying explicit JSON-RPC error codes, reducing reliance on brittle string-matching.
+  - `rpc_utils.dart`: Shared JSON-RPC parameter validation helpers used by both the daemon entrypoint and pairing flows to avoid validation drift.
 - `lib/src/pairing/`:
-  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
+  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, restores the timeout on failed outbound approve attempts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
 - `lib/src/storage/`:
   - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
 - `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
@@ -73,7 +74,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:04 +77: All tests passed!`
+- `dart test` -> `00:03 +77: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository currently contains a standalone entrypoint at `bin/daemon.dart`, but it is still a stub intended for future CI/conformance work. There is currently **no checked-in `demo_cert.dart` script** in this package.
