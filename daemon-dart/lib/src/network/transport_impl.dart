@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
+import '../core/rift_exceptions.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
@@ -110,7 +111,7 @@ class TransportImpl implements Transport {
     final peerCert = socket.peerCertificate;
     if (peerCert == null) {
       socket.destroy();
-      throw StateError('Peer certificate missing');
+      throw const RiftAuthenticationFailedException('Peer certificate missing');
     }
 
     try {

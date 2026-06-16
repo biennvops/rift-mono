@@ -57,6 +57,7 @@ class SessionManager {
   //   • effectively preventing cross-session replay of PoP signatures.
   // If dart:io ever exposes tls-exporter this method should be replaced with the
   // RFC 9266 label "EXPORTER-RIFT-Ed25519-PoP" derivation.
+  // TODO(Conformance): This is a strict protocol deviation (see ADR-0002). C# daemon MUST support this fallback for interop until Dart adds RFC 9266 support.
   Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
     final localCertDer = _identityManager.tlsCertificateDer;
     final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);

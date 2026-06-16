@@ -43,8 +43,9 @@ class PairingManager {
       if (record != null && record.state == TrustState.pairingPending) {
         await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, TrustState.discovered);
       }
-    } catch (_) {
-      // Best-effort cleanup only.
+    } catch (e, stackTrace) {
+      // Best-effort cleanup only, but log for observability.
+      print('Warning: Failed to handle peer disconnect for $peerDeviceId: $e\n$stackTrace');
     }
   }
 

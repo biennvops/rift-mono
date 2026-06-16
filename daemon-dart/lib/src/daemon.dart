@@ -211,6 +211,16 @@ class RiftDaemon {
       case 'rift.unblockPeer':
         await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
         return {'unblocked': true};
+      case 'rift.connect':
+        final host = _requireStringParam(params, 'host');
+        final port = params['port'] as int;
+        final peerDeviceId = params['peerDeviceId'] as String?;
+        final resolvedPeerDeviceId = await _transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
+        await _sessionManager!.sendSessionHello(resolvedPeerDeviceId);
+        return {'connected': true, 'deviceId': resolvedPeerDeviceId};
+      case 'rift.stop':
+        await stop();
+        return {'stopped': true};
       default:
         throw UnsupportedError('Method not found: $method');
     }
@@ -226,22 +236,6 @@ class RiftDaemon {
       'id': id,
       'result': result,
     };
-  }
-
-  static int _mapStateErrorToCode(StateError e) {
-    final msg = e.message.toString();
-    if (msg.contains('not found') || msg.contains('not in TrustStore')) {
-      return -32009; // NotFound
-    } else if (msg.contains('blocked or revoked') || msg.contains('not trusted')) {
-      return -32004; // Unauthorized
-    } else if (msg.contains('Invalid state transition') || msg.contains('invalid state')) {
-      return -32008; // InvalidTransition
-    } else if (msg.contains('SecurityError') || msg.contains('Fingerprint mismatch')) {
-      return -32005; // AuthenticationFailed
-    } else if (msg.contains('not initialized') || msg.contains('not established')) {
-      return -32012; // IdentityNotInitialized
-    }
-    return -32603; // InternalError
   }
 
   static Map<String, dynamic> jsonRpcError(Object? id, int code, String message) {
@@ -315,62 +309,22 @@ class RiftDaemon {
                 try {
                   final result = await daemon.handleJsonRpcRequest(message);
                   sendPort.send(RiftDaemon.jsonRpcResult(id, result));
+                  if (message['method'] == 'rift.stop') {
+                    commandPort.close();
+                  }
                 } on RiftException catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, e.code, e.message));
                 } on UnsupportedError catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32601, e.toString()));
                 } on ArgumentError catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32602, e.message?.toString() ?? e.toString()));
-                } on StateError catch (e) {
-                  // Map StateError messages to the correct ipc.md error codes.
-                  final code = RiftDaemon._mapStateErrorToCode(e);
-                  sendPort.send(RiftDaemon.jsonRpcError(id, code, e.message.toString()));
+                } on SocketException catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(id, -32000, 'NetworkError: ${e.message}'));
                 } catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32603, e.toString()));
                 }
-                return;
-              }
-
-              final cmd = message['command'];
-              if (cmd == 'stop') {
-                await daemon.stop();
-                commandPort.close();
-              } else if (cmd == 'connect') {
-                final host = message['host'] as String;
-                final port = message['port'] as int;
-                final peerDeviceId = message['peerDeviceId'] as String?;
-                
-                try {
-                  final resolvedPeerDeviceId =
-                      await daemon._transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
-                  await daemon._sessionManager!.sendSessionHello(resolvedPeerDeviceId);
-                } on StateError catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(null, -32000, e.message));
-                } on SocketException catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(null, -32000, 'PeerUnreachable: ${e.message}'));
-                } catch (e) {
-                  // Re-throw unexpected errors as internal JSON-RPC errors instead
-                  // of hiding them behind a generic ad-hoc map.
-                  sendPort.send(RiftDaemon.jsonRpcError(null, -32603, e.toString()));
-                }
-              } else if (cmd != null && cmd.toString().startsWith('rift.')) {
-                try {
-                  final result = await daemon.handleJsonRpcRequest({
-                    'jsonrpc': '2.0',
-                    'method': cmd,
-                    'params': message,
-                  });
-                  sendPort.send(RiftDaemon.jsonRpcResult(message['id'], result));
-                } on RiftException catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], e.code, e.message));
-                } on ArgumentError catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32602, e.message?.toString() ?? e.toString()));
-                } on StateError catch (e) {
-                  final code = RiftDaemon._mapStateErrorToCode(e);
-                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], code, e.message.toString()));
-                } catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32603, e.toString()));
-                }
+              } else {
+                sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32600, 'Invalid Request'));
               }
             }
           });
