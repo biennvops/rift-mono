@@ -10,10 +10,10 @@ The IPC API is the only interface through which a client application interacts w
 
 The IPC contract is defined independently of transport. In v0.1-draft, two transport bindings exist:
 
-| Platform | Transport | Notes |
-| --- | --- | --- |
-| Windows | Named pipe | Flutter client connects to the riftd Windows Service |
-| Android | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
+| Platform | Transport                | Notes                                                        |
+| -------- | ------------------------ | ------------------------------------------------------------ |
+| Windows  | Named pipe               | Flutter client connects to the riftd Windows Service         |
+| Android  | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
 
 Future transports (Unix domain sockets on macOS/Linux, in-process channels on iOS) require only a new transport binding, not changes to this contract.
 
@@ -37,33 +37,33 @@ Errors use the standard JSON-RPC 2.0 error object: `{ "code": integer, "message"
 
 ### 3.1 Standard JSON-RPC Errors
 
-| Code | Meaning |
-| --- | --- |
-| `-32700` | Parse error (malformed JSON) |
+| Code     | Meaning                                       |
+| -------- | --------------------------------------------- |
+| `-32700` | Parse error (malformed JSON)                  |
 | `-32600` | Invalid request (not a valid JSON-RPC object) |
-| `-32601` | Method not found |
-| `-32602` | Invalid params |
-| `-32603` | Internal error |
+| `-32601` | Method not found                              |
+| `-32602` | Invalid params                                |
+| `-32603` | Internal error                                |
 
 ### 3.2 Application Error Codes
 
 Rift application errors use codes in the range `-32000` to `-32099`:
 
-| Code | Name | Mapped from | Description |
-| --- | --- | --- | --- |
-| `-32000` | `PeerUnreachable` | `PeerUnreachable` | Target peer is not connected |
-| `-32001` | `PeerRejected` | `PeerRejected` | Peer rejected the request |
-| `-32002` | `OfferExpired` | `OfferExpired` | Clipboard offer has expired |
-| `-32003` | `CapabilityUnavailable` | `CapabilityUnavailable` | Required capability not negotiated |
-| `-32004` | `Unauthorized` | `Unauthorized` | Peer is not trusted |
-| `-32005` | `AuthenticationFailed` | `AuthenticationFailed` | Identity verification failed |
-| `-32006` | `HashMismatch` | `HashMismatch` | Clipboard content hash mismatch |
-| `-32007` | `PayloadTooLarge` | `PayloadTooLarge` | Content exceeds frame limit |
-| `-32008` | `InvalidTransition` | `InvalidTransition` | Invalid operation state transition |
-| `-32009` | `NotFound` | — | Requested resource (peer, offer, operation) does not exist |
-| `-32010` | `PolicyDenied` | `PolicyDenied` | Action denied by local policy |
-| `-32011` | `Timeout` | `Timeout` | Operation timed out |
-| `-32012` | `IdentityNotInitialized` | — | Daemon identity not yet generated |
+| Code     | Name                     | Mapped from             | Description                                                |
+| -------- | ------------------------ | ----------------------- | ---------------------------------------------------------- |
+| `-32000` | `PeerUnreachable`        | `PeerUnreachable`       | Target peer is not connected                               |
+| `-32001` | `PeerRejected`           | `PeerRejected`          | Peer rejected the request                                  |
+| `-32002` | `OfferExpired`           | `OfferExpired`          | Clipboard offer has expired                                |
+| `-32003` | `CapabilityUnavailable`  | `CapabilityUnavailable` | Required capability not negotiated                         |
+| `-32004` | `Unauthorized`           | `Unauthorized`          | Peer is not trusted                                        |
+| `-32005` | `AuthenticationFailed`   | `AuthenticationFailed`  | Identity verification failed                               |
+| `-32006` | `HashMismatch`           | `HashMismatch`          | Clipboard content hash mismatch                            |
+| `-32007` | `PayloadTooLarge`        | `PayloadTooLarge`       | Content exceeds frame limit                                |
+| `-32008` | `InvalidTransition`      | `InvalidTransition`     | Invalid operation state transition                         |
+| `-32009` | `NotFound`               | —                       | Requested resource (peer, offer, operation) does not exist |
+| `-32010` | `PolicyDenied`           | `PolicyDenied`          | Action denied by local policy                              |
+| `-32011` | `Timeout`                | `Timeout`               | Operation timed out                                        |
+| `-32012` | `IdentityNotInitialized` | —                       | Daemon identity not yet generated                          |
 
 The `data` field of an error object MAY contain additional diagnostic information. It MUST NOT contain private keys or clipboard content.
 
@@ -146,9 +146,9 @@ Initiates the pairing flow with a discovered peer.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer to pair with |
+| Field      | Type             | Required | Description           |
+| ---------- | ---------------- | -------- | --------------------- |
+| `deviceId` | device ID string | Yes      | The peer to pair with |
 
 **Result:**
 
@@ -168,10 +168,10 @@ Confirms the fingerprint matches and approves the pairing.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer being paired |
-| `fingerprint` | fingerprint string | Yes | The fingerprint the user confirmed |
+| Field         | Type               | Required | Description                        |
+| ------------- | ------------------ | -------- | ---------------------------------- |
+| `deviceId`    | device ID string   | Yes      | The peer being paired              |
+| `fingerprint` | fingerprint string | Yes      | The fingerprint the user confirmed |
 
 **Result:** `{ "trustedDeviceId": "rift-...", "persistedAt": "2026-05-30T10:00:00Z" }`
 
@@ -183,9 +183,9 @@ Rejects an incoming or outgoing pairing.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer whose pairing to reject |
+| Field      | Type             | Required | Description                      |
+| ---------- | ---------------- | -------- | -------------------------------- |
+| `deviceId` | device ID string | Yes      | The peer whose pairing to reject |
 
 **Result:** `{ "rejected": true }`
 
@@ -221,10 +221,10 @@ Revokes trust for a peer. Deletes key material, terminates sessions, permanently
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer to revoke |
-| `reason` | string | Yes | Human-readable reason for audit log |
+| Field      | Type             | Required | Description                         |
+| ---------- | ---------------- | -------- | ----------------------------------- |
+| `deviceId` | device ID string | Yes      | The peer to revoke                  |
+| `reason`   | string           | Yes      | Human-readable reason for audit log |
 
 **Result:** `{ "revoked": true, "revokedAt": "2026-05-30T10:05:00Z" }`
 
@@ -236,9 +236,9 @@ Removes a block on a peer, returning them to `discovered` state.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer to unblock |
+| Field      | Type             | Required | Description         |
+| ---------- | ---------------- | -------- | ------------------- |
+| `deviceId` | device ID string | Yes      | The peer to unblock |
 
 **Result:** `{ "unblocked": true }`
 
@@ -252,12 +252,12 @@ Called by the client to inform the daemon that the local clipboard has changed. 
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `contentType` | string | Yes | MIME type of the clipboard content |
-| `byteSize` | integer | Yes | Size of the raw content in bytes |
-| `sha256` | string | Yes | SHA-256 hash of the raw content (64 lowercase hex) |
-| `contentBase64` | string | Yes | Base64-encoded content for the daemon to hold |
+| Field           | Type    | Required | Description                                        |
+| --------------- | ------- | -------- | -------------------------------------------------- |
+| `contentType`   | string  | Yes      | MIME type of the clipboard content                 |
+| `byteSize`      | integer | Yes      | Size of the raw content in bytes                   |
+| `sha256`        | string  | Yes      | SHA-256 hash of the raw content (64 lowercase hex) |
+| `contentBase64` | string  | Yes      | Base64-encoded content for the daemon to hold      |
 
 **Result:**
 
@@ -300,9 +300,9 @@ Requests the actual clipboard content from a peer for a given offer.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `offerId` | UUIDv4 string | Yes | The offer to fetch |
+| Field     | Type          | Required | Description        |
+| --------- | ------------- | -------- | ------------------ |
+| `offerId` | UUIDv4 string | Yes      | The offer to fetch |
 
 **Result:**
 
@@ -328,9 +328,9 @@ Returns presence information for a specific trusted peer.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `deviceId` | device ID string | Yes | The peer to query |
+| Field      | Type             | Required | Description       |
+| ---------- | ---------------- | -------- | ----------------- |
+| `deviceId` | device ID string | Yes      | The peer to query |
 
 **Result:**
 
@@ -353,10 +353,10 @@ Returns recent operation history.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `limit` | integer | No | Maximum number of operations to return (default: 50) |
-| `offset` | integer | No | Pagination offset (default: 0) |
+| Field    | Type    | Required | Description                                          |
+| -------- | ------- | -------- | ---------------------------------------------------- |
+| `limit`  | integer | No       | Maximum number of operations to return (default: 50) |
+| `offset` | integer | No       | Pagination offset (default: 0)                       |
 
 **Result:**
 
@@ -383,9 +383,9 @@ Returns details for a single operation, including its transition history.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `operationId` | UUIDv4 string | Yes | The operation to retrieve |
+| Field         | Type          | Required | Description               |
+| ------------- | ------------- | -------- | ------------------------- |
+| `operationId` | UUIDv4 string | Yes      | The operation to retrieve |
 
 **Result:**
 
@@ -415,14 +415,14 @@ Queries the security event log with optional filters.
 
 **Params:**
 
-| Field | Type | Required | Description |
-| --- | --- | --- | --- |
-| `eventTypes` | array of strings | No | Filter by event type (Section 13.1 of protocol spec) |
-| `severities` | array of strings | No | Filter by severity level |
-| `peerDeviceId` | device ID string | No | Filter by peer |
-| `since` | RFC 3339 string | No | Events after this timestamp |
-| `limit` | integer | No | Maximum events to return (default: 100) |
-| `offset` | integer | No | Pagination offset (default: 0) |
+| Field          | Type             | Required | Description                                          |
+| -------------- | ---------------- | -------- | ---------------------------------------------------- |
+| `eventTypes`   | array of strings | No       | Filter by event type (Section 13.1 of protocol spec) |
+| `severities`   | array of strings | No       | Filter by severity level                             |
+| `peerDeviceId` | device ID string | No       | Filter by peer                                       |
+| `since`        | RFC 3339 string  | No       | Events after this timestamp                          |
+| `limit`        | integer          | No       | Maximum events to return (default: 100)              |
+| `offset`       | integer          | No       | Pagination offset (default: 0)                       |
 
 **Result:**
 
@@ -448,18 +448,18 @@ Queries the security event log with optional filters.
 
 Notifications are unsolicited daemon → client messages with no `id` field. The client receives them automatically after connecting; no subscription handshake is required in v0.1-draft.
 
-| Method | Payload | Description |
-| --- | --- | --- |
-| `rift.onPeerDiscovered` | `{ "deviceId", "address", "port", "txtRecord" }` | New peer found via mDNS-SD |
-| `rift.onPeerLost` | `{ "deviceId" }` | Peer service record disappeared |
-| `rift.onPairingRequest` | `{ "deviceId", "fingerprint", "displayName?", "expiresInMs" }` | Incoming pairing request from a peer |
-| `rift.onPairingComplete` | `{ "deviceId", "fingerprint", "persistedAt" }` | Pairing completed successfully |
-| `rift.onTrustChanged` | `{ "deviceId", "previousState", "newState", "reason?" }` | Trust state transitioned |
-| `rift.onClipboardOffer` | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }` | New clipboard offer from a peer |
-| `rift.onClipboardExpired` | `{ "offerId" }` | Clipboard offer expired |
-| `rift.onPresenceUpdate` | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }` | Peer presence changed |
-| `rift.onOperationTransition` | `{ "operationId", "operationType", "previousState", "nextState", "failureReason?" }` | Operation state changed |
-| `rift.onSecurityEvent` | `{ "eventId", "eventType", "severity", "peerDeviceId?", "outcome", "failureReason?" }` | Security event logged |
+| Method                       | Payload                                                                                | Description                          |
+| ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
+| `rift.onPeerDiscovered`      | `{ "deviceId", "address", "port", "txtRecord" }`                                       | New peer found via mDNS-SD           |
+| `rift.onPeerLost`            | `{ "deviceId" }`                                                                       | Peer service record disappeared      |
+| `rift.onPairingRequest`      | `{ "deviceId", "fingerprint", "displayName?", "expiresInMs" }`                         | Incoming pairing request from a peer |
+| `rift.onPairingComplete`     | `{ "deviceId", "fingerprint", "persistedAt" }`                                         | Pairing completed successfully       |
+| `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |
+| `rift.onClipboardOffer`      | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }`  | New clipboard offer from a peer      |
+| `rift.onClipboardExpired`    | `{ "offerId" }`                                                                        | Clipboard offer expired              |
+| `rift.onPresenceUpdate`      | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }`                              | Peer presence changed                |
+| `rift.onOperationTransition` | `{ "operationId", "operationType", "previousState", "nextState", "failureReason?" }`   | Operation state changed              |
+| `rift.onSecurityEvent`       | `{ "eventId", "eventType", "severity", "peerDeviceId?", "outcome", "failureReason?" }` | Security event logged                |
 
 ## 6. Security Boundary
 
