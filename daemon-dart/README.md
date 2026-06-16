@@ -28,7 +28,7 @@ This is the core background module (daemon) on Android for the Rift project, dev
   - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
 - `lib/src/storage/`:
   - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
-- `lib/src/daemon.dart`: The master orchestrator bounding all services. Protects against UI-layer memory leaks via `try/catch` IPC port setups.
+- `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
 - `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, and storage. At the time of this README update, `dart test` passes with 77 tests.
 
 ---
@@ -73,7 +73,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:03 +77: All tests passed!`
+- `dart test` -> `00:04 +77: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository currently contains a standalone entrypoint at `bin/daemon.dart`, but it is still a stub intended for future CI/conformance work. There is currently **no checked-in `demo_cert.dart` script** in this package.
@@ -85,7 +85,7 @@ dart run bin/daemon.dart
 This currently prints a placeholder message and exits.
 
 ### 2.5. Flutter Integration Guide (Week 5 / M3)
-The root orchestrator is designed to run inside a background isolate hosted by the Android app. The current implementation exposes a `SendPort`/`ReceivePort` bridge, which operates substantially via JSON-RPC 2.0 complying with `spec/doc/ipc.md` (with some legacy bridge payload shapes remaining in the daemon entrypoint).
+The root orchestrator is designed to run inside a background isolate hosted by the Android app. The current implementation exposes a `SendPort`/`ReceivePort` bridge, centered around a JSON-RPC-focused `rpcPort`, and operates substantially via JSON-RPC 2.0 complying with `spec/doc/ipc.md`.
 
 To integrate this into the Flutter app, the UI must provide a writable `storagePath` and listen for isolate messages:
 ```dart
@@ -94,7 +94,7 @@ import 'package:daemon_dart/daemon_dart.dart';
 
 void startDaemon() async {
   ReceivePort receivePort = ReceivePort();
-  SendPort? commandPort;
+  SendPort? rpcPort;
   final storagePath = '/data/user/0/com.example.app/files/rift';
   
   // Start the background daemon
@@ -107,11 +107,11 @@ void startDaemon() async {
   receivePort.listen((message) {
     if (message is Map<String, dynamic>) {
       if (message['method'] == 'rift.daemonReady') {
-        commandPort = message['params']['commandPort'];
+        rpcPort = message['params']['rpcPort'];
         print('Daemon is running. Device ID: ${message['params']['deviceId']}');
         
         // Example: Standard JSON-RPC command
-        // commandPort?.send({
+        // rpcPort?.send({
         //   'jsonrpc': '2.0',
         //   'method': 'rift.approvePairing',
         //   'id': 1,
@@ -129,7 +129,7 @@ void startDaemon() async {
   });
 }
 ```
-This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon, matching most of the JSON-RPC notification model described in `ipc.md` with some legacy structures intact.
+This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon, matching the current notification/request model described in `ipc.md` while still retaining isolate-specific `SendPort` transport details.
 
 ---
 
@@ -139,4 +139,4 @@ This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the D
   - Implemented session bootstrap, PoP verification, client-side `session.accept` verification, pairing hardening, and trust-store persistence.
   - **Known gaps:** The current code does not yet fully match the normative peer message schema in `protocol.md` and is blocked on proper TLS channel binding because `dart:io` does not expose `tls-exporter` / EMS state.
 - **With `ipc.md`:** 
-  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., largely matching the standard JSON-RPC 2.0 spec mapping error codes (`-32009`, `-32004`, etc.), while retaining minor legacy bridge artifacts.
+  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., and now routes application failures primarily through typed Rift exceptions with standard JSON-RPC 2.0 error codes (`-32009`, `-32004`, etc.).
