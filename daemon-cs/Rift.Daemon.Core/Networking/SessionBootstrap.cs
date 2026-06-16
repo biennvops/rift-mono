@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Net.Security;
+using System.Runtime.InteropServices;
+using System.Security.Authentication.ExtendedProtection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -30,9 +32,7 @@ public class SessionBootstrap
     /// </summary>
     public byte[] GenerateIdentityProof(SslStream sslStream, byte[] myEd25519PubKey, X509Certificate2 myCert)
     {
-        // ExportTlsSecret is not exposed natively by SslStream in this framework version.
-        // Using dummy binding for MVP.
-        byte[] channelBinding = new byte[32];
+        var channelBinding = GetIdentityProofChannelBinding(sslStream);
 
         using var sha256 = SHA256.Create();
         var certHash = sha256.ComputeHash(myCert.GetRawCertData());
@@ -55,8 +55,7 @@ public class SessionBootstrap
     /// </summary>
     public bool VerifyIdentityProof(SslStream sslStream, byte[] peerEd25519PubKey, X509Certificate2 peerCert, byte[] signatureBytes)
     {
-        // ExportTlsSecret is not exposed natively. Using dummy binding for MVP.
-        byte[] channelBinding = new byte[32];
+        var channelBinding = GetIdentityProofChannelBinding(sslStream);
 
         using var sha256 = SHA256.Create();
         var certHash = sha256.ComputeHash(peerCert.GetRawCertData());
@@ -74,10 +73,64 @@ public class SessionBootstrap
         return _identityManager.VerifyEd25519(peerEd25519PubKey, expectedInput, signatureBytes);
     }
 
+    protected virtual byte[] GetIdentityProofChannelBinding(SslStream sslStream)
+    {
+        ArgumentNullException.ThrowIfNull(sslStream);
+
+        try
+        {
+            // TODO: Replace tls-unique with RFC 9266 tls-exporter once SslStream exposes exporter access
+            // and we can verify the TLS 1.2 EMS requirement from spec §5.3.4. Until then, fail closed
+            // if ChannelBindingKind.Unique is unavailable instead of silently signing a replayable proof.
+            var binding = sslStream.TransportContext?.GetChannelBinding(ChannelBindingKind.Unique);
+            if (binding is null)
+            {
+                throw new InvalidOperationException(
+                    "TLS channel binding is unavailable; refusing to generate or verify identity proof without session binding.");
+            }
+
+            try
+            {
+                if (binding.Size != 32)
+                {
+                    throw new InvalidOperationException(
+                        $"Expected 32-byte TLS channel binding but received {binding.Size} bytes.");
+                }
+
+                var channelBinding = new byte[binding.Size];
+                Marshal.Copy(binding.DangerousGetHandle(), channelBinding, 0, channelBinding.Length);
+                return channelBinding;
+            }
+            finally
+            {
+                binding.Dispose();
+            }
+        }
+        catch (Exception ex) when (ex is NotSupportedException or PlatformNotSupportedException)
+        {
+            throw new InvalidOperationException(
+                "TLS channel binding is not supported on this platform/runtime; refusing to generate or verify identity proof without session binding.",
+                ex);
+        }
+    }
+
     /// <summary>
     /// Sends a session.hello message
     /// </summary>
-    public async Task SendSessionHelloAsync(SslStream stream, string peerDeviceId, CancellationToken cancellationToken)
+    public async Task SendSessionHelloAsync(SslStream stream, CancellationToken cancellationToken)
+    {
+        await SendSessionControlMessageAsync(stream, "session.hello", cancellationToken);
+    }
+
+    /// <summary>
+    /// Sends a session.accept message after successful peer identity verification.
+    /// </summary>
+    public async Task SendSessionAcceptAsync(SslStream stream, CancellationToken cancellationToken)
+    {
+        await SendSessionControlMessageAsync(stream, "session.accept", cancellationToken);
+    }
+
+    private async Task SendSessionControlMessageAsync(SslStream stream, string messageType, CancellationToken cancellationToken)
     {
         // For MVP, we will construct the JSON payload.
         // A complete implementation would map these to strong types per the IPC schema.
@@ -105,7 +158,7 @@ public class SessionBootstrap
         var envelope = new
         {
             rift = "0.1-draft",
-            type = "session.hello",
+            type = messageType,
             messageId = Guid.NewGuid().ToString("D"),
             sourceDeviceId = myDeviceId,
             payload = payload

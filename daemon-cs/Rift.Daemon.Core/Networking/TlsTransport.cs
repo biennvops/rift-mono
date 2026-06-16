@@ -6,9 +6,11 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Protocol;
 using Rift.Daemon.Core.Cryptography;
@@ -19,8 +21,11 @@ public sealed class TlsTransport : ITransport, IDisposable
 {
     private readonly ILogger<TlsTransport> _logger;
     private readonly IIdentityManager _identityManager;
+    private readonly SessionBootstrap _sessionBootstrap;
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
+    private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
+    private int _nextBackgroundTaskId;
     
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
 
@@ -28,20 +33,21 @@ public sealed class TlsTransport : ITransport, IDisposable
     {
         _logger = logger;
         _identityManager = identityManager;
+        _sessionBootstrap = new SessionBootstrap(NullLogger<SessionBootstrap>.Instance, identityManager);
     }
 
     public async Task StartListeningAsync(CancellationToken cancellationToken)
     {
-        _listener = new TcpListener(IPAddress.Any, 9140);
+        _listener = new TcpListener(IPAddress.Any, RiftNetworkDefaults.DefaultPort);
         _listener.Start();
-        _logger.LogInformation("TlsTransport listening on port 9140.");
+        _logger.LogInformation("TlsTransport listening on port {Port}.", RiftNetworkDefaults.DefaultPort);
 
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 var client = await _listener.AcceptTcpClientAsync(cancellationToken);
-                _ = HandleInboundConnectionAsync(client, cancellationToken);
+                TrackBackgroundTask(HandleInboundConnectionAsync(client, cancellationToken), "inbound connection");
             }
         }
         catch (OperationCanceledException)
@@ -96,14 +102,13 @@ public sealed class TlsTransport : ITransport, IDisposable
             TargetHost = host, // Could be instance name or anything, we don't validate hostname
             ClientCertificates = new X509CertificateCollection { clientCert },
             EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck,
-            RemoteCertificateValidationCallback = RemoteCertificateValidationCallback
+            CertificateRevocationCheckMode = X509RevocationMode.NoCheck
         };
 
         await sslStream.AuthenticateAsClientAsync(options, cancellationToken);
         
         // Start reading loop in background
-        _ = SessionLoopAsync(sslStream, client, cancellationToken);
+        TrackBackgroundTask(SessionLoopAsync(sslStream, client, cancellationToken), "outbound session loop");
     }
 
     private async Task SessionLoopAsync(SslStream sslStream, TcpClient client, CancellationToken cancellationToken)
@@ -122,26 +127,16 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
 
         var session = new ActiveSession(sslStream, client, deviceId);
-        _sessions.TryAdd(deviceId, session);
 
         try
         {
-            var headerBuffer = new byte[RiftFrame.LengthPrefixBytes];
+            await CompleteSessionHandshakeAsync(session, remoteCert, cancellationToken);
+            _sessions.TryAdd(deviceId, session);
+
             while (!cancellationToken.IsCancellationRequested)
             {
-                int headerRead = await ReadExactAsync(sslStream, headerBuffer, cancellationToken);
-                if (headerRead == 0) break; // EOF
-
-                uint payloadLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(headerBuffer);
-                // Currently setting limit to post-auth max size. We should strictly track auth state.
-                if (payloadLength > RiftFrame.MaxPostAuthSize)
-                {
-                    throw new InvalidOperationException("PayloadTooLarge");
-                }
-
-                var payloadBuffer = new byte[payloadLength];
-                int payloadRead = await ReadExactAsync(sslStream, payloadBuffer, cancellationToken);
-                if (payloadRead == 0) break;
+                var payloadBuffer = await ReadFramePayloadAsync(sslStream, GetMaxInboundFrameSize(session.IsAuthenticated), cancellationToken);
+                if (payloadBuffer is null) break;
 
                 MessageReceived?.Invoke(this, new MessageReceivedEventArgs(deviceId, payloadBuffer));
             }
@@ -155,6 +150,96 @@ public sealed class TlsTransport : ITransport, IDisposable
             _sessions.TryRemove(deviceId, out _);
             session.Dispose();
         }
+    }
+
+    private async Task CompleteSessionHandshakeAsync(ActiveSession session, X509Certificate2 remoteCert, CancellationToken cancellationToken)
+    {
+        await _sessionBootstrap.SendSessionHelloAsync(session.Stream, cancellationToken);
+
+        var helloPayload = await ReadFramePayloadAsync(session.Stream, RiftFrame.MaxPreAuthSize, cancellationToken);
+        if (helloPayload is null)
+        {
+            throw new InvalidOperationException("Peer closed connection before sending session.hello.");
+        }
+
+        VerifySessionControlMessage(session.Stream, remoteCert, helloPayload, expectedType: "session.hello");
+
+        await _sessionBootstrap.SendSessionAcceptAsync(session.Stream, cancellationToken);
+
+        var acceptPayload = await ReadFramePayloadAsync(session.Stream, RiftFrame.MaxPreAuthSize, cancellationToken);
+        if (acceptPayload is null)
+        {
+            throw new InvalidOperationException("Peer closed connection before sending session.accept.");
+        }
+
+        VerifySessionControlMessage(session.Stream, remoteCert, acceptPayload, expectedType: "session.accept");
+        session.IsAuthenticated = true;
+    }
+
+    private void VerifySessionControlMessage(SslStream sslStream, X509Certificate2 remoteCert, byte[] payloadBuffer, string expectedType)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payloadBuffer);
+            var root = document.RootElement;
+
+            var messageType = root.GetProperty("type").GetString();
+            if (!string.Equals(messageType, expectedType, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Expected {expectedType} but received {messageType ?? "<null>"}.");
+            }
+
+            var payload = root.GetProperty("payload");
+            var identityProofHex = payload.GetProperty("identityProof").GetString();
+            if (string.IsNullOrWhiteSpace(identityProofHex))
+            {
+                throw new InvalidOperationException($"{expectedType} did not include identityProof.");
+            }
+
+            var signatureBytes = Convert.FromHexString(identityProofHex);
+            var peerEd25519PubKey = ExtractEd25519PublicKeyFromCertificate(remoteCert);
+            if (!_sessionBootstrap.VerifyIdentityProof(sslStream, peerEd25519PubKey, remoteCert, signatureBytes))
+            {
+                throw new InvalidOperationException($"{expectedType} identityProof verification failed.");
+            }
+        }
+        catch (KeyNotFoundException ex)
+        {
+            throw new InvalidOperationException($"{expectedType} payload was missing required fields.", ex);
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"{expectedType} payload was not valid JSON.", ex);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidOperationException($"{expectedType} identityProof was not valid lowercase hexadecimal.", ex);
+        }
+    }
+
+    private static async Task<byte[]?> ReadFramePayloadAsync(Stream stream, int maxFrameSize, CancellationToken cancellationToken)
+    {
+        var headerBuffer = new byte[RiftFrame.LengthPrefixBytes];
+        int headerRead = await ReadExactAsync(stream, headerBuffer, cancellationToken);
+        if (headerRead == 0)
+        {
+            return null;
+        }
+
+        uint payloadLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(headerBuffer);
+        if (payloadLength > maxFrameSize)
+        {
+            throw new InvalidOperationException("PayloadTooLarge");
+        }
+
+        var payloadBuffer = new byte[payloadLength];
+        int payloadRead = await ReadExactAsync(stream, payloadBuffer, cancellationToken);
+        if (payloadRead == 0)
+        {
+            return null;
+        }
+
+        return payloadBuffer;
     }
 
     private static async Task<int> ReadExactAsync(Stream stream, byte[] buffer, CancellationToken cancellationToken)
@@ -176,7 +261,13 @@ public sealed class TlsTransport : ITransport, IDisposable
         return certificate != null;
     }
 
-    private string ExtractDeviceIdFromCertificate(X509Certificate2 cert)
+    internal static string ExtractDeviceIdFromCertificate(X509Certificate2 cert)
+    {
+        var edKeyBytes = ExtractEd25519PublicKeyFromCertificate(cert);
+        return IdentityManager.DeriveDeviceId(edKeyBytes);
+    }
+
+    internal static byte[] ExtractEd25519PublicKeyFromCertificate(X509Certificate2 cert)
     {
         foreach (var ext in cert.Extensions)
         {
@@ -188,7 +279,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 {
                     var edKeyBytes = new byte[32];
                     Array.Copy(rawData, 2, edKeyBytes, 0, 32);
-                    return IdentityManager.DeriveDeviceId(edKeyBytes);
+                    return edKeyBytes;
                 }
             }
         }
@@ -199,10 +290,10 @@ public sealed class TlsTransport : ITransport, IDisposable
     {
         if (_sessions.TryGetValue(peerDeviceId, out var session))
         {
-            // Limit check
-            if (frameBody.Length > RiftFrame.MaxPostAuthSize)
+            int maxFrameSize = GetMaxOutboundFrameSize(session.IsAuthenticated);
+            if (frameBody.Length > maxFrameSize)
                 throw new InvalidOperationException("PayloadTooLarge");
-                
+                 
             var frame = RiftFrame.Encode(frameBody.Span);
             await session.Stream.WriteAsync(frame, cancellationToken);
         }
@@ -229,6 +320,55 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.Dispose();
         }
         _sessions.Clear();
+        WaitForBackgroundTasks();
+    }
+
+    private void TrackBackgroundTask(Task task, string operation)
+    {
+        int taskId = Interlocked.Increment(ref _nextBackgroundTaskId);
+        _backgroundTasks.TryAdd(taskId, task);
+
+        _ = task.ContinueWith(
+            completedTask =>
+            {
+                _backgroundTasks.TryRemove(taskId, out _);
+
+                if (completedTask.IsFaulted)
+                {
+                    _logger.LogError(completedTask.Exception, "Background task failed during {Operation}.", operation);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void WaitForBackgroundTasks()
+    {
+        var pendingTasks = _backgroundTasks.Values.ToArray();
+        if (pendingTasks.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            Task.WhenAll(pendingTasks).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Observed background task completion during transport disposal.");
+        }
+    }
+
+    internal static int GetMaxInboundFrameSize(bool isAuthenticated)
+    {
+        return isAuthenticated ? RiftFrame.MaxPostAuthSize : RiftFrame.MaxPreAuthSize;
+    }
+
+    internal static int GetMaxOutboundFrameSize(bool isAuthenticated)
+    {
+        return isAuthenticated ? RiftFrame.MaxPostAuthSize : RiftFrame.MaxPreAuthSize;
     }
 
     private class ActiveSession : IDisposable
@@ -236,12 +376,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         public SslStream Stream { get; }
         public TcpClient Client { get; }
         public string DeviceId { get; }
+        public bool IsAuthenticated { get; set; }
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId)
         {
             Stream = stream;
             Client = client;
             DeviceId = deviceId;
+            IsAuthenticated = false;
         }
 
         public void Dispose()
