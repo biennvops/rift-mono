@@ -5,6 +5,7 @@ import 'constants.dart';
 import 'screens/event_log_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
+import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
@@ -83,6 +84,16 @@ class HomeScreen extends StatelessWidget {
                 );
               },
               child: const Text(AppStrings.openEventLog),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const SettingsScreen(),
+                  ),
+                );
+              },
+              child: const Text(AppStrings.openSettings),
             ),
           ],
         ),

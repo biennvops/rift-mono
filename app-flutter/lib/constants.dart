@@ -8,4 +8,6 @@ class AppStrings {
   static const pairingTitle = 'Pairing';
   static const trustedDevicesTitle = 'Trusted Devices';
   static const eventLogTitle = 'Event Log';
+  static const openSettings = 'Open settings/debug';
+  static const settingsTitle = 'Settings / Debug';
 }

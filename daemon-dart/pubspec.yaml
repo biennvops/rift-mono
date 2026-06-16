@@ -4,7 +4,7 @@ version: 1.0.0
 # repository: https://github.com/my_org/my_repo
 
 environment:
-  sdk: ^3.12.0
+  sdk: "^3.12.0"
 
 # Add regular dependencies here.
 dependencies:
@@ -16,7 +16,7 @@ dependencies:
   pointycastle: ^4.0.0
   cryptography: ^2.7.0
   stream_channel: ^2.1.2
-  nsd: ^5.0.1
+  nsd: ^4.0.0
   crypto: ^3.0.7
   uuid: ^4.5.3
 

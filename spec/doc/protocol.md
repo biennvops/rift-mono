@@ -10,15 +10,15 @@ Open ADRs in `spec/decisions/` still record decisions that must later be accepte
 
 The v0.1-draft profile has these normative constants:
 
-| Field | Value |
-| --- | --- |
-| Protocol version | `0.1-draft` |
-| Peer transport framing | 4-byte unsigned big-endian length prefix followed by one UTF-8 JSON object |
-| Maximum encoded JSON frame size | 32 MiB (authenticated peers); 64 KiB (pre-authentication) |
-| Binary clipboard content | Base64 in JSON; payloads exceeding the frame limit fail with `PayloadTooLarge` |
-| Message IDs, operation IDs, offer IDs, event IDs | Lowercase RFC 4122 UUIDv4 strings |
-| Audit timestamps | RFC 3339 UTC |
-| Relative durations and expiries | Integer milliseconds, interpreted with local monotonic timers |
+| Field                                            | Value                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------ |
+| Protocol version                                 | `0.1-draft`                                                                    |
+| Peer transport framing                           | 4-byte unsigned big-endian length prefix followed by one UTF-8 JSON object     |
+| Maximum encoded JSON frame size                  | 32 MiB (authenticated peers); 64 KiB (pre-authentication)                      |
+| Binary clipboard content                         | Base64 in JSON; payloads exceeding the frame limit fail with `PayloadTooLarge` |
+| Message IDs, operation IDs, offer IDs, event IDs | Lowercase RFC 4122 UUIDv4 strings                                              |
+| Audit timestamps                                 | RFC 3339 UTC                                                                   |
+| Relative durations and expiries                  | Integer milliseconds, interpreted with local monotonic timers                  |
 
 Each received frame MUST contain exactly one JSON object. A zero-length frame, invalid UTF-8, invalid JSON, non-object JSON value, negative or overflowing length, or encoded frame exceeding the applicable size limit MUST be rejected with `MalformedMessage` or `PayloadTooLarge` as applicable.
 
@@ -78,13 +78,13 @@ The ECDSA P-256 certificate MUST include exactly one custom non-critical X.509 e
 
 The v0.1-draft extension is:
 
-| Property | Value |
-| --- | --- |
-| OID | `2.25.293029629918709742181702189012786017422` |
-| Criticality | Non-critical |
-| X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes |
-| Expected inner encoding | `04 20 <32 bytes>` (34 bytes: tag `04`, length `20`, value) |
-| Full `extnValue` on wire | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 22 04 20 <32 bytes>` (36 bytes total) |
+| Property                  | Value                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| OID                       | `2.25.293029629918709742181702189012786017422`                                                                                         |
+| Criticality               | Non-critical                                                                                                                           |
+| X.509 `extnValue` payload | DER bytes for an OCTET STRING containing exactly 32 raw Ed25519 public-key bytes                                                       |
+| Expected inner encoding   | `04 20 <32 bytes>` (34 bytes: tag `04`, length `20`, value)                                                                            |
+| Full `extnValue` on wire  | The outer X.509 `extnValue` is itself an OCTET STRING wrapping the inner encoding, producing `04 22 04 20 <32 bytes>` (36 bytes total) |
 
 On receipt, an implementation MUST reject the session if the extension is absent, duplicated, critical, malformed, uses the wrong OID, has the wrong length, is oversized, contains unparsable DER, or does not decode to exactly one 32-byte Ed25519 public key. The Dart implementation's custom certificate parser MUST fail closed for all parse failures.
 
@@ -108,12 +108,12 @@ The service domain is `local.`.
 
 The following TXT record key-value pairs are defined for v0.1-draft:
 
-| Key | Required | Value | Notes |
-| --- | --- | --- | --- |
-| `minV` | Yes | Protocol version string | Lowest version this daemon supports, e.g. `0.1-draft` |
-| `maxV` | Yes | Protocol version string | Highest version this daemon supports, e.g. `0.1-draft` |
-| `did` | No | Device ID string | Non-authoritative hint; MUST be verified post-TLS. Implementations SHOULD NOT include this field by default to limit pre-authentication identity disclosure; it MAY be included when explicit peer recognition before connection is required |
-| `fp` | No | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust. Implementations SHOULD NOT include this field by default for the same privacy reasons as `did` |
+| Key    | Required | Value                                   | Notes                                                                                                                                                                                                                                        |
+| ------ | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minV` | Yes      | Protocol version string                 | Lowest version this daemon supports, e.g. `0.1-draft`                                                                                                                                                                                        |
+| `maxV` | Yes      | Protocol version string                 | Highest version this daemon supports, e.g. `0.1-draft`                                                                                                                                                                                       |
+| `did`  | No       | Device ID string                        | Non-authoritative hint; MUST be verified post-TLS. Implementations SHOULD NOT include this field by default to limit pre-authentication identity disclosure; it MAY be included when explicit peer recognition before connection is required |
+| `fp`   | No       | Fingerprint prefix (first 8 characters) | Optional UI recognition hint; MUST NOT be relied on for trust. Implementations SHOULD NOT include this field by default for the same privacy reasons as `did`                                                                                |
 
 All TXT record values are UTF-8 strings. The total TXT record payload MUST NOT exceed 1300 bytes. Unknown TXT record keys MUST be ignored by receivers. TXT records MUST NOT contain: device display names, capability lists, trust state information, clipboard metadata, or any content exchanged only over authenticated channels.
 
@@ -195,17 +195,17 @@ When a TLS 1.2 session is used (i.e., `tls-exporter` is unavailable and `tls-uni
 
 Every peer message is one JSON object using the common envelope:
 
-| Field | Required | Type | Notes |
-| --- | --- | --- | --- |
-| `rift` | Yes | string | Protocol version for this message, `0.1-draft` in this profile |
-| `type` | Yes | string | Message type from Section 7 |
-| `messageId` | Yes | UUIDv4 string | Unique message identifier |
-| `sourceDeviceId` | Yes | device ID string | MUST match the session's Ed25519 identity |
-| `payload` | Yes | object | Type-specific payload |
-| `destinationDeviceId` | No | device ID string | MUST match the receiving device when present |
-| `operationId` | No | UUIDv4 string | Required for operation-scoped messages |
-| `timestamp` | No | RFC 3339 UTC string | Audit timestamp only |
-| `requiredExtensions` | No | array of strings | Unknown values cause `ProtocolError` |
+| Field                 | Required | Type                | Notes                                                          |
+| --------------------- | -------- | ------------------- | -------------------------------------------------------------- |
+| `rift`                | Yes      | string              | Protocol version for this message, `0.1-draft` in this profile |
+| `type`                | Yes      | string              | Message type from Section 7                                    |
+| `messageId`           | Yes      | UUIDv4 string       | Unique message identifier                                      |
+| `sourceDeviceId`      | Yes      | device ID string    | MUST match the session's Ed25519 identity                      |
+| `payload`             | Yes      | object              | Type-specific payload                                          |
+| `destinationDeviceId` | No       | device ID string    | MUST match the receiving device when present                   |
+| `operationId`         | No       | UUIDv4 string       | Required for operation-scoped messages                         |
+| `timestamp`           | No       | RFC 3339 UTC string | Audit timestamp only                                           |
+| `requiredExtensions`  | No       | array of strings    | Unknown values cause `ProtocolError`                           |
 
 Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` MUST cause `ProtocolError`. Implementations MUST reject missing required fields, wrong JSON types, malformed identifiers, or envelope/device identity mismatches with `MalformedMessage`, `Unauthorized`, or `ProtocolError` as applicable.
 
@@ -293,15 +293,15 @@ Revocation messages are advisory. Local revocation state is authoritative and MU
 
 Trust is local state. Each daemon independently decides whether a peer is discovered, pending pairing, trusted, blocked, or revoked. Implementations MUST persist trust state durably before relying on it for protected operations.
 
-| From | To | Trigger | Requirements |
-| --- | --- | --- | --- |
-| `discovered` | `pairing_pending` | Local pairing start or accepted remote pairing start | TLS established and Ed25519 extension parsed |
-| `pairing_pending` | `trusted` | Pairing completion | Identity verification passed, matching fingerprint confirmed on both sides, durable trust persisted |
-| `pairing_pending` | `discovered` | Reject, timeout, or failed verification | No trusted entry persisted; failure logged |
-| `trusted` | `blocked` | Local block | Active sessions terminated; block recorded |
-| `trusted` | `revoked` | Local revocation | Active trust removed; negative-trust evidence retained |
-| `blocked` | `discovered` | Explicit local unblock | Prior block evidence remains auditable |
-| `revoked` | `discovered` | Explicit local reset followed by full new pairing flow | Silent re-trust forbidden |
+| From              | To                | Trigger                                                | Requirements                                                                                        |
+| ----------------- | ----------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `discovered`      | `pairing_pending` | Local pairing start or accepted remote pairing start   | TLS established and Ed25519 extension parsed                                                        |
+| `pairing_pending` | `trusted`         | Pairing completion                                     | Identity verification passed, matching fingerprint confirmed on both sides, durable trust persisted |
+| `pairing_pending` | `discovered`      | Reject, timeout, or failed verification                | No trusted entry persisted; failure logged                                                          |
+| `trusted`         | `blocked`         | Local block                                            | Active sessions terminated; block recorded                                                          |
+| `trusted`         | `revoked`         | Local revocation                                       | Active trust removed; negative-trust evidence retained                                              |
+| `blocked`         | `discovered`      | Explicit local unblock                                 | Prior block evidence remains auditable                                                              |
+| `revoked`         | `discovered`      | Explicit local reset followed by full new pairing flow | Silent re-trust forbidden                                                                           |
 
 Only `trusted` peers may perform protected operations. `discovered` and `pairing_pending` peers may exchange only the minimum messages required for authentication and pairing.
 
@@ -321,11 +321,11 @@ The daemon exposes negotiated capabilities and all protocol functionality to loc
 
 Each capability is represented as a JSON object:
 
-| Field | Required | Type | Notes |
-| --- | --- | --- | --- |
-| `name` | Yes | string | Dot-separated lowercase identifier, e.g. `clipboard.offer_fetch` |
-| `version` | Yes | integer | Positive integer, monotonically increasing across revisions |
-| `policyFlags` | No | array of strings | Policy constraints required to use this capability; empty array or absent if none |
+| Field         | Required | Type             | Notes                                                                             |
+| ------------- | -------- | ---------------- | --------------------------------------------------------------------------------- |
+| `name`        | Yes      | string           | Dot-separated lowercase identifier, e.g. `clipboard.offer_fetch`                  |
+| `version`     | Yes      | integer          | Positive integer, monotonically increasing across revisions                       |
+| `policyFlags` | No       | array of strings | Policy constraints required to use this capability; empty array or absent if none |
 
 Capability names use a `<domain>.<feature>` convention. The v0.1-draft vocabulary is a closed set; implementations MUST NOT advertise capability names outside this set in v0.1-draft.
 
@@ -350,12 +350,12 @@ If either peer does not send `capability.advertise` within a reasonable timeout 
 
 The following capabilities are REQUIRED for a conformant v0.1-draft session:
 
-| Name | Version | Minimum | Description |
-| --- | --- | --- | --- |
-| `clipboard.offer_fetch` | 1 | 1 | Clipboard metadata offer and authenticated content fetch |
-| `presence.basic` | 1 | 1 | Online/offline status and last-seen tracking |
-| `operation.lifecycle` | 1 | 1 | Operation state machine transitions |
-| `security.event_log` | 1 | 1 | Security event logging for audit |
+| Name                    | Version | Minimum | Description                                              |
+| ----------------------- | ------- | ------- | -------------------------------------------------------- |
+| `clipboard.offer_fetch` | 1       | 1       | Clipboard metadata offer and authenticated content fetch |
+| `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
+| `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
+| `security.event_log`    | 1       | 1       | Security event logging for audit                         |
 
 All four capabilities MUST be present in the selected set for a v0.1-draft session to proceed to protected operations. If any required capability is absent after negotiation, the session MAY remain open for diagnostic purposes but MUST NOT permit clipboard, presence, or operation messages.
 
@@ -369,15 +369,15 @@ Unknown capability names in a peer's advertisement MUST be silently ignored. Thi
 
 All cross-device actions flow through this transition table:
 
-| From | To | Rule |
-| --- | --- | --- |
-| `Created` | `Pending` | Operation accepted locally |
-| `Pending` | `Dispatched` | Message queued or sent to peer |
-| `Dispatched` | `Active` | Peer acknowledges or starts work |
-| `Active` | `Done` | Work completed successfully |
-| `Created`, `Pending`, `Dispatched`, `Active` | `Failed` | Failure reason recorded |
-| `Pending`, `Dispatched`, `Active` | `Expired` | Monotonic expiry elapsed |
-| `Done`, `Failed`, `Expired` | none | Terminal states have no outgoing transitions |
+| From                                         | To           | Rule                                         |
+| -------------------------------------------- | ------------ | -------------------------------------------- |
+| `Created`                                    | `Pending`    | Operation accepted locally                   |
+| `Pending`                                    | `Dispatched` | Message queued or sent to peer               |
+| `Dispatched`                                 | `Active`     | Peer acknowledges or starts work             |
+| `Active`                                     | `Done`       | Work completed successfully                  |
+| `Created`, `Pending`, `Dispatched`, `Active` | `Failed`     | Failure reason recorded                      |
+| `Pending`, `Dispatched`, `Active`            | `Expired`    | Monotonic expiry elapsed                     |
+| `Done`, `Failed`, `Expired`                  | none         | Terminal states have no outgoing transitions |
 
 Duplicate reports for the same terminal state are idempotent. Conflicting terminal reports MUST be rejected with `InvalidTransition` and logged. Each transition MUST record the operation ID, source device ID, destination device ID, operation type, previous state, next state, timestamp or monotonic-relative timing data, and typed failure reason when applicable.
 
@@ -407,45 +407,45 @@ Security tests for the KDE Connect vulnerability classes MUST assert both networ
 
 The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT emit event types outside this vocabulary in v0.1-draft.
 
-| `eventType` | Description |
-| --- | --- |
-| `pairing.attempted` | Pairing flow initiated (local or remote) |
-| `pairing.completed` | Pairing succeeded; trust persisted |
-| `pairing.rejected` | Pairing rejected by either side |
-| `trust.transitioned` | Trust state changed (any transition from Section 8) |
-| `trust.revoked` | Peer trust revoked; sessions terminated |
-| `auth.failed` | Authentication or identity verification failed |
-| `auth.identity_proof_failed` | Ed25519 Proof of Possession verification failed (Section 5.3) |
-| `connection.established` | Mutual TLS session established with a peer |
-| `connection.rejected` | TLS session rejected (untrusted, blocked, or revoked peer) |
-| `connection.lost` | TLS session lost unexpectedly |
-| `certificate.rotated` | Peer certificate changed while Ed25519 identity unchanged |
-| `capability.negotiated` | Capability set computed for a session |
-| `operation.transitioned` | Operation state changed (any transition from Section 10) |
-| `clipboard.offered` | Clipboard offer broadcast to peers |
-| `clipboard.fetched` | Clipboard content fetched by or from a peer |
-| `clipboard.expired` | Clipboard offer expired without fetch |
-| `clipboard.offer_replay` | Clipboard offer rejected due to out-of-order or replayed sequence number |
-| `message.malformed` | Received peer message failed envelope or schema validation |
-| `certificate.malformed` | Peer certificate failed extension parsing |
-| `policy.denied` | Action denied by local policy |
+| `eventType`                  | Description                                                              |
+| ---------------------------- | ------------------------------------------------------------------------ |
+| `pairing.attempted`          | Pairing flow initiated (local or remote)                                 |
+| `pairing.completed`          | Pairing succeeded; trust persisted                                       |
+| `pairing.rejected`           | Pairing rejected by either side                                          |
+| `trust.transitioned`         | Trust state changed (any transition from Section 8)                      |
+| `trust.revoked`              | Peer trust revoked; sessions terminated                                  |
+| `auth.failed`                | Authentication or identity verification failed                           |
+| `auth.identity_proof_failed` | Ed25519 Proof of Possession verification failed (Section 5.3)            |
+| `connection.established`     | Mutual TLS session established with a peer                               |
+| `connection.rejected`        | TLS session rejected (untrusted, blocked, or revoked peer)               |
+| `connection.lost`            | TLS session lost unexpectedly                                            |
+| `certificate.rotated`        | Peer certificate changed while Ed25519 identity unchanged                |
+| `capability.negotiated`      | Capability set computed for a session                                    |
+| `operation.transitioned`     | Operation state changed (any transition from Section 10)                 |
+| `clipboard.offered`          | Clipboard offer broadcast to peers                                       |
+| `clipboard.fetched`          | Clipboard content fetched by or from a peer                              |
+| `clipboard.expired`          | Clipboard offer expired without fetch                                    |
+| `clipboard.offer_replay`     | Clipboard offer rejected due to out-of-order or replayed sequence number |
+| `message.malformed`          | Received peer message failed envelope or schema validation               |
+| `certificate.malformed`      | Peer certificate failed extension parsing                                |
+| `policy.denied`              | Action denied by local policy                                            |
 
 ### 13.2 Severity Levels
 
-| `severity` | Usage |
-| --- | --- |
-| `info` | Normal protocol events: connection established, pairing completed, capability negotiated, clipboard offered/fetched |
-| `warning` | Non-fatal anomalies: certificate rotation, capability version downgrade, offer expiry |
-| `error` | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed |
+| `severity` | Usage                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `info`     | Normal protocol events: connection established, pairing completed, capability negotiated, clipboard offered/fetched      |
+| `warning`  | Non-fatal anomalies: certificate rotation, capability version downgrade, offer expiry                                    |
+| `error`    | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed                              |
 | `critical` | Security violations: authentication failure, identity mismatch, revoked peer reconnection attempt, malformed certificate |
 
 ### 13.3 Outcome Values
 
-| `outcome` | Meaning |
-| --- | --- |
-| `success` | Event completed normally |
+| `outcome` | Meaning                                                                            |
+| --------- | ---------------------------------------------------------------------------------- |
+| `success` | Event completed normally                                                           |
 | `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
-| `denied` | Event blocked by local policy; `failureReason` MUST be present |
+| `denied`  | Event blocked by local policy; `failureReason` MUST be present                     |
 
 ## 14. Failure Reasons
 
@@ -477,14 +477,14 @@ The protocol requires deterministic test vectors for both daemon implementations
 
 Test input: the Ed25519 public key from RFC 8032 §7.1 Test Vector 1.
 
-| Step | Value |
-| --- | --- |
-| Ed25519 public key (32 bytes, hex) | `d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3` |
-| SHA-256 of public key (32 bytes, hex) | `13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7` |
-| Base32 (RFC 4648, lowercase, padding stripped) | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq` |
-| First 32 characters | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
-| Device ID | `rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq` |
-| Display fingerprint | `CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ` |
+| Step                                           | Value                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| Ed25519 public key (32 bytes, hex)             | `d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3` |
+| SHA-256 of public key (32 bytes, hex)          | `13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7` |
+| Base32 (RFC 4648, lowercase, padding stripped) | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfqm76h62zeqzckswanehtq`             |
+| First 32 characters                            | `cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq`                                 |
+| Device ID                                      | `rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq`                            |
+| Display fingerprint                            | `CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ`                          |
 
 Both implementations MUST produce identical device ID and fingerprint values from this public key.
 
@@ -527,13 +527,13 @@ Both implementations MUST produce byte-identical extension DER for a given Ed255
 
 ### 15.3 Clipboard Hash
 
-| Field | Value |
-| --- | --- |
-| Content (UTF-8 string) | `hello` |
-| Content (raw bytes, hex) | `68656c6c6f` |
-| Byte size | `5` |
+| Field                                 | Value                                                              |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| Content (UTF-8 string)                | `hello`                                                            |
+| Content (raw bytes, hex)              | `68656c6c6f`                                                       |
+| Byte size                             | `5`                                                                |
 | SHA-256 (64 lowercase hex characters) | `2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824` |
-| Base64 of content | `aGVsbG8=` |
+| Base64 of content                     | `aGVsbG8=`                                                         |
 
 A receiver MUST verify both `byteSize` and `sha256` match after decoding `contentBase64`.
 
@@ -604,16 +604,16 @@ Deterministic certificate vector bytes are future conformance material to be gen
 
 A conformant Rift ECDSA P-256 self-signed certificate MUST have the following structure:
 
-| Field | Requirement | Notes |
-| --- | --- | --- |
-| Version | v3 (integer `2`) | Required to carry extensions |
-| Serial number | Implementation-chosen | No normative value; MUST be unique per device |
-| Signature algorithm | `ecdsa-with-SHA256` (OID `1.2.840.10045.4.3.2`) | ECDSA P-256 with SHA-256 |
-| Issuer | Same as Subject | Self-signed |
-| Validity | Implementation-chosen | See Section 3.4 for renewal policy |
-| Subject | Implementation-chosen | No normative format required |
-| Subject public key algorithm | `id-ecPublicKey` (OID `1.2.840.10045.2.1`) with `secp256r1` | ECDSA P-256 |
-| Extensions | Custom Ed25519 extension (Section 3.5) | MUST be present; MUST NOT be critical |
+| Field                        | Requirement                                                 | Notes                                         |
+| ---------------------------- | ----------------------------------------------------------- | --------------------------------------------- |
+| Version                      | v3 (integer `2`)                                            | Required to carry extensions                  |
+| Serial number                | Implementation-chosen                                       | No normative value; MUST be unique per device |
+| Signature algorithm          | `ecdsa-with-SHA256` (OID `1.2.840.10045.4.3.2`)             | ECDSA P-256 with SHA-256                      |
+| Issuer                       | Same as Subject                                             | Self-signed                                   |
+| Validity                     | Implementation-chosen                                       | See Section 3.4 for renewal policy            |
+| Subject                      | Implementation-chosen                                       | No normative format required                  |
+| Subject public key algorithm | `id-ecPublicKey` (OID `1.2.840.10045.2.1`) with `secp256r1` | ECDSA P-256                                   |
+| Extensions                   | Custom Ed25519 extension (Section 3.5)                      | MUST be present; MUST NOT be critical         |
 
 ### B.2 Extension Placement
 
@@ -638,18 +638,18 @@ Generated test vectors for these rejection classes are maintained in `spec/vecto
 
 Both implementations MUST reject the TLS session with `AuthenticationFailed` for each of the following malformed-input classes. Security tests (Section 13, `certificate.malformed` event type) MUST cover every class.
 
-| # | Malformed Input Class | Expected Behavior |
-| --- | --- | --- |
-| 1 | Extension absent | Reject: no Ed25519 identity bound |
-| 2 | Extension duplicated (two extensions with the Rift OID) | Reject: ambiguous identity |
-| 3 | Extension marked critical | Reject: violates spec requirement of non-critical |
-| 4 | Wrong OID (valid extension structure but different OID) | Reject: extension not found |
-| 5 | Inner OCTET STRING too short (fewer than 32 key bytes) | Reject: invalid key length |
-| 6 | Inner OCTET STRING too long (more than 32 key bytes) | Reject: invalid key length |
-| 7 | Wrong DER tag (e.g. `03` BIT STRING instead of `04` OCTET STRING) | Reject: unparsable value |
-| 8 | Truncated DER (tag and length present but value bytes missing) | Reject: incomplete encoding |
-| 9 | Oversized extnValue (length field exceeds remaining certificate bytes) | Reject: malformed DER |
-| 10 | Valid structure but Ed25519 key does not match trust store | Reject: untrusted identity (see Section 5.2) |
+| #   | Malformed Input Class                                                  | Expected Behavior                                 |
+| --- | ---------------------------------------------------------------------- | ------------------------------------------------- |
+| 1   | Extension absent                                                       | Reject: no Ed25519 identity bound                 |
+| 2   | Extension duplicated (two extensions with the Rift OID)                | Reject: ambiguous identity                        |
+| 3   | Extension marked critical                                              | Reject: violates spec requirement of non-critical |
+| 4   | Wrong OID (valid extension structure but different OID)                | Reject: extension not found                       |
+| 5   | Inner OCTET STRING too short (fewer than 32 key bytes)                 | Reject: invalid key length                        |
+| 6   | Inner OCTET STRING too long (more than 32 key bytes)                   | Reject: invalid key length                        |
+| 7   | Wrong DER tag (e.g. `03` BIT STRING instead of `04` OCTET STRING)      | Reject: unparsable value                          |
+| 8   | Truncated DER (tag and length present but value bytes missing)         | Reject: incomplete encoding                       |
+| 9   | Oversized extnValue (length field exceeds remaining certificate bytes) | Reject: malformed DER                             |
+| 10  | Valid structure but Ed25519 key does not match trust store             | Reject: untrusted identity (see Section 5.2)      |
 
 For all classes 1–9, the parser MUST fail closed without crashing, leaking memory, or accepting the peer. Class 10 is a trust-layer rejection that occurs after successful parsing.
 
@@ -729,7 +729,10 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
   "type": "session.reject",
   "messageId": "018f2f9a-8b7c-4a4b-9c0d-666666666666",
   "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
-  "payload": { "failureReason": "Unauthorized", "message": "peer identity is revoked" }
+  "payload": {
+    "failureReason": "Unauthorized",
+    "message": "peer identity is revoked"
+  }
 }
 ```
 
@@ -741,6 +744,9 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
   "type": "error",
   "messageId": "018f2f9a-8b7c-4a4b-9c0d-777777777777",
   "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
-  "payload": { "failureReason": "AuthenticationFailed", "message": "device ID does not match TLS-bound Ed25519 identity" }
+  "payload": {
+    "failureReason": "AuthenticationFailed",
+    "message": "device ID does not match TLS-bound Ed25519 identity"
+  }
 }
 ```
