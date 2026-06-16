@@ -300,9 +300,9 @@ class RiftDaemon {
         // Forward uncaught isolate exceptions to the Flutter UI layer.
         Isolate.current.addErrorListener(sendPort);
 
-        final commandPort = ReceivePort();
+        final rpcPort = ReceivePort();
         try {
-          commandPort.listen((message) async {
+          rpcPort.listen((message) async {
             if (message is Map<String, dynamic>) {
               if (message['jsonrpc'] == '2.0' && message['method'] is String) {
                 final id = message['id'];
@@ -310,7 +310,7 @@ class RiftDaemon {
                   final result = await daemon.handleJsonRpcRequest(message);
                   sendPort.send(RiftDaemon.jsonRpcResult(id, result));
                   if (message['method'] == 'rift.stop') {
-                    commandPort.close();
+                    rpcPort.close();
                   }
                 } on RiftException catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, e.code, e.message));
@@ -358,11 +358,11 @@ class RiftDaemon {
             'params': {
               'status': 'running',
               'deviceId': daemon._identityManager!.deviceId,
-              'commandPort': commandPort.sendPort,
+              'rpcPort': rpcPort.sendPort,
             },
           });
         } on SocketException catch (e) {
-          commandPort.close();
+          rpcPort.close();
           sendPort.send({
             'jsonrpc': '2.0',
             'method': 'rift.daemonError',
@@ -370,7 +370,7 @@ class RiftDaemon {
           });
         } catch (e) {
           // Close port to avoid ReceivePort leak if IPC setup fails.
-          commandPort.close();
+          rpcPort.close();
           sendPort.send({
             'jsonrpc': '2.0',
             'method': 'rift.daemonError',
