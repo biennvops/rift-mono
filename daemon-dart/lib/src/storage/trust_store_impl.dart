@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:sqlite3/sqlite3.dart';
+import '../core/rift_exceptions.dart';
 import '../interfaces/trust_store.dart';
 
 class TrustStoreImpl implements TrustStore {
@@ -43,7 +44,10 @@ class TrustStoreImpl implements TrustStore {
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         display_name = excluded.display_name,
-        cert_der = excluded.cert_der,
+        cert_der = CASE
+          WHEN peers.state IN ('trusted', 'blocked', 'revoked') THEN peers.cert_der
+          ELSE excluded.cert_der
+        END,
         updated_at = excluded.updated_at;
     ''');
     
@@ -108,7 +112,7 @@ class TrustStoreImpl implements TrustStore {
     };
 
     if (!isValid) {
-      throw StateError('Invalid state transition from ${from.name} to ${to.name}.');
+      throw RiftInvalidTransitionException('Invalid state transition from ${from.name} to ${to.name}.');
     }
     
     final now = DateTime.now().toUtc().millisecondsSinceEpoch;
@@ -148,7 +152,9 @@ class TrustStoreImpl implements TrustStore {
     // Trusted, Blocked, or Revoked peers MUST NOT be deleted.
     final record = await getPeer(deviceId);
     if (record != null && record.state != TrustState.discovered) {
-      throw StateError('SecurityError: Cannot hard-delete peer in state ${record.state.name}. Must preserve trust evidence.');
+      throw RiftAuthenticationFailedException(
+        'SecurityError: Cannot hard-delete peer in state ${record.state.name}. Must preserve trust evidence.',
+      );
     }
 
     final stmt = _db!.prepare('DELETE FROM peers WHERE device_id = ? AND state = ?');
@@ -177,7 +183,9 @@ class TrustStoreImpl implements TrustStore {
   
   void _ensureInitialized() {
     if (_db == null) {
-      throw StateError('TrustStore has not been initialized. Call initialize() first.');
+      throw const RiftIdentityNotInitializedException(
+        'TrustStore has not been initialized. Call initialize() first.',
+      );
     }
   }
   

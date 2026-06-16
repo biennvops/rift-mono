@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/rift_constants.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/pop_manager.dart';
@@ -33,15 +34,6 @@ class SessionException implements Exception {
 
 /// Orchestrates the Rift session lifecycle and enforces Risk 3 & Risk 6 mitigations.
 class SessionManager {
-  static const String _protocolVersion = '0.1-draft';
-  static const String _implementationId = 'riftd-dart/0.1.0';
-  static const List<Map<String, dynamic>> _capabilities = [
-    {'name': 'clipboard.offer_fetch', 'version': 1},
-    {'name': 'presence.basic', 'version': 1},
-    {'name': 'operation.lifecycle', 'version': 1},
-    {'name': 'security.event_log', 'version': 1},
-  ];
-
   final Transport _transport;
   final IdentityManager _identityManager;
   final Future<bool> Function(String peerDeviceId)? _isPeerAllowed;
@@ -119,16 +111,16 @@ class SessionManager {
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
-      'rift': _protocolVersion,
+      'rift': RiftConstants.protocolVersion,
       'messageId': const Uuid().v4(),
       'type': 'session.hello',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
-        'supportedVersions': [_protocolVersion],
+        'supportedVersions': [RiftConstants.protocolVersion],
         'deviceId': _identityManager.deviceId,
-        'implementationId': _implementationId,
-        'capabilities': _capabilities,
+        'implementationId': RiftConstants.implementationId,
+        'capabilities': RiftConstants.capabilities,
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
@@ -167,7 +159,7 @@ class SessionManager {
     }
 
     final protocolVersion = jsonMap['rift'] as String?;
-    if (protocolVersion != _protocolVersion) {
+    if (protocolVersion != RiftConstants.protocolVersion) {
       await _rejectSession(msg.peerDeviceId, 'VersionMismatch', 'Unsupported protocol version');
       return;
     }
@@ -220,7 +212,7 @@ class SessionManager {
         final capabilities = payload?['capabilities'] as List?;
         final identityVerified = payload?['identityVerified'];
         final sessionNonceStr = payload?['sessionNonce'] as String?;
-        if (selectedVersion != _protocolVersion) {
+        if (selectedVersion != RiftConstants.protocolVersion) {
           await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
           return;
         }
@@ -311,7 +303,7 @@ class SessionManager {
 
   Future<void> _rejectSession(String peerDeviceId, String failureReason, String message) async {
     final payload = {
-      'rift': _protocolVersion,
+      'rift': RiftConstants.protocolVersion,
       'type': 'session.reject',
       'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
@@ -349,7 +341,7 @@ class SessionManager {
 
     final supportedVersions = payload['supportedVersions'];
     final payloadDeviceId = payload['deviceId'] as String?;
-    if (supportedVersions is! List || !supportedVersions.contains(_protocolVersion)) {
+    if (supportedVersions is! List || !supportedVersions.contains(RiftConstants.protocolVersion)) {
       await _rejectSession(peerDeviceId, 'VersionMismatch', 'No mutually supported protocol version');
       return;
     }
@@ -443,18 +435,18 @@ class SessionManager {
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
-      'rift': _protocolVersion,
+      'rift': RiftConstants.protocolVersion,
       'type': 'session.accept',
       'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
-        'selectedVersion': _protocolVersion,
+        'selectedVersion': RiftConstants.protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
-        'capabilities': _capabilities,
+        'capabilities': RiftConstants.capabilities,
       }
     };
 

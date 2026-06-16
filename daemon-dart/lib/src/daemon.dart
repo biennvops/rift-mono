@@ -5,6 +5,8 @@ import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/src/crypto/cert_decoder.dart';
 import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/crypto/base32_utils.dart';
+import 'package:daemon_dart/src/core/rift_constants.dart';
+import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/network/discovery_service_impl.dart';
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
@@ -26,15 +28,6 @@ class RiftDaemon {
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
   final Map<String, DiscoveredPeer> _discoveredPeers = {};
-
-  static const String protocolVersion = '0.1-draft';
-  static const String implementationId = 'riftd-dart/0.1.0';
-  static const List<Map<String, dynamic>> capabilities = [
-    {'name': 'clipboard.offer_fetch', 'version': 1},
-    {'name': 'presence.basic', 'version': 1},
-    {'name': 'operation.lifecycle', 'version': 1},
-    {'name': 'security.event_log', 'version': 1},
-  ];
 
   final String storagePath;
   final int port;
@@ -91,15 +84,15 @@ class RiftDaemon {
   Map<String, dynamic> getDeviceInfo() {
     final identityManager = _identityManager;
     if (identityManager == null) {
-      throw StateError('Identity manager not initialized');
+      throw const RiftIdentityNotInitializedException('Identity manager not initialized');
     }
 
     return {
       'deviceId': identityManager.deviceId,
       'fingerprint': _formatFingerprint(identityManager.getDeviceFingerprint()),
-      'implementationId': implementationId,
-      'protocolVersion': protocolVersion,
-      'capabilities': capabilities,
+      'implementationId': RiftConstants.implementationId,
+      'protocolVersion': RiftConstants.protocolVersion,
+      'capabilities': RiftConstants.capabilities,
     };
   }
 
@@ -185,7 +178,7 @@ class RiftDaemon {
         final peerDeviceId = _requireStringParam(params, 'deviceId');
         final record = await _trustStore?.getPeer(peerDeviceId);
         if (record == null) {
-          throw StateError('Peer not found in TrustStore');
+          throw const RiftNotFoundException('Peer not found in TrustStore');
         }
         return {
           'fingerprint': _formatFingerprint(_identityManager!.getDeviceFingerprint()),
@@ -322,6 +315,8 @@ class RiftDaemon {
                 try {
                   final result = await daemon.handleJsonRpcRequest(message);
                   sendPort.send(RiftDaemon.jsonRpcResult(id, result));
+                } on RiftException catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(id, e.code, e.message));
                 } on UnsupportedError catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, -32601, e.toString()));
                 } on ArgumentError catch (e) {
@@ -366,6 +361,8 @@ class RiftDaemon {
                     'params': message,
                   });
                   sendPort.send(RiftDaemon.jsonRpcResult(message['id'], result));
+                } on RiftException catch (e) {
+                  sendPort.send(RiftDaemon.jsonRpcError(message['id'], e.code, e.message));
                 } on ArgumentError catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32602, e.message?.toString() ?? e.toString()));
                 } on StateError catch (e) {

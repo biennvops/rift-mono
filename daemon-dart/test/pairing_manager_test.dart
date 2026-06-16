@@ -5,6 +5,7 @@ import 'dart:ffi';
 import 'dart:typed_data';
 import 'package:sqlite3/open.dart';
 import 'package:test/test.dart';
+import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 import 'package:daemon_dart/src/pairing/pairing_manager.dart';
@@ -129,10 +130,10 @@ void main() {
             'fingerprint': 'FAKE-FING-ERPR-INT1-2345-6789-ABCD-EFGH',
           }
         });
-        fail('Should have thrown StateError');
+        fail('Should have thrown RiftAuthenticationFailedException');
       } catch (e) {
-        expect(e, isA<StateError>());
-        expect((e as StateError).message, contains('SecurityError: Fingerprint mismatch'));
+        expect(e, isA<RiftAuthenticationFailedException>());
+        expect((e as RiftAuthenticationFailedException).message, contains('SecurityError: Fingerprint mismatch'));
       }
 
       // Peer must revert to discovered due to suspected spoofing
@@ -289,6 +290,7 @@ void main() {
 
       final peer = await trustStore.getPeer('rift-peer');
       expect(peer!.state, TrustState.pairingPending);
+      expect(ipcEvents.any((event) => event['method'] == 'rift.onPairingApproved'), isTrue);
       expect(ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'), isFalse);
     });
 

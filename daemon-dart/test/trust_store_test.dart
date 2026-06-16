@@ -2,6 +2,7 @@ import 'dart:ffi';
 import 'dart:typed_data';
 import 'package:sqlite3/open.dart';
 import 'package:test/test.dart';
+import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 
@@ -117,7 +118,7 @@ void main() {
       
       final fetched = await trustStore.getPeer('rift-test-downgrade');
       expect(fetched!.state, TrustState.trusted, reason: 'State MUST NOT be overwritten');
-      expect(fetched.certDer, Uint8List.fromList([4, 5, 6]), reason: 'certDer is still updated');
+      expect(fetched.certDer, Uint8List.fromList([1, 2, 3]), reason: 'Pinned certDer MUST NOT be overwritten');
     });
 
     test('Invalid transition is rejected (revoked -> trusted)', () async {
@@ -130,10 +131,10 @@ void main() {
       
       await trustStore.upsertPeer(record);
       
-      // Direct transition from revoked to trusted must throw StateError
+      // Direct transition from revoked to trusted must throw InvalidTransition
       expect(
         () => trustStore.transitionState('rift-test4', TrustState.revoked, TrustState.trusted),
-        throwsA(isA<StateError>()),
+        throwsA(isA<RiftInvalidTransitionException>()),
       );
       
       // State must remain revoked
@@ -192,7 +193,7 @@ void main() {
       
       expect(
         () => trustStore.deletePeer('rift-del-fail'),
-        throwsA(isA<StateError>()),
+        throwsA(isA<RiftAuthenticationFailedException>()),
       );
       
       // Must still exist

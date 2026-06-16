@@ -21,10 +21,13 @@ This is the core background module (daemon) on Android for the Rift project, dev
   - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, emits `onPeerDisconnected` events to clear stale sessions, and tracks unauthenticated connection timeouts per socket to avoid reconnect races.
   - `discovery_service_impl.dart`: Uses `nsd` for mDNS. Robustly handles network flaps by diff-ing active instances and evicting removed/null-named peers.
   - `session_manager.dart`: Orchestrates the `session.hello` state machine. Evaluates PoP signatures using the *signer's own cert DER*, catches Zone exceptions natively, and accurately prunes offline peers to allow seamless reconnections. Also enforces Client-side PoP validation on `session.accept`.
+- `lib/src/core/`:
+  - `rift_constants.dart`: Shared source of truth for protocol version, implementation ID, and capability advertisement metadata used by both handshake and IPC-facing surfaces.
+  - `rift_exceptions.dart`: Typed Rift application exceptions carrying explicit JSON-RPC error codes, reducing reliance on brittle string-matching.
 - `lib/src/pairing/`:
-  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), and prevents UI Spoofing.
+  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
 - `lib/src/storage/`:
-  - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption.
+  - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
 - `lib/src/daemon.dart`: The master orchestrator bounding all services. Protects against UI-layer memory leaks via `try/catch` IPC port setups.
 - `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, and storage. At the time of this README update, `dart test` passes with 77 tests.
 
@@ -136,4 +139,4 @@ This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the D
   - Implemented session bootstrap, PoP verification, client-side `session.accept` verification, pairing hardening, and trust-store persistence.
   - **Known gaps:** The current code does not yet fully match the normative peer message schema in `protocol.md` and is blocked on proper TLS channel binding because `dart:io` does not expose `tls-exporter` / EMS state.
 - **With `ipc.md`:** 
-  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, etc., largely matching the standard JSON-RPC 2.0 spec mapping error codes (`-32009`, `-32004`, etc.), while retaining minor legacy bridge artifacts.
+  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., largely matching the standard JSON-RPC 2.0 spec mapping error codes (`-32009`, `-32004`, etc.), while retaining minor legacy bridge artifacts.
