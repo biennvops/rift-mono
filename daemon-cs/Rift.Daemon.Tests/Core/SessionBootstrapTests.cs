@@ -49,6 +49,23 @@ public class SessionBootstrapTests
     }
 
     [Fact]
+    public void VerifyIdentityProof_SucceedsWhenChannelBindingMatches()
+    {
+        var identityManager = new IdentityManager();
+        identityManager.EnsureIdentityInitialized();
+        var cert = identityManager.GetTlsCertificate();
+        var pubKey = identityManager.GetEd25519PublicKey();
+        using var stream = new SslStream(new MemoryStream());
+
+        var bootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x55));
+
+        var proof = bootstrap.GenerateIdentityProof(stream, pubKey, cert);
+        var isValid = bootstrap.VerifyIdentityProof(stream, pubKey, cert, proof);
+
+        Assert.True(isValid);
+    }
+
+    [Fact]
     public void GenerateIdentityProof_ThrowsWhenChannelBindingUnavailable()
     {
         var identityManager = new IdentityManager();

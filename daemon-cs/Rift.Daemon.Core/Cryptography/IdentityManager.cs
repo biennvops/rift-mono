@@ -19,9 +19,9 @@ namespace Rift.Daemon.Core.Cryptography;
 
 public class IdentityManager : IIdentityManager
 {
-    private Ed25519PublicKeyParameters _ed25519PublicKey = null!;
+    private volatile Ed25519PublicKeyParameters _ed25519PublicKey = null!;
     private Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
-    private X509Certificate2 _tlsCertificate = null!;
+    private volatile X509Certificate2 _tlsCertificate = null!;
     private readonly object _syncRoot = new();
 
     // Note: Identity persistence is currently deferred. For now, a new identity

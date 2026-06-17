@@ -129,7 +129,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException($"A session for {deviceId} is already registered.");
             }
 
-            TrackBackgroundTask(RunRegisteredSessionLoopAsync(session, linkedToken), "outbound session loop");
+            TrackBackgroundTask(RunRegisteredSessionLoopAsync(session, _shutdownCts.Token), "outbound session loop");
         }
         catch
         {
