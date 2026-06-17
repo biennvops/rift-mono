@@ -82,9 +82,13 @@ class PoPManager {
     }
 
     final signatureBytes = Uint8List(64);
-    for (int i = 0; i < 64; i++) {
-      final byteStr = identityProofHex.substring(i * 2, i * 2 + 2);
-      signatureBytes[i] = int.parse(byteStr, radix: 16);
+    try {
+      for (int i = 0; i < 64; i++) {
+        final byteStr = identityProofHex.substring(i * 2, i * 2 + 2);
+        signatureBytes[i] = int.parse(byteStr, radix: 16);
+      }
+    } on FormatException {
+      return false;
     }
 
     final input = buildSigningInput(channelBinding, peerEd25519PublicKey, peerCertDer);
@@ -95,10 +99,6 @@ class PoPManager {
     try {
       return await algorithm.verify(input, signature: signature);
     } on ArgumentError {
-      return false;
-    } on StateError {
-      return false;
-    } on FormatException {
       return false;
     }
   }

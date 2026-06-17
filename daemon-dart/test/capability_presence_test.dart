@@ -21,7 +21,9 @@ class FakeTransport implements Transport {
   Stream<String> get onPeerDisconnected => _disconnectController.stream;
 
   @override
-  Future<void> connectTo(String host, int port, {String? expectedDeviceId}) async {}
+  Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
+    return expectedDeviceId ?? 'default';
+  }
 
   @override
   void disconnect(String peerDeviceId) {
@@ -98,28 +100,27 @@ class FakeTrustStore implements TrustStore {
   void setState(TrustState s) => _state = s;
 
   @override
-  Future<void> blockDevice(String deviceId) async {}
-
-  @override
-  Future<TrustRecord?> getTrustRecord(String deviceId) async => null;
-
-  @override
-  Future<List<TrustRecord>> getAllTrustRecords() async => [];
-
-  @override
-  Future<TrustState> getTrustState(String deviceId) async => _state;
-
-  @override
   Future<void> initialize() async {}
 
   @override
-  Future<void> revokeDevice(String deviceId, {required String reason}) async {}
+  Future<void> upsertPeer(PeerRecord record) async {}
 
   @override
-  Future<void> saveTrustRecord(TrustRecord record) async {}
+  Future<PeerRecord?> getPeer(String deviceId) async => PeerRecord(
+    deviceId: deviceId,
+    certDer: Uint8List(0),
+    state: _state,
+    updatedAt: DateTime.now(),
+  );
 
   @override
-  Future<void> unblockDevice(String deviceId) async {}
+  Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
+
+  @override
+  Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
+
+  @override
+  Future<void> deletePeer(String deviceId) async {}
 
   @override
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
@@ -149,6 +150,8 @@ void main() {
     ctx.localAdvertisedCapabilities = [
       Capability(name: 'clipboard.offer_fetch', version: 1),
       Capability(name: 'presence.basic', version: 1),
+      Capability(name: 'operation.lifecycle', version: 1),
+      Capability(name: 'security.event_log', version: 1),
     ];
     sessionManager.injectContextForTesting(ctx);
 
@@ -156,6 +159,8 @@ void main() {
       'capabilities': [
         {'name': 'clipboard.offer_fetch', 'version': 1},
         {'name': 'presence.basic', 'version': 1},
+        {'name': 'operation.lifecycle', 'version': 1},
+        {'name': 'security.event_log', 'version': 1},
       ]
     });
 
@@ -167,7 +172,7 @@ void main() {
     expect(selectedReply, isNotEmpty);
     
     // presence.update is also sent immediately after capability.selected if trusted
-    expect(ctx.negotiatedCapabilities.length, equals(2));
+    expect(ctx.negotiatedCapabilities.length, equals(4));
     expect(ctx.currentPresenceStatus, equals('online'));
   });
 

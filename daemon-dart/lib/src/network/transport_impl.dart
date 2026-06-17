@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
+import '../core/rift_exceptions.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
@@ -18,6 +19,7 @@ class TransportImpl implements Transport {
   final Map<String, SecureSocket> _peers = {};
   final Map<String, Uint8List> _peerCerts = {};
   final Set<String> _authenticatedPeers = {};
+  final Map<String, Timer> _unauthenticatedTimeouts = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
   final _disconnectController = StreamController<String>.broadcast();
 
@@ -47,16 +49,16 @@ class TransportImpl implements Transport {
   Future<void> stopServer() async {
     await _serverSocket?.close();
     _serverSocket = null;
+    for (final timer in _unauthenticatedTimeouts.values) {
+      timer.cancel();
+    }
+    _unauthenticatedTimeouts.clear();
     for (final socket in _peers.values) {
       // Flush before closing to avoid dropping frames written by sendMessage() concurrently.
       try {
         await socket.flush();
       } on SocketException {
-        // Socket is already unusable during shutdown; closing continues below.
-      } on TlsException {
-        // TLS teardown raced with flush; closing continues below.
-      } on StateError {
-        // Socket already closed; shutdown still proceeds.
+        // Best-effort flush during teardown; the socket is being closed anyway.
       }
       await socket.close();
     }
@@ -67,7 +69,7 @@ class TransportImpl implements Transport {
   }
 
   @override
-  Future<void> connectTo(String host, int port, {String? expectedDeviceId}) async {
+  Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
@@ -89,11 +91,7 @@ class TransportImpl implements Transport {
             if (actualDeviceId != expectedDeviceId) {
               return false; // Reject MITM immediately during TLS handshake
             }
-          } on FormatException {
-            return false; // Fail-closed on invalid cert
-          } on ArgumentError {
-            return false; // Fail-closed on invalid cert
-          } on StateError {
+          } on CertificateDecoderException {
             return false; // Fail-closed on invalid cert
           }
         }
@@ -106,14 +104,14 @@ class TransportImpl implements Transport {
       },
     );
 
-    _handleConnection(socket, isServer: false);
+    return _handleConnection(socket, isServer: false);
   }
 
-  void _handleConnection(SecureSocket socket, {required bool isServer}) async {
+  Future<String> _handleConnection(SecureSocket socket, {required bool isServer}) async {
     final peerCert = socket.peerCertificate;
     if (peerCert == null) {
       socket.destroy();
-      return;
+      throw const RiftAuthenticationFailedException('Peer certificate missing');
     }
 
     try {
@@ -150,22 +148,24 @@ class TransportImpl implements Transport {
       );
 
       // Disconnect unauthenticated peers after 10 s to prevent connection-slot exhaustion.
-      Timer(const Duration(seconds: 10), () {
-        if (_peers.containsKey(peerDeviceId) && !_authenticatedPeers.contains(peerDeviceId)) {
+      _unauthenticatedTimeouts[peerDeviceId]?.cancel();
+      _unauthenticatedTimeouts[peerDeviceId] = Timer(const Duration(seconds: 10), () {
+        if (identical(_peers[peerDeviceId], socket) && !_authenticatedPeers.contains(peerDeviceId)) {
           disconnect(peerDeviceId);
         }
       });
 
-    } on FormatException {
+      return peerDeviceId;
+    } catch (e) {
       // Fail-closed: destroy socket if cert is missing the Rift extension.
       socket.destroy();
-    } on ArgumentError {
-      socket.destroy();
+      rethrow;
     }
   }
 
   @override
   void disconnect(String peerDeviceId) {
+    _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
     _peers[peerDeviceId]?.destroy();
     _peers.remove(peerDeviceId);
     _peerCerts.remove(peerDeviceId);
@@ -178,6 +178,7 @@ class TransportImpl implements Transport {
   @override
   void setPeerAuthenticated(String peerDeviceId) {
     if (_peers.containsKey(peerDeviceId)) {
+      _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
       _authenticatedPeers.add(peerDeviceId);
     }
   }
@@ -191,17 +192,33 @@ class TransportImpl implements Transport {
   @override
   Future<void> sendMessage(String deviceId, Uint8List message) async {
     final socket = _peers[deviceId];
-    if (socket != null) {
-      try {
-        final frame = RiftFrameCodec.encodeBytes(message);
-        socket.add(frame);
-        await socket.flush();
-      } on SocketException {
-        disconnect(deviceId);
-      } on FrameCodecException {
-        // Drop the message without crashing if it's too large or empty, caller will know
-        rethrow;
+    if (socket == null) {
+      throw StateError('Peer $deviceId is not connected');
+    }
+
+    late final Map<String, dynamic> jsonMap;
+    try {
+      final jsonStr = utf8.decode(message);
+      final decoded = json.decode(jsonStr);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Outbound payload must be a JSON object');
       }
+      jsonMap = decoded;
+    } on FormatException {
+      disconnect(deviceId);
+      rethrow;
+    }
+
+    final frame = RiftFrameCodec.encode(jsonMap);
+    try {
+      socket.add(frame);
+      await socket.flush();
+    } on SocketException {
+      disconnect(deviceId);
+      rethrow;
+    } on StateError {
+      disconnect(deviceId);
+      rethrow;
     }
   }
 

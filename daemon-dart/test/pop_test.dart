@@ -76,5 +76,21 @@ void main() {
       final wrongCert = Uint8List.fromList([10, 20, 31]);
       expect(await PoPManager.verifyIdentityProof(proofHex, channelBinding, pubKeyList, wrongCert), isFalse);
     });
+
+    test('verifyIdentityProof fails on malformed hex without throwing', () async {
+      final channelBinding = Uint8List.fromList(List.generate(32, (i) => 42));
+      final pubKey = Uint8List.fromList(List.generate(32, (i) => i));
+      final certDer = Uint8List.fromList([10, 20, 30]);
+
+      final malformedHex = '${'0' * 126}zz';
+      final isValid = await PoPManager.verifyIdentityProof(
+        malformedHex,
+        channelBinding,
+        pubKey,
+        certDer,
+      );
+
+      expect(isValid, isFalse);
+    });
   });
 }

@@ -1,6 +1,10 @@
 # Rift Android Daemon (Dart) - Usage Guide & Architecture
 
-This is the core background module (daemon) on the Android OS for the Rift project, developed using the Dart language. The mission of this module is to securely communicate with the Windows Daemon (via mTLS) and provide services to the Flutter UI (via JSON-RPC).
+This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
+
+> **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), but it is **not yet fully compliant with `spec/doc/protocol.md`** because Dart does not expose `tls-exporter` / TLS 1.2 EMS state. The current implementation uses an Application Nonce fallback (`sessionNonce` + cert hashing) for channel binding. While this provides true per-session replay protection, it deviates from the formal specification and requires cross-implementation support.
+>
+> **Discovery privacy note:** The current Android daemon advertises `did` and `fp` TXT hints by default to make explicit peer recognition and auto-pair/connect flows workable from the Flutter UI. This is an intentional UX trade-off and is less privacy-preserving than the protocol's default recommendation.
 
 ---
 
@@ -13,15 +17,22 @@ This is the core background module (daemon) on the Android OS for the Rift proje
   - `cert_builder.dart`: Automatically wraps the Ed25519 key into an X.509 certificate using the *Double OCTET STRING* technique. Replaced static sentinels with random 64-bit entropy serials.
   - `cert_decoder.dart`: A secure X.509 Parser (Fail-Closed).
   - `identity_manager_impl.dart`: Generates/stores the Ed25519 key. Implements **Atomic Write** against corruption and strict heap zeroing (`dispose()`).
-  - `pop_manager.dart`: Manages the Ed25519 Proof of Possession (PoP) verification with a 113-byte dynamic structure mitigating Canonicalization attacks.
-  - `trust_store_impl.dart`: Persists trust state in SQLite, including durable `lastSeenAt` timestamps and schema migration for presence history.
+  - `pop_manager.dart`: Manages the Ed25519 Proof of Possession (PoP) verification with a 113-byte dynamic structure mitigating Canonicalization attacks and fails closed on malformed proof hex.
 - `lib/src/network/`: 
   - `frame_codec.dart`: Safe stream transformer handling Length prefix + JSON frames. Strictly limits sizes to 64 KiB pre-auth and 32 MiB post-auth without order-sensitive aliasing hazards.
-  - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, and emits `onPeerDisconnected` events to clear stale sessions.
+  - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, emits `onPeerDisconnected` events to clear stale sessions, and tracks unauthenticated connection timeouts per socket to avoid reconnect races.
   - `discovery_service_impl.dart`: Uses `nsd` for mDNS. Robustly handles network flaps by diff-ing active instances and evicting removed/null-named peers.
-  - `session_manager.dart`: Orchestrates the authenticated session lifecycle, capability negotiation, presence heartbeats, and fail-closed message validation.
-- `lib/src/daemon.dart`: The master orchestrator bounding all services. It wires trust persistence, presence IPC responses, and isolate command handling.
-- `test/`: Contains security and conformance-focused test scenarios, including 43 passing tests across crypto, identity, frame handling, capability/presence, and trust-store persistence.
+  - `session_manager.dart`: Orchestrates the `session.hello` state machine. Evaluates PoP signatures using the *signer's own cert DER*, catches Zone exceptions natively, and accurately prunes offline peers to allow seamless reconnections. Also enforces Client-side PoP validation on `session.accept`.
+- `lib/src/core/`:
+  - `rift_constants.dart`: Shared source of truth for protocol version, implementation ID, and capability advertisement metadata used by both handshake and IPC-facing surfaces.
+  - `rift_exceptions.dart`: Typed Rift application exceptions carrying explicit JSON-RPC error codes, reducing reliance on brittle string-matching.
+  - `rpc_utils.dart`: Shared JSON-RPC parameter validation helpers used by both the daemon entrypoint and pairing flows to avoid validation drift.
+- `lib/src/pairing/`:
+  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, restores the timeout on failed outbound approve attempts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
+- `lib/src/storage/`:
+  - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
+- `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
+- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, and storage. At the time of this README update, `dart test` passes with 77 tests.
 
 ---
 
@@ -42,81 +53,93 @@ dart analyze
 ```
 > **Note:** Must output `No issues found!` to create a Pull Request.
 
-### 2.3. Run Security Unit Tests (Updated through Week 6)
-The test system now covers all core cryptography/network subsystems with 43/43 tests passing:
+### 2.3. Run Security Unit Tests
+The test suite currently covers the core cryptography, framing, session, pairing, and storage subsystems. At the time of this README update, `dart test` reports 77 passing tests:
 1. **ASN.1 Encryption (`crypto_test`):** Verifies the generated byte array contains the correct Ed25519 OID and randomized RFC 5280 serials (64-bit entropy).
 2. **Fail-Closed Decoding (`decoder_test`):** Strictly verifies 10 advanced CVE-class attack vectors (missing OID, duplicate OID, unsupported critical flags, length manipulation, truncated DER, and fragile OID modifications).
 3. **Stream Network Frame (`frame_codec_test`):** Verifies memory purging, explicit frame boundary upgrades (64 KiB rejection pre-auth vs 32 MiB acceptance post-auth), and prevents double-parsing by directly returning Maps.
-4. **Identity `identity_test`:** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
-5. **PoP Validation (`pop_test`):** Verifies Ed25519 Proof of Possession dynamic structures (113 bytes) against Canonicalization attacks.
-6. **Capability & Presence (`capability_presence_test`):** Verifies negotiated capability selection, malformed payload rejection, presence status validation, and heartbeat gating.
-7. **Trust Persistence (`trust_store_impl_test`):** Verifies SQLite persistence of trust records, durable `lastSeenAt`, and schema migration from v1 to v2.
+4. **Identity (`identity_test`):** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
+5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession dynamic structures (113 bytes) against Canonicalization attacks and Client-side Auth Bypass.
+6. **Pairing State Machine (`pairing_manager_test`):** Validates strict protocol transitions, 120s auto-timeouts, Double-Approve Bypass prevention, and Fingerprint spoofing rejections.
+7. **Storage ACID (`trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, schema migration, and durable `lastSeenAt` persistence.
 
 ```bash
 dart test
 ```
-> **Case where 1 of 43 Tests Fails:**
-> If the system prints a red message `Some tests failed. Exit code: 1`, this proves that the application's defense system has been breached or there is a serious error:
-> - **Error in `crypto_test` / `decoder_test` / `pop_test`:** Proves the ASN.1 byte structure has been manipulated, or the Fail-Closed decoding/PoP mechanism has a loophole (vulnerable to spoofing).
+> **If one or more tests fail:**
+> Treat it as a signal that behavior has regressed or an important invariant is no longer being enforced:
+> - **Error in `crypto_test` / `decoder_test` / `pop_test` / `session_manager_test`:** Proves the ASN.1 byte structure has been manipulated, or the Fail-Closed decoding/PoP mechanism has a loophole (vulnerable to spoofing).
+> - **Error in `pairing_manager_test` / `trust_store_test`:** Proves the Pairing State Machine or SQLite storage is failing, risking Double-Approve Bypass, UI Spoofing, or mDNS Downgrade attacks.
 > - **Error in `frame_codec_test`:** The stream filter system is not working, risking the passage of packets over 32 MiB or RAM overflow.
 > - **Error in `identity_test`:** The Atomic Write structure is failing, or Canonicalization / Length Extension attacks on PoP signatures are possible.
-> - **Error in `capability_presence_test`:** Session negotiation, presence validation, or heartbeat gating has regressed and may permit protocol drift or unauthorized feature use.
-> - **Error in `trust_store_impl_test`:** Durable trust persistence or `lastSeenAt` migration is broken, risking data loss or upgrade crashes.
-> - **General Consequence:** CI/CD will completely block your Pull Request. Absolutely no merging until fixed!
+> - **General Consequence:** Do not assume the implementation is still protocol-safe or review-ready until the failure is understood and fixed.
 
-### 2.4. Run Demo Script (Generate Certificate - Week 2)
-To test the self-signed certificate generation feature of Week 2, you can run the command:
+Latest local verification snapshot:
+- `dart analyze` -> `No issues found!`
+- `dart test` -> `00:03 +77: All tests passed!`
+
+### 2.4. Standalone Runner Status
+The repository currently contains a standalone entrypoint at `bin/daemon.dart`, but it is still a stub intended for future CI/conformance work. There is currently **no checked-in `demo_cert.dart` script** in this package.
+
 ```bash
-dart run demo_cert.dart
+dart run bin/daemon.dart
 ```
-This command will create a `demo.pem` file right in the root directory. You can use `openssl x509 -in demo.pem -text -noout` to manually check the internal structure.
 
-### 2.5. Flutter Integration Guide (Week 4)
-The core achievement of Week 4 is the Root Orchestrator designed for Android Background Services. Because it operates over mTLS and mDNS, it is not meant to be run as a simple console script. Instead, the Flutter App will launch it via an Isolate.
-To integrate this into the Flutter App, the UI layer will use:
+This currently prints a placeholder message and exits.
+
+### 2.5. Flutter Integration Guide (Week 5 / M3)
+The root orchestrator is designed to run inside a background isolate hosted by the Android app. The current implementation exposes a `SendPort`/`ReceivePort` bridge, centered around a JSON-RPC-focused `rpcPort`, and operates substantially via JSON-RPC 2.0 complying with `spec/doc/ipc.md`.
+
+To integrate this into the Flutter app, the UI must provide a writable `storagePath` and listen for isolate messages:
 ```dart
 import 'dart:isolate';
 import 'package:daemon_dart/daemon_dart.dart';
 
 void startDaemon() async {
   ReceivePort receivePort = ReceivePort();
-  SendPort? commandPort;
+  SendPort? rpcPort;
+  final storagePath = '/data/user/0/com.example.app/files/rift';
   
   // Start the background daemon
   await Isolate.spawn(RiftDaemon.isolateEntryPoint, {
     'sendPort': receivePort.sendPort,
+    'storagePath': storagePath,
   });
 
   // Listen for messages from the Daemon
   receivePort.listen((message) {
     if (message is Map<String, dynamic>) {
-      if (message['status'] == 'running') {
-        commandPort = message['commandPort'];
-        print('Daemon is running. Device ID: ${message['deviceId']}');
+      if (message['method'] == 'rift.daemonReady') {
+        rpcPort = message['params']['rpcPort'];
+        print('Daemon is running. Device ID: ${message['params']['deviceId']}');
         
-        // Example: Command the daemon to connect to a discovered peer
-        // commandPort?.send({
-        //   'command': 'connect',
-        //   'host': '192.168.1.5',
-        //   'port': 11112,
-        //   'peerDeviceId': 'rift-xyz123'
+        // Example: Standard JSON-RPC command
+        // rpcPort?.send({
+        //   'jsonrpc': '2.0',
+        //   'method': 'rift.approvePairing',
+        //   'id': 1,
+        //   'params': { 'deviceId': 'rift-xyz123', 'fingerprint': 'ABCD-EFGH-IJKL-...' }
         // });
-      } else if (message['event'] == 'peer_discovered') {
-        print('Peer Discovered: ${message['deviceIdHint']}');
+      } else if (message['method'] == 'rift.onPairingRequest') {
+        // UI should show a popup with the Fingerprint for User to verify
+        print('Pairing Request from: ${message['params']['displayName']}');
+        print('Fingerprint: ${message['params']['fingerprint']}');
+      } else if (message['method'] == 'rift.onTrustChanged') {
+        // UI should update peer trust status
+        print('Trust Changed: ${message['params']['deviceId']} -> ${message['params']['newState']}');
       }
     }
   });
 }
 ```
-This establishes the `SendPort/ReceivePort` IPC bridge (defined in `ipc.md`) required to communicate securely with the daemon while it runs indefinitely in the background.
+This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and several still-unimplemented IPC methods mean the daemon should not yet be described as fully conformant.
 
 ---
 
 ## 3. Compliance Level with System Specification (Protocol & IPC)
 - **With `protocol.md`:** 
-  - Week 2 & 3: Strictly adhered 100% to cryptographic requirements (ECDSA + Ed25519 X.509 Extension), Fail-Closed Parser, and `rift-` Device ID standard.
-  - Week 4 & Audit Phase: Implemented mTLS and State-Dependent Frame Size (64 KiB / 32 MiB). Fixed critical PoP mismatches by binding signatures to the signer's own certificate DER context. Corrected `messageId` to the standard `id` payload fields. Session Orchestrator fully enforces Risk 3 (Identity strictly derived from TLS), Risk 6 (Double `session.hello` rejection), and a 10-second Handshake Timeout. **BLOCKER:** Pending ADR for Triple Handshake Risk due to lack of `tls-exporter`.
+  - Implemented the main crypto building blocks required by the spec: ECDSA P-256 self-signed certificates, the custom Ed25519 X.509 extension, fail-closed extension parsing, `rift-` device ID derivation, and state-dependent frame limits (64 KiB pre-auth / 32 MiB post-auth).
+  - Implemented session bootstrap, PoP verification, client-side `session.accept` verification, pairing hardening, and trust-store persistence.
+  - **Known gaps:** The current code does not yet fully match the normative peer message schema in `protocol.md` and is blocked on proper TLS channel binding because `dart:io` does not expose `tls-exporter` / EMS state.
 - **With `ipc.md`:** 
-  - Week 2 & 3: Built and started implementing Interfaces (Abstract) to create an Abstraction Layer.
-  - Week 4: Created `RiftDaemon.isolateEntryPoint` setting up the `SendPort/ReceivePort` IPC bridge required for Android Isolate execution. Implemented `Isolate.current.addErrorListener` to prevent silent daemon death.
-  - Week 6: Added trusted-peer presence responses, negotiated capability summaries, durable `lastSeenAt`, and trust-backed IPC list responses for the Flutter client.
+  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., and now routes application failures primarily through typed Rift exceptions with standard JSON-RPC 2.0 error codes (`-32009`, `-32004`, etc.).

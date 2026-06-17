@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
+import 'package:daemon_dart/src/core/rift_exceptions.dart';
 
 void main() {
   group('IdentityManagerImpl Tests', () {
@@ -66,13 +67,13 @@ void main() {
       expect(signatureHex.length, equals(128)); // Ed25519 signature hex string is 128 chars
     });
 
-    test('Should throw StateError if signing before initialize', () async {
+    test('Should throw RiftIdentityNotInitializedException if signing before initialize', () async {
       var manager = IdentityManagerImpl(tempDir.path);
       var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
       
       expect(
         () => manager.generateIdentityProof(validBuffer, validBuffer),
-        throwsA(isA<StateError>()),
+        throwsA(isA<RiftIdentityNotInitializedException>()),
       );
     });
 
@@ -99,7 +100,7 @@ void main() {
       var validBuffer = Uint8List.fromList(List.generate(32, (i) => i));
       expect(
         () => manager.generateIdentityProof(validBuffer, validBuffer),
-        throwsA(isA<StateError>()),
+        throwsA(isA<RiftIdentityNotInitializedException>()),
       );
     });
   });

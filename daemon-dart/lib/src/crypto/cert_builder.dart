@@ -14,7 +14,7 @@ class CertificateBuilderException implements Exception {
 }
 
 class RiftCertBuilder {
-  // TODO(Biên): Cross-check with ADR-0001. May need to switch to PEN branch
+  // TODO(Bien): Cross-check with ADR-0001. May need to switch to PEN branch
   // (1.3.6.1.4.1.XXXXX) if the protocol OID assignment changes.
   static const String riftCustomOid =
       '2.25.293029629918709742181702189012786017422';

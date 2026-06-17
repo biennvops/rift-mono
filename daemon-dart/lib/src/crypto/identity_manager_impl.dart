@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
 import 'package:basic_utils/basic_utils.dart';
+import '../core/rift_exceptions.dart';
 import '../interfaces/identity_manager.dart';
 import 'cert_builder.dart';
 import 'base32_utils.dart';
@@ -89,7 +90,9 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Uint8List get tlsCertificateDer {
-    if (_tlsCertificateDer == null) throw StateError('IdentityManager not initialized');
+    if (_tlsCertificateDer == null) {
+      throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
+    }
     return Uint8List.fromList(_tlsCertificateDer!); // Defensive copy to prevent mutation
   }
 
@@ -99,7 +102,7 @@ class IdentityManagerImpl implements IdentityManager {
   @override
   Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List localCertDer) async {
     if (_cachedKeyPair == null || _privateKey == null || _publicKey == null) {
-      throw StateError('IdentityManager not initialized');
+      throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
     }
     return await PoPManager.generateIdentityProof(
         channelBinding, _publicKey!, localCertDer, _privateKey!);

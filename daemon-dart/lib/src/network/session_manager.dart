@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:uuid/uuid.dart';
 
@@ -10,6 +12,15 @@ import '../interfaces/trust_store.dart';
 import '../crypto/pop_manager.dart';
 
 enum HandshakeState { handshaking, established }
+
+
+class ProtocolMessage {
+  final String peerDeviceId;
+  final Uint8List? peerCertDer;
+  final Map<String, dynamic> payload;
+
+  ProtocolMessage(this.peerDeviceId, this.peerCertDer, this.payload);
+}
 
 class SessionException implements Exception {
   final String message;
@@ -84,8 +95,29 @@ class SessionManager {
   final IdentityManager _identityManager;
   final TrustStore _trustStore;
   final Map<String, SessionContext> _sessions = {};
+  final Map<String, Completer<void>> _establishmentWaiters = {};
   
-  final Uint8List _dummyChannelBinding = Uint8List.fromList(List.generate(32, (_) => 0));
+  
+  Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);
+    input.setRange(0, sessionNonce.length, sessionNonce);
+    input.setRange(sessionNonce.length, sessionNonce.length + localCertDer.length, localCertDer);
+    input.setRange(sessionNonce.length + localCertDer.length, input.length, peerCertDer);
+    return Uint8List.fromList(sha256.convert(input).bytes);
+  }
+
+  Uint8List _generateSessionNonce() {
+    final random = Random.secure();
+    return Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+  }
+
+  final Future<bool> Function(String)? peerAllowanceResolver;
+
+  
+  final _messageController = StreamController<ProtocolMessage>.broadcast();
+  Stream<ProtocolMessage> get onMessage => _messageController.stream;
+  Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
   final _presenceUpdateController = StreamController<SessionContext>.broadcast();
   Stream<SessionContext> get onPresenceUpdate => _presenceUpdateController.stream;
@@ -97,13 +129,22 @@ class SessionManager {
     Capability(name: 'security.event_log', version: 1),
   ];
 
-  SessionManager(this._transport, this._identityManager, this._trustStore) {
+  SessionManager(
+    this._transport,
+    this._identityManager,
+    this._trustStore, {
+    this.peerAllowanceResolver,
+  }) {
     _transport.onMessageReceived.listen(
       (msg) => _handleMessage(msg).catchError((Object e) {
         _transport.disconnect(msg.peerDeviceId);
       }),
     );
     _transport.onPeerDisconnected.listen((deviceId) {
+      final waiter = _establishmentWaiters.remove(deviceId);
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete();
+      }
       final ctx = _sessions.remove(deviceId);
       if (ctx != null) {
         ctx.dispose();
@@ -114,11 +155,37 @@ class SessionManager {
   }
 
   void dispose() {
+    for (final waiter in _establishmentWaiters.values) {
+      if (!waiter.isCompleted) {
+        waiter.complete();
+      }
+    }
+    _establishmentWaiters.clear();
     for (var ctx in _sessions.values) {
       ctx.dispose();
     }
     _sessions.clear();
     _presenceUpdateController.close();
+    _messageController.close();
+  }
+
+
+  Future<void> sendMessage(String peerDeviceId, Map<String, dynamic> payload) async {
+    final ctx = _sessions[peerDeviceId];
+    if (ctx == null || ctx.handshakeState != HandshakeState.established) {
+      throw SessionException('Cannot send message: Session not established with $peerDeviceId');
+    }
+    await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+
+  void disconnectPeer(String peerDeviceId) {
+    final waiter = _establishmentWaiters.remove(peerDeviceId);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
+    _sessions[peerDeviceId]?.dispose();
+    _sessions.remove(peerDeviceId);
+    _transport.disconnect(peerDeviceId);
   }
 
   SessionContext? getContext(String peerDeviceId) => _sessions[peerDeviceId];
@@ -144,27 +211,63 @@ class SessionManager {
   }
 
   Future<void> sendSessionHello(String peerDeviceId) async {
+    final existing = _sessions[peerDeviceId];
+    if (existing != null) {
+      throw SessionException('Session already exists for $peerDeviceId');
+    }
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) throw SessionException('Cannot compute channel binding: peer cert not available');
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'session.hello',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
         'deviceId': _identityManager.deviceId,
         'fingerprint': _identityManager.getDeviceFingerprint().map((b) => b.toRadixString(16).padLeft(2, '0')).join(''),
+        'supportedVersions': ['0.1-draft'],
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
     };
 
     final ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: true);
-    ctx.trustState = await _trustStore.getTrustState(peerDeviceId);
+    final record = await _trustStore.getPeer(peerDeviceId);
+    ctx.trustState = record?.state ?? TrustState.discovered;
     _sessions[peerDeviceId] = ctx;
+    _establishmentWaiters.putIfAbsent(peerDeviceId, Completer<void>.new);
     
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+
+  Future<void> waitForSessionEstablished(
+    String peerDeviceId, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final ctx = _sessions[peerDeviceId];
+    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+      return;
+    }
+
+    final waiter = _establishmentWaiters.putIfAbsent(peerDeviceId, Completer<void>.new);
+    await waiter.future.timeout(
+      timeout,
+      onTimeout: () => throw SessionException(
+        'Timed out waiting for session establishment with $peerDeviceId',
+      ),
+    );
+
+    final refreshed = _sessions[peerDeviceId];
+    if (refreshed == null || refreshed.handshakeState != HandshakeState.established) {
+      throw SessionException('Session not established with $peerDeviceId');
+    }
   }
 
   Future<void> _handleMessage(TransportMessage msg) async {
@@ -190,6 +293,12 @@ class SessionManager {
     final type = jsonMap['type'];
     if (type is! String) {
       await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing or invalid message type');
+      return;
+    }
+
+    final requiredExtensions = jsonMap['requiredExtensions'];
+    if (requiredExtensions != null && requiredExtensions is! List) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'requiredExtensions must be a list');
       return;
     }
 
@@ -225,15 +334,19 @@ class SessionManager {
         await _handleCapabilityAdvertise(ctx, msg, jsonMap);
       } else if (type == 'capability.selected') {
         await _handleCapabilitySelected(ctx, msg, jsonMap);
-      } else if (type == 'presence.update') {
+            } else if (type == 'presence.update') {
         await _handlePresenceUpdate(ctx, msg, jsonMap);
       } else {
-         // other messages like clipboard.offer handled elsewhere
+        _messageController.add(ProtocolMessage(msg.peerDeviceId, msg.peerCertDer, jsonMap));
       }
     }
   }
 
   Future<void> _rejectSession(String peerDeviceId, String failureReason, String message) async {
+    final waiter = _establishmentWaiters.remove(peerDeviceId);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
     final payload = {
       'rift': '0.1-draft',
       'type': 'session.reject',
@@ -253,8 +366,13 @@ class SessionManager {
     final peerDeviceId = msg.peerDeviceId;
     var ctx = _sessions[peerDeviceId];
     if (ctx == null) {
+      if (!await _isPeerAllowedForSession(peerDeviceId)) {
+        await _rejectSession(peerDeviceId, 'Unauthorized', 'peer identity is blocked or revoked');
+        throw SessionException('Unauthorized: peer identity is blocked or revoked');
+      }
       ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
-      ctx.trustState = await _trustStore.getTrustState(peerDeviceId);
+      final record = await _trustStore.getPeer(peerDeviceId);
+      ctx.trustState = record?.state ?? TrustState.discovered;
       _sessions[peerDeviceId] = ctx;
     } else if (ctx.handshakeState == HandshakeState.established) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Double session.hello received');
@@ -264,6 +382,23 @@ class SessionManager {
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
     if (payload == null) {
       await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing payload');
+      return;
+    }
+
+    final supportedVersions = payload['supportedVersions'];
+    if (supportedVersions is! List ||
+        !supportedVersions.whereType<String>().contains('0.1-draft')) {
+      await _rejectSession(peerDeviceId, 'VersionMismatch', 'Missing or unsupported supportedVersions');
+      return;
+    }
+
+    final payloadDeviceId = payload['deviceId'] as String?;
+    if (payloadDeviceId == null) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing payload.deviceId');
+      return;
+    }
+    if (payloadDeviceId != peerDeviceId) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'payload.deviceId mismatch with TLS identity');
       return;
     }
 
@@ -278,9 +413,32 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
+    final sessionNonceStr = payload['sessionNonce'] as String?;
+    if (sessionNonceStr == null) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+      return;
+    }
+    late final Uint8List peerNonce;
+    try {
+      peerNonce = base64.decode(sessionNonceStr);
+    } on FormatException {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+      return;
+    }
+    if (peerNonce.length != 32) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+      return;
+    }
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final cbInput = Uint8List(peerNonce.length + msg.peerCertDer!.length + localCertDer.length);
+    cbInput.setRange(0, peerNonce.length, peerNonce);
+    cbInput.setRange(peerNonce.length, peerNonce.length + msg.peerCertDer!.length, msg.peerCertDer!);
+    cbInput.setRange(peerNonce.length + msg.peerCertDer!.length, cbInput.length, localCertDer);
+    final channelBinding = Uint8List.fromList(sha256.convert(cbInput).bytes);
+
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
-      _dummyChannelBinding,
+      channelBinding,
       msg.peerEd25519Key!,
       msg.peerCertDer!,
     );
@@ -292,24 +450,34 @@ class SessionManager {
 
     ctx.handshakeState = HandshakeState.established;
     _transport.setPeerAuthenticated(peerDeviceId);
+    final waiter = _establishmentWaiters.remove(peerDeviceId);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
     await _sendSessionAccept(ctx);
     _startCapabilityNegotiation(ctx);
   }
 
   Future<void> _sendSessionAccept(SessionContext ctx) async {
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = _transport.getPeerCert(ctx.peerDeviceId);
+    if (peerCertDer == null) throw SessionException('Cannot compute channel binding: peer cert not available');
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': '0.1-draft',
       'type': 'session.accept',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': ctx.peerDeviceId,
       'payload': {
         'selectedVersion': '0.1-draft',
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
     };
@@ -332,6 +500,12 @@ class SessionManager {
       return;
     }
 
+    final identityVerified = payload['identityVerified'];
+    if (identityVerified is! bool || !identityVerified) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing or invalid identityVerified');
+      return;
+    }
+
     final identityProofHex = payload['identityProof'] as String?;
     if (identityProofHex == null) {
       await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identityProof');
@@ -343,9 +517,32 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
+    final sessionNonceStr = payload['sessionNonce'] as String?;
+    if (sessionNonceStr == null) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+      return;
+    }
+    late final Uint8List peerNonce;
+    try {
+      peerNonce = base64.decode(sessionNonceStr);
+    } on FormatException {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+      return;
+    }
+    if (peerNonce.length != 32) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+      return;
+    }
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final cbInput = Uint8List(peerNonce.length + msg.peerCertDer!.length + localCertDer.length);
+    cbInput.setRange(0, peerNonce.length, peerNonce);
+    cbInput.setRange(peerNonce.length, peerNonce.length + msg.peerCertDer!.length, msg.peerCertDer!);
+    cbInput.setRange(peerNonce.length + msg.peerCertDer!.length, cbInput.length, localCertDer);
+    final channelBinding = Uint8List.fromList(sha256.convert(cbInput).bytes);
+
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
-      _dummyChannelBinding,
+      channelBinding,
       msg.peerEd25519Key!,
       msg.peerCertDer!,
     );
@@ -357,11 +554,19 @@ class SessionManager {
 
     ctx.handshakeState = HandshakeState.established;
     _transport.setPeerAuthenticated(peerDeviceId);
+    final waiter = _establishmentWaiters.remove(peerDeviceId);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
     _startCapabilityNegotiation(ctx);
   }
 
   Future<void> _handleSessionReject(TransportMessage msg, Map<String, dynamic> jsonMap) async {
     final peerDeviceId = msg.peerDeviceId;
+    final waiter = _establishmentWaiters.remove(peerDeviceId);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
+    }
     final ctx = _sessions.remove(peerDeviceId);
     ctx?.dispose();
     _transport.disconnect(peerDeviceId);
@@ -565,5 +770,11 @@ class SessionManager {
     _resetOfflineTimeout(ctx);
     
     _presenceUpdateController.add(ctx);
+  }
+
+  Future<bool> _isPeerAllowedForSession(String peerDeviceId) async {
+    final resolver = peerAllowanceResolver;
+    if (resolver == null) return true;
+    return await resolver(peerDeviceId);
   }
 }
