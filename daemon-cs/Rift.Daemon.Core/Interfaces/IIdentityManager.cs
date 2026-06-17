@@ -34,4 +34,9 @@ public interface IIdentityManager
     /// Gets the pairing fingerprint (e.g. ABCD-EFGH-...).
     /// </summary>
     string GetFingerprint();
+
+    /// <summary>
+    /// Verifies an Ed25519 signature using the given public key.
+    /// </summary>
+    bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature);
 }
