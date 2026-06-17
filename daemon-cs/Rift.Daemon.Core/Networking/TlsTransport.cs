@@ -22,6 +22,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly ILogger<TlsTransport> _logger;
     private readonly IIdentityManager _identityManager;
     private readonly SessionBootstrap _sessionBootstrap;
+    private readonly CancellationTokenSource _shutdownCts = new();
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
@@ -38,16 +39,19 @@ public sealed class TlsTransport : ITransport, IDisposable
 
     public async Task StartListeningAsync(CancellationToken cancellationToken)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        var linkedToken = linkedCts.Token;
+
         _listener = new TcpListener(IPAddress.Any, RiftNetworkDefaults.DefaultPort);
         _listener.Start();
         _logger.LogInformation("TlsTransport listening on port {Port}.", RiftNetworkDefaults.DefaultPort);
 
         try
         {
-            while (!cancellationToken.IsCancellationRequested)
+            while (!linkedToken.IsCancellationRequested)
             {
-                var client = await _listener.AcceptTcpClientAsync(cancellationToken);
-                TrackBackgroundTask(HandleInboundConnectionAsync(client, cancellationToken), "inbound connection");
+                var client = await _listener.AcceptTcpClientAsync(linkedToken);
+                TrackBackgroundTask(HandleInboundConnectionAsync(client, linkedToken), "inbound connection");
             }
         }
         catch (OperationCanceledException)
@@ -89,26 +93,50 @@ public sealed class TlsTransport : ITransport, IDisposable
 
     public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
+        var linkedToken = linkedCts.Token;
         var client = new TcpClient();
-        await client.ConnectAsync(host, port, cancellationToken);
+        SslStream? sslStream = null;
 
-        var stream = client.GetStream();
-        var sslStream = new SslStream(stream, false, RemoteCertificateValidationCallback);
-
-        var clientCert = _identityManager.GetTlsCertificate();
-
-        var options = new SslClientAuthenticationOptions
+        try
         {
-            TargetHost = host, // Could be instance name or anything, we don't validate hostname
-            ClientCertificates = new X509CertificateCollection { clientCert },
-            EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
-            CertificateRevocationCheckMode = X509RevocationMode.NoCheck
-        };
+            await client.ConnectAsync(host, port, linkedToken);
 
-        await sslStream.AuthenticateAsClientAsync(options, cancellationToken);
-        
-        // Start reading loop in background
-        TrackBackgroundTask(SessionLoopAsync(sslStream, client, cancellationToken), "outbound session loop");
+            var stream = client.GetStream();
+            sslStream = new SslStream(stream, false, RemoteCertificateValidationCallback);
+
+            var clientCert = _identityManager.GetTlsCertificate();
+
+            var options = new SslClientAuthenticationOptions
+            {
+                TargetHost = host, // Could be instance name or anything, we don't validate hostname
+                ClientCertificates = new X509CertificateCollection { clientCert },
+                EnabledSslProtocols = SslProtocols.Tls13 | SslProtocols.Tls12,
+                CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+            };
+
+            await sslStream.AuthenticateAsClientAsync(options, linkedToken);
+
+            var remoteCert = sslStream.RemoteCertificate as X509Certificate2 ??
+                X509CertificateLoader.LoadCertificate(sslStream.RemoteCertificate!.GetRawCertData());
+            var deviceId = ExtractDeviceIdFromCertificate(remoteCert);
+            var session = new ActiveSession(sslStream, client, deviceId);
+
+            await CompleteSessionHandshakeAsync(session, remoteCert, linkedToken);
+            if (!_sessions.TryAdd(deviceId, session))
+            {
+                session.Dispose();
+                throw new InvalidOperationException($"A session for {deviceId} is already registered.");
+            }
+
+            TrackBackgroundTask(RunRegisteredSessionLoopAsync(session, linkedToken), "outbound session loop");
+        }
+        catch
+        {
+            sslStream?.Dispose();
+            client.Dispose();
+            throw;
+        }
     }
 
     private async Task SessionLoopAsync(SslStream sslStream, TcpClient client, CancellationToken cancellationToken)
@@ -132,14 +160,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             await CompleteSessionHandshakeAsync(session, remoteCert, cancellationToken);
             _sessions.TryAdd(deviceId, session);
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var payloadBuffer = await ReadFramePayloadAsync(sslStream, GetMaxInboundFrameSize(session.IsAuthenticated), cancellationToken);
-                if (payloadBuffer is null) break;
-
-                MessageReceived?.Invoke(this, new MessageReceivedEventArgs(deviceId, payloadBuffer));
-            }
+            await RunRegisteredSessionLoopAsync(session, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -174,6 +195,20 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         VerifySessionControlMessage(session.Stream, remoteCert, acceptPayload, expectedType: "session.accept");
         session.IsAuthenticated = true;
+    }
+
+    private async Task RunRegisteredSessionLoopAsync(ActiveSession session, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var payloadBuffer = await ReadFramePayloadAsync(session.Stream, GetMaxInboundFrameSize(session.IsAuthenticated), cancellationToken);
+            if (payloadBuffer is null)
+            {
+                break;
+            }
+
+            MessageReceived?.Invoke(this, new MessageReceivedEventArgs(session.DeviceId, payloadBuffer));
+        }
     }
 
     private void VerifySessionControlMessage(SslStream sslStream, X509Certificate2 remoteCert, byte[] payloadBuffer, string expectedType)
@@ -314,13 +349,15 @@ public sealed class TlsTransport : ITransport, IDisposable
 
     public void Dispose()
     {
+        _shutdownCts.Cancel();
         _listener?.Stop();
+        WaitForBackgroundTasks();
         foreach (var session in _sessions.Values)
         {
             session.Dispose();
         }
         _sessions.Clear();
-        WaitForBackgroundTasks();
+        _shutdownCts.Dispose();
     }
 
     private void TrackBackgroundTask(Task task, string operation)

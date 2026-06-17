@@ -91,12 +91,15 @@ public class SessionBootstrap
 
             try
             {
-                if (binding.Size != 32)
+                if (binding.Size <= 0)
                 {
                     throw new InvalidOperationException(
-                        $"Expected 32-byte TLS channel binding but received {binding.Size} bytes.");
+                        $"TLS channel binding was empty or invalid ({binding.Size} bytes).");
                 }
 
+                // ChannelBindingKind.Unique can vary by negotiated TLS version/runtime.
+                // TODO: Replace this fallback with spec-aligned tls-exporter handling and
+                // explicit TLS 1.2 EMS enforcement once SslStream exposes exporter access.
                 var channelBinding = new byte[binding.Size];
                 Marshal.Copy(binding.DangerousGetHandle(), channelBinding, 0, channelBinding.Length);
                 return channelBinding;
@@ -141,18 +144,32 @@ public class SessionBootstrap
         var identityProof = GenerateIdentityProof(stream, myEdKey, myCert);
         var hexProof = BitConverter.ToString(identityProof).Replace("-", "").ToLowerInvariant();
 
-        var payload = new
+        var capabilities = new[] {
+            new { name = "clipboard.offer_fetch", version = 1 },
+            new { name = "presence.basic", version = 1 },
+            new { name = "operation.lifecycle", version = 1 },
+            new { name = "security.event_log", version = 1 }
+        };
+
+        object payload = messageType switch
         {
-            supportedVersions = new[] { "0.1-draft" },
-            deviceId = myDeviceId,
-            implementationId = "riftd-cs/0.1.0",
-            capabilities = new[] {
-                new { name = "clipboard.offer_fetch", version = 1 },
-                new { name = "presence.basic", version = 1 },
-                new { name = "operation.lifecycle", version = 1 },
-                new { name = "security.event_log", version = 1 }
+            "session.hello" => new
+            {
+                supportedVersions = new[] { "0.1-draft" },
+                deviceId = myDeviceId,
+                implementationId = "riftd-cs/0.1.0",
+                capabilities,
+                identityProof = hexProof
             },
-            identityProof = hexProof
+            "session.accept" => new
+            {
+                selectedVersion = "0.1-draft",
+                deviceId = myDeviceId,
+                identityVerified = true,
+                identityProof = hexProof,
+                capabilities
+            },
+            _ => throw new InvalidOperationException($"Unsupported session control message type '{messageType}'.")
         };
 
         var envelope = new

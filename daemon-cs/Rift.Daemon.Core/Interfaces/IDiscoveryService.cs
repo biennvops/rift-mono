@@ -1,14 +1,31 @@
 using System.Collections.Generic;
+using System.Net;
 
 namespace Rift.Daemon.Core.Interfaces;
 
 public sealed class PeerDiscoveredEventArgs : EventArgs
 {
     public string InstanceName { get; }
+    public string Host { get; }
+    public int Port { get; }
+    public string? MinVersion { get; }
+    public string? MaxVersion { get; }
+    public IPEndPoint? RemoteEndPoint { get; }
 
-    public PeerDiscoveredEventArgs(string instanceName)
+    public PeerDiscoveredEventArgs(
+        string instanceName,
+        string host,
+        int port,
+        string? minVersion,
+        string? maxVersion,
+        IPEndPoint? remoteEndPoint)
     {
         InstanceName = instanceName ?? throw new ArgumentNullException(nameof(instanceName));
+        Host = host ?? throw new ArgumentNullException(nameof(host));
+        Port = port;
+        MinVersion = minVersion;
+        MaxVersion = maxVersion;
+        RemoteEndPoint = remoteEndPoint;
     }
 }
 

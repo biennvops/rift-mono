@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Makaretu.Dns;
 using Microsoft.Extensions.Logging;
 using Rift.Daemon.Core.Interfaces;
@@ -14,6 +16,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private ServiceProfile? _profile;
     private bool _isAdvertising;
     private bool _isDiscovering;
+    private bool _isMdnsRunning;
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -107,24 +110,24 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
     private void StartMdnsIfNeeded()
     {
-        try
+        if (_isMdnsRunning)
         {
-            _mdns.Start();
+            return;
         }
-        catch (InvalidOperationException)
-        {
-            // Already started
-        }
+
+        _mdns.Start();
+        _isMdnsRunning = true;
     }
 
     private void StopMdnsIfIdle()
     {
-        if (_isAdvertising || _isDiscovering)
+        if (_isAdvertising || _isDiscovering || !_isMdnsRunning)
         {
             return;
         }
 
         _mdns.Stop();
+        _isMdnsRunning = false;
     }
 
     private void OnServiceInstanceDiscovered(object? sender, ServiceInstanceDiscoveryEventArgs e)
@@ -139,8 +142,68 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
         }
 
-        _logger.LogInformation("Discovered Rift peer instance: {InstanceName}", name);
-        PeerDiscovered?.Invoke(this, new PeerDiscoveredEventArgs(name));
+        var peerInfo = CreatePeerDiscoveredEventArgs(e);
+        _logger.LogInformation(
+            "Discovered Rift peer instance: {InstanceName} at {Host}:{Port}",
+            peerInfo.InstanceName,
+            peerInfo.Host,
+            peerInfo.Port);
+        PeerDiscovered?.Invoke(this, peerInfo);
+    }
+
+    private static PeerDiscoveredEventArgs CreatePeerDiscoveredEventArgs(ServiceInstanceDiscoveryEventArgs e)
+    {
+        var records = e.Message.Answers.Concat(e.Message.AdditionalRecords).ToArray();
+
+        var serviceInstanceName = e.ServiceInstanceName;
+        var srvRecord = records
+            .OfType<SRVRecord>()
+            .FirstOrDefault(record => record.Name == serviceInstanceName);
+
+        if (srvRecord is null)
+        {
+            throw new InvalidOperationException($"Discovered service instance '{serviceInstanceName}' did not include an SRV record.");
+        }
+
+        var txtRecord = records
+            .OfType<TXTRecord>()
+            .FirstOrDefault(record => record.Name == serviceInstanceName);
+
+        var txtProperties = ParseTxtProperties(txtRecord);
+        var host = srvRecord.Target.ToString();
+        var port = srvRecord.Port;
+
+        return new PeerDiscoveredEventArgs(
+            instanceName: serviceInstanceName.ToString(),
+            host: host,
+            port: port,
+            minVersion: txtProperties.GetValueOrDefault("minV"),
+            maxVersion: txtProperties.GetValueOrDefault("maxV"),
+            remoteEndPoint: e.RemoteEndPoint);
+    }
+
+    private static Dictionary<string, string> ParseTxtProperties(TXTRecord? txtRecord)
+    {
+        var properties = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (txtRecord is null)
+        {
+            return properties;
+        }
+
+        foreach (var entry in txtRecord.Strings)
+        {
+            var separatorIndex = entry.IndexOf('=');
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            var key = entry[..separatorIndex];
+            var value = entry[(separatorIndex + 1)..];
+            properties[key] = value;
+        }
+
+        return properties;
     }
 
     public void Dispose()
@@ -149,7 +212,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         {
             _isAdvertising = false;
             _isDiscovering = false;
-            _mdns.Stop();
+            if (_isMdnsRunning)
+            {
+                _mdns.Stop();
+                _isMdnsRunning = false;
+            }
             _serviceDiscovery.Dispose();
             _mdns.Dispose();
         }
