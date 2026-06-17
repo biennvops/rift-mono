@@ -89,6 +89,22 @@ app-flutter/
 - **Parser Robustness:** Added 9 deterministic fail-closed security test classes to the Dart X.509 ASN.1 parser (`../daemon-dart/test/decoder_test.dart`) to reject malformed/oversized DER inputs.
 - **Test Suite Fixes:** Resolved syntax errors in older screen tests and achieved a 100% green test suite.
 
+### Week 4: Device Discovery & Network Drop Tests
+- **Trusted / Discovered Devices UI (`trusted_devices_screen.dart`):**
+  - Completely revamped into a reactive Material 3 interface that dynamically displays separate lists for `Trusted` (authenticated) and `Discovered` (unauthenticated/mDNS) peers, strictly adhering to the Trust State Machine (`protocol.md` Section 8).
+  - Implemented real-time online/offline presence indicators via UI dots based on daemon events.
+  - Added pull-to-refresh (`RefreshIndicator`) and floating action buttons for starting/stopping discovery.
+- **IPC Event Streams (`json_rpc_client.dart`):**
+  - Extended the JSON-RPC client to support unsolicited server-to-client notifications (`rift.onPeerDiscovered`, `rift.onPeerLost`, `rift.onTrustChanged`).
+  - Upgraded architecture to use `json_rpc_2.Peer` to support bidirectional communication, ensuring the UI accurately reflects daemon state changes without polling.
+  - Implemented rigorous stream cleanup and provider injection methods to prevent memory leaks in the UI and test suites.
+- **Discovery Flow & Capability Negotiation Tests (`discovery_integration_test.dart`):**
+  - Created end-to-end integration tests in `daemon-dart` verifying the full TLS and capability handshake sequence (`session.hello` -> `session.accept` -> `capability.advertise` -> `capability.selected`) across two mock daemon environments.
+  - Confirmed the daemon strictly adheres to Section 6 and Section 9 of the Rift protocol during connection establishment.
+- **Simulated Network Drop Test:**
+  - Emulated a harsh network failure by explicitly terminating the simulated `Transport` channel.
+  - Validated that `SessionManager` detects the disconnection, safely unregisters the session, and throws `SessionException` on subsequent operations, preventing stale connections from persisting.
+
 ## Technical Debt & Known Limitations
 
 While critical crashes and UI bugs have been resolved, the following areas require future attention:

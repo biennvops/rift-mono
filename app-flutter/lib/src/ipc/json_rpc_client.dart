@@ -8,12 +8,22 @@ class JsonRpcRiftClient {
   final IpcTransport _transport;
   final _log = Logger('JsonRpcRiftClient');
 
-  json_rpc.Client? _client;
+  json_rpc.Peer? _client;
   bool _isConnected = false;
 
   JsonRpcRiftClient(this._transport);
 
   bool get isConnected => _isConnected;
+
+  final _peerDiscoveredController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPeerDiscovered => _peerDiscoveredController.stream;
+
+  final _peerLostController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPeerLost => _peerLostController.stream;
+
+  final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onTrustChanged => _trustChangedController.stream;
+
 
   Future<void> connect() async {
     if (_isConnected) return;
@@ -39,7 +49,18 @@ class JsonRpcRiftClient {
         _outController!.sink,
       );
 
-      _client = json_rpc.Client(loggingChannel);
+      _client = json_rpc.Peer(loggingChannel);
+
+      _client!.registerMethod('rift.onPeerDiscovered', (json_rpc.Parameters params) {
+        _peerDiscoveredController.add(params.value as Map<String, dynamic>);
+      });
+      _client!.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
+        _peerLostController.add(params.value as Map<String, dynamic>);
+      });
+      _client!.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
+        _trustChangedController.add(params.value as Map<String, dynamic>);
+      });
+
 
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
@@ -120,5 +141,33 @@ class JsonRpcRiftClient {
       throw StateError('Not connected to daemon');
     }
     return _client!.sendRequest('rift.getDeviceInfo');
+  }
+
+  Future<dynamic> listDiscoveredPeers() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.listDiscoveredPeers');
+  }
+
+  Future<dynamic> listTrustedPeers() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.listTrustedPeers');
+  }
+
+  Future<dynamic> startDiscovery() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.startDiscovery');
+  }
+
+  Future<dynamic> stopDiscovery() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.stopDiscovery');
   }
 }
