@@ -49,7 +49,15 @@ class TransportImpl implements Transport {
     _serverSocket = null;
     for (final socket in _peers.values) {
       // Flush before closing to avoid dropping frames written by sendMessage() concurrently.
-      try { await socket.flush(); } catch (_) {}
+      try {
+        await socket.flush();
+      } on SocketException {
+        // Socket is already unusable during shutdown; closing continues below.
+      } on TlsException {
+        // TLS teardown raced with flush; closing continues below.
+      } on StateError {
+        // Socket already closed; shutdown still proceeds.
+      }
       await socket.close();
     }
     _peers.clear();
@@ -81,7 +89,11 @@ class TransportImpl implements Transport {
             if (actualDeviceId != expectedDeviceId) {
               return false; // Reject MITM immediately during TLS handshake
             }
-          } catch (_) {
+          } on FormatException {
+            return false; // Fail-closed on invalid cert
+          } on ArgumentError {
+            return false; // Fail-closed on invalid cert
+          } on StateError {
             return false; // Fail-closed on invalid cert
           }
         }

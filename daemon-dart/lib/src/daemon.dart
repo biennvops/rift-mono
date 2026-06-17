@@ -3,6 +3,8 @@ import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/network/discovery_service_impl.dart';
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
+import 'package:daemon_dart/src/crypto/trust_store_impl.dart';
+import 'package:daemon_dart/src/interfaces/trust_store.dart';
 
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
@@ -13,6 +15,7 @@ class RiftDaemon {
   DiscoveryServiceImpl? _discoveryService;
   TransportImpl? _transport;
   SessionManager? _sessionManager;
+  TrustStoreImpl? _trustStore;
 
   final String storagePath;
   final int port;
@@ -23,10 +26,13 @@ class RiftDaemon {
     _identityManager = IdentityManagerImpl(storagePath);
     await _identityManager!.initialize();
 
+    _trustStore = TrustStoreImpl(storagePath);
+    await _trustStore!.initialize();
+
     _transport = TransportImpl(_identityManager!, port: port);
     await _transport!.startServer();
 
-    _sessionManager = SessionManager(_transport!, _identityManager!);
+    _sessionManager = SessionManager(_transport!, _identityManager!, _trustStore!);
 
     _discoveryService = DiscoveryServiceImpl(port: port);
     await _discoveryService!.startAdvertising();
@@ -38,6 +44,7 @@ class RiftDaemon {
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
+    _sessionManager?.dispose();
     await _transport?.stopServer();
     await _identityManager?.dispose();
   }
@@ -77,6 +84,37 @@ class RiftDaemon {
                 } catch (e) {
                   sendPort.send({'event': 'connection_error', 'error': e.toString()});
                 }
+              } else if (cmd == 'getPeerPresence') {
+                final peerDeviceId = message['peerDeviceId'] as String;
+                final ctx = daemon._sessionManager!.getContext(peerDeviceId);
+                final trustRecord = await daemon._trustStore!.getTrustRecord(peerDeviceId);
+                sendPort.send({
+                  'event': 'peer_presence',
+                  'deviceId': peerDeviceId,
+                  'status': ctx?.currentPresenceStatus ?? 'offline',
+                  'lastSeenAt': ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ?? trustRecord?.lastSeenAt?.toUtc().toIso8601String(),
+                  'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
+                });
+              } else if (cmd == 'listTrustedPeers') {
+                final peers = await daemon._trustStore!.getAllTrustRecords();
+                final peerList = peers.where((p) => p.state == TrustState.trusted).map((p) {
+                  final ctx = daemon._sessionManager!.getContext(p.deviceId);
+                  return {
+                    'deviceId': p.deviceId,
+                    'fingerprint': p.fingerprint,
+                    'trustState': p.state.toJson(),
+                    'presence': {
+                      'status': ctx?.currentPresenceStatus ?? 'offline',
+                      'lastSeenAt': ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ?? p.lastSeenAt?.toUtc().toIso8601String(),
+                      'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
+                    }
+                  };
+                }).toList();
+                
+                sendPort.send({
+                  'event': 'trusted_peers',
+                  'peers': peerList,
+                });
               }
             }
           });
@@ -89,6 +127,16 @@ class RiftDaemon {
               'address': peer.address,
               'port': peer.port,
               'deviceIdHint': peer.deviceIdHint,
+            });
+          });
+
+          daemon._sessionManager!.onPresenceUpdate.listen((ctx) {
+            sendPort.send({
+              'event': 'presence_update',
+              'deviceId': ctx.peerDeviceId,
+              'status': ctx.currentPresenceStatus,
+              'lastSeenAt': ctx.lastHeartbeatReceived?.toUtc().toIso8601String(),
+              'capabilities': ctx.negotiatedCapabilities.map((c) => c.name).toList(),
             });
           });
 

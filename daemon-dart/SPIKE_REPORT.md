@@ -1,4 +1,4 @@
-# Dart Daemon Assessment & Analysis Report (Week 1-4)
+# Dart Daemon Assessment & Analysis Report (Week 1-6)
 
 **Reference Standard:** `フィナーレ.md` (Master Plan)
 **Component:** Android Daemon (`daemon-dart`)
@@ -6,7 +6,7 @@
 
 ---
 
-## Directory Structure & Important Files (As of Week 4)
+## Directory Structure & Important Files (As of Week 6)
 
 ```text
 daemon-dart/
@@ -18,26 +18,29 @@ daemon-dart/
 │       │   ├── cert_builder.dart           # Generates mTLS X.509 certificate with random 64-bit entropy serials
 │       │   ├── cert_decoder.dart           # Fail-Closed Parser to extract Ed25519 from ASN.1
 │       │   ├── identity_manager_impl.dart  # Generates/stores Ed25519 key, handles Atomic Write and heap zeroing
-│       │   └── pop_manager.dart            # PoP static 113-byte payload builder & verifier
+│       │   ├── pop_manager.dart            # PoP static 113-byte payload builder & verifier
+│       │   └── trust_store_impl.dart       # SQLite trust persistence with lastSeenAt migration
 │       ├── interfaces/
 │       │   ├── clipboard_service.dart      # Abstract Interface managing Clipboard
 │       │   ├── discovery_service.dart      # Abstract Interface managing mDNS with explicit dispose()
 │       │   ├── identity_manager.dart       # Abstract Interface defining Identity info
 │       │   ├── transport.dart              # Abstract Interface managing Network connection and disconnect streams
-│       │   └── trust_store.dart            # Abstract Interface managing trust list
+│       │   └── trust_store.dart            # Abstract Interface managing trust list and lastSeen persistence
 │       ├── network/
 │       │   ├── discovery_service_impl.dart # nsd mDNS Discovery robustly handling network flaps
 │       │   ├── frame_codec.dart            # Stream transformer locking chunks to 64 KiB / 32 MiB bounds
-│       │   ├── session_manager.dart        # Session Orchestrator & PoP validation with active Zone exception catching
+│       │   ├── session_manager.dart        # Session orchestration, capability negotiation, and presence heartbeats
 │       │   └── transport_impl.dart         # mTLS SecureServerSocket with socket flush and peer disconnect tracking
-│       └── daemon.dart                     # IPC try/catch boundary and Isolate orchestrator for Flutter
+│       └── daemon.dart                     # IPC bridge exposing trusted peers and presence state to Flutter
 ├── test/
+│   ├── capability_presence_test.dart       # Capability negotiation and presence validation tests
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
 │   ├── identity_test.dart                  # Unit test to verify valid Device ID, Base32, and key zeroing
-│   └── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
-├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
+│   ├── pop_test.dart                       # PoP signature verification Test Vectors (113-byte dynamic)
+│   └── trust_store_impl_test.dart          # SQLite persistence and migration coverage
+├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, sqlite, meta, uuid, etc.)
 └── README.md                               # Guide for running tests, linter and overall architecture
 ```
 
@@ -80,6 +83,15 @@ daemon-dart/
   - **Low/Conformance (L-1 to L-5):** Corrected `session.reject` and `session.accept` envelope payloads to use the spec-compliant `id` instead of the legacy `messageId`. Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
   - **Documentation & Technical Debt:** Executed a massive comment cleanup across 7 core files (`session_manager.dart`, `cert_builder.dart`, `base32_utils.dart`, etc.). Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
   - **Assessment:** **PASSED (100%)** Zero linter warnings. 35/35 Unit Tests passing (including 2 new frame boundary coverage tests).
+
+- **`[daemon-dart] Capability Negotiation & Presence` (Week 6):** Added authenticated capability negotiation, trusted-peer presence tracking, and durable presence history.
+  - Implemented `capability.advertise` / `capability.selected` negotiation with version intersection, responder-side validation, and a 5-second negotiation timeout.
+  - Added `SessionContext` tracking for negotiated capabilities, trust state, heartbeat timers, and `lastHeartbeatReceived`.
+  - Implemented trusted-peer `presence.update` handling with strict status validation, negotiated-capability enforcement, and durable `lastSeenAt` persistence through `TrustStoreImpl`.
+  - Added SQLite schema migration from trust-store v1 to v2 to preserve older installs while introducing `lastSeenAt`.
+  - Exposed `getPeerPresence` and `listTrustedPeers` responses through the daemon isolate bridge, including capability summaries and persisted timestamps.
+  - Added unit coverage for malformed capability payloads, invalid selected sets, presence validation, heartbeat gating, trust-store persistence, and migration behavior.
+  - **Assessment:** **PASSED (100%)** Zero linter warnings. 43/43 Unit Tests passing.
 
 ---
 

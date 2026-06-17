@@ -26,12 +26,14 @@ class TrustRecord {
   final Uint8List ed25519PublicKey;
   final String fingerprint;
   final TrustState state;
+  final DateTime? lastSeenAt;
 
   TrustRecord({
     required this.deviceId,
     required this.ed25519PublicKey,
     required this.fingerprint,
     required this.state,
+    this.lastSeenAt,
   });
 }
 
@@ -39,8 +41,10 @@ abstract class TrustStore {
   Future<void> initialize();
   Future<void> saveTrustRecord(TrustRecord record);
   Future<TrustRecord?> getTrustRecord(String deviceId);
+  Future<List<TrustRecord>> getAllTrustRecords();
   Future<TrustState> getTrustState(String deviceId);
   Future<void> blockDevice(String deviceId);
   Future<void> revokeDevice(String deviceId, {required String reason});
   Future<void> unblockDevice(String deviceId);
+  Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt);
 }

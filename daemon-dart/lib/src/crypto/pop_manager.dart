@@ -94,7 +94,11 @@ class PoPManager {
 
     try {
       return await algorithm.verify(input, signature: signature);
-    } catch (_) {
+    } on ArgumentError {
+      return false;
+    } on StateError {
+      return false;
+    } on FormatException {
       return false;
     }
   }
