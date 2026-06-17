@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
 import 'package:basic_utils/basic_utils.dart';
+import '../core/rift_exceptions.dart';
 import '../interfaces/identity_manager.dart';
 import 'cert_builder.dart';
 import 'base32_utils.dart';
@@ -26,6 +27,7 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Future<void> initialize() async {
+    // TODO(Security): Backlog item - identity.key is currently stored in plaintext. Needs secure Android Keystore integration.
     var keyFile = File(p.join(storagePath, 'identity.key'));
     if (await keyFile.exists()) {
       _privateKey = await keyFile.readAsBytes();
@@ -43,7 +45,7 @@ class IdentityManagerImpl implements IdentityManager {
       await tempFile.writeAsBytes(_privateKey, flush: true);
       await tempFile.rename(keyFile.path);
       // TODO(Security): Integrate Android Keystore via Flutter channels to avoid
-      // plaintext Ed25519 seed storage. (Target: M3 - Tuần 5)
+      // plaintext Ed25519 seed storage. (Target: M3 - Week 5)
 
       await _derivePublicKey();
     }
@@ -88,7 +90,7 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Uint8List get tlsCertificateDer {
-    if (_tlsCertificateDer == null) throw StateError('IdentityManager not initialized');
+    if (_tlsCertificateDer == null) throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
     return _tlsCertificateDer!;
   }
 
@@ -97,7 +99,7 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List localCertDer) async {
-    if (_cachedKeyPair == null) throw StateError('IdentityManager not initialized');
+    if (_cachedKeyPair == null) throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
     return await PoPManager.generateIdentityProof(
         channelBinding, _publicKey, localCertDer, _privateKey);
   }

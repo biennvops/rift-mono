@@ -1,10 +1,24 @@
+// ignore_for_file: prefer_initializing_formals
+
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/rift_constants.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/pop_manager.dart';
+
+class ProtocolMessage {
+  final String peerDeviceId;
+  final Uint8List? peerCertDer;
+  final Map<String, dynamic> payload;
+
+  ProtocolMessage(this.peerDeviceId, this.peerCertDer, this.payload);
+}
 
 enum SessionState {
   handshaking,
@@ -22,37 +36,93 @@ class SessionException implements Exception {
 class SessionManager {
   final Transport _transport;
   final IdentityManager _identityManager;
+  final Future<bool> Function(String peerDeviceId)? _isPeerAllowed;
   final Map<String, SessionState> _sessions = {};
+  final Set<String> _receivedSessionHello = {};
+  StreamSubscription<TransportMessage>? _messageSubscription;
+  StreamSubscription<String>? _disconnectSubscription;
   
-  // TODO(Blocker): Dart lacks tls-exporter, using a placeholder until ADR resolves Risk 1
-  final Uint8List _dummyChannelBinding = Uint8List.fromList(List.generate(32, (_) => 0));
+  // Stream to broadcast established protocol messages to higher layers (PairingManager, etc.)
+  final _messageController = StreamController<ProtocolMessage>.broadcast();
+  Stream<ProtocolMessage> get onMessage => _messageController.stream;
+  Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
-  SessionManager(this._transport, this._identityManager) {
-    _transport.onMessageReceived.listen(
+  // Risk-1 Mitigation (ADR-0002 fallback): dart:io SecureSocket does not expose
+  // tls-exporter (RFC 9266) or tls-unique (RFC 5929). As the best available
+  // platform-level substitute, we implement an Application Nonce fallback:
+  //   channelBinding = SHA-256(sessionNonce || localCertDer || peerCertDer)
+  // This value is:
+  //   • per-session unique (via the securely generated 32-byte sessionNonce),
+  //   • tied to the specific cert pair (preventing cross-identity replay),
+  //   • effectively preventing cross-session replay of PoP signatures.
+  // If dart:io ever exposes tls-exporter this method should be replaced with the
+  // RFC 9266 label "EXPORTER-RIFT-Ed25519-PoP" derivation.
+  // TODO(Conformance): This is a strict protocol deviation (see ADR-0002). C# daemon MUST support this fallback for interop until Dart adds RFC 9266 support.
+  Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);
+    input.setRange(0, sessionNonce.length, sessionNonce);
+    input.setRange(sessionNonce.length, sessionNonce.length + localCertDer.length, localCertDer);
+    input.setRange(sessionNonce.length + localCertDer.length, input.length, peerCertDer);
+    return Uint8List.fromList(sha256.convert(input).bytes);
+  }
+
+  Uint8List _generateSessionNonce() {
+    final random = Random.secure();
+    return Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+  }
+
+  final Set<String> _requiredCapabilityNames = const {
+    'clipboard.offer_fetch',
+    'presence.basic',
+    'operation.lifecycle',
+    'security.event_log',
+  };
+
+  SessionManager(this._transport, this._identityManager, {Future<bool> Function(String peerDeviceId)? isPeerAllowed})
+      : _isPeerAllowed = isPeerAllowed {
+    _messageSubscription = _transport.onMessageReceived.listen(
       (msg) => _handleMessage(msg).catchError((Object e) {
         _transport.disconnect(msg.peerDeviceId);
       }),
     );
     // Prune stale session state on disconnect so a reconnecting peer isn't
     // rejected by the double-hello guard.
-    _transport.onPeerDisconnected.listen(_sessions.remove);
+    _disconnectSubscription = _transport.onPeerDisconnected.listen((peerDeviceId) {
+      _sessions.remove(peerDeviceId);
+      _receivedSessionHello.remove(peerDeviceId);
+    });
   }
 
   Future<void> sendSessionHello(String peerDeviceId) async {
+    if (_sessions.containsKey(peerDeviceId)) {
+      throw SessionException('Cannot send session.hello twice on the same connection for $peerDeviceId');
+    }
+
     // Sign over the local cert DER — the verifier reconstructs the same input
     // from the peer's cert carried in the TLS handshake (spec §5.3).
+    // Channel binding is computed from both certs (Risk-1 ADR-0002 fallback).
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw SessionException('Cannot compute channel binding: peer cert not available for $peerDeviceId');
+    }
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
-      'rift': '0.1-draft',
-      'id': const Uuid().v4(),
+      'rift': RiftConstants.protocolVersion,
+      'messageId': const Uuid().v4(),
       'type': 'session.hello',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
+        'supportedVersions': [RiftConstants.protocolVersion],
         'deviceId': _identityManager.deviceId,
-        'fingerprint': _identityManager.getDeviceFingerprint().map((b) => b.toRadixString(16).padLeft(2, '0')).join(''),
+        'implementationId': RiftConstants.implementationId,
+        'capabilities': RiftConstants.capabilities,
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
     };
@@ -61,13 +131,70 @@ class SessionManager {
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
   }
 
+  Future<void> sendMessage(String peerDeviceId, Map<String, dynamic> payload) async {
+    if (_sessions[peerDeviceId] != SessionState.established) {
+      throw SessionException('Cannot send message: Session not established with $peerDeviceId');
+    }
+    await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+
+  void disconnectPeer(String peerDeviceId) {
+    _sessions.remove(peerDeviceId);
+    _receivedSessionHello.remove(peerDeviceId);
+    _transport.disconnect(peerDeviceId);
+  }
+
   Future<void> _handleMessage(TransportMessage msg) async {
-    final payloadStr = utf8.decode(msg.payload);
-    final jsonMap = json.decode(payloadStr) as Map<String, dynamic>;
+    late final Map<String, dynamic> jsonMap;
+    try {
+      final payloadStr = utf8.decode(msg.payload);
+      final parsed = json.decode(payloadStr);
+      if (parsed is! Map<String, dynamic>) {
+        await _rejectSession(msg.peerDeviceId, 'MalformedMessage', 'Non-object message payload');
+        return;
+      }
+      jsonMap = parsed;
+    } on FormatException {
+      await _rejectSession(msg.peerDeviceId, 'MalformedMessage', 'Invalid JSON payload');
+      return;
+    }
+
+    final protocolVersion = jsonMap['rift'] as String?;
+    if (protocolVersion != RiftConstants.protocolVersion) {
+      await _rejectSession(msg.peerDeviceId, 'VersionMismatch', 'Unsupported protocol version');
+      return;
+    }
+
+    final messageId = jsonMap['messageId'] as String?;
+    if (messageId == null || messageId.isEmpty) {
+      await _rejectSession(msg.peerDeviceId, 'MalformedMessage', 'Missing messageId');
+      return;
+    }
 
     final type = jsonMap['type'] as String?;
+    if (type == null || type.isEmpty) {
+      await _rejectSession(msg.peerDeviceId, 'MalformedMessage', 'Missing type');
+      return;
+    }
     final peerDeviceId = msg.peerDeviceId;
     final envelopeSourceDeviceId = jsonMap['sourceDeviceId'] as String?;
+    final destinationDeviceId = jsonMap['destinationDeviceId'] as String?;
+    final requiredExtensions = jsonMap['requiredExtensions'];
+
+    if (destinationDeviceId != null && destinationDeviceId != _identityManager.deviceId) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'destinationDeviceId mismatch');
+      return;
+    }
+
+    if (requiredExtensions != null) {
+      if (requiredExtensions is! List) {
+        await _rejectSession(peerDeviceId, 'ProtocolError', 'requiredExtensions must be an array');
+        return;
+      } else if (requiredExtensions.isNotEmpty) {
+        await _rejectSession(peerDeviceId, 'ProtocolError', 'Unknown requiredExtensions');
+        return;
+      }
+    }
 
     // ENVELOPE VALIDATION: §6 - device ID MUST match the authenticated TLS identity
     if (envelopeSourceDeviceId != peerDeviceId) {
@@ -77,18 +204,109 @@ class SessionManager {
 
     if (type == 'session.hello') {
       await _handleSessionHello(msg, jsonMap);
+    } else if (type == 'session.accept' || type == 'session.reject') {
+      if (type == 'session.accept') {
+        final payload = jsonMap['payload'] as Map<String, dynamic>?;
+        final selectedVersion = payload?['selectedVersion'] as String?;
+        final payloadDeviceId = payload?['deviceId'] as String?;
+        final identityProofHex = payload?['identityProof'] as String?;
+        final capabilities = payload?['capabilities'] as List?;
+        final identityVerified = payload?['identityVerified'];
+        final sessionNonceStr = payload?['sessionNonce'] as String?;
+        if (selectedVersion != RiftConstants.protocolVersion) {
+          await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
+          return;
+        }
+        if (identityVerified != true) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'session.accept missing identityVerified: true');
+          return;
+        }
+        if (payloadDeviceId != peerDeviceId) {
+          await _rejectSession(peerDeviceId, 'Unauthorized', 'session.accept deviceId mismatch');
+          return;
+        }
+        if (capabilities == null || !_hasRequiredCapabilities(capabilities)) {
+          await _rejectSession(peerDeviceId, 'CapabilityUnavailable', 'Missing required capabilities');
+          return;
+        }
+        if (identityProofHex == null || msg.peerEd25519Key == null || msg.peerCertDer == null) {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identity proof or cert');
+          return;
+        }
+
+        // Reconstruct the same channel binding the peer used when signing:
+        // SHA-256(peerCertDer || localCertDer) — note the order is swapped
+        // because from the peer's perspective, their cert is "local" and ours
+        // is "peer". We reverse here to match.
+        final localCertDer = _identityManager.tlsCertificateDer;
+        final peerCertDer = msg.peerCertDer!;
+        
+        if (sessionNonceStr == null) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+          return;
+        }
+
+        late final Uint8List peerNonce;
+        try {
+          peerNonce = base64.decode(sessionNonceStr);
+        } on FormatException {
+          await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+          return;
+        }
+
+        if (peerNonce.length != 32) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+          return;
+        }
+
+        final channelBindingForVerify = Uint8List(
+            peerNonce.length + peerCertDer.length + localCertDer.length);
+        channelBindingForVerify.setRange(0, peerNonce.length, peerNonce);
+        channelBindingForVerify.setRange(
+            peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+        channelBindingForVerify.setRange(
+            peerNonce.length + peerCertDer.length, channelBindingForVerify.length, localCertDer);
+        final channelBinding = Uint8List.fromList(
+            sha256.convert(channelBindingForVerify).bytes);
+
+        final isValidPoP = await PoPManager.verifyIdentityProof(
+          identityProofHex,
+          channelBinding,
+          msg.peerEd25519Key!,
+          peerCertDer,
+        );
+
+        if (!isValidPoP) {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Invalid PoP Signature');
+          throw SessionException('SecurityError: Invalid PoP Signature on session.accept');
+        }
+
+        _sessions[peerDeviceId] = SessionState.established;
+        _transport.setPeerAuthenticated(peerDeviceId);
+      } else {
+        _sessions.remove(peerDeviceId);
+        _transport.disconnect(peerDeviceId);
+      }
     } else {
       if (_sessions[peerDeviceId] != SessionState.established) {
         await _rejectSession(peerDeviceId, 'Unauthorized', 'Session not established');
+        return;
       }
+      
+      // Dispatch established messages to higher layers
+      _messageController.add(ProtocolMessage(
+        msg.peerDeviceId,
+        msg.peerCertDer,
+        jsonMap,
+      ));
     }
   }
 
   Future<void> _rejectSession(String peerDeviceId, String failureReason, String message) async {
     final payload = {
-      'rift': '0.1-draft',
+      'rift': RiftConstants.protocolVersion,
       'type': 'session.reject',
-      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
@@ -102,13 +320,13 @@ class SessionManager {
 
   Future<void> _handleSessionHello(TransportMessage msg, Map<String, dynamic> jsonMap) async {
     final peerDeviceId = msg.peerDeviceId;
-    final currentState = _sessions[peerDeviceId] ?? SessionState.handshaking;
 
     // Risk 6 Mitigation: Prevent Double session.hello
-    if (currentState == SessionState.established) {
+    if (_receivedSessionHello.contains(peerDeviceId)) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Double session.hello received');
       throw SessionException('ProtocolError: Double session.hello received from $peerDeviceId');
     }
+    _receivedSessionHello.add(peerDeviceId);
 
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
     if (payload == null) {
@@ -122,6 +340,33 @@ class SessionManager {
       return;
     }
 
+    final supportedVersions = payload['supportedVersions'];
+    final payloadDeviceId = payload['deviceId'] as String?;
+    if (supportedVersions is! List || !supportedVersions.contains(RiftConstants.protocolVersion)) {
+      await _rejectSession(peerDeviceId, 'VersionMismatch', 'No mutually supported protocol version');
+      return;
+    }
+    if (payloadDeviceId != peerDeviceId) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'session.hello deviceId mismatch');
+      return;
+    }
+
+    final implementationId = payload['implementationId'] as String?;
+    if (implementationId == null || implementationId.isEmpty) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing implementationId');
+      return;
+    }
+
+    if (payload['capabilities'] is! List) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing capabilities');
+      return;
+    }
+
+    if (!await _isPeerAllowedForSession(peerDeviceId)) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'peer identity is blocked or revoked');
+      throw SessionException('Unauthorized: peer identity is blocked or revoked');
+    }
+
     // Risk 3 Mitigation: Strictly use the identity extracted from the TLS Certificate!
     // We absolutely IGNORE payload['deviceId'] for PoP verification.
     if (msg.peerEd25519Key == null || msg.peerCertDer == null) {
@@ -129,11 +374,41 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
+    // Reconstruct channel binding: from the peer's perspective their cert is
+    // "local" and ours is "peer", so we reverse the concatenation order.
+    final localCertDer = _identityManager.tlsCertificateDer;
+    final peerCertDer = msg.peerCertDer!;
+    final sessionNonceStr = payload['sessionNonce'] as String?;
+
+    if (sessionNonceStr == null) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+      return;
+    }
+
+    late final Uint8List peerNonce;
+    try {
+      peerNonce = base64.decode(sessionNonceStr);
+    } on FormatException {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+      return;
+    }
+
+    if (peerNonce.length != 32) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+      return;
+    }
+
+    final cbInput = Uint8List(peerNonce.length + peerCertDer.length + localCertDer.length);
+    cbInput.setRange(0, peerNonce.length, peerNonce);
+    cbInput.setRange(peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+    cbInput.setRange(peerNonce.length + peerCertDer.length, cbInput.length, localCertDer);
+    final channelBindingHello = Uint8List.fromList(sha256.convert(cbInput).bytes);
+
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
-      _dummyChannelBinding,
+      channelBindingHello,
       msg.peerEd25519Key!,
-      msg.peerCertDer!,
+      peerCertDer,
     );
 
     if (!isValidPoP) {
@@ -148,30 +423,59 @@ class SessionManager {
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    // Same PoP binding: sign over the local cert DER (spec §5.3).
+    // Same cert-based channel binding used in sendSessionHello:
+    // SHA-256(localCertDer || peerCertDer) — consistent with signing side.
     final localCertDer = _identityManager.tlsCertificateDer;
-    final proofHex = await _identityManager.generateIdentityProof(_dummyChannelBinding, localCertDer);
+    final peerCertDer = msg.peerCertDer ?? _transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw SessionException(
+          'Cannot compute channel binding for session.accept: peer cert missing for $peerDeviceId');
+    }
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
+    final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
-      'rift': '0.1-draft',
+      'rift': RiftConstants.protocolVersion,
       'type': 'session.accept',
-      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {
-        'selectedVersion': '0.1-draft',
+        'selectedVersion': RiftConstants.protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
-        'capabilities': [
-          { 'name': 'clipboard.offer_fetch', 'version': 1 },
-          { 'name': 'presence.basic', 'version': 1 },
-          { 'name': 'operation.lifecycle', 'version': 1 },
-          { 'name': 'security.event_log', 'version': 1 }
-        ]
+        'capabilities': RiftConstants.capabilities,
       }
     };
 
     await _transport.sendMessage(peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+  }
+
+  Future<bool> _isPeerAllowedForSession(String peerDeviceId) async {
+    final resolver = _isPeerAllowed;
+    if (resolver == null) return true;
+    return await resolver(peerDeviceId);
+  }
+
+  bool _hasRequiredCapabilities(List capabilities) {
+    final advertised = <String>{};
+    for (final capability in capabilities) {
+      if (capability is Map<String, dynamic>) {
+        final name = capability['name'];
+        if (name is String) {
+          advertised.add(name);
+        }
+      }
+    }
+    return advertised.containsAll(_requiredCapabilityNames);
+  }
+  
+  Future<void> dispose() async {
+    await _messageSubscription?.cancel();
+    await _disconnectSubscription?.cancel();
+    await _messageController.close();
   }
 }

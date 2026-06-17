@@ -19,7 +19,17 @@ class RiftCertDecoder {
   static Uint8List extractEd25519PublicKey(String pem) {
     try {
       var certBytes = CryptoUtils.getBytesFromPEMString(pem);
-      var parser = ASN1Parser(certBytes);
+      return extractEd25519PublicKeyFromDer(certBytes);
+    } catch (e) {
+      if (e is CertificateDecoderException) rethrow;
+      throw CertificateDecoderException('Failed to parse PEM certificate: $e');
+    }
+  }
+
+  /// Extracts the Ed25519 public key from a Rift mTLS certificate in DER format.
+  static Uint8List extractEd25519PublicKeyFromDer(Uint8List der) {
+    try {
+      var parser = ASN1Parser(der);
       var certObj = parser.nextObject();
 
       if (certObj is! ASN1Sequence || certObj.elements.isEmpty) {
