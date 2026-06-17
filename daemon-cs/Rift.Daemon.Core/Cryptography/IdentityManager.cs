@@ -97,7 +97,7 @@ public class IdentityManager : IIdentityManager
             using var ms = new MemoryStream();
             store.Save(ms, "password".ToCharArray(), random);
             
-            _tlsCertificate = new X509Certificate2(ms.ToArray(), "password", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+            _tlsCertificate = X509CertificateLoader.LoadPkcs12(ms.ToArray(), "password", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
         }
     }
 
@@ -153,5 +153,14 @@ public class IdentityManager : IIdentityManager
         // Chunk into 8 groups of 4 characters
         var chunks = Enumerable.Range(0, 8).Select(i => base32.Substring(i * 4, 4));
         return string.Join("-", chunks);
+    }
+
+    public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature)
+    {
+        var verifier = SignerUtilities.GetSigner("Ed25519");
+        var pubKeyParam = new Ed25519PublicKeyParameters(publicKey, 0);
+        verifier.Init(false, pubKeyParam);
+        verifier.BlockUpdate(data, 0, data.Length);
+        return verifier.VerifySignature(signature);
     }
 }
