@@ -195,9 +195,12 @@ class RiftCertBuilder {
       }
       lines.add('-----END CERTIFICATE-----');
       return lines.join('\n');
-    } catch (e) {
-      if (e is CertificateBuilderException) rethrow;
-      throw CertificateBuilderException('Failed to generate self-signed certificate', e);
+    } on FormatException catch (e) {
+      throw CertificateBuilderException('Format error while generating certificate', e);
+    } on ArgumentError catch (e) {
+      throw CertificateBuilderException('Invalid argument in certificate generation', e);
+    } on StateError catch (e) {
+      throw CertificateBuilderException('State error in certificate generation', e);
     }
   }
 }

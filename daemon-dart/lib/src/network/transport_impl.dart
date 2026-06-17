@@ -156,8 +156,10 @@ class TransportImpl implements Transport {
         }
       });
 
-    } catch (e) {
+    } on FormatException {
       // Fail-closed: destroy socket if cert is missing the Rift extension.
+      socket.destroy();
+    } on ArgumentError {
       socket.destroy();
     }
   }
@@ -191,13 +193,14 @@ class TransportImpl implements Transport {
     final socket = _peers[deviceId];
     if (socket != null) {
       try {
-        final jsonStr = utf8.decode(message);
-        final jsonMap = json.decode(jsonStr) as Map<String, dynamic>;
-        final frame = RiftFrameCodec.encode(jsonMap);
+        final frame = RiftFrameCodec.encodeBytes(message);
         socket.add(frame);
         await socket.flush();
-      } catch (e) {
+      } on SocketException {
         disconnect(deviceId);
+      } on FrameCodecException {
+        // Drop the message without crashing if it's too large or empty, caller will know
+        rethrow;
       }
     }
   }

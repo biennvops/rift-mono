@@ -478,7 +478,11 @@ class SessionManager {
   }
 
   void _startHeartbeatIfTrusted(SessionContext ctx) {
-    if (ctx.trustState == TrustState.trusted && ctx.hasCapability('presence.basic')) {
+    if (ctx.trustState == TrustState.trusted && 
+        ctx.hasCapability('presence.basic') &&
+        ctx.hasCapability('clipboard.offer_fetch') &&
+        ctx.hasCapability('operation.lifecycle') &&
+        ctx.hasCapability('security.event_log')) {
       ctx.currentPresenceStatus = 'online';
       ctx.lastHeartbeatReceived = DateTime.now();
       _presenceUpdateController.add(ctx);

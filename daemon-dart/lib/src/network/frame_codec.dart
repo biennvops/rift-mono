@@ -37,6 +37,24 @@ class RiftFrameCodec {
     return frame;
   }
 
+  /// Encodes a pre-serialized JSON byte payload into a Rift protocol frame.
+  static Uint8List encodeBytes(Uint8List payloadBytes) {
+    var length = payloadBytes.length;
+
+    if (length == 0) {
+      throw FrameCodecException('Cannot encode empty payload');
+    }
+    if (length > maxFrameSizePostAuth) {
+      throw FrameCodecException('Payload too large: $length bytes (absolute max $maxFrameSizePostAuth)');
+    }
+
+    var frame = Uint8List(4 + length);
+    var byteData = ByteData.view(frame.buffer);
+    byteData.setUint32(0, length, Endian.big);
+    frame.setRange(4, frame.length, payloadBytes);
+    return frame;
+  }
+
   /// Decodes a Rift protocol frame into a JSON object.
   /// Note: The input [frameBytes] must be EXACTLY the complete frame
   /// (length prefix + payload). Stream chunking must be handled at the transport layer.

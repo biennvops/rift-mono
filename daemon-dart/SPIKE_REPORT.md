@@ -91,6 +91,7 @@ daemon-dart/
   - Added SQLite schema migration from trust-store v1 to v2 to preserve older installs while introducing `lastSeenAt`.
   - Exposed `getPeerPresence` and `listTrustedPeers` responses through the daemon isolate bridge, including capability summaries and persisted timestamps.
   - Added unit coverage for malformed capability payloads, invalid selected sets, presence validation, heartbeat gating, trust-store persistence, and migration behavior.
+  - **Battery Impact Check Status:** The heartbeat implementation is in place and ready for measurement, but real-device battery evidence is still pending. The required verification remains: run Android foreground-service measurements on at least one physical device in idle mode and in "1 trusted peer heartbeat" mode, capture `adb shell dumpsys batterystats` output, then record the observed drain and any interval/backoff decision here.
   - **Assessment:** **PASSED (100%)** Zero linter warnings. 43/43 Unit Tests passing.
 
 ---

@@ -145,16 +145,11 @@ class TrustStoreImpl implements TrustStore {
 
   @override
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {
-    final record = await getTrustRecord(deviceId);
-    if (record != null) {
-      final updated = TrustRecord(
-        deviceId: record.deviceId,
-        ed25519PublicKey: record.ed25519PublicKey,
-        fingerprint: record.fingerprint,
-        state: record.state,
-        lastSeenAt: lastSeenAt,
-      );
-      await saveTrustRecord(updated);
-    }
+    await _db.update(
+      'trusted_peers',
+      {'lastSeenAt': lastSeenAt.toIso8601String()},
+      where: 'deviceId = ?',
+      whereArgs: [deviceId],
+    );
   }
 }
