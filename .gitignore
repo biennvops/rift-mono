@@ -70,3 +70,6 @@ temp/
 *.iml
 **/.metadata
 .idea/
+\n# AI tools\n.agents/\n.codex/
+\n# Gradle\n.gradle/
+**/.gradle/

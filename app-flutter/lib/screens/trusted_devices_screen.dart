@@ -18,6 +18,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   String? _error;
   
   StreamSubscription? _discoverySub;
+  StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
 
   @override
@@ -33,6 +34,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   @override
   void dispose() {
     _discoverySub?.cancel();
+    _peerLostSub?.cancel();
     _trustSub?.cancel();
     super.dispose();
   }
@@ -40,6 +42,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   void _setupListeners() {
     final client = context.read<JsonRpcRiftClient>();
     _discoverySub = client.onPeerDiscovered.listen((_) => _loadData());
+    _peerLostSub = client.onPeerLost.listen((_) => _loadData());
     _trustSub = client.onTrustChanged.listen((_) => _loadData());
   }
 
@@ -64,6 +67,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _trustedPeers = trustedResult['peers'] ?? [];
           _discoveredPeers = discoveredResult['peers'] ?? [];
+          if (discoveredResult['isDiscovering'] != null) {
+            _isDiscovering = discoveredResult['isDiscovering'] as bool;
+          }
           _error = null;
         });
       }
@@ -101,6 +107,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final isOnline = peer['presence'] == 'online';
     final theme = Theme.of(context);
     
+    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
+    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = peer['displayName'] ?? (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
+
     return Card(
       elevation: 0,
       color: isTrusted 
@@ -125,7 +135,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         ),
         title: Text(
-          peer['displayName'] ?? (peer['deviceId'] != null ? peer['deviceId'].toString().substring(0, 16) : 'Unknown Device'),
+          titleText,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         subtitle: Column(
@@ -156,13 +166,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ],
         ),
         trailing: isTrusted 
-          ? IconButton(
-              icon: const Icon(Icons.settings),
-              onPressed: () {}, // Future config options
+          ? const IconButton(
+              icon: Icon(Icons.settings),
+              onPressed: null, // Future config options
             )
-          : ElevatedButton(
-              onPressed: () {}, // Future pair logic
-              child: const Text('Pair'),
+          : const ElevatedButton(
+              onPressed: null, // Future pair logic
+              child: Text('Pair'),
             ),
       ),
     );

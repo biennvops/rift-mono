@@ -12,7 +12,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
-  final Set<String> _seenInstanceIds = {};
+  final _peerLostController = StreamController<String>.broadcast();
+  final Map<String, DiscoveredPeer> _seenPeers = {};
 
   DiscoveryServiceImpl({
     required this.port,
@@ -50,6 +51,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
   Stream<DiscoveredPeer> get onDeviceDiscovered => _peerStreamController.stream;
 
   @override
+  Stream<String> get onDeviceLost => _peerLostController.stream;
+
+  @override
   Future<void> startDiscovery() async {
     if (_discovery != null) return;
     
@@ -63,7 +67,11 @@ class DiscoveryServiceImpl implements DiscoveryService {
       };
 
       // Evict removed instances so they can be re-discovered after a mDNS flap.
-      _seenInstanceIds.removeWhere((id) => !currentIds.contains(id));
+      final lostIds = _seenPeers.keys.toSet().difference(currentIds);
+      for (final id in lostIds) {
+        final peer = _seenPeers.remove(id)!;
+        _peerLostController.add(peer.deviceIdHint ?? peer.instanceId);
+      }
 
       for (final service in _discovery!.services) {
         final instanceId = service.name;
@@ -72,9 +80,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
         if (instanceId == null || service.host == null || service.port == null) {
           continue;
         }
-        if (!_seenInstanceIds.contains(instanceId)) {
-          _seenInstanceIds.add(instanceId);
-          
+        if (!_seenPeers.containsKey(instanceId)) {
           final txt = service.txt ?? {};
           final minV = txt['minV'] != null ? String.fromCharCodes(txt['minV']!) : 'unknown';
           final maxV = txt['maxV'] != null ? String.fromCharCodes(txt['maxV']!) : 'unknown';
@@ -90,6 +96,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
             deviceIdHint: did,
             fingerprintPrefix: fp,
           );
+          _seenPeers[instanceId] = peer;
           _peerStreamController.add(peer);
         }
       }
@@ -101,7 +108,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_discovery != null) {
       await nsd.stopDiscovery(_discovery!);
       _discovery = null;
-      _seenInstanceIds.clear(); // Reset tracking when discovery stops
+      _seenPeers.clear(); // Reset tracking when discovery stops
     }
   }
 
@@ -110,5 +117,6 @@ class DiscoveryServiceImpl implements DiscoveryService {
     await stopAdvertising();
     await stopDiscovery();
     await _peerStreamController.close();
+    await _peerLostController.close();
   }
 }

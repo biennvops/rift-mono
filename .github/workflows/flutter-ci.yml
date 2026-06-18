@@ -25,3 +25,21 @@ jobs:
       - name: Run tests
         run: flutter test --coverage
         working-directory: app-flutter
+
+  daemon-dart-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: Install dependencies
+        run: dart pub get
+        working-directory: daemon-dart
+      - name: Analyze
+        run: dart analyze
+        working-directory: daemon-dart
+      - name: Run tests
+        run: dart test
+        working-directory: daemon-dart

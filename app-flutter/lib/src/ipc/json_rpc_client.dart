@@ -15,13 +15,13 @@ class JsonRpcRiftClient {
 
   bool get isConnected => _isConnected;
 
-  final _peerDiscoveredController = StreamController<Map<String, dynamic>>.broadcast();
+  late final _peerDiscoveredController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onPeerDiscovered => _peerDiscoveredController.stream;
 
-  final _peerLostController = StreamController<Map<String, dynamic>>.broadcast();
+  late final _peerLostController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onPeerLost => _peerLostController.stream;
 
-  final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
+  late final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onTrustChanged => _trustChangedController.stream;
 
 
@@ -52,16 +52,20 @@ class JsonRpcRiftClient {
       _client = json_rpc.Peer(loggingChannel);
 
       _client!.registerMethod('rift.onPeerDiscovered', (json_rpc.Parameters params) {
-        _peerDiscoveredController.add(params.value as Map<String, dynamic>);
+        if (params.value is Map) {
+          _peerDiscoveredController.add(Map<String, dynamic>.from(params.value as Map));
+        }
       });
       _client!.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
-        _peerLostController.add(params.value as Map<String, dynamic>);
+        if (params.value is Map) {
+          _peerLostController.add(Map<String, dynamic>.from(params.value as Map));
+        }
       });
       _client!.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
-        _trustChangedController.add(params.value as Map<String, dynamic>);
+        if (params.value is Map) {
+          _trustChangedController.add(Map<String, dynamic>.from(params.value as Map));
+        }
       });
-
-
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
         _log.warning('RPC Connection closed');
@@ -134,6 +138,13 @@ class JsonRpcRiftClient {
     await _outController?.close();
     _outController = null;
     await _transport.disconnect();
+  }
+
+  void dispose() {
+    disconnect();
+    _peerDiscoveredController.close();
+    _peerLostController.close();
+    _trustChangedController.close();
   }
 
   Future<dynamic> getDeviceInfo() async {
