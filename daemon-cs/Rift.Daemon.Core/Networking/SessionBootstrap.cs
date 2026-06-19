@@ -52,12 +52,17 @@ public class SessionBootstrap
         return (bindingType, _identityManager.SignEd25519(signingInput), sessionNonce);
     }
 
+    private static readonly string[] ValidBindingTypes = ["tls-exporter", "tls-unique", "app-nonce"];
+
     /// <summary>
     /// Verifies the identityProof received from a peer (Spec §5.3)
     /// </summary>
     public bool VerifyIdentityProof(SslStream sslStream, byte[] peerEd25519PubKey, X509Certificate2 peerCert,
         byte[] signatureBytes, string peerBindingType, byte[]? peerSessionNonce = null)
     {
+        if (Array.IndexOf(ValidBindingTypes, peerBindingType) < 0)
+            throw new InvalidOperationException($"Unrecognized bindingType: '{peerBindingType}'.");
+
         byte[] channelBinding;
 
         if (peerBindingType == "app-nonce")
@@ -68,9 +73,15 @@ public class SessionBootstrap
             var localCert = _identityManager.GetTlsCertificate();
             channelBinding = ComputeAppNonceBinding(peerSessionNonce, peerCert.GetRawCertData(), localCert.GetRawCertData());
         }
-        else
+        else if (peerBindingType == "tls-unique")
         {
             channelBinding = GetTlsChannelBinding(sslStream);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"C# daemon does not yet support verifying bindingType '{peerBindingType}'. " +
+                "tls-exporter requires SslStream.ExportKeyingMaterial (not yet available in .NET).");
         }
 
         using var sha256 = SHA256.Create();
@@ -97,7 +108,7 @@ public class SessionBootstrap
             var tlsBinding = GetTlsChannelBinding(sslStream);
             return ("tls-unique", tlsBinding, null);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex) when (ex.Message.Contains("unavailable") || ex.Message.Contains("not supported"))
         {
             // TLS channel binding unavailable — fall back to Tier 3 (app-nonce).
         }
@@ -232,7 +243,10 @@ public class SessionBootstrap
             payload = payload
         };
 
-        var json = JsonSerializer.Serialize(envelope);
+        var json = JsonSerializer.Serialize(envelope, new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
         var frame = RiftFrame.Encode(Encoding.UTF8.GetBytes(json));
 
         await stream.WriteAsync(frame, cancellationToken);

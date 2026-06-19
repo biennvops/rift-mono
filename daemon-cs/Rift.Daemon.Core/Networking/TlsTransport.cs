@@ -237,6 +237,11 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException($"{expectedType} did not include bindingType.");
             }
 
+            if (bindingType is not ("tls-exporter" or "tls-unique" or "app-nonce"))
+            {
+                throw new InvalidOperationException($"{expectedType} contained unrecognized bindingType '{bindingType}'.");
+            }
+
             byte[]? peerSessionNonce = null;
             if (bindingType == "app-nonce")
             {
@@ -246,6 +251,10 @@ public sealed class TlsTransport : ITransport, IDisposable
                     throw new InvalidOperationException($"{expectedType} app-nonce binding requires sessionNonce.");
                 }
                 peerSessionNonce = Convert.FromBase64String(nonceStr);
+                if (peerSessionNonce.Length != 32)
+                {
+                    throw new InvalidOperationException($"{expectedType} sessionNonce must be exactly 32 bytes, got {peerSessionNonce.Length}.");
+                }
             }
 
             var signatureBytes = Convert.FromHexString(identityProofHex);
