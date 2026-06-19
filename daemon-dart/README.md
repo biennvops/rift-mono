@@ -36,12 +36,12 @@ This is the core background module (daemon) on Android for the Rift project, dev
 
 ## 2. Usage Guide & Basic Commands
 
-> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before typing any `dart` commands.
+> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before running the package commands.
 
 ### 2.1. Install Dependencies
 Before working, ensure you have downloaded enough libraries (`pointycastle`, `asn1lib`, `cryptography`, `nsd`, `uuid`, `crypto`):
 ```bash
-dart pub get
+flutter pub get
 ```
 
 ### 2.2. Code Quality Check (Linter)

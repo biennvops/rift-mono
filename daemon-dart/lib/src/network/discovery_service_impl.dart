@@ -56,9 +56,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
   @override
   Future<void> startDiscovery() async {
     if (_discovery != null) return;
-    
+
     _discovery = await nsd.startDiscovery('_rift._tcp');
-    
+
     _discovery!.addListener(() {
       // Compute the set of currently-active instance IDs.
       final currentIds = {
@@ -77,15 +77,25 @@ class DiscoveryServiceImpl implements DiscoveryService {
         final instanceId = service.name;
         // Skip services without a name — using a fallback would collapse all
         // null-named peers into one dedup entry and suppress re-discovery.
-        if (instanceId == null || service.host == null || service.port == null) {
+        if (instanceId == null ||
+            service.host == null ||
+            service.port == null) {
           continue;
         }
         if (!_seenPeers.containsKey(instanceId)) {
           final txt = service.txt ?? {};
-          final minV = txt['minV'] != null ? String.fromCharCodes(txt['minV']!) : 'unknown';
-          final maxV = txt['maxV'] != null ? String.fromCharCodes(txt['maxV']!) : 'unknown';
-          final did = txt['did'] != null ? String.fromCharCodes(txt['did']!) : null;
-          final fp = txt['fp'] != null ? String.fromCharCodes(txt['fp']!) : null;
+          final minV = txt['minV'] != null
+              ? String.fromCharCodes(txt['minV']!)
+              : 'unknown';
+          final maxV = txt['maxV'] != null
+              ? String.fromCharCodes(txt['maxV']!)
+              : 'unknown';
+          final did = txt['did'] != null
+              ? String.fromCharCodes(txt['did']!)
+              : null;
+          final fp = txt['fp'] != null
+              ? String.fromCharCodes(txt['fp']!)
+              : null;
 
           final peer = DiscoveredPeer(
             instanceId: instanceId,
