@@ -196,20 +196,22 @@ class TransportImpl implements Transport {
       throw StateError('Peer $deviceId is not connected');
     }
 
-    late final Map<String, dynamic> jsonMap;
+    // Validate outbound payload once, then frame the original bytes without re-encoding.
     try {
       final jsonStr = utf8.decode(message);
       final decoded = json.decode(jsonStr);
       if (decoded is! Map<String, dynamic>) {
         throw const FormatException('Outbound payload must be a JSON object');
       }
-      jsonMap = decoded;
     } on FormatException {
       disconnect(deviceId);
       rethrow;
     }
 
-    final frame = RiftFrameCodec.encode(jsonMap);
+    // Avoid double JSON serialization overhead:
+    // - we already have `message` (UTF-8 JSON bytes)
+    // - framing only needs the length prefix
+    final frame = RiftFrameCodec.encodeBytes(message);
     try {
       socket.add(frame);
       await socket.flush();

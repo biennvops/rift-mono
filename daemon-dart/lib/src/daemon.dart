@@ -83,7 +83,7 @@ class RiftDaemon {
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
     await _transport?.stopServer();
-    _sessionManager?.dispose();
+    await _sessionManager?.dispose();
     _trustStore?.dispose();
     await _identityManager?.dispose();
   }

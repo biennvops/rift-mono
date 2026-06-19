@@ -143,7 +143,7 @@ void main() {
     sessionManager.dispose();
   });
 
-  test('advertise hợp lệ: peer gửi advertise đúng chuẩn', () async {
+  test('valid advertise: peer sends well-formed capability.advertise', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;
     ctx.trustState = TrustState.trusted;
@@ -176,7 +176,7 @@ void main() {
     expect(ctx.currentPresenceStatus, equals('online'));
   });
 
-  test('malformed capability payload bị reject', () async {
+  test('malformed capability payload is rejected', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;
     sessionManager.injectContextForTesting(ctx);
@@ -249,7 +249,7 @@ void main() {
     expect(reply['payload']['message'], contains('Unnegotiated capability in presence update'));
   });
 
-  test('thiếu presence.basic capability không start heartbeat ngay cả khi trusted', () async {
+  test('missing presence.basic capability does not start heartbeat even when trusted', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;
     ctx.trustState = TrustState.trusted;

@@ -180,7 +180,7 @@ class SessionManager {
     });
   }
 
-  void dispose() {
+  Future<void> dispose() async {
     for (final waiter in _establishmentWaiters.values) {
       if (!waiter.isCompleted) {
         waiter.complete();
@@ -191,8 +191,8 @@ class SessionManager {
       ctx.dispose();
     }
     _sessions.clear();
-    _presenceUpdateController.close();
-    _messageController.close();
+    await _presenceUpdateController.close();
+    await _messageController.close();
   }
 
 
@@ -400,7 +400,7 @@ class SessionManager {
       final record = await _trustStore.getPeer(peerDeviceId);
       ctx.trustState = record?.state ?? TrustState.discovered;
       _sessions[peerDeviceId] = ctx;
-    } else if (ctx.handshakeState == HandshakeState.established) {
+    } else {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Double session.hello received');
       throw SessionException('ProtocolError: Double session.hello received from $peerDeviceId');
     }
@@ -486,7 +486,7 @@ class SessionManager {
       waiter.complete();
     }
     await _sendSessionAccept(ctx);
-    _startCapabilityNegotiation(ctx);
+    await _startCapabilityNegotiation(ctx);
   }
 
   Future<void> _sendSessionAccept(SessionContext ctx) async {
@@ -594,7 +594,7 @@ class SessionManager {
     if (waiter != null && !waiter.isCompleted) {
       waiter.complete();
     }
-    _startCapabilityNegotiation(ctx);
+    await _startCapabilityNegotiation(ctx);
   }
 
   Future<void> _handleSessionReject(TransportMessage msg, Map<String, dynamic> jsonMap) async {
@@ -608,7 +608,7 @@ class SessionManager {
     _transport.disconnect(peerDeviceId);
   }
 
-  void _startCapabilityNegotiation(SessionContext ctx) {
+  Future<void> _startCapabilityNegotiation(SessionContext ctx) async {
     ctx.localAdvertisedCapabilities = _defaultCapabilities;
 
     ctx.capabilityNegotiationTimer?.cancel();
@@ -628,12 +628,21 @@ class SessionManager {
         'capabilities': ctx.localAdvertisedCapabilities.map((c) => c.toJson()).toList(),
       }
     };
-    _transport.sendMessage(ctx.peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))));
+    unawaited(
+      _transport
+          .sendMessage(ctx.peerDeviceId, Uint8List.fromList(utf8.encode(json.encode(payload))))
+          .catchError((_) {
+        _transport.disconnect(ctx.peerDeviceId);
+      }),
+    );
   }
 
   Future<void> _handleCapabilityAdvertise(SessionContext ctx, TransportMessage msg, Map<String, dynamic> jsonMap) async {
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
-    if (payload == null) return;
+    if (payload == null) {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Missing payload in capability.advertise');
+      return;
+    }
 
     List<Capability> peerCaps;
     try {
@@ -643,7 +652,13 @@ class SessionManager {
         return;
       }
       peerCaps = peerCapabilitiesList.map((e) => Capability.fromJson(e as Map<String, dynamic>)).toList();
-    } catch (e) {
+    } on FormatException {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.advertise payload');
+      return;
+    } on TypeError {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.advertise payload');
+      return;
+    } on ArgumentError {
       await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.advertise payload');
       return;
     }
@@ -689,13 +704,22 @@ class SessionManager {
 
   Future<void> _handleCapabilitySelected(SessionContext ctx, TransportMessage msg, Map<String, dynamic> jsonMap) async {
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
-    if (payload == null) return;
+    if (payload == null) {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Missing payload in capability.selected');
+      return;
+    }
 
     List<Capability> selectedCaps;
     try {
       final selectedCapsList = payload['selectedCapabilities'] as List<dynamic>? ?? [];
       selectedCaps = selectedCapsList.map((e) => Capability.fromJson(e as Map<String, dynamic>)).toList();
-    } catch (e) {
+    } on FormatException {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.selected payload');
+      return;
+    } on TypeError {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.selected payload');
+      return;
+    } on ArgumentError {
       await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid capability.selected payload');
       return;
     }
@@ -719,11 +743,8 @@ class SessionManager {
   }
 
   void _startHeartbeatIfTrusted(SessionContext ctx) {
-    if (ctx.trustState == TrustState.trusted && 
-        ctx.hasCapability('presence.basic') &&
-        ctx.hasCapability('clipboard.offer_fetch') &&
-        ctx.hasCapability('operation.lifecycle') &&
-        ctx.hasCapability('security.event_log')) {
+    final hasAllRequiredCaps = _requiredCapabilityNames.every(ctx.hasCapability);
+    if (ctx.trustState == TrustState.trusted && hasAllRequiredCaps) {
       ctx.currentPresenceStatus = 'online';
       ctx.lastHeartbeatReceived = DateTime.now();
       _presenceUpdateController.add(ctx);

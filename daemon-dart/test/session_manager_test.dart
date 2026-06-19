@@ -237,6 +237,8 @@ void main() {
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
           ],
+          'bindingType': 'app-nonce',
+          'sessionNonce': base64.encode(Uint8List(32)),
           'identityProof': '0' * 128,
         }
       });
@@ -261,6 +263,8 @@ void main() {
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
           ],
+          'bindingType': 'app-nonce',
+          'sessionNonce': base64.encode(Uint8List(32)),
           'identityProof': '0' * 128,
         }
       });
@@ -300,6 +304,7 @@ void main() {
           'deviceId': 'rift-peer',
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
+          'bindingType': 'app-nonce',
           'identityProof': '0' * 128,
         }
       });
@@ -321,6 +326,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
           'identityProof': '0' * 128,
+          'bindingType': 'app-nonce',
           'sessionNonce': 'not-base-64!@#',
         }
       });
@@ -342,6 +348,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
           'identityProof': '0' * 128,
+          'bindingType': 'app-nonce',
           'sessionNonce': base64.encode(Uint8List(16)), // Only 16 bytes
         }
       });
@@ -367,6 +374,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'capabilities': const [],
+          'bindingType': 'app-nonce',
           'identityProof': '0' * 128,
           'sessionNonce': base64.encode(Uint8List(32)),
           // identityVerified is intentionally omitted
@@ -393,6 +401,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'identityVerified': true,
+          'bindingType': 'app-nonce',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
@@ -425,6 +434,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'identityVerified': true,
+          'bindingType': 'app-nonce',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
             {'name': 'presence.basic', 'version': 1},

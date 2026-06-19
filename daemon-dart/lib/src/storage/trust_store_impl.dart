@@ -88,8 +88,13 @@ class TrustStoreImpl implements TrustStore {
     if (currentVersion < 2) {
       try {
         _db!.execute("ALTER TABLE peers ADD COLUMN last_seen_at INTEGER;");
-      } catch (e) {
-        // Column might already exist if migration failed halfway previously
+      } on SqliteException catch (e) {
+        // Column might already exist if migration failed halfway previously.
+        // Fail closed on other sqlite errors (corruption, disk full, etc.).
+        final msg = e.message.toLowerCase();
+        if (!msg.contains('duplicate column') && !msg.contains('already exists')) {
+          rethrow;
+        }
       }
       _db!.execute("UPDATE config SET value = '2' WHERE key = 'schema_version'");
     }
@@ -99,14 +104,15 @@ class TrustStoreImpl implements TrustStore {
   Future<void> upsertPeer(PeerRecord record) async {
     _ensureInitialized();
     final stmt = _db!.prepare('''
-      INSERT INTO peers (device_id, display_name, cert_der, state, paired_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (device_id, display_name, cert_der, state, paired_at, updated_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         display_name = excluded.display_name,
         cert_der = CASE
           WHEN peers.state IN ('trusted', 'blocked', 'revoked') THEN peers.cert_der
           ELSE excluded.cert_der
         END,
+        last_seen_at = COALESCE(excluded.last_seen_at, peers.last_seen_at),
         updated_at = excluded.updated_at;
     ''');
     
@@ -121,6 +127,7 @@ class TrustStoreImpl implements TrustStore {
         record.state.toJson(),
         record.pairedAt?.millisecondsSinceEpoch,
         record.updatedAt.millisecondsSinceEpoch,
+        record.lastSeenAt?.toUtc().millisecondsSinceEpoch,
       ]);
     } finally {
       stmt.dispose();
