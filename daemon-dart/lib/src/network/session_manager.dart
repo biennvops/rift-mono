@@ -122,6 +122,7 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'implementationId': RiftConstants.implementationId,
         'capabilities': RiftConstants.capabilities,
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
@@ -213,6 +214,7 @@ class SessionManager {
         final capabilities = payload?['capabilities'] as List?;
         final identityVerified = payload?['identityVerified'];
         final sessionNonceStr = payload?['sessionNonce'] as String?;
+        final bindingType = payload?['bindingType'] as String?;
         if (selectedVersion != RiftConstants.protocolVersion) {
           await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
           return;
@@ -227,6 +229,19 @@ class SessionManager {
         }
         if (capabilities == null || !_hasRequiredCapabilities(capabilities)) {
           await _rejectSession(peerDeviceId, 'CapabilityUnavailable', 'Missing required capabilities');
+          return;
+        }
+        if (bindingType == null) {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing bindingType');
+          return;
+        }
+        if (bindingType != 'app-nonce' && bindingType != 'tls-exporter' && bindingType != 'tls-unique') {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Unrecognized bindingType');
+          return;
+        }
+        if (bindingType != 'app-nonce') {
+          await _rejectSession(peerDeviceId, 'AuthenticationFailed',
+              'Dart daemon only supports app-nonce bindingType');
           return;
         }
         if (identityProofHex == null || msg.peerEd25519Key == null || msg.peerCertDer == null) {
@@ -379,6 +394,25 @@ class SessionManager {
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer!;
     final sessionNonceStr = payload['sessionNonce'] as String?;
+    final bindingType = payload['bindingType'] as String?;
+
+    if (bindingType == null) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing bindingType');
+      return;
+    }
+
+    if (bindingType != 'app-nonce' && bindingType != 'tls-exporter' && bindingType != 'tls-unique') {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Unrecognized bindingType');
+      return;
+    }
+
+    if (bindingType != 'app-nonce') {
+      // Dart cannot verify tls-exporter or tls-unique bindings — dart:io
+      // does not expose channel binding primitives.
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed',
+          'Dart daemon only supports app-nonce bindingType');
+      return;
+    }
 
     if (sessionNonceStr == null) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
@@ -445,6 +479,7 @@ class SessionManager {
         'selectedVersion': RiftConstants.protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
         'capabilities': RiftConstants.capabilities,
