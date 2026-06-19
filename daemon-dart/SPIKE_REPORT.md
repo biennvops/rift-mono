@@ -101,8 +101,11 @@ daemon-dart/
   - Added SQLite schema migration from trust-store v1 to v2 to preserve older installs while introducing `lastSeenAt`.
   - Exposed `getPeerPresence` and `listTrustedPeers` responses through the daemon isolate bridge, including capability summaries and persisted timestamps.
   - Added unit coverage for malformed capability payloads, invalid selected sets, presence validation, heartbeat gating, trust-store persistence, and migration behavior.
-  - **Battery Impact Check Status:** The heartbeat implementation is in place and ready for measurement, but real-device battery evidence is still pending. The required verification remains: run Android foreground-service measurements on at least one physical device in idle mode and in "1 trusted peer heartbeat" mode, capture `adb shell dumpsys batterystats` output, then record the observed drain and any interval/backoff decision here.
-  - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite, but Week 6 should not be called fully closed until battery measurements are backed by real-device evidence.
+  - **Battery Impact Check Status (Evidence):**
+    - **Snapshot A captured (2026-06-19):** using `adb shell dumpsys battery unplug` + `adb shell dumpsys batterystats com.example.app_flutter` (simulated on-battery while keeping USB connected for ADB).
+    - **Still missing:** Snapshot B (same commands after a fixed idle window, screen-off, no interaction) so we can compute A->B deltas.
+    - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
+  - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 is functionally complete in code/tests, but battery impact cannot be signed off until at least one idle A/B delta and one "1 trusted peer heartbeat" C/D delta are recorded.
 
 ---
 
