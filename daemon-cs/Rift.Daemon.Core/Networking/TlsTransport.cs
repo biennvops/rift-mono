@@ -14,6 +14,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Protocol;
 using Rift.Daemon.Core.Cryptography;
+using Org.BouncyCastle.Asn1;
+using BouncyCertificateParser = Org.BouncyCastle.X509.X509CertificateParser;
 
 namespace Rift.Daemon.Core.Networking;
 
@@ -21,7 +23,10 @@ public sealed class TlsTransport : ITransport, IDisposable
 {
     private readonly ILogger<TlsTransport> _logger;
     private readonly IIdentityManager _identityManager;
+    private readonly ITrustStore? _trustStore;
+    private readonly ISecurityEventLog? _securityEventLog;
     private readonly SessionBootstrap _sessionBootstrap;
+    private readonly SessionCapabilityCoordinator _sessionCapabilityCoordinator = new();
     private readonly CancellationTokenSource _shutdownCts = new();
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
@@ -29,11 +34,18 @@ public sealed class TlsTransport : ITransport, IDisposable
     private int _nextBackgroundTaskId;
     
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+    public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
-    public TlsTransport(ILogger<TlsTransport> logger, IIdentityManager identityManager)
+    public TlsTransport(
+        ILogger<TlsTransport> logger,
+        IIdentityManager identityManager,
+        ITrustStore? trustStore = null,
+        ISecurityEventLog? securityEventLog = null)
     {
         _logger = logger;
         _identityManager = identityManager;
+        _trustStore = trustStore;
+        _securityEventLog = securityEventLog;
         _sessionBootstrap = new SessionBootstrap(NullLogger<SessionBootstrap>.Instance, identityManager);
     }
 
@@ -120,7 +132,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             var remoteCert = sslStream.RemoteCertificate as X509Certificate2 ??
                 X509CertificateLoader.LoadCertificate(sslStream.RemoteCertificate!.GetRawCertData());
             var deviceId = ExtractDeviceIdFromCertificate(remoteCert);
-            var session = new ActiveSession(sslStream, client, deviceId);
+            await AuthorizePeerAsync(remoteCert, deviceId);
+            var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
             await CompleteSessionHandshakeAsync(session, remoteCert, linkedToken);
             if (!_sessions.TryAdd(deviceId, session))
@@ -128,6 +141,11 @@ public sealed class TlsTransport : ITransport, IDisposable
                 session.Dispose();
                 throw new InvalidOperationException($"A session for {deviceId} is already registered.");
             }
+
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                deviceId,
+                isOnline: true,
+                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
 
             TrackBackgroundTask(RunRegisteredSessionLoopAsync(session, _shutdownCts.Token), "outbound session loop");
         }
@@ -154,12 +172,17 @@ public sealed class TlsTransport : ITransport, IDisposable
             return;
         }
 
-        var session = new ActiveSession(sslStream, client, deviceId);
+        var session = new ActiveSession(sslStream, client, deviceId, isInitiator: false);
 
         try
         {
+            await AuthorizePeerAsync(remoteCert, deviceId);
             await CompleteSessionHandshakeAsync(session, remoteCert, cancellationToken);
             _sessions.TryAdd(deviceId, session);
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                deviceId,
+                isOnline: true,
+                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
             await RunRegisteredSessionLoopAsync(session, cancellationToken);
         }
         catch (Exception ex)
@@ -169,6 +192,10 @@ public sealed class TlsTransport : ITransport, IDisposable
         finally
         {
             _sessions.TryRemove(deviceId, out _);
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                deviceId,
+                isOnline: false,
+                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
             session.Dispose();
         }
     }
@@ -194,6 +221,13 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
 
         VerifySessionControlMessage(session.Stream, remoteCert, acceptPayload, expectedType: "session.accept");
+        session.SelectedCapabilities = await _sessionCapabilityCoordinator.NegotiateAsync(
+            session.Stream,
+            _identityManager.GetDeviceId(),
+            session.DeviceId,
+            session.IsInitiator,
+            ReadFramePayloadAsync,
+            cancellationToken);
         session.IsAuthenticated = true;
     }
 
@@ -217,6 +251,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             using var document = JsonDocument.Parse(payloadBuffer);
             var root = document.RootElement;
+            var certificateDeviceId = ExtractDeviceIdFromCertificate(remoteCert);
 
             var messageType = root.GetProperty("type").GetString();
             if (!string.Equals(messageType, expectedType, StringComparison.Ordinal))
@@ -224,7 +259,19 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException($"Expected {expectedType} but received {messageType ?? "<null>"}.");
             }
 
+            var sourceDeviceId = root.GetProperty("sourceDeviceId").GetString();
+            if (!string.Equals(sourceDeviceId, certificateDeviceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"{expectedType} sourceDeviceId did not match the TLS-authenticated device identity.");
+            }
+
             var payload = root.GetProperty("payload");
+            var payloadDeviceId = payload.GetProperty("deviceId").GetString();
+            if (!string.Equals(payloadDeviceId, certificateDeviceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"{expectedType} payload.deviceId did not match the TLS-authenticated device identity.");
+            }
+
             var identityProofHex = payload.GetProperty("identityProof").GetString();
             if (string.IsNullOrWhiteSpace(identityProofHex))
             {
@@ -250,6 +297,70 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             throw new InvalidOperationException($"{expectedType} identityProof was not valid lowercase hexadecimal.", ex);
         }
+    }
+
+    private async Task AuthorizePeerAsync(X509Certificate2 remoteCert, string deviceId)
+    {
+        if (_trustStore is null)
+        {
+            return;
+        }
+
+        var peerPublicKey = ExtractEd25519PublicKeyFromCertificate(remoteCert);
+        var certificateFingerprint = remoteCert.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256).ToLowerInvariant();
+        var existingPeer = _trustStore.GetPeer(deviceId);
+
+        if (existingPeer is null)
+        {
+            _trustStore.SavePeer(new PeerIdentity
+            {
+                DeviceId = deviceId,
+                Ed25519PublicKey = peerPublicKey,
+                State = TrustState.Discovered,
+                EcdsaCertificateFingerprint = certificateFingerprint,
+                LastStateTransitionAt = DateTimeOffset.UtcNow
+            });
+            return;
+        }
+
+        if (existingPeer.Ed25519PublicKey is not null && !existingPeer.Ed25519PublicKey.SequenceEqual(peerPublicKey))
+        {
+            await LogSecurityEventAsync(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Failure, "AuthenticationFailed");
+            throw new InvalidOperationException("Peer Ed25519 identity did not match the stored trust-store entry.");
+        }
+
+        if (existingPeer.State is TrustState.Blocked or TrustState.Revoked)
+        {
+            await LogSecurityEventAsync(SecurityEventTypes.ConnectionRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, "Unauthorized");
+            throw new UnauthorizedAccessException("Peer identity is blocked or revoked.");
+        }
+
+        existingPeer.Ed25519PublicKey ??= peerPublicKey;
+        existingPeer.EcdsaCertificateFingerprint = certificateFingerprint;
+        _trustStore.SavePeer(existingPeer);
+    }
+
+    private Task LogSecurityEventAsync(
+        string eventType,
+        string peerDeviceId,
+        SecurityEventSeverity severity,
+        SecurityEventOutcome outcome,
+        string? failureReason)
+    {
+        if (_securityEventLog is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return _securityEventLog.LogEventAsync(new SecurityEventRecord
+        {
+            EventType = eventType,
+            Severity = severity,
+            LocalDeviceId = _identityManager.GetDeviceId(),
+            PeerDeviceId = peerDeviceId,
+            Outcome = outcome,
+            FailureReason = failureReason
+        });
     }
 
     private static async Task<byte[]?> ReadFramePayloadAsync(Stream stream, int maxFrameSize, CancellationToken cancellationToken)
@@ -304,20 +415,20 @@ public sealed class TlsTransport : ITransport, IDisposable
 
     internal static byte[] ExtractEd25519PublicKeyFromCertificate(X509Certificate2 cert)
     {
-        foreach (var ext in cert.Extensions)
+        var parser = new BouncyCertificateParser();
+        var parsedCertificate = parser.ReadCertificate(cert.RawData);
+        var extension = parsedCertificate.GetExtensionValue(new DerObjectIdentifier("2.25.293029629918709742181702189012786017422"));
+        if (extension is not null)
         {
-            if (ext.Oid?.Value == "2.25.293029629918709742181702189012786017422")
+            var rawData = extension.GetOctets();
+            if (rawData.Length == 36 && rawData[0] == 0x04 && rawData[1] == 0x22 && rawData[2] == 0x04 && rawData[3] == 0x20)
             {
-                // Spec appendix A: OCTET STRING containing 04 20 <32-byte Ed25519 key>
-                var rawData = ext.RawData; // Inner 34 bytes
-                if (rawData.Length == 34 && rawData[0] == 0x04 && rawData[1] == 0x20)
-                {
-                    var edKeyBytes = new byte[32];
-                    Array.Copy(rawData, 2, edKeyBytes, 0, 32);
-                    return edKeyBytes;
-                }
+                var edKeyBytes = new byte[32];
+                Array.Copy(rawData, 4, edKeyBytes, 0, 32);
+                return edKeyBytes;
             }
         }
+
         throw new InvalidOperationException("Certificate does not contain a valid Rift Ed25519 identity extension.");
     }
 
@@ -342,6 +453,10 @@ public sealed class TlsTransport : ITransport, IDisposable
     {
         if (_sessions.TryRemove(peerDeviceId, out var session))
         {
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                peerDeviceId,
+                isOnline: false,
+                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
             session.Dispose();
         }
         return Task.CompletedTask;
@@ -413,14 +528,18 @@ public sealed class TlsTransport : ITransport, IDisposable
         public SslStream Stream { get; }
         public TcpClient Client { get; }
         public string DeviceId { get; }
+        public bool IsInitiator { get; }
         public bool IsAuthenticated { get; set; }
+        public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
 
-        public ActiveSession(SslStream stream, TcpClient client, string deviceId)
+        public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
             Stream = stream;
             Client = client;
             DeviceId = deviceId;
+            IsInitiator = isInitiator;
             IsAuthenticated = false;
+            SelectedCapabilities = [];
         }
 
         public void Dispose()

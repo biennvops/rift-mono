@@ -1,0 +1,448 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Rift.Daemon.Core.Interfaces;
+
+namespace Rift.Daemon.Core;
+
+public sealed class ClipboardService : IClipboardService
+{
+    private const int DefaultOfferExpiryMs = 120000;
+    private const string RequiredCapability = "clipboard.offer_fetch";
+
+    private readonly ITransport _transport;
+    private readonly ITrustStore _trustStore;
+    private readonly IPresenceService _presenceService;
+    private readonly IIdentityManager _identityManager;
+    private readonly ISecurityEventLog _securityEventLog;
+    private readonly ILogger<ClipboardService> _logger;
+    private readonly ConcurrentDictionary<string, LocalClipboardOffer> _localOffers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ClipboardOfferInfo> _remoteOffers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _peerOfferHighWaterMarks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<FetchClipboardContentResult>> _pendingFetches = new(StringComparer.Ordinal);
+    private long _nextOfferSequence;
+
+    public ClipboardService(
+        ITransport transport,
+        ITrustStore trustStore,
+        IPresenceService presenceService,
+        IIdentityManager identityManager,
+        ISecurityEventLog securityEventLog,
+        ILogger<ClipboardService>? logger = null)
+    {
+        _transport = transport;
+        _trustStore = trustStore;
+        _presenceService = presenceService;
+        _identityManager = identityManager;
+        _securityEventLog = securityEventLog;
+        _logger = logger ?? NullLogger<ClipboardService>.Instance;
+    }
+
+    public async Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence)
+    {
+        var trustedPeers = _trustStore.GetAllPeers()
+            .Where(peer => peer.State == TrustState.Trusted && PeerHasCapability(peer.DeviceId, requiredCapability))
+            .Select(peer => peer.DeviceId)
+            .ToArray();
+
+        foreach (var deviceId in trustedPeers)
+        {
+            try
+            {
+                var envelope = new
+                {
+                    rift = "0.1-draft",
+                    type = "clipboard.offer",
+                    messageId = Guid.NewGuid().ToString("D"),
+                    sourceDeviceId = _identityManager.GetDeviceId(),
+                    payload = new
+                    {
+                        offerId,
+                        contentType,
+                        byteSize = size,
+                        sha256 = hash,
+                        expiresInMs,
+                        sourceDeviceId = _identityManager.GetDeviceId(),
+                        requiredCapability,
+                        offerSequence
+                    }
+                };
+
+                var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+                await _transport.SendAsync(deviceId, bytes, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to broadcast clipboard offer {OfferId} to {DeviceId}.", offerId, deviceId);
+            }
+        }
+    }
+
+    public Task HandleOfferReceivedAsync(string deviceId, string payloadSourceDeviceId, string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence)
+    {
+        EnsurePayloadIdentityMatches(deviceId, payloadSourceDeviceId, "clipboard.offer");
+        EnsurePeerCanUseClipboard(deviceId, requiredCapability);
+
+        var highWaterMark = _peerOfferHighWaterMarks.GetOrAdd(deviceId, -1);
+        if (offerSequence <= highWaterMark)
+        {
+            LogEvent(SecurityEventTypes.ClipboardOfferReplay, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, null);
+            return Task.CompletedTask;
+        }
+
+        _peerOfferHighWaterMarks[deviceId] = offerSequence;
+        _remoteOffers[offerId] = new ClipboardOfferInfo
+        {
+            OfferId = offerId,
+            SourceDeviceId = deviceId,
+            ContentType = contentType,
+            ByteSize = size,
+            Sha256 = hash,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMilliseconds(expiresInMs).ToString("O")
+        };
+
+        LogEvent(SecurityEventTypes.ClipboardOffered, deviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null);
+        return Task.CompletedTask;
+    }
+
+    public Task<byte[]> FetchContentAsync(string deviceId, string offerId)
+    {
+        return FetchClipboardContentAsync(offerId, CancellationToken.None)
+            .ContinueWith(task => Convert.FromBase64String(task.Result.ContentBase64), TaskContinuationOptions.OnlyOnRanToCompletion);
+    }
+
+    public async Task<NotifyClipboardChangeResult> NotifyClipboardChangeAsync(string contentType, long byteSize, string sha256, string contentBase64, CancellationToken cancellationToken)
+    {
+        if (!VerifyClipboardPayload(contentBase64, byteSize, sha256))
+        {
+            throw new ClipboardFailureException("HashMismatch", -32006, "Clipboard content did not match the declared size or SHA-256 hash.");
+        }
+
+        var offerId = Guid.NewGuid().ToString("D");
+        var offerSequence = Interlocked.Increment(ref _nextOfferSequence);
+        var now = DateTimeOffset.UtcNow;
+
+        _localOffers[offerId] = new LocalClipboardOffer
+        {
+            OfferId = offerId,
+            ContentType = contentType,
+            ByteSize = byteSize,
+            Sha256 = sha256,
+            ContentBase64 = contentBase64,
+            ExpiresAt = now.AddMilliseconds(DefaultOfferExpiryMs),
+            OfferSequence = offerSequence
+        };
+
+        var recipients = _trustStore.GetAllPeers()
+            .Where(peer => peer.State == TrustState.Trusted && PeerHasCapability(peer.DeviceId, RequiredCapability))
+            .Select(peer => peer.DeviceId)
+            .ToArray();
+
+        await BroadcastOfferAsync(offerId, contentType, byteSize, sha256, DefaultOfferExpiryMs, RequiredCapability, offerSequence);
+
+        LogEvent(SecurityEventTypes.ClipboardOffered, null, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null);
+
+        return new NotifyClipboardChangeResult
+        {
+            OfferId = offerId,
+            ExpiresInMs = DefaultOfferExpiryMs,
+            BroadcastTo = recipients
+        };
+    }
+
+    public Task<ListClipboardOffersResult> ListClipboardOffersAsync()
+    {
+        PruneExpiredRemoteOffers();
+
+        var now = DateTimeOffset.UtcNow;
+        var offers = _remoteOffers.Values
+            .Where(offer => DateTimeOffset.Parse(offer.ExpiresAt) > now)
+            .OrderBy(offer => offer.ExpiresAt, StringComparer.Ordinal)
+            .ToArray();
+
+        return Task.FromResult(new ListClipboardOffersResult
+        {
+            Offers = offers
+        });
+    }
+
+    public async Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId, CancellationToken cancellationToken)
+    {
+        if (!_remoteOffers.TryGetValue(offerId, out var offer))
+        {
+            throw new ClipboardFailureException("NotFound", -32009, $"Offer '{offerId}' was not found.");
+        }
+
+        if (DateTimeOffset.Parse(offer.ExpiresAt) <= DateTimeOffset.UtcNow)
+        {
+            _remoteOffers.TryRemove(offerId, out _);
+            LogEvent(SecurityEventTypes.ClipboardExpired, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
+            throw new ClipboardFailureException("OfferExpired", -32002, $"Offer '{offerId}' has expired.");
+        }
+
+        PruneExpiredRemoteOffers();
+
+        EnsurePeerCanUseClipboard(offer.SourceDeviceId, RequiredCapability);
+
+        var tcs = new TaskCompletionSource<FetchClipboardContentResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pendingFetches.TryAdd(offerId, tcs))
+        {
+            throw new ClipboardFailureException("PolicyDenied", -32010, $"A fetch for offer '{offerId}' is already in progress.");
+        }
+
+        try
+        {
+            var envelope = new
+            {
+                rift = "0.1-draft",
+                type = "clipboard.fetchRequest",
+                messageId = Guid.NewGuid().ToString("D"),
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                payload = new
+                {
+                    offerId,
+                    requestingDeviceId = _identityManager.GetDeviceId()
+                }
+            };
+
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+            try
+            {
+                await _transport.SendAsync(offer.SourceDeviceId, bytes, cancellationToken);
+            }
+            catch (InvalidOperationException ex) when (string.Equals(ex.Message, "PayloadTooLarge", StringComparison.Ordinal))
+            {
+                throw new ClipboardFailureException("PayloadTooLarge", -32007, "Clipboard request exceeded the transport frame limit.");
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new ClipboardFailureException("PeerUnreachable", -32000, ex.Message);
+            }
+
+            using var registration = cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+            return await tcs.Task;
+        }
+        finally
+        {
+            _pendingFetches.TryRemove(offerId, out _);
+        }
+    }
+
+    public async Task HandleFetchRequestAsync(string deviceId, string offerId, string requestingDeviceId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            EnsurePayloadIdentityMatches(deviceId, requestingDeviceId, "clipboard.fetchRequest");
+            EnsurePeerCanUseClipboard(deviceId, RequiredCapability);
+        }
+        catch (ClipboardFailureException ex)
+        {
+            await SendFetchRejectAsync(deviceId, offerId, ex.FailureReason, ex.Message, cancellationToken);
+            return;
+        }
+
+        if (!_localOffers.TryGetValue(offerId, out var offer) || offer.ExpiresAt <= DateTimeOffset.UtcNow)
+        {
+            _localOffers.TryRemove(offerId, out _);
+            LogEvent(SecurityEventTypes.ClipboardExpired, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
+            await SendFetchRejectAsync(deviceId, offerId, "OfferExpired", "offer expired", cancellationToken);
+            return;
+        }
+
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "clipboard.fetchResponse",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            payload = new
+            {
+                offerId,
+                contentBase64 = offer.ContentBase64,
+                byteSize = offer.ByteSize,
+                sha256 = offer.Sha256
+            }
+        };
+
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        await _transport.SendAsync(deviceId, bytes, cancellationToken);
+        LogEvent(SecurityEventTypes.ClipboardFetched, deviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null);
+    }
+
+    public Task HandleFetchResponseAsync(string deviceId, string offerId, string contentBase64, long byteSize, string sha256, CancellationToken cancellationToken)
+    {
+        if (_remoteOffers.TryGetValue(offerId, out var offer) && !string.Equals(offer.SourceDeviceId, deviceId, StringComparison.Ordinal))
+        {
+            LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized");
+            return Task.CompletedTask;
+        }
+
+        if (_pendingFetches.TryGetValue(offerId, out var tcs))
+        {
+            var verified = VerifyClipboardPayload(contentBase64, byteSize, sha256);
+            if (!verified)
+            {
+                LogEvent(SecurityEventTypes.ClipboardFetched, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "HashMismatch");
+                tcs.TrySetException(new ClipboardFailureException("HashMismatch", -32006, "Clipboard content failed size or SHA-256 verification."));
+                return Task.CompletedTask;
+            }
+
+            tcs.TrySetResult(new FetchClipboardContentResult
+            {
+                OfferId = offerId,
+                ContentBase64 = contentBase64,
+                ByteSize = byteSize,
+                Sha256 = sha256,
+                Verified = verified
+            });
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public Task HandleFetchRejectAsync(string deviceId, string offerId, string failureReason, string? message, CancellationToken cancellationToken)
+    {
+        if (_remoteOffers.TryGetValue(offerId, out var offer) && !string.Equals(offer.SourceDeviceId, deviceId, StringComparison.Ordinal))
+        {
+            LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized");
+            return Task.CompletedTask;
+        }
+
+        if (_pendingFetches.TryGetValue(offerId, out var tcs))
+        {
+            tcs.TrySetException(CreateFailureException(failureReason, message));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task SendFetchRejectAsync(string deviceId, string offerId, string failureReason, string message, CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "clipboard.fetchReject",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            payload = new
+            {
+                offerId,
+                failureReason,
+                message
+            }
+        };
+
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        await _transport.SendAsync(deviceId, bytes, cancellationToken);
+    }
+
+    private static bool VerifyClipboardPayload(string contentBase64, long byteSize, string sha256)
+    {
+        byte[] contentBytes;
+        try
+        {
+            contentBytes = Convert.FromBase64String(contentBase64);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        if (contentBytes.LongLength != byteSize)
+        {
+            return false;
+        }
+
+        var computedHash = Convert.ToHexStringLower(SHA256.HashData(contentBytes));
+        return string.Equals(computedHash, sha256, StringComparison.Ordinal);
+    }
+
+    private void EnsurePeerCanUseClipboard(string deviceId, string requiredCapability)
+    {
+        var peer = _trustStore.GetPeer(deviceId);
+        if (peer is null || peer.State != TrustState.Trusted)
+        {
+            throw new ClipboardFailureException("Unauthorized", -32004, "Peer is not trusted.");
+        }
+
+        if (!PeerHasCapability(deviceId, requiredCapability))
+        {
+            throw new ClipboardFailureException("CapabilityUnavailable", -32003, $"Capability '{requiredCapability}' is not negotiated for peer '{deviceId}'.");
+        }
+    }
+
+    private bool PeerHasCapability(string deviceId, string requiredCapability)
+    {
+        var presence = _presenceService.GetPeerPresence(deviceId);
+        return presence is not null && presence.Capabilities.Contains(requiredCapability, StringComparer.Ordinal);
+    }
+
+    private void EnsurePayloadIdentityMatches(string authenticatedDeviceId, string payloadDeviceId, string messageType)
+    {
+        if (string.Equals(authenticatedDeviceId, payloadDeviceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LogEvent(SecurityEventTypes.AuthFailed, authenticatedDeviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized");
+        throw new ClipboardFailureException("Unauthorized", -32004, $"{messageType} payload identity did not match the authenticated peer identity.");
+    }
+
+    private void PruneExpiredRemoteOffers()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var entry in _remoteOffers)
+        {
+            if (DateTimeOffset.Parse(entry.Value.ExpiresAt) > now)
+            {
+                continue;
+            }
+
+            if (_remoteOffers.TryRemove(entry.Key, out var removed))
+            {
+                LogEvent(SecurityEventTypes.ClipboardExpired, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
+            }
+        }
+    }
+
+    private static ClipboardFailureException CreateFailureException(string failureReason, string? message)
+    {
+        return failureReason switch
+        {
+            "OfferExpired" => new ClipboardFailureException(failureReason, -32002, message ?? "Clipboard offer expired."),
+            "CapabilityUnavailable" => new ClipboardFailureException(failureReason, -32003, message ?? "Clipboard capability is unavailable."),
+            "Unauthorized" => new ClipboardFailureException(failureReason, -32004, message ?? "Peer is not authorized for clipboard access."),
+            "HashMismatch" => new ClipboardFailureException(failureReason, -32006, message ?? "Clipboard content failed hash verification."),
+            "PayloadTooLarge" => new ClipboardFailureException(failureReason, -32007, message ?? "Clipboard payload exceeded the transport frame limit."),
+            "Timeout" => new ClipboardFailureException(failureReason, -32011, message ?? "Clipboard request timed out."),
+            _ => new ClipboardFailureException(failureReason, -32001, message ?? failureReason)
+        };
+    }
+
+    private void LogEvent(string eventType, string? peerDeviceId, SecurityEventSeverity severity, SecurityEventOutcome outcome, string? failureReason)
+    {
+        _securityEventLog.LogEventAsync(new SecurityEventRecord
+        {
+            EventType = eventType,
+            Severity = severity,
+            LocalDeviceId = _identityManager.GetDeviceId(),
+            PeerDeviceId = peerDeviceId,
+            Outcome = outcome,
+            FailureReason = failureReason
+        }).GetAwaiter().GetResult();
+    }
+
+    private sealed class LocalClipboardOffer
+    {
+        public string OfferId { get; init; } = string.Empty;
+        public string ContentType { get; init; } = string.Empty;
+        public long ByteSize { get; init; }
+        public string Sha256 { get; init; } = string.Empty;
+        public string ContentBase64 { get; init; } = string.Empty;
+        public DateTimeOffset ExpiresAt { get; init; }
+        public long OfferSequence { get; init; }
+    }
+}

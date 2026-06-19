@@ -48,6 +48,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             // spec §4.2: Required TXT records
             _profile.AddProperty("minV", minVersion);
             _profile.AddProperty("maxV", maxVersion);
+            _profile.AddProperty("did", deviceId);
 
             _serviceDiscovery.Advertise(_profile);
             StartMdnsIfNeeded();
@@ -174,11 +175,13 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         var port = srvRecord.Port;
 
         return new PeerDiscoveredEventArgs(
+            deviceIdHint: txtProperties.GetValueOrDefault("did"),
             instanceName: serviceInstanceName.ToString(),
             host: host,
             port: port,
             minVersion: txtProperties.GetValueOrDefault("minV"),
             maxVersion: txtProperties.GetValueOrDefault("maxV"),
+            txtRecord: txtProperties,
             remoteEndPoint: e.RemoteEndPoint);
     }
 

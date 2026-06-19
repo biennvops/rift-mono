@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);NU1902;NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,7 +22,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Rift.Daemon.Core\Rift.Daemon.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
     <ProjectReference Include="..\Rift.Daemon.Linux\Rift.Daemon.Linux.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <Compile Remove="Core\LinuxIpcListenerTests.cs" />
   </ItemGroup>
 
 </Project>
