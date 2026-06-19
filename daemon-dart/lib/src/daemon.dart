@@ -107,7 +107,14 @@ class RiftDaemon {
     final trustStore = _trustStore;
     if (trustStore == null) return [];
 
-    final peers = await trustStore.getPeersByState(TrustState.trusted);
+    // ipc.md: listTrustedPeers is a trust-management surface.
+    // Include all non-discovered peers (pairing_pending, trusted, blocked, revoked).
+    final peers = <PeerRecord>[
+      ...await trustStore.getPeersByState(TrustState.pairingPending),
+      ...await trustStore.getPeersByState(TrustState.trusted),
+      ...await trustStore.getPeersByState(TrustState.blocked),
+      ...await trustStore.getPeersByState(TrustState.revoked),
+    ];
 
     return peers.map((peer) {
       final ctx = _sessionManager!.getContext(peer.deviceId);

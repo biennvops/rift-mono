@@ -132,7 +132,7 @@ void startDaemon() async {
   });
 }
 ```
-This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and several still-unimplemented IPC methods mean the daemon should not yet be described as fully conformant.
+This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and other backlog IPC methods mean the daemon should not yet be described as fully conformant.
 
 ---
 

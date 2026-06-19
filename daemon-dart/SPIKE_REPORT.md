@@ -122,7 +122,7 @@ daemon-dart/
       - **Battery drain:** `0 mAh` reported for this window (again: likely below meter precision at this duration).
       - **Comparison to clean idle:** baseline shows `~0.40s/min` partial wakelock, while this run shows `~1.68s/min` partial wakelock delta. This suggests additional periodic work during the window (consistent with “heartbeat present”), but attribution remains imperfect because system jobs can also contribute; repeating the run with a longer window (30-60m) would improve confidence.
     - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
-  - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 is functionally complete in code/tests, but battery impact cannot be signed off until at least one idle A/B delta and one "1 trusted peer heartbeat" C/D delta are recorded.
+  - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 battery evidence has been captured on a physical device for both a clean idle baseline and a 1 trusted peer heartbeat run (see above), with the caveat that short-window `batterystats` may under-report mAh deltas.
 
 ---
 

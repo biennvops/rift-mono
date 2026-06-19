@@ -193,7 +193,8 @@ Rejects an incoming or outgoing pairing.
 
 #### `rift.listTrustedPeers`
 
-Returns all peers in the trust store with their current state.
+Returns all non-discovered peers in the trust store with their current state
+(`pairing_pending`, `trusted`, `blocked`, `revoked`).
 
 **Params:** none.
 
@@ -214,6 +215,18 @@ Returns all peers in the trust store with their current state.
   ]
 }
 ```
+
+#### `rift.listPeersByState`
+
+Returns all peers in the trust store for a given `trustState`.
+
+**Params:**
+
+| Field        | Type   | Required | Description                                                               |
+| ------------ | ------ | -------- | ------------------------------------------------------------------------- |
+| `trustState` | string | Yes      | One of: `discovered`, `pairing_pending`, `trusted`, `blocked`, `revoked`. |
+
+**Result:** same shape as `rift.listTrustedPeers`.
 
 #### `rift.revokeTrust`
 
