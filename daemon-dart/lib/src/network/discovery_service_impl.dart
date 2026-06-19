@@ -68,7 +68,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
           snapshot.add(peer);
         }
       }
-      ingestSnapshot(snapshot);
+      _ingestSnapshot(snapshot);
     });
   }
 
@@ -105,11 +105,15 @@ class DiscoveryServiceImpl implements DiscoveryService {
     );
   }
 
-  // Shared dedup/eviction path used by the real nsd listener and integration tests.
-  void ingestSnapshot(Iterable<DiscoveredPeer> peers) {
+  // Shared dedup/eviction path for the real nsd listener. Integration tests
+  // exercise the same behavior through DiscoveryPeerTracker directly so they
+  // can stay pure-Dart and avoid depending on the Flutter-only nsd plugin.
+  void _ingestSnapshot(Iterable<DiscoveredPeer> peers) {
     final delta = _tracker.ingest(peers);
     for (final peer in delta.removed) {
-      _peerLostController.add(peer.deviceIdHint ?? peer.instanceId);
+      if (peer.deviceIdHint != null) {
+        _peerLostController.add(peer.deviceIdHint!);
+      }
     }
     for (final peer in delta.added) {
       _peerStreamController.add(peer);

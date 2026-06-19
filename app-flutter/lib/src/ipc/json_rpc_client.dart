@@ -24,7 +24,6 @@ class JsonRpcRiftClient {
   late final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onTrustChanged => _trustChangedController.stream;
 
-
   Future<void> connect() async {
     if (_isConnected) return;
 
@@ -140,11 +139,11 @@ class JsonRpcRiftClient {
     await _transport.disconnect();
   }
 
-  void dispose() {
-    disconnect();
-    _peerDiscoveredController.close();
-    _peerLostController.close();
-    _trustChangedController.close();
+  Future<void> dispose() async {
+    await disconnect();
+    await _peerDiscoveredController.close();
+    await _peerLostController.close();
+    await _trustChangedController.close();
   }
 
   Future<dynamic> getDeviceInfo() async {

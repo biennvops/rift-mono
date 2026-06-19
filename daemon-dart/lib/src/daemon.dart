@@ -239,6 +239,9 @@ class RiftDaemon {
 
   void trackDiscoveredPeer(DiscoveredPeer peer) {
     if (peer.deviceIdHint != null) {
+      // DiscoveryPeerTracker deduplicates at the mDNS instance level, but the
+      // daemon UI model is keyed by Rift device ID so multiple instance records
+      // for the same device collapse into one visible peer entry.
       _discoveredPeers[peer.deviceIdHint!] = peer;
     }
   }

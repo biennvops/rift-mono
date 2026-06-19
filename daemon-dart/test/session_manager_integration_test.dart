@@ -148,11 +148,12 @@ void main() {
     test('Simulated Network Drop - cleans up session and fires callbacks', () async {
       // Setup session state
       transport1.registerPeerCert('rift-device2', testCertDer2);
-      
-      // Simulate network drop directly from transport 
+
+      final disconnectedFuture = transport1.onPeerDisconnected.first;
+
+      // Simulate network drop directly from transport
       transport1.simulateNetworkDrop('rift-device2');
-      
-      await Future.delayed(Duration(milliseconds: 100));
+      await disconnectedFuture;
 
       expect(
         () => sessionManager1.sendMessage('rift-device2', {}),

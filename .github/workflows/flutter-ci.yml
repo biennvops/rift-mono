@@ -42,5 +42,5 @@ jobs:
         run: dart analyze
         working-directory: daemon-dart
       - name: Run tests
-        run: dart test
+        run: dart test -x network
         working-directory: daemon-dart

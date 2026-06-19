@@ -1,3 +1,6 @@
+@Tags(['network'])
+library;
+
 import 'dart:async';
 import 'package:test/test.dart';
 import 'package:mdns_dart/mdns_dart.dart';
