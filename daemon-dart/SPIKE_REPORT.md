@@ -103,7 +103,14 @@ daemon-dart/
   - Added unit coverage for malformed capability payloads, invalid selected sets, presence validation, heartbeat gating, trust-store persistence, and migration behavior.
   - **Battery Impact Check Status (Evidence):**
     - **Snapshot A captured (2026-06-19):** using `adb shell dumpsys battery unplug` + `adb shell dumpsys batterystats com.example.app_flutter` (simulated on-battery while keeping USB connected for ADB).
-    - **Still missing:** Snapshot B (same commands after a fixed idle window, screen-off, no interaction) so we can compute A->B deltas.
+    - **Snapshot B captured (2026-06-19):** same commands after an idle window.
+    - **A -> B delta (device-level signals):**
+      - Time on battery: `+32m 36s`
+      - Total partial wakelock time: `+4m 31s`
+      - Connectivity changes: `343 -> 345`
+      - WiFi data received: `679.67MB -> 1.05GB` (not an idle baseline)
+      - WiFi data sent: `40.52MB -> 52.01MB`
+    - **Interpretation:** This A/B run is valid as a “real device snapshot delta”, but it is **not a clean idle baseline** due to significant WiFi traffic during the window. It cannot be used to attribute battery/network impact to Rift heartbeats yet; it mainly proves the measurement pipeline works (snapshot deltas without `batterystats --reset`).
     - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
   - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 is functionally complete in code/tests, but battery impact cannot be signed off until at least one idle A/B delta and one "1 trusted peer heartbeat" C/D delta are recorded.
 
