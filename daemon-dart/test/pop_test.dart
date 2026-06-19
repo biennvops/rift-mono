@@ -7,7 +7,7 @@ import 'package:cryptography/cryptography.dart';
 
 void main() {
   group('PoPManager Tests', () {
-    test('buildSigningInput constructs exact 113-byte payload with length prefixes', () {
+    test('buildSigningInput constructs exact 107-byte payload with raw concatenation', () {
       final channelBinding = Uint8List.fromList(List.generate(32, (i) => i));
       final pubKey = Uint8List.fromList(List.generate(32, (i) => 255 - i));
       final certDer = Uint8List.fromList([1, 2, 3, 4, 5]); // Fake cert
@@ -15,19 +15,16 @@ void main() {
 
       final input = PoPManager.buildSigningInput(channelBinding, pubKey, certDer);
 
-      expect(input.length, equals(113));
+      expect(input.length, equals(107));
       
       final prefix = utf8.encode('RiftPoP-v2:');
       expect(input.sublist(0, 11), equals(prefix));
       
-      expect(input.sublist(11, 13), equals([0, 32])); // channelBinding length
-      expect(input.sublist(13, 45), equals(channelBinding));
+      expect(input.sublist(11, 43), equals(channelBinding));
       
-      expect(input.sublist(45, 47), equals([0, 32])); // pubKey length
-      expect(input.sublist(47, 79), equals(pubKey));
+      expect(input.sublist(43, 75), equals(pubKey));
       
-      expect(input.sublist(79, 81), equals([0, 32])); // certHash length
-      expect(input.sublist(81, 113), equals(certHash));
+      expect(input.sublist(75, 107), equals(certHash));
     });
 
     test('generateIdentityProof and verifyIdentityProof succeed symmetrically', () async {

@@ -46,18 +46,22 @@ class SessionManager {
   Stream<ProtocolMessage> get onMessage => _messageController.stream;
   Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
-  // Risk-1 Mitigation (ADR-0002 fallback): dart:io SecureSocket does not expose
+  // Risk-1 Mitigation: dart:io SecureSocket does not expose
   // tls-exporter (RFC 9266) or tls-unique (RFC 5929). As the best available
   // platform-level substitute until dart:io supports it, we fallback to using
-  // the envelope's UUIDv4 messageId to guarantee per-session uniqueness:
-  //   channelBinding = SHA-256(messageId || localCertDer || peerCertDer)
-  // TODO(Conformance): This is a protocol deviation. Wait for Dart support for RFC 9266.
-  Uint8List _computeChannelBinding(Uint8List messageIdBytes, Uint8List peerCertDer) {
+  // a deterministic certificate-based binding:
+  //   channelBinding = SHA-256(localCertDer || peerCertDer)
+  // TODO(Conformance): This lacks true session replay protection. Wait for Dart support for RFC 9266.
+  Uint8List _computeChannelBinding(bool isSender, Uint8List peerCertDer) {
     final localCertDer = _identityManager.tlsCertificateDer;
-    final input = Uint8List(messageIdBytes.length + localCertDer.length + peerCertDer.length);
-    input.setRange(0, messageIdBytes.length, messageIdBytes);
-    input.setRange(messageIdBytes.length, messageIdBytes.length + localCertDer.length, localCertDer);
-    input.setRange(messageIdBytes.length + localCertDer.length, input.length, peerCertDer);
+    final input = Uint8List(localCertDer.length + peerCertDer.length);
+    if (isSender) {
+      input.setRange(0, localCertDer.length, localCertDer);
+      input.setRange(localCertDer.length, input.length, peerCertDer);
+    } else {
+      input.setRange(0, peerCertDer.length, peerCertDer);
+      input.setRange(peerCertDer.length, input.length, localCertDer);
+    }
     return Uint8List.fromList(sha256.convert(input).bytes);
   }
 
@@ -96,14 +100,12 @@ class SessionManager {
     if (peerCertDer == null) {
       throw SessionException('Cannot compute channel binding: peer cert not available for $peerDeviceId');
     }
-    final messageIdStr = const Uuid().v4();
-    final messageIdBytes = Uint8List.fromList(utf8.encode(messageIdStr));
-    final channelBinding = _computeChannelBinding(messageIdBytes, peerCertDer);
+    final channelBinding = _computeChannelBinding(true, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': RiftConstants.protocolVersion,
-      'messageId': messageIdStr,
+      'messageId': const Uuid().v4(),
       'type': 'session.hello',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
@@ -225,22 +227,7 @@ class SessionManager {
           return;
         }
 
-        final messageIdStr = jsonMap['messageId'] as String?;
-        if (messageIdStr == null) {
-          await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing messageId in envelope');
-          return;
-        }
-        final messageIdBytes = Uint8List.fromList(utf8.encode(messageIdStr));
-
-        final channelBindingForVerify = Uint8List(
-            messageIdBytes.length + peerCertDer.length + localCertDer.length);
-        channelBindingForVerify.setRange(0, messageIdBytes.length, messageIdBytes);
-        channelBindingForVerify.setRange(
-            messageIdBytes.length, messageIdBytes.length + peerCertDer.length, peerCertDer);
-        channelBindingForVerify.setRange(
-            messageIdBytes.length + peerCertDer.length, channelBindingForVerify.length, localCertDer);
-        final channelBinding = Uint8List.fromList(
-            sha256.convert(channelBindingForVerify).bytes);
+        final channelBinding = _computeChannelBinding(false, peerCertDer);
 
         final isValidPoP = await PoPManager.verifyIdentityProof(
           identityProofHex,
@@ -350,18 +337,7 @@ class SessionManager {
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer!;
 
-    final messageIdStr = jsonMap['messageId'] as String?;
-    if (messageIdStr == null) {
-      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing messageId in envelope');
-      return;
-    }
-    final messageIdBytes = Uint8List.fromList(utf8.encode(messageIdStr));
-
-    final cbInput = Uint8List(messageIdBytes.length + peerCertDer.length + localCertDer.length);
-    cbInput.setRange(0, messageIdBytes.length, messageIdBytes);
-    cbInput.setRange(messageIdBytes.length, messageIdBytes.length + peerCertDer.length, peerCertDer);
-    cbInput.setRange(messageIdBytes.length + peerCertDer.length, cbInput.length, localCertDer);
-    final channelBindingHello = Uint8List.fromList(sha256.convert(cbInput).bytes);
+    final channelBindingHello = _computeChannelBinding(false, peerCertDer);
 
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
@@ -390,15 +366,13 @@ class SessionManager {
       throw SessionException(
           'Cannot compute channel binding for session.accept: peer cert missing for $peerDeviceId');
     }
-    final messageIdStr = const Uuid().v4();
-    final messageIdBytes = Uint8List.fromList(utf8.encode(messageIdStr));
-    final channelBinding = _computeChannelBinding(messageIdBytes, peerCertDer);
+    final channelBinding = _computeChannelBinding(true, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
       'rift': RiftConstants.protocolVersion,
       'type': 'session.accept',
-      'messageId': messageIdStr,
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {

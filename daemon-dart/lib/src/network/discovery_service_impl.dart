@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:nsd/nsd.dart' as nsd;
 import '../interfaces/discovery_service.dart';
+import 'discovery_peer_tracker.dart';
 
 class DiscoveryServiceImpl implements DiscoveryService {
   final int port;
@@ -13,7 +14,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
   nsd.Discovery? _discovery;
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
   final _peerLostController = StreamController<String>.broadcast();
-  final Map<String, DiscoveredPeer> _seenPeers = {};
+  final DiscoveryPeerTracker _tracker = DiscoveryPeerTracker();
 
   DiscoveryServiceImpl({
     required this.port,
@@ -60,57 +61,59 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _discovery = await nsd.startDiscovery('_rift._tcp');
 
     _discovery!.addListener(() {
-      // Compute the set of currently-active instance IDs.
-      final currentIds = {
-        for (final s in _discovery!.services)
-          if (s.name != null) s.name!,
-      };
-
-      // Evict removed instances so they can be re-discovered after a mDNS flap.
-      final lostIds = _seenPeers.keys.toSet().difference(currentIds);
-      for (final id in lostIds) {
-        final peer = _seenPeers.remove(id)!;
-        _peerLostController.add(peer.deviceIdHint ?? peer.instanceId);
-      }
-
+      final snapshot = <DiscoveredPeer>[];
       for (final service in _discovery!.services) {
-        final instanceId = service.name;
-        // Skip services without a name — using a fallback would collapse all
-        // null-named peers into one dedup entry and suppress re-discovery.
-        if (instanceId == null ||
-            service.host == null ||
-            service.port == null) {
-          continue;
-        }
-        if (!_seenPeers.containsKey(instanceId)) {
-          final txt = service.txt ?? {};
-          final minV = txt['minV'] != null
-              ? String.fromCharCodes(txt['minV']!)
-              : 'unknown';
-          final maxV = txt['maxV'] != null
-              ? String.fromCharCodes(txt['maxV']!)
-              : 'unknown';
-          final did = txt['did'] != null
-              ? String.fromCharCodes(txt['did']!)
-              : null;
-          final fp = txt['fp'] != null
-              ? String.fromCharCodes(txt['fp']!)
-              : null;
-
-          final peer = DiscoveredPeer(
-            instanceId: instanceId,
-            address: service.host!,
-            port: service.port!,
-            minVersion: minV,
-            maxVersion: maxV,
-            deviceIdHint: did,
-            fingerprintPrefix: fp,
-          );
-          _seenPeers[instanceId] = peer;
-          _peerStreamController.add(peer);
+        final peer = _peerFromNsdService(service);
+        if (peer != null) {
+          snapshot.add(peer);
         }
       }
+      ingestSnapshot(snapshot);
     });
+  }
+
+  DiscoveredPeer? _peerFromNsdService(nsd.Service service) {
+    final instanceId = service.name;
+    // Skip services without a name — using a fallback would collapse all
+    // null-named peers into one dedup entry and suppress re-discovery.
+    if (instanceId == null || service.host == null || service.port == null) {
+      return null;
+    }
+
+    final txt = service.txt ?? {};
+    final minV = txt['minV'] != null
+        ? String.fromCharCodes(txt['minV']!)
+        : 'unknown';
+    final maxV = txt['maxV'] != null
+        ? String.fromCharCodes(txt['maxV']!)
+        : 'unknown';
+    final did = txt['did'] != null
+        ? String.fromCharCodes(txt['did']!)
+        : null;
+    final fp = txt['fp'] != null
+        ? String.fromCharCodes(txt['fp']!)
+        : null;
+
+    return DiscoveredPeer(
+      instanceId: instanceId,
+      address: service.host!,
+      port: service.port!,
+      minVersion: minV,
+      maxVersion: maxV,
+      deviceIdHint: did,
+      fingerprintPrefix: fp,
+    );
+  }
+
+  // Shared dedup/eviction path used by the real nsd listener and integration tests.
+  void ingestSnapshot(Iterable<DiscoveredPeer> peers) {
+    final delta = _tracker.ingest(peers);
+    for (final peer in delta.removed) {
+      _peerLostController.add(peer.deviceIdHint ?? peer.instanceId);
+    }
+    for (final peer in delta.added) {
+      _peerStreamController.add(peer);
+    }
   }
 
   @override
@@ -118,7 +121,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     if (_discovery != null) {
       await nsd.stopDiscovery(_discovery!);
       _discovery = null;
-      _seenPeers.clear(); // Reset tracking when discovery stops
+      _tracker.clear(); // Reset tracking when discovery stops
     }
   }
 
