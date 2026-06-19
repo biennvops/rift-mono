@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
@@ -46,23 +47,48 @@ class SessionManager {
   Stream<ProtocolMessage> get onMessage => _messageController.stream;
   Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
-  // Risk-1 Mitigation: dart:io SecureSocket does not expose
+  // Risk-1 Mitigation (ADR-0002 fallback): dart:io SecureSocket does not expose
   // tls-exporter (RFC 9266) or tls-unique (RFC 5929). As the best available
-  // platform-level substitute until dart:io supports it, we fallback to using
-  // a deterministic certificate-based binding:
-  //   channelBinding = SHA-256(localCertDer || peerCertDer)
-  // TODO(Conformance): This lacks true session replay protection. Wait for Dart support for RFC 9266.
-  Uint8List _computeChannelBinding(bool isSender, Uint8List peerCertDer) {
+  // platform-level substitute, we implement an Application Nonce fallback:
+  //   channelBinding = SHA-256(sessionNonce || localCertDer || peerCertDer)
+  // This value is:
+  //   • per-session unique (via the securely generated 32-byte sessionNonce),
+  //   • tied to the specific cert pair (preventing cross-identity replay),
+  //   • effectively preventing cross-session replay of PoP signatures.
+  // If dart:io ever exposes tls-exporter this method should be replaced with the
+  // RFC 9266 label "EXPORTER-RIFT-Ed25519-PoP" derivation.
+  // TODO(Conformance): This is a strict protocol deviation (see ADR-0002). C# daemon MUST support this fallback for interop until Dart adds RFC 9266 support.
+  Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
     final localCertDer = _identityManager.tlsCertificateDer;
-    final input = Uint8List(localCertDer.length + peerCertDer.length);
-    if (isSender) {
-      input.setRange(0, localCertDer.length, localCertDer);
-      input.setRange(localCertDer.length, input.length, peerCertDer);
-    } else {
-      input.setRange(0, peerCertDer.length, peerCertDer);
-      input.setRange(peerCertDer.length, input.length, localCertDer);
-    }
+    final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);
+    input.setRange(0, sessionNonce.length, sessionNonce);
+    input.setRange(sessionNonce.length, sessionNonce.length + localCertDer.length, localCertDer);
+    input.setRange(sessionNonce.length + localCertDer.length, input.length, peerCertDer);
     return Uint8List.fromList(sha256.convert(input).bytes);
+  }
+
+  Uint8List _generateSessionNonce() {
+    final random = Random.secure();
+    return Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+  }
+
+  static const Set<String> _validBindingTypes = {'tls-exporter', 'tls-unique', 'app-nonce'};
+
+  Future<String?> _validateBindingType(String peerDeviceId, String? bindingType) async {
+    if (bindingType == null) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing bindingType');
+      return null;
+    }
+    if (!_validBindingTypes.contains(bindingType)) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Unrecognized bindingType');
+      return null;
+    }
+    if (bindingType != 'app-nonce') {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed',
+          'Dart daemon only supports app-nonce bindingType');
+      return null;
+    }
+    return bindingType;
   }
 
   final Set<String> _requiredCapabilityNames = const {
@@ -100,7 +126,8 @@ class SessionManager {
     if (peerCertDer == null) {
       throw SessionException('Cannot compute channel binding: peer cert not available for $peerDeviceId');
     }
-    final channelBinding = _computeChannelBinding(true, peerCertDer);
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
@@ -114,6 +141,8 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'implementationId': RiftConstants.implementationId,
         'capabilities': RiftConstants.capabilities,
+        'bindingType': 'app-nonce',
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
     };
@@ -203,8 +232,8 @@ class SessionManager {
         final identityProofHex = payload?['identityProof'] as String?;
         final capabilities = payload?['capabilities'] as List?;
         final identityVerified = payload?['identityVerified'];
-        final peerCertDer = msg.peerCertDer!;
-
+        final sessionNonceStr = payload?['sessionNonce'] as String?;
+        final bindingType = payload?['bindingType'] as String?;
         if (selectedVersion != RiftConstants.protocolVersion) {
           await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
           return;
@@ -221,12 +250,45 @@ class SessionManager {
           await _rejectSession(peerDeviceId, 'CapabilityUnavailable', 'Missing required capabilities');
           return;
         }
+        final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+        if (validatedBinding == null) return;
         if (identityProofHex == null || msg.peerEd25519Key == null || msg.peerCertDer == null) {
           await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identity proof or cert');
           return;
         }
 
-        final channelBinding = _computeChannelBinding(false, peerCertDer);
+        // Reconstruct the channel binding the peer used: from the peer's
+        // perspective, their cert is "local" and ours is "peer".
+        final localCertDer = _identityManager.tlsCertificateDer;
+        final peerCertDer = msg.peerCertDer!;
+        
+        if (sessionNonceStr == null) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+          return;
+        }
+
+        late final Uint8List peerNonce;
+        try {
+          peerNonce = base64.decode(sessionNonceStr);
+        } on FormatException {
+          await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+          return;
+        }
+
+        if (peerNonce.length != 32) {
+          await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+          return;
+        }
+
+        final channelBindingForVerify = Uint8List(
+            peerNonce.length + peerCertDer.length + localCertDer.length);
+        channelBindingForVerify.setRange(0, peerNonce.length, peerNonce);
+        channelBindingForVerify.setRange(
+            peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+        channelBindingForVerify.setRange(
+            peerNonce.length + peerCertDer.length, channelBindingForVerify.length, localCertDer);
+        final channelBinding = Uint8List.fromList(
+            sha256.convert(channelBindingForVerify).bytes);
 
         final isValidPoP = await PoPManager.verifyIdentityProof(
           identityProofHex,
@@ -333,9 +395,39 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
+    // Reconstruct channel binding: from the peer's perspective their cert is
+    // "local" and ours is "peer", so we reverse the concatenation order.
+    final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer!;
+    final sessionNonceStr = payload['sessionNonce'] as String?;
+    final bindingType = payload['bindingType'] as String?;
 
-    final channelBindingHello = _computeChannelBinding(false, peerCertDer);
+    final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+    if (validatedBinding == null) return;
+
+    if (sessionNonceStr == null) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
+      return;
+    }
+
+    late final Uint8List peerNonce;
+    try {
+      peerNonce = base64.decode(sessionNonceStr);
+    } on FormatException {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Invalid base64 in sessionNonce');
+      return;
+    }
+
+    if (peerNonce.length != 32) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'sessionNonce must be exactly 32 bytes');
+      return;
+    }
+
+    final cbInput = Uint8List(peerNonce.length + peerCertDer.length + localCertDer.length);
+    cbInput.setRange(0, peerNonce.length, peerNonce);
+    cbInput.setRange(peerNonce.length, peerNonce.length + peerCertDer.length, peerCertDer);
+    cbInput.setRange(peerNonce.length + peerCertDer.length, cbInput.length, localCertDer);
+    final channelBindingHello = Uint8List.fromList(sha256.convert(cbInput).bytes);
 
     final isValidPoP = await PoPManager.verifyIdentityProof(
       identityProofHex,
@@ -356,15 +448,14 @@ class SessionManager {
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    // Same cert-based channel binding used in sendSessionHello:
-    // SHA-256(localCertDer || peerCertDer) — consistent with signing side.
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer ?? _transport.getPeerCert(peerDeviceId);
     if (peerCertDer == null) {
       throw SessionException(
           'Cannot compute channel binding for session.accept: peer cert missing for $peerDeviceId');
     }
-    final channelBinding = _computeChannelBinding(true, peerCertDer);
+    final sessionNonce = _generateSessionNonce();
+    final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(channelBinding, localCertDer);
 
     final payload = {
@@ -377,6 +468,8 @@ class SessionManager {
         'selectedVersion': RiftConstants.protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'bindingType': 'app-nonce',
+        'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
         'capabilities': RiftConstants.capabilities,
       }
