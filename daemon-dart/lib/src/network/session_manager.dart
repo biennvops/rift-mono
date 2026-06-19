@@ -47,17 +47,16 @@ class SessionManager {
   Stream<ProtocolMessage> get onMessage => _messageController.stream;
   Stream<String> get onPeerDisconnected => _transport.onPeerDisconnected;
 
-  // Risk-1 Mitigation (ADR-0002 fallback): dart:io SecureSocket does not expose
-  // tls-exporter (RFC 9266) or tls-unique (RFC 5929). As the best available
-  // platform-level substitute, we implement an Application Nonce fallback:
+  // Channel binding Tier 3 (spec §5.3.1 / ADR-0011): dart:io SecureSocket does
+  // not expose tls-exporter (RFC 9266) or tls-unique (RFC 5929), so the Dart
+  // daemon currently implements the normative app-nonce fallback:
   //   channelBinding = SHA-256(sessionNonce || localCertDer || peerCertDer)
   // This value is:
   //   • per-session unique (via the securely generated 32-byte sessionNonce),
   //   • tied to the specific cert pair (preventing cross-identity replay),
-  //   • effectively preventing cross-session replay of PoP signatures.
-  // If dart:io ever exposes tls-exporter this method should be replaced with the
-  // RFC 9266 label "EXPORTER-RIFT-Ed25519-PoP" derivation.
-  // TODO(Conformance): This is a strict protocol deviation (see ADR-0002). C# daemon MUST support this fallback for interop until Dart adds RFC 9266 support.
+  //   • resistant to replay across distinct application sessions.
+  // It does not cryptographically bind to the underlying TLS transcript; when
+  // dart:io exposes tls-exporter, this implementation should upgrade to Tier 1.
   Uint8List _computeChannelBinding(Uint8List sessionNonce, Uint8List peerCertDer) {
     final localCertDer = _identityManager.tlsCertificateDer;
     final input = Uint8List(sessionNonce.length + localCertDer.length + peerCertDer.length);

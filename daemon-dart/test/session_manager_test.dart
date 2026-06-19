@@ -114,6 +114,11 @@ void main() {
       await sessionManager.sendSessionHello('rift-peer');
       expect(transport.sentMessages.single['messageId'], isNotNull);
       expect(transport.sentMessages.single['payload']['supportedVersions'], ['0.1-draft']);
+      expect(transport.sentMessages.single['payload']['bindingType'], 'app-nonce');
+      expect(
+        base64.decode(transport.sentMessages.single['payload']['sessionNonce'] as String),
+        hasLength(32),
+      );
       
       // 2. Peer responds session.accept with FAKE PoP signature
       transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
@@ -301,6 +306,85 @@ void main() {
       await Future.delayed(Duration.zero);
       expect(transport.isDisconnected, isTrue);
       expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('session.hello rejects missing bindingType', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(32)),
+        }
+      });
+
+      await Future.delayed(Duration.zero);
+
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'AuthenticationFailed');
+    });
+
+    test('session.hello rejects invalid sessionNonce length for app-nonce', () async {
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        'type': 'session.hello',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'supportedVersions': ['0.1-draft'],
+          'deviceId': 'rift-peer',
+          'implementationId': 'riftd-peer/0.1.0',
+          'capabilities': const [],
+          'identityProof': '0' * 128,
+          'bindingType': 'app-nonce',
+          'sessionNonce': base64.encode(Uint8List(31)),
+        }
+      });
+
+      await Future.delayed(Duration.zero);
+
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+    });
+
+    test('session.accept rejects missing bindingType', () async {
+      transport.registerPeerCert('rift-peer', testCertDer);
+      await sessionManager.sendSessionHello('rift-peer');
+      transport.sentMessages.clear();
+      transport.isDisconnected = false;
+
+      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
+        'rift': '0.1-draft',
+        'messageId': 'abababab-abab-4bab-8bab-abababababab',
+        'type': 'session.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'selectedVersion': '0.1-draft',
+          'deviceId': 'rift-peer',
+          'identityVerified': true,
+          'capabilities': const [
+            {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'presence.basic', 'version': 1},
+            {'name': 'operation.lifecycle', 'version': 1},
+            {'name': 'security.event_log', 'version': 1},
+          ],
+          'identityProof': '0' * 128,
+          'sessionNonce': base64.encode(Uint8List(32)),
+        }
+      });
+      await Future.delayed(Duration.zero);
+
+      expect(transport.isDisconnected, isTrue);
+      expect(transport.sentMessages.single['payload']['failureReason'], 'AuthenticationFailed');
     });
 
 

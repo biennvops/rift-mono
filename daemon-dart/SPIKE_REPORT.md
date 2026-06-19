@@ -78,16 +78,16 @@ daemon-dart/
   - Implemented **mTLS Transport (`transport_impl.dart`)** with `SecureServerSocket`. **Security Hardening:** Strictly extracts Ed25519 identity from custom X.509 extension; enforced Memory Exhaustion protection (64 KiB/32 MiB) with strict chunking limits. Added 10-second Handshake Timeout to mitigate Connection Slot Exhaustion. **Security Deferral:** Purposefully returns `true` inside `onBadCertificate` when `expectedDeviceId` is null to allow incoming peers, passing the absolute verification burden down to the Ed25519 PoP validation layer.
   - Created **Session Orchestrator (`session_manager.dart`)** to manage `session.hello` and `session.accept`. **Security Hardening:** Enforced Risk 6, Envelope Identity validation (`sourceDeviceId`), and proper `session.reject` error dispatching. Implemented `PoPManager` for Ed25519 PoP signature verification over a 113-byte dynamic structure to mitigate Canonicalization Attacks. **Fix (Critical):** Resolved a critical verification mismatch by enforcing that PoP signatures are generated using the **signer's own local certificate DER**. This guarantees the payload mathematically matches the certificate extracted by the verifier's TLS context.
   - Created the Root Daemon Orchestrator **`daemon.dart`** with `isolateEntryPoint` to encapsulate Android Background Services. **Resilience:** Implemented `Isolate.current.addErrorListener` to propagate fatal isolate crashes to the UI layer. **Fix:** The isolate bridge now exposes a JSON-RPC-focused `rpcPort`, removing the old ad-hoc command naming and clarifying that the background bridge is request/response oriented.
-  - **Security Alignment (M2 Partially Resolved):** Removed the Application Nonce (`sessionNonce`) fallback. Due to Dart `SecureSocket` limitations lacking `tls-exporter` (TLS 1.3), the channel binding is now structurally aligned to the 32-byte requirement via a deterministic `SHA-256(localCertDer || peerCertDer)` fallback. This preserves certificate binding and helps against certificate-replay classes such as Triple Handshake, but it still lacks full session replay protection until Dart supports RFC 9266 or the protocol adopts a different challenge mechanism.
+  - **Security Alignment (M2 Implemented Against Current Spec):** Session bootstrap now follows the current Tier 3 channel-binding design from `protocol.md` / ADR-0011. Both `session.hello` and `session.accept` carry `bindingType: "app-nonce"` plus a 32-byte base64 `sessionNonce`, and PoP verification reconstructs `SHA-256(peerNonce || peerCertDer || localCertDer)` exactly as required. This restores per-session uniqueness within the boundaries explicitly accepted by the spec for platforms without `tls-exporter`.
   - **PoP Alignment (M2 Resolved):** Removed length-prefixes from the PoP signing payload to strictly conform to the 107-byte raw concatenation schema specified in Section 5.3.1.
-  - **Assessment:** Transport and session flows are implemented, but Milestone M2 still retains a protocol/platform blocker around true session-bound channel binding.
+  - **Assessment:** Transport and session flows are implemented in line with the current protocol draft. The remaining limitation is no longer an implementation blocker but the spec-documented residual risk of Tier 3 `app-nonce` versus Tier 1 `tls-exporter`.
 
 - **`[daemon-dart] Pairing State Machine & Storage` (Week 5 / M3):** Finalize Trust boundaries.
   - Implemented **`TrustStoreImpl`**: Replaced mock data with a physical SQLite database (`sqlite3` FFI). **Database Hardening:** Enabled WAL mode to prevent lock contention between the Isolate and potential future readers. Enforced **Exhaustive Edge Validation** directly in `transitionState` to block invalid state jumps (e.g., `revoked` -> `trusted`). Implemented explicit `ON CONFLICT` constraints to prevent mDNS discovery mechanisms from automatically downgrading a `trusted` peer back to `discovered`, and now preserve pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
   - Implemented **`PairingManager`**: Built the strict State Machine orchestrating trust workflows. **Security Hardening:** Mitigated **Double-Approve Bypass** by maintaining an `_outboundPairings` set, silently dropping unsolicited `pairing.approve` packets from rogue peers. Mitigated **UI Spoofing** by deriving the fingerprint mathematically from the TLS Context instead of trusting the packet payload. Enforced a rigid 120s timeout via an explicit `pairing.reject` broadcast and timer cleanup, and later patched the outbound approve path to restore the timer for any exception type instead of only `StateError` / `SocketException`. Added an intermediate `rift.onPairingApproved` IPC notification so the UI can distinguish "peer approved" from final trust persistence.
   - Finalized **Client-side PoP Verification**: Hardened `SessionManager.accept` by validating the inbound PoP signature on the client side before allowing connection completion.
   - **Discovery Automation (M3 Resolved):** Added `discovery_integration_test.dart` using the pure-Dart `mdns_dart` package to actively advertise and discover `_rift._tcp` TXT records over the real local UDP network stack, replacing logical mocks.
-  - **Assessment:** Pairing, discovery automation, and trust persistence are implemented in code. At the time of this report update, `dart test` passes with 75 tests.
+  - **Assessment:** Pairing, discovery automation, and trust persistence are implemented in code. At the time of this report update, `dart test` passes with 81 tests.
 
 - **`[daemon-dart] Security Audit & Hardening` (End of Week 4):** Conducted a deep-dive 16-point security and conformance audit across all Dart implementation files.
   - **Critical (C-1/C-2):** Resolved a severe Integer Overflow vulnerability in `Base32Utils` affecting Dart Web/JS builds (53-bit float limits) by implementing explicit bit clamping. Enforced strict memory zeroing of ephemeral TLS Certificates (`_tlsCertificateDer`) during daemon shutdown to prevent extraction from heap dumps.
@@ -95,7 +95,7 @@ daemon-dart/
   - **Medium (M-1 to M-5):** Solved a silent session starvation state where disconnected peers were locked out from reconnecting by integrating a reactive `onPeerDisconnected` stream. Bounded IPC `ReceivePort` lifecycles in `daemon.dart` behind `try/catch` logic to prevent headless port leaks on startup failures. Implemented dedicated unit tests for pre-auth (64 KiB) and post-auth (32 MiB) promotion boundaries. Later hardening also centralized shared protocol metadata, introduced typed Rift exceptions carrying explicit JSON-RPC error codes, extracted shared JSON-RPC param validation into `rpc_utils.dart`, and updated the isolate bridge naming from `commandPort` to `rpcPort` to reflect its real JSON-RPC role.
   - **Low/Conformance (L-1 to L-5):** Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
   - **Documentation & Technical Debt:** Executed a massive comment cleanup across the repository to ensure all code is strictly English-first. Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
-  - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 75 tests.
+  - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 81 tests.
 
 ---
 
@@ -105,8 +105,8 @@ The implementation is clearly derived from the two core specifications, but it s
 
 ### 2.1. Compliance with `spec/doc/protocol.md` (Network Protocol & Security)
 - **Implemented and aligned:** The code embeds the custom Ed25519 extension in the TLS certificate, parses it fail-closed, derives the device ID from the Ed25519 public key, enforces pre-auth/post-auth frame size limits, and canonicalizes the PoP signing payload strictly to the 107-byte raw format.
-- **Implemented with accepted technical debt:** `session.accept` verification exists, but the channel binding utilizes a static `SHA-256(localCertDer || peerCertDer)` substitute due to `dart:io` lacking `tls-exporter` support.
-- **Net assessment:** Security architecture is integrated and close to the spec structurally, but it is not yet fully conformant for M2 because session-unique replay resistance is still missing.
+- **Implemented with spec-defined fallback:** `session.hello` / `session.accept` verification now uses the normative Tier 3 `app-nonce` channel binding from Section 5.3.1 / ADR-0011 because `dart:io` still lacks `tls-exporter` support.
+- **Net assessment:** Security architecture is integrated and aligned with the current protocol draft for the Dart platform. The remaining tradeoff is the residual risk already documented in the spec for Tier 3 versus TLS-exporter.
 
 ### 2.2. Compliance with `spec/doc/ipc.md` (Flutter Client Communication)
 - **Implemented and aligned:** The daemon exposes an isolate entrypoint and the pairing/trust notifications needed for the Flutter app to drive the flow.
@@ -120,8 +120,8 @@ The implementation is clearly derived from the two core specifications, but it s
 
 ## 3. Risk Assessment & Blockers (Milestone M3)
 
-1. **TLS-Exporter Absence (Accepted Technical Debt):**
-   `dart:io` `SecureSocket` does not expose `tls-exporter` (RFC 9266) or Extended Master Secret (EMS) status. The implementation currently relies on a certificate-bound hash (`SHA-256(localCertDer || peerCertDer)`). While this prevents Triple Handshake Attacks (CVE-2014-1295) and aligns with the structural 32-byte channel binding requirement, it does not provide cryptographic session uniqueness against replay attacks. **Action:** Accepted as technical debt until the Dart SDK formally supports RFC 9266.
+1. **TLS-Exporter Absence (Residual Spec-Level Limitation):**
+   `dart:io` `SecureSocket` does not expose `tls-exporter` (RFC 9266) or `tls-unique` material. The implementation therefore uses the current spec-approved Tier 3 `app-nonce` binding, which provides per-session uniqueness but does not cryptographically bind the PoP to the TLS transcript itself. **Action:** Upgrade to Tier 1 automatically once the Dart SDK exposes TLS keying material export.
 
 2. **PoP Canonicalization (Resolved):**
    The implementation has been refactored to strictly match the 107-byte raw concatenation schema defined in `protocol.md` Section 5.3.1. The previous divergence (length prefixes) has been removed.
@@ -135,9 +135,9 @@ The implementation is clearly derived from the two core specifications, but it s
 ## 4. Reality Check Against the Repository
 
 - `dart analyze` currently reports `No issues found!`.
-- `dart test` currently passes with 75 tests.
+- `dart test` currently passes with 81 tests.
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
-  `dart test` -> `00:03 +75: All tests passed!`
+  `dart test` -> `00:06 +81: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` exists, but it is still a standalone runner stub and not a full daemon launcher for conformance use yet.

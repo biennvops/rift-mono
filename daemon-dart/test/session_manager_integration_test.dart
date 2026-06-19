@@ -170,6 +170,11 @@ void main() {
       // Since they aren't fully wired synchronously, we capture the sent message and pass it to transport2 manually
       expect(transport1.sentMessages.isNotEmpty, isTrue);
       final helloMsg = transport1.sentMessages.last;
+      expect(helloMsg['payload']['bindingType'], 'app-nonce');
+      expect(
+        base64.decode(helloMsg['payload']['sessionNonce'] as String),
+        hasLength(32),
+      );
       
       // We expect transport2 to respond with accept when it receives the hello
       final acceptFuture = transport2.onSentMessage.first;
@@ -177,6 +182,11 @@ void main() {
       
       final acceptMsg = await acceptFuture;
       expect(acceptMsg['type'], 'session.accept');
+      expect(acceptMsg['payload']['bindingType'], 'app-nonce');
+      expect(
+        base64.decode(acceptMsg['payload']['sessionNonce'] as String),
+        hasLength(32),
+      );
       
       // Discovery flow and session establish complete.
       expect(transport1.isDisconnected, isFalse);
