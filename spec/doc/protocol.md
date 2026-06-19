@@ -250,13 +250,19 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
   "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+  "bindingType": "app-nonce",
+  "sessionNonce": "base64-encoded-32-bytes",
   "identityProof": "a]1b2c3...128 hex chars...f4e5d6"
 }
 ```
 
 The `identityProof` field is REQUIRED. It contains a 128-character lowercase hexadecimal string encoding the 64-byte Ed25519 signature defined in Section 5.3.
 
-`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
+The `bindingType` field is REQUIRED. It MUST be one of `"tls-exporter"`, `"tls-unique"`, or `"app-nonce"`, indicating which channel binding tier the signer used for the PoP construction (Section 5.3.1).
+
+The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUST be absent otherwise. It contains a base64-encoded 32-byte cryptographically random nonce used in the Tier 3 channel binding computation.
+
+`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
 `session.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
@@ -689,6 +695,8 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
     "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
     "implementationId": "riftd-cs/0.1.0",
     "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+    "bindingType": "app-nonce",
+    "sessionNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "identityProof": "a1b2c3d4...128 hex characters...e5f6a7b8"
   }
 }
