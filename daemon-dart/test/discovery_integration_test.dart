@@ -51,7 +51,7 @@ void main() {
       final delta = tracker!.ingest([
         DiscoveredPeer(
           instanceId: discoveredService.name,
-          address: discoveredService.host ?? '127.0.0.1',
+          address: discoveredService.host,
           port: discoveredService.port,
           minVersion: '0.1-draft',
           maxVersion: '0.1-draft',

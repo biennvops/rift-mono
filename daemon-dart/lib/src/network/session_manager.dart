@@ -203,7 +203,6 @@ class SessionManager {
         final identityProofHex = payload?['identityProof'] as String?;
         final capabilities = payload?['capabilities'] as List?;
         final identityVerified = payload?['identityVerified'];
-        final localCertDer = _identityManager.tlsCertificateDer;
         final peerCertDer = msg.peerCertDer!;
 
         if (selectedVersion != RiftConstants.protocolVersion) {
@@ -334,7 +333,6 @@ class SessionManager {
       throw SessionException('IdentityError: Missing peer certificate context');
     }
 
-    final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer!;
 
     final channelBindingHello = _computeChannelBinding(false, peerCertDer);
