@@ -115,6 +115,12 @@ daemon-dart/
       - **A2 -> B2 window:** `~16m 51s` on-battery (screen-off `~16m 39s`), WiFi and Cellular data `0B` throughout.
       - **B2 observed:** total partial wakelock time `6s 803ms`, device light idle `11m 53s` (entered Doze).
       - **Battery drain:** `0 mAh` reported for this window (short-window resolution; treat as “below meter precision” rather than guaranteed zero).
+    - **1 trusted peer heartbeat run (WiFi on, 2026-06-19):**
+      - **C -> D window:** `~15m 5s` on-battery (screen-off `~15m 5s`), screen-on delta `~0s`.
+      - **C -> D deltas:** partial wakelock `+25s` (48.9s -> 74.3s), connectivity changes `13 -> 19`.
+      - **C -> D network deltas:** WiFi RX `+302KB`, WiFi TX `+544KB` (Cellular `0B` throughout).
+      - **Battery drain:** `0 mAh` reported for this window (again: likely below meter precision at this duration).
+      - **Comparison to clean idle:** baseline shows `~0.40s/min` partial wakelock, while this run shows `~1.68s/min` partial wakelock delta. This suggests additional periodic work during the window (consistent with “heartbeat present”), but attribution remains imperfect because system jobs can also contribute; repeating the run with a longer window (30-60m) would improve confidence.
     - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
   - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 is functionally complete in code/tests, but battery impact cannot be signed off until at least one idle A/B delta and one "1 trusted peer heartbeat" C/D delta are recorded.
 
