@@ -114,6 +114,32 @@ class SessionManager {
 
   final Future<bool> Function(String)? peerAllowanceResolver;
 
+  static const Set<String> _validBindingTypes = {'tls-exporter', 'tls-unique', 'app-nonce'};
+
+  Future<String?> _validateBindingType(String peerDeviceId, String? bindingType) async {
+    if (bindingType == null) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing bindingType');
+      return null;
+    }
+    if (!_validBindingTypes.contains(bindingType)) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Unrecognized bindingType');
+      return null;
+    }
+    if (bindingType != 'app-nonce') {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed',
+          'Dart daemon only supports app-nonce bindingType');
+      return null;
+    }
+    return bindingType;
+  }
+
+  final Set<String> _requiredCapabilityNames = const {
+    'clipboard.offer_fetch',
+    'presence.basic',
+    'operation.lifecycle',
+    'security.event_log',
+  };
+
   
   final _messageController = StreamController<ProtocolMessage>.broadcast();
   Stream<ProtocolMessage> get onMessage => _messageController.stream;
@@ -414,6 +440,11 @@ class SessionManager {
     }
 
     final sessionNonceStr = payload['sessionNonce'] as String?;
+    final bindingType = payload['bindingType'] as String?;
+
+    final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+    if (validatedBinding == null) return;
+
     if (sessionNonceStr == null) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
       return;
@@ -477,6 +508,7 @@ class SessionManager {
         'selectedVersion': '0.1-draft',
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
@@ -505,6 +537,10 @@ class SessionManager {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing or invalid identityVerified');
       return;
     }
+
+    final bindingType = payload['bindingType'] as String?;
+    final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+    if (validatedBinding == null) return;
 
     final identityProofHex = payload['identityProof'] as String?;
     if (identityProofHex == null) {
