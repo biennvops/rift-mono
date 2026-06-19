@@ -125,6 +125,29 @@ class RiftDaemon {
     }).toList();
   }
 
+  Future<List<Map<String, dynamic>>> listPeersByState(String trustState) async {
+    final trustStore = _trustStore;
+    if (trustStore == null) return [];
+
+    final state = TrustState.fromJson(trustState);
+    final peers = await trustStore.getPeersByState(state);
+
+    return peers.map((peer) {
+      final ctx = _sessionManager!.getContext(peer.deviceId);
+      final lastSeenAt = ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+          peer.lastSeenAt?.toUtc().toIso8601String();
+      return {
+        'deviceId': peer.deviceId,
+        if (peer.displayName != null) 'displayName': peer.displayName,
+        'trustState': peer.state.toJson(),
+        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
+        'lastSeenAt': lastSeenAt,
+        'presence': ctx?.currentPresenceStatus ?? 'offline',
+        'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? <String>[],
+      };
+    }).toList();
+  }
+
   Future<List<Map<String, dynamic>>> listDiscoveredPeers() async {
     final trustStore = _trustStore;
     final results = <Map<String, dynamic>>[];
@@ -163,6 +186,9 @@ class RiftDaemon {
         return getDeviceInfo();
       case 'rift.listTrustedPeers':
         return {'peers': await listTrustedPeers()};
+      case 'rift.listPeersByState':
+        final state = RpcUtils.requireStringParam(params, 'trustState');
+        return {'peers': await listPeersByState(state)};
       case 'rift.getPeerPresence':
         final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
         final trustRecord = await _trustStore!.getPeer(peerDeviceId);

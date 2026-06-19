@@ -47,8 +47,8 @@ class FakeTransport implements Transport {
   @override
   Future<void> stopServer() async {}
   
-  void simulateMessage(String deviceId, String type, Map<String, dynamic> payload, {String? sourceDeviceId}) {
-    final map = {
+  void simulateMessage(String deviceId, String type, Map<String, dynamic>? payload, {String? sourceDeviceId}) {
+    final map = <String, dynamic>{
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
       'type': type,
@@ -247,6 +247,22 @@ void main() {
     reply = transport.sentMessages.last;
     expect(reply['type'], equals('session.reject'));
     expect(reply['payload']['message'], contains('Unnegotiated capability in presence update'));
+  });
+
+  test('presence update rejects missing payload', () async {
+    final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
+    ctx.handshakeState = HandshakeState.established;
+    ctx.trustState = TrustState.trusted;
+    ctx.negotiatedCapabilities = [Capability(name: 'presence.basic', version: 1)];
+    sessionManager.injectContextForTesting(ctx);
+
+    // No payload (null) should be treated as MalformedMessage, not a no-op.
+    transport.simulateMessage('peer1', 'presence.update', null);
+    await Future.delayed(Duration.zero);
+
+    final reply = transport.sentMessages.last;
+    expect(reply['type'], equals('session.reject'));
+    expect(reply['payload']['failureReason'], equals('MalformedMessage'));
   });
 
   test('missing presence.basic capability does not start heartbeat even when trusted', () async {

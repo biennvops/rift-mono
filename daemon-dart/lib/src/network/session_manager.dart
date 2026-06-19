@@ -126,8 +126,14 @@ class SessionManager {
       return null;
     }
     if (bindingType != 'app-nonce') {
-      await _rejectSession(peerDeviceId, 'AuthenticationFailed',
-          'Dart daemon only supports app-nonce bindingType');
+      // Spec supports a tiered hierarchy (tls-exporter / tls-unique / app-nonce),
+      // but dart:io SecureSocket does not expose TLS channel binding primitives.
+      // This daemon can only *verify* PoP using Tier 3 (app-nonce).
+      await _rejectSession(
+        peerDeviceId,
+        'AuthenticationFailed',
+        'Unsupported bindingType on this platform (only app-nonce is supported by Dart daemon)',
+      );
       return null;
     }
     return bindingType;
@@ -797,7 +803,10 @@ class SessionManager {
     requireCapability(ctx.peerDeviceId, 'presence.basic');
     
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
-    if (payload == null) return;
+    if (payload == null) {
+      await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Missing payload in presence.update');
+      return;
+    }
     
     final status = payload['status'] as String?;
     if (status != 'online' && status != 'offline' && status != 'away') {
@@ -808,6 +817,9 @@ class SessionManager {
     List<String> reportedCaps;
     try {
       final caps = payload['capabilities'] as List<dynamic>? ?? [];
+      if (caps.any((e) => e is! String)) {
+        throw const FormatException('capabilities must be a list of strings');
+      }
       reportedCaps = caps.cast<String>();
     } catch (e) {
       await _rejectSession(ctx.peerDeviceId, 'MalformedMessage', 'Invalid presence.update capabilities format');
