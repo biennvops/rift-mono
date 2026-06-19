@@ -18,6 +18,11 @@ namespace Rift.Daemon.Core.Networking;
 
 public class SessionBootstrap
 {
+    private static readonly JsonSerializerOptions NullOmittingJsonOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
     private readonly ILogger<SessionBootstrap> _logger;
     private readonly IIdentityManager _identityManager;
 
@@ -75,7 +80,9 @@ public class SessionBootstrap
         }
         else if (peerBindingType == "tls-unique")
         {
-            channelBinding = GetTlsChannelBinding(sslStream);
+            if (!TryGetTlsChannelBinding(sslStream, out channelBinding))
+                throw new InvalidOperationException(
+                    "Peer used tls-unique binding but TLS channel binding is unavailable on this platform.");
         }
         else
         {
@@ -103,15 +110,8 @@ public class SessionBootstrap
     private (string bindingType, byte[] channelBinding, byte[]? sessionNonce) GetChannelBinding(
         SslStream sslStream, X509Certificate2 localCert, byte[]? peerCertDer)
     {
-        try
-        {
-            var tlsBinding = GetTlsChannelBinding(sslStream);
+        if (TryGetTlsChannelBinding(sslStream, out var tlsBinding))
             return ("tls-unique", tlsBinding, null);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("unavailable") || ex.Message.Contains("not supported"))
-        {
-            // TLS channel binding unavailable — fall back to Tier 3 (app-nonce).
-        }
 
         if (peerCertDer is null)
             throw new InvalidOperationException(
@@ -136,30 +136,25 @@ public class SessionBootstrap
         return sha256.ComputeHash(ms.ToArray());
     }
 
-    protected virtual byte[] GetTlsChannelBinding(SslStream sslStream)
+    protected virtual bool TryGetTlsChannelBinding(SslStream sslStream, out byte[] channelBinding)
     {
         ArgumentNullException.ThrowIfNull(sslStream);
+        channelBinding = [];
 
         try
         {
             var binding = sslStream.TransportContext?.GetChannelBinding(ChannelBindingKind.Unique);
             if (binding is null)
-            {
-                throw new InvalidOperationException(
-                    "TLS channel binding is unavailable; falling back to app-nonce.");
-            }
+                return false;
 
             try
             {
                 if (binding.Size <= 0)
-                {
-                    throw new InvalidOperationException(
-                        $"TLS channel binding was empty or invalid ({binding.Size} bytes).");
-                }
+                    return false;
 
-                var channelBinding = new byte[binding.Size];
+                channelBinding = new byte[binding.Size];
                 Marshal.Copy(binding.DangerousGetHandle(), channelBinding, 0, channelBinding.Length);
-                return channelBinding;
+                return true;
             }
             finally
             {
@@ -168,9 +163,7 @@ public class SessionBootstrap
         }
         catch (Exception ex) when (ex is NotSupportedException or PlatformNotSupportedException)
         {
-            throw new InvalidOperationException(
-                "TLS channel binding is not supported on this platform/runtime.",
-                ex);
+            return false;
         }
     }
 
@@ -243,10 +236,7 @@ public class SessionBootstrap
             payload = payload
         };
 
-        var json = JsonSerializer.Serialize(envelope, new JsonSerializerOptions
-        {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        });
+        var json = JsonSerializer.Serialize(envelope, NullOmittingJsonOptions);
         var frame = RiftFrame.Encode(Encoding.UTF8.GetBytes(json));
 
         await stream.WriteAsync(frame, cancellationToken);

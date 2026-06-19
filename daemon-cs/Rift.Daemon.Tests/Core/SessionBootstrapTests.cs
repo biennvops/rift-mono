@@ -128,14 +128,16 @@ public class SessionBootstrapTests
             _channelBinding = channelBinding;
         }
 
-        protected override byte[] GetTlsChannelBinding(SslStream sslStream)
+        protected override bool TryGetTlsChannelBinding(SslStream sslStream, out byte[] channelBinding)
         {
             if (_channelBinding is null)
             {
-                throw new InvalidOperationException("TLS channel binding is unavailable in test.");
+                channelBinding = [];
+                return false;
             }
 
-            return _channelBinding;
+            channelBinding = _channelBinding;
+            return true;
         }
     }
 }
