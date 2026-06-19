@@ -58,11 +58,14 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
             ORDER BY DeviceId;
             """;
 
+        var peers = new List<PeerIdentity>();
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            yield return ReadPeer(reader);
+            peers.Add(ReadPeer(reader));
         }
+
+        return peers;
     }
 
     public bool TryTransition(string deviceId, TrustState newState)
@@ -99,7 +102,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         peer.LastStateTransitionAt = DateTimeOffset.UtcNow;
         if (newState != TrustState.Revoked)
         {
-            peer.RevocationEvidence ??= null;
+            peer.RevocationEvidence = null;
         }
 
         using var update = connection.CreateCommand();

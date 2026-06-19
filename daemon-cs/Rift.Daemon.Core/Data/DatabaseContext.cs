@@ -4,6 +4,7 @@ namespace Rift.Daemon.Core.Data;
 
 public sealed class DatabaseContext
 {
+    private const int BusyTimeoutMs = 5000;
     private readonly string _connectionString;
 
     public DatabaseContext(string databasePath)
@@ -36,11 +37,14 @@ public sealed class DatabaseContext
         command.CommandText =
             """
             PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            PRAGMA busy_timeout = 5000;
 
             CREATE TABLE IF NOT EXISTS LocalIdentity (
                 Id INTEGER NOT NULL PRIMARY KEY CHECK (Id = 1),
                 Ed25519PrivateKey BLOB NOT NULL,
                 Ed25519PublicKey BLOB NOT NULL,
+                TlsCertificatePfx BLOB NULL,
                 CreatedAt TEXT NOT NULL
             );
 
@@ -65,8 +69,22 @@ public sealed class DatabaseContext
                 FailureReason TEXT NULL,
                 DetailsJson TEXT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS IX_SecurityEvents_Timestamp
+            ON SecurityEvents (Timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS IX_SecurityEvents_EventType_Timestamp
+            ON SecurityEvents (EventType, Timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS IX_SecurityEvents_Severity_Timestamp
+            ON SecurityEvents (Severity, Timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS IX_SecurityEvents_PeerDeviceId_Timestamp
+            ON SecurityEvents (PeerDeviceId, Timestamp DESC);
             """;
         command.ExecuteNonQuery();
+
+        EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
     }
 
     public SqliteConnection CreateOpenConnection()
@@ -75,9 +93,33 @@ public sealed class DatabaseContext
         connection.Open();
 
         using var pragma = connection.CreateCommand();
-        pragma.CommandText = "PRAGMA foreign_keys = ON;";
+        pragma.CommandText =
+            $"""
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            PRAGMA busy_timeout = {BusyTimeoutMs};
+            """;
         pragma.ExecuteNonQuery();
 
         return connection;
+    }
+
+    private static void EnsureColumnExists(SqliteConnection connection, string tableName, string columnName, string columnDefinition)
+    {
+        using var schemaCommand = connection.CreateCommand();
+        schemaCommand.CommandText = $"PRAGMA table_info({tableName});";
+
+        using var reader = schemaCommand.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader["name"] as string, columnName, StringComparison.Ordinal))
+            {
+                return;
+            }
+        }
+
+        using var alterCommand = connection.CreateCommand();
+        alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
+        alterCommand.ExecuteNonQuery();
     }
 }

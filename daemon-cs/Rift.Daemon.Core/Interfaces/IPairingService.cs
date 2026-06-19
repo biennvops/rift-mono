@@ -31,13 +31,13 @@ public sealed class UnblockPeerResult
 
 public interface IPairingService
 {
-    StartPairingResult StartPairing(string deviceId);
+    Task<StartPairingResult> StartPairingAsync(string deviceId);
 
-    ApprovePairingResult ApprovePairing(string deviceId, string fingerprint);
+    Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);
 
-    RejectPairingResult RejectPairing(string deviceId);
+    Task<RejectPairingResult> RejectPairingAsync(string deviceId);
 
-    RevokeTrustResult RevokeTrust(string deviceId, string reason);
+    Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason);
 
-    UnblockPeerResult UnblockPeer(string deviceId);
+    Task<UnblockPeerResult> UnblockPeerAsync(string deviceId);
 }

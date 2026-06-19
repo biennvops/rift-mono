@@ -118,6 +118,28 @@ public sealed class WorkerTests
         await worker.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ObservesFaultedSiblingTaskWhenOtherTaskCompletesFirst()
+    {
+        var ipcListener = new DelayedFaultIpcListener(TimeSpan.FromMilliseconds(50), new InvalidOperationException("ipc boom"));
+        var discoveryService = new FakeDiscoveryService();
+        var transport = new CompletingTransport();
+        var protocolRouter = new FakeProtocolMessageRouter();
+        var presenceService = new PresenceService();
+        var identityManager = new IdentityManager();
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            identityManager,
+            discoveryService,
+            transport,
+            protocolRouter,
+            presenceService);
+
+        await worker.RunExecuteAsync(CancellationToken.None);
+        await ipcListener.Faulted.Task;
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 3000)
     {
         var startedAt = Environment.TickCount64;
@@ -151,11 +173,25 @@ public sealed class WorkerTests
             Dispose();
             return ValueTask.CompletedTask;
         }
+
+        public Task RunExecuteAsync(CancellationToken cancellationToken) => ExecuteAsync(cancellationToken);
     }
 
     private sealed class FakeIpcListener : IIpcListener
     {
         public Task ListenAsync(CancellationToken stoppingToken) => Task.Delay(Timeout.Infinite, stoppingToken);
+    }
+
+    private sealed class DelayedFaultIpcListener(TimeSpan delay, Exception exception) : IIpcListener
+    {
+        public TaskCompletionSource Faulted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task ListenAsync(CancellationToken stoppingToken)
+        {
+            await Task.Delay(delay, stoppingToken);
+            Faulted.TrySetResult();
+            throw exception;
+        }
     }
 
     private sealed class FakeDiscoveryService : IDiscoveryService
@@ -224,6 +260,20 @@ public sealed class WorkerTests
         {
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(peerDeviceId, payload));
         }
+    }
+
+    private sealed class CompletingTransport : ITransport
+    {
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+
+        public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class FakeProtocolMessageRouter : IProtocolMessageRouter

@@ -29,9 +29,9 @@ public sealed class DaemonInfoService(
         };
     }
 
-    public QueryEventLogResult QueryEventLog(SecurityEventQuery query)
+    public async Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query)
     {
-        var events = securityEventLog.QueryEventsAsync(query).GetAwaiter().GetResult();
+        var events = await securityEventLog.QueryEventsAsync(query);
         return new QueryEventLogResult
         {
             Events = events,
@@ -42,14 +42,18 @@ public sealed class DaemonInfoService(
     public ListTrustedPeersResult ListTrustedPeers()
     {
         var peers = trustStore.GetAllPeers()
-            .Select(peer => new TrustedPeerInfo
+            .Select(peer =>
             {
-                DeviceId = peer.DeviceId,
-                TrustState = peer.State.ToString().ToLowerInvariant(),
-                PairedAt = peer.State == TrustState.Trusted ? peer.LastStateTransitionAt.ToString("O") : null,
-                LastSeenAt = presenceService.GetPeerPresence(peer.DeviceId)?.LastSeenAt,
-                Presence = presenceService.GetPeerPresence(peer.DeviceId)?.Status ?? "offline",
-                Capabilities = presenceService.GetPeerPresence(peer.DeviceId)?.Capabilities ?? []
+                var presence = presenceService.GetPeerPresence(peer.DeviceId);
+                return new TrustedPeerInfo
+                {
+                    DeviceId = peer.DeviceId,
+                    TrustState = peer.State.ToString().ToLowerInvariant(),
+                    PairedAt = peer.State == TrustState.Trusted ? peer.LastStateTransitionAt.ToString("O") : null,
+                    LastSeenAt = presence?.LastSeenAt,
+                    Presence = presence?.Status ?? "offline",
+                    Capabilities = presence?.Capabilities ?? []
+                };
             })
             .ToArray();
 

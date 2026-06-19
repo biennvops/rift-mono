@@ -100,23 +100,23 @@ public class RiftApiHandler : IRiftApi
 
     [JsonRpcMethod("rift.startPairing")]
     public Task<StartPairingResult> StartPairingAsync(string deviceId) =>
-        Task.FromResult(_pairingService.StartPairing(deviceId));
+        ExecutePairingAsync(() => _pairingService.StartPairingAsync(deviceId));
 
     [JsonRpcMethod("rift.approvePairing")]
     public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) =>
-        Task.FromResult(_pairingService.ApprovePairing(deviceId, fingerprint));
+        ExecutePairingAsync(() => _pairingService.ApprovePairingAsync(deviceId, fingerprint));
 
     [JsonRpcMethod("rift.rejectPairing")]
     public Task<RejectPairingResult> RejectPairingAsync(string deviceId) =>
-        Task.FromResult(_pairingService.RejectPairing(deviceId));
+        ExecutePairingAsync(() => _pairingService.RejectPairingAsync(deviceId));
 
     [JsonRpcMethod("rift.revokeTrust")]
     public Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason) =>
-        Task.FromResult(_pairingService.RevokeTrust(deviceId, reason));
+        ExecutePairingAsync(() => _pairingService.RevokeTrustAsync(deviceId, reason));
 
     [JsonRpcMethod("rift.unblockPeer")]
     public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) =>
-        Task.FromResult(_pairingService.UnblockPeer(deviceId));
+        ExecutePairingAsync(() => _pairingService.UnblockPeerAsync(deviceId));
 
     [JsonRpcMethod("rift.queryEventLog")]
     public Task<QueryEventLogResult> QueryEventLogAsync(
@@ -133,7 +133,7 @@ public class RiftApiHandler : IRiftApi
             sinceTimestamp = DateTimeOffset.Parse(since);
         }
 
-        return Task.FromResult(_daemonInfoService.QueryEventLog(new SecurityEventQuery
+        return _daemonInfoService.QueryEventLogAsync(new SecurityEventQuery
         {
             EventTypes = eventTypes,
             Severities = severities,
@@ -141,14 +141,33 @@ public class RiftApiHandler : IRiftApi
             Since = sinceTimestamp,
             Limit = limit,
             Offset = offset
-        }));
+        });
+    }
+
+    private static async Task<TResult> ExecutePairingAsync<TResult>(Func<Task<TResult>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (LocalRpcException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new LocalRpcException(ex.Message)
+            {
+                ErrorCode = -32603
+            };
+        }
     }
 
     private sealed class UnsupportedDaemonInfoService : IDaemonInfoService
     {
         public DeviceInfoResult GetDeviceInfo() => throw CreateNotConfiguredException();
 
-        public QueryEventLogResult QueryEventLog(SecurityEventQuery query) => throw CreateNotConfiguredException();
+        public Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query) => throw CreateNotConfiguredException();
 
         public ListTrustedPeersResult ListTrustedPeers() => throw CreateNotConfiguredException();
 
@@ -192,7 +211,7 @@ public class RiftApiHandler : IRiftApi
     {
         public Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
 
-        public Task HandleOfferReceivedAsync(string deviceId, string payloadSourceDeviceId, string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
+        public Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer) => throw CreateNotConfiguredException();
 
         public Task<byte[]> FetchContentAsync(string deviceId, string offerId) => throw CreateNotConfiguredException();
 
@@ -219,15 +238,15 @@ public class RiftApiHandler : IRiftApi
 
     private sealed class UnsupportedPairingService : IPairingService
     {
-        public StartPairingResult StartPairing(string deviceId) => throw CreateNotConfiguredException();
+        public Task<StartPairingResult> StartPairingAsync(string deviceId) => throw CreateNotConfiguredException();
 
-        public ApprovePairingResult ApprovePairing(string deviceId, string fingerprint) => throw CreateNotConfiguredException();
+        public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) => throw CreateNotConfiguredException();
 
-        public RejectPairingResult RejectPairing(string deviceId) => throw CreateNotConfiguredException();
+        public Task<RejectPairingResult> RejectPairingAsync(string deviceId) => throw CreateNotConfiguredException();
 
-        public RevokeTrustResult RevokeTrust(string deviceId, string reason) => throw CreateNotConfiguredException();
+        public Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason) => throw CreateNotConfiguredException();
 
-        public UnblockPeerResult UnblockPeer(string deviceId) => throw CreateNotConfiguredException();
+        public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()
         {

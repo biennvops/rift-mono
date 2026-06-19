@@ -30,7 +30,7 @@ public sealed class PairingService : IPairingService
         _logger = logger ?? NullLogger<PairingService>.Instance;
     }
 
-    public StartPairingResult StartPairing(string deviceId)
+    public async Task<StartPairingResult> StartPairingAsync(string deviceId)
     {
         var peer = GetExistingPeer(deviceId);
         EnsurePeerHasPublicKey(peer);
@@ -50,8 +50,12 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, "Failed to transition peer into pairing_pending.");
         }
 
-        _pairingProtocolCoordinator?.NotifyLocalPairingStarted(deviceId);
-        LogEvent(SecurityEventTypes.PairingAttempted, deviceId, SecurityEventOutcome.Success, null);
+        if (_pairingProtocolCoordinator is not null)
+        {
+            await _pairingProtocolCoordinator.NotifyLocalPairingStartedAsync(deviceId);
+        }
+
+        await LogEventAsync(SecurityEventTypes.PairingAttempted, deviceId, SecurityEventOutcome.Success, null);
 
         return new StartPairingResult
         {
@@ -61,7 +65,7 @@ public sealed class PairingService : IPairingService
         };
     }
 
-    public ApprovePairingResult ApprovePairing(string deviceId, string fingerprint)
+    public async Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint)
     {
         var peer = GetExistingPeer(deviceId);
         EnsurePeerHasPublicKey(peer);
@@ -83,8 +87,12 @@ public sealed class PairingService : IPairingService
         }
 
         var persistedAt = DateTimeOffset.UtcNow;
-        _pairingProtocolCoordinator?.NotifyLocalPairingApproved(deviceId);
-        LogEvent(SecurityEventTypes.PairingCompleted, deviceId, SecurityEventOutcome.Success, null);
+        if (_pairingProtocolCoordinator is not null)
+        {
+            await _pairingProtocolCoordinator.NotifyLocalPairingApprovedAsync(deviceId);
+        }
+
+        await LogEventAsync(SecurityEventTypes.PairingCompleted, deviceId, SecurityEventOutcome.Success, null);
 
         return new ApprovePairingResult
         {
@@ -93,7 +101,7 @@ public sealed class PairingService : IPairingService
         };
     }
 
-    public RejectPairingResult RejectPairing(string deviceId)
+    public async Task<RejectPairingResult> RejectPairingAsync(string deviceId)
     {
         var peer = GetExistingPeer(deviceId);
         if (peer.State != TrustState.PairingPending)
@@ -106,18 +114,22 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, "Failed to reject pairing.");
         }
 
-        _pairingProtocolCoordinator?.NotifyLocalPairingRejected(deviceId);
-        LogEvent(SecurityEventTypes.PairingRejected, deviceId, SecurityEventOutcome.Success, null);
+        if (_pairingProtocolCoordinator is not null)
+        {
+            await _pairingProtocolCoordinator.NotifyLocalPairingRejectedAsync(deviceId);
+        }
+
+        await LogEventAsync(SecurityEventTypes.PairingRejected, deviceId, SecurityEventOutcome.Success, null);
         return new RejectPairingResult { Rejected = true };
     }
 
-    public RevokeTrustResult RevokeTrust(string deviceId, string reason)
+    public async Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason)
     {
         _ = GetExistingPeer(deviceId);
         _trustStore.RevokePeer(deviceId, reason);
 
         var revokedAt = DateTimeOffset.UtcNow;
-        LogEvent(SecurityEventTypes.TrustRevoked, deviceId, SecurityEventOutcome.Success, reason);
+        await LogEventAsync(SecurityEventTypes.TrustRevoked, deviceId, SecurityEventOutcome.Success, reason);
         return new RevokeTrustResult
         {
             Revoked = true,
@@ -125,7 +137,7 @@ public sealed class PairingService : IPairingService
         };
     }
 
-    public UnblockPeerResult UnblockPeer(string deviceId)
+    public async Task<UnblockPeerResult> UnblockPeerAsync(string deviceId)
     {
         var peer = GetExistingPeer(deviceId);
         if (peer.State != TrustState.Blocked)
@@ -138,7 +150,7 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, "Failed to unblock peer.");
         }
 
-        LogEvent(SecurityEventTypes.TrustTransitioned, deviceId, SecurityEventOutcome.Success, null);
+        await LogEventAsync(SecurityEventTypes.TrustTransitioned, deviceId, SecurityEventOutcome.Success, null);
         return new UnblockPeerResult { Unblocked = true };
     }
 
@@ -169,10 +181,10 @@ public sealed class PairingService : IPairingService
         }
     }
 
-    private void LogEvent(string eventType, string deviceId, SecurityEventOutcome outcome, string? failureReason)
+    private async Task LogEventAsync(string eventType, string deviceId, SecurityEventOutcome outcome, string? failureReason)
     {
         _logger.LogInformation("Security event {EventType} for peer {DeviceId}.", eventType, deviceId);
-        _securityEventLog.LogEventAsync(new SecurityEventRecord
+        await _securityEventLog.LogEventAsync(new SecurityEventRecord
         {
             EventType = eventType,
             Severity = outcome == SecurityEventOutcome.Success ? SecurityEventSeverity.Info : SecurityEventSeverity.Warning,
@@ -180,6 +192,6 @@ public sealed class PairingService : IPairingService
             PeerDeviceId = deviceId,
             Outcome = outcome,
             FailureReason = failureReason
-        }).GetAwaiter().GetResult();
+        });
     }
 }

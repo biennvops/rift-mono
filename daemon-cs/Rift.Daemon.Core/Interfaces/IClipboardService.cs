@@ -19,6 +19,19 @@ public sealed class ClipboardOfferInfo
     public string ExpiresAt { get; init; } = string.Empty;
 }
 
+public sealed class ReceivedClipboardOffer
+{
+    public string DeviceId { get; init; } = string.Empty;
+    public string PayloadSourceDeviceId { get; init; } = string.Empty;
+    public string OfferId { get; init; } = string.Empty;
+    public string ContentType { get; init; } = string.Empty;
+    public long ByteSize { get; init; }
+    public string Sha256 { get; init; } = string.Empty;
+    public long ExpiresInMs { get; init; }
+    public string RequiredCapability { get; init; } = string.Empty;
+    public long OfferSequence { get; init; }
+}
+
 public sealed class NotifyClipboardChangeResult
 {
     public string OfferId { get; init; } = string.Empty;
@@ -50,7 +63,7 @@ public interface IClipboardService
     /// <summary>
     /// Handles a received clipboard offer from a trusted peer.
     /// </summary>
-    Task HandleOfferReceivedAsync(string deviceId, string payloadSourceDeviceId, string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence);
+    Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer);
 
     /// <summary>
     /// Explicitly fetches the content of an offer from a peer.

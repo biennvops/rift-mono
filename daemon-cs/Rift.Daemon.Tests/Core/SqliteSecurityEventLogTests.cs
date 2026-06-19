@@ -9,6 +9,7 @@ public sealed class SqliteSecurityEventLogTests : IDisposable
     private readonly string _databasePath;
     private readonly DatabaseContext _databaseContext;
     private readonly SqliteSecurityEventLog _eventLog;
+    private readonly SqliteSecurityEventLog _boundedEventLog;
 
     public SqliteSecurityEventLogTests()
     {
@@ -16,6 +17,7 @@ public sealed class SqliteSecurityEventLogTests : IDisposable
         _databaseContext = new DatabaseContext(_databasePath);
         _databaseContext.Initialize();
         _eventLog = new SqliteSecurityEventLog(_databaseContext);
+        _boundedEventLog = new SqliteSecurityEventLog(_databaseContext, maxRetainedEvents: 3);
     }
 
     [Fact]
@@ -48,6 +50,35 @@ public sealed class SqliteSecurityEventLogTests : IDisposable
         Assert.Single(results);
         Assert.Equal(SecurityEventTypes.PairingAttempted, results[0].EventType);
         Assert.Equal("rift-peer-a", results[0].PeerDeviceId);
+    }
+
+    [Fact]
+    public async Task LogEventAsync_PrunesOldestEventsBeyondRetentionLimit()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            await _boundedEventLog.LogEventAsync(new SecurityEventRecord
+            {
+                EventId = $"event-{i}",
+                EventType = SecurityEventTypes.PairingAttempted,
+                Severity = SecurityEventSeverity.Info,
+                LocalDeviceId = "rift-local",
+                PeerDeviceId = $"rift-peer-{i}",
+                Timestamp = DateTimeOffset.Parse("2026-06-19T00:00:00Z").AddMinutes(i),
+                Outcome = SecurityEventOutcome.Success,
+                Details = new Dictionary<string, object> { ["sequence"] = i }
+            });
+        }
+
+        var results = await _boundedEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            Limit = 10
+        });
+
+        Assert.Equal(3, results.Count);
+        Assert.DoesNotContain(results, evt => evt.EventId == "event-0");
+        Assert.DoesNotContain(results, evt => evt.EventId == "event-1");
+        Assert.Contains(results, evt => evt.EventId == "event-4");
     }
 
     public void Dispose()

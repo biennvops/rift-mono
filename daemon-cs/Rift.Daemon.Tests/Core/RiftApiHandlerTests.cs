@@ -12,6 +12,7 @@ namespace Rift.Daemon.Tests.Core;
 
 public sealed class RiftApiHandlerTests : IDisposable
 {
+    private static readonly TimeSpan FetchResponseTimeout = TimeSpan.FromMilliseconds(75);
     private readonly string _databasePath;
     private readonly DatabaseContext _databaseContext;
     private readonly SqliteTrustStore _trustStore;
@@ -36,7 +37,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         _transport = new FakeTransport();
         var discoveryCoordinator = new DiscoveryCoordinator(_discoveryService, _trustStore);
         var daemonInfoService = new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, discoveryCoordinator, _presenceService);
-        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance);
+        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
@@ -202,20 +203,52 @@ public sealed class RiftApiHandlerTests : IDisposable
             Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
             Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")));
 
-        await _clipboardService.HandleOfferReceivedAsync(
-            "rift-peer-expired",
-            "rift-peer-expired",
-            "offer-expired",
-            "text/plain",
-            5,
-            Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
-            -1,
-            "clipboard.offer_fetch",
-            1);
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-expired",
+            PayloadSourceDeviceId = "rift-peer-expired",
+            OfferId = "offer-expired",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ExpiresInMs = -1,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
 
         var ex = await Assert.ThrowsAsync<LocalRpcException>(() => _handler.FetchClipboardContentAsync("offer-expired"));
 
         Assert.Equal(-32002, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FetchClipboardContentAsync_SilentPeer_ReturnsTimeoutCode()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-timeout",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-timeout", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-timeout",
+            PayloadSourceDeviceId = "rift-peer-timeout",
+            OfferId = "offer-timeout",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() => _handler.FetchClipboardContentAsync("offer-timeout"));
+
+        Assert.Equal(-32011, ex.ErrorCode);
     }
 
     [Fact]
@@ -278,6 +311,21 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Contains(result.Events, evt => evt.EventType == "pairing.attempted" && evt.PeerDeviceId == deviceId);
     }
 
+    [Fact]
+    public async Task StartPairingAsync_UnexpectedServiceFailure_ReturnsInternalError()
+    {
+        var handler = new RiftApiHandler(
+            new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore), _presenceService),
+            new DiscoveryCoordinator(_discoveryService, _trustStore),
+            _clipboardService,
+            new ThrowingPairingService());
+
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() => handler.StartPairingAsync("rift-peer-failure"));
+
+        Assert.Equal(-32603, ex.ErrorCode);
+        Assert.Equal("boom", ex.Message);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -336,5 +384,18 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
 
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingPairingService : IPairingService
+    {
+        public Task<StartPairingResult> StartPairingAsync(string deviceId) => throw new InvalidOperationException("boom");
+
+        public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) => throw new InvalidOperationException("boom");
+
+        public Task<RejectPairingResult> RejectPairingAsync(string deviceId) => throw new InvalidOperationException("boom");
+
+        public Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason) => throw new InvalidOperationException("boom");
+
+        public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) => throw new InvalidOperationException("boom");
     }
 }

@@ -4,8 +4,10 @@ using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Core.Data;
 
-public sealed class SqliteSecurityEventLog(DatabaseContext databaseContext) : ISecurityEventLog
+public sealed class SqliteSecurityEventLog(DatabaseContext databaseContext, int maxRetainedEvents = 10000) : ISecurityEventLog
 {
+    private const int DefaultMaxRetainedEvents = 10000;
+
     public Task LogEventAsync(SecurityEventRecord securityEvent)
     {
         ArgumentNullException.ThrowIfNull(securityEvent);
@@ -39,6 +41,20 @@ public sealed class SqliteSecurityEventLog(DatabaseContext databaseContext) : IS
             """;
         BindRecord(command, securityEvent);
         command.ExecuteNonQuery();
+
+        using var pruneCommand = connection.CreateCommand();
+        pruneCommand.CommandText =
+            """
+            DELETE FROM SecurityEvents
+            WHERE EventId IN (
+                SELECT EventId
+                FROM SecurityEvents
+                ORDER BY Timestamp DESC
+                LIMIT -1 OFFSET $maxRetainedEvents
+            );
+            """;
+        pruneCommand.Parameters.AddWithValue("$maxRetainedEvents", maxRetainedEvents);
+        pruneCommand.ExecuteNonQuery();
         return Task.CompletedTask;
     }
 
@@ -140,7 +156,7 @@ public sealed class SqliteSecurityEventLog(DatabaseContext databaseContext) : IS
             return null;
         }
 
-        var document = JsonDocument.Parse(detailsJson);
+        using var document = JsonDocument.Parse(detailsJson);
         var result = new Dictionary<string, object>(StringComparer.Ordinal);
         foreach (var property in document.RootElement.EnumerateObject())
         {

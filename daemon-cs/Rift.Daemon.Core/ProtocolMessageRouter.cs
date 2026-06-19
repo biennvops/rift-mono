@@ -10,16 +10,18 @@ public sealed class ProtocolMessageRouter(
 {
     public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
-        presenceService.ObservePeerMessage(peerDeviceId);
-
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var messageType = root.GetProperty("type").GetString();
+        var sourceDeviceId = root.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
 
         if (string.IsNullOrWhiteSpace(messageType))
         {
             return;
         }
+
+        EnsureEnvelopeIdentityMatches(peerDeviceId, sourceDeviceId, messageType);
+        presenceService.ObservePeerMessage(peerDeviceId);
 
         if (messageType.StartsWith("pairing.", StringComparison.Ordinal))
         {
@@ -30,16 +32,18 @@ public sealed class ProtocolMessageRouter(
         if (string.Equals(messageType, "clipboard.offer", StringComparison.Ordinal))
         {
             var clipboardPayload = root.GetProperty("payload");
-            await clipboardService.HandleOfferReceivedAsync(
-                peerDeviceId,
-                clipboardPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
-                clipboardPayload.GetProperty("offerId").GetString() ?? string.Empty,
-                clipboardPayload.GetProperty("contentType").GetString() ?? string.Empty,
-                clipboardPayload.GetProperty("byteSize").GetInt64(),
-                clipboardPayload.GetProperty("sha256").GetString() ?? string.Empty,
-                clipboardPayload.GetProperty("expiresInMs").GetInt64(),
-                clipboardPayload.GetProperty("requiredCapability").GetString() ?? string.Empty,
-                clipboardPayload.GetProperty("offerSequence").GetInt64());
+            await clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+            {
+                DeviceId = peerDeviceId,
+                PayloadSourceDeviceId = clipboardPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
+                OfferId = clipboardPayload.GetProperty("offerId").GetString() ?? string.Empty,
+                ContentType = clipboardPayload.GetProperty("contentType").GetString() ?? string.Empty,
+                ByteSize = clipboardPayload.GetProperty("byteSize").GetInt64(),
+                Sha256 = clipboardPayload.GetProperty("sha256").GetString() ?? string.Empty,
+                ExpiresInMs = clipboardPayload.GetProperty("expiresInMs").GetInt64(),
+                RequiredCapability = clipboardPayload.GetProperty("requiredCapability").GetString() ?? string.Empty,
+                OfferSequence = clipboardPayload.GetProperty("offerSequence").GetInt64()
+            });
             return;
         }
 
@@ -92,5 +96,15 @@ public sealed class ProtocolMessageRouter(
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
         }
+    }
+
+    private static void EnsureEnvelopeIdentityMatches(string authenticatedDeviceId, string sourceDeviceId, string messageType)
+    {
+        if (string.Equals(authenticatedDeviceId, sourceDeviceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new UnauthorizedAccessException($"{messageType} sourceDeviceId did not match the authenticated peer identity.");
     }
 }

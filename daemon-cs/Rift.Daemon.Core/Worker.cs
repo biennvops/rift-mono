@@ -27,6 +27,8 @@ public class Worker(
 
         var ipcTask = ipcListener.ListenAsync(stoppingToken);
         var transportTask = transport.StartListeningAsync(stoppingToken);
+        ObserveFault(ipcTask);
+        ObserveFault(transportTask);
 
         try
         {
@@ -50,6 +52,18 @@ public class Worker(
             transport.SessionStateChanged -= OnSessionStateChanged;
             discoveryService.StopAdvertising();
             discoveryService.StopDiscovery();
+        }
+
+        void ObserveFault(Task task)
+        {
+            _ = task.ContinueWith(
+                completedTask =>
+                {
+                    _ = completedTask.Exception;
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         void OnTransportMessageReceived(object? sender, MessageReceivedEventArgs args)

@@ -55,6 +55,27 @@ public sealed class SqliteTrustStoreTests : IDisposable
         Assert.Equal("user-request", peer.RevocationEvidence);
     }
 
+    [Fact]
+    public void TryTransition_FromRevokedToDiscovered_ClearsRevocationEvidence()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-c",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        _trustStore.RevokePeer("rift-peer-c", "user-request");
+
+        Assert.True(_trustStore.TryTransition("rift-peer-c", TrustState.Discovered));
+
+        var peer = _trustStore.GetPeer("rift-peer-c");
+        Assert.NotNull(peer);
+        Assert.Equal(TrustState.Discovered, peer!.State);
+        Assert.Null(peer.RevocationEvidence);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

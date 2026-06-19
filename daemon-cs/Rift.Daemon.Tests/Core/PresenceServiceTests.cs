@@ -5,6 +5,21 @@ namespace Rift.Daemon.Tests.Core;
 public sealed class PresenceServiceTests
 {
     [Fact]
+    public void ObservePeerMessage_CreatesOnlinePresenceRecord()
+    {
+        var service = new PresenceService();
+
+        service.ObservePeerMessage("rift-peer-observed");
+
+        var presence = service.GetPeerPresence("rift-peer-observed");
+        Assert.NotNull(presence);
+        Assert.Equal("rift-peer-observed", presence!.DeviceId);
+        Assert.Equal("online", presence.Status);
+        Assert.NotNull(presence.LastSeenAt);
+        Assert.Empty(presence.Capabilities);
+    }
+
+    [Fact]
     public void MarkPeerOffline_PreservesTrackedPeerAndUpdatesStatus()
     {
         var service = new PresenceService();

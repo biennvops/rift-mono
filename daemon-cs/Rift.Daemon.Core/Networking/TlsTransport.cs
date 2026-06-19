@@ -132,22 +132,17 @@ public sealed class TlsTransport : ITransport, IDisposable
             var remoteCert = sslStream.RemoteCertificate as X509Certificate2 ??
                 X509CertificateLoader.LoadCertificate(sslStream.RemoteCertificate!.GetRawCertData());
             var deviceId = ExtractDeviceIdFromCertificate(remoteCert);
-            await AuthorizePeerAsync(remoteCert, deviceId);
+            await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
             await CompleteSessionHandshakeAsync(session, remoteCert, linkedToken);
+            PersistAuthorizedPeer(remoteCert, deviceId);
             if (!_sessions.TryAdd(deviceId, session))
             {
                 session.Dispose();
                 throw new InvalidOperationException($"A session for {deviceId} is already registered.");
             }
-
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: true,
-                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
-
-            TrackBackgroundTask(RunRegisteredSessionLoopAsync(session, _shutdownCts.Token), "outbound session loop");
+            TrackBackgroundTask(RunSessionLifetimeAsync(session, _shutdownCts.Token), "outbound session loop");
         }
         catch
         {
@@ -176,27 +171,15 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         try
         {
-            await AuthorizePeerAsync(remoteCert, deviceId);
+            await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             await CompleteSessionHandshakeAsync(session, remoteCert, cancellationToken);
+            PersistAuthorizedPeer(remoteCert, deviceId);
             _sessions.TryAdd(deviceId, session);
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: true,
-                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
-            await RunRegisteredSessionLoopAsync(session, cancellationToken);
+            await RunSessionLifetimeAsync(session, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
-        }
-        finally
-        {
-            _sessions.TryRemove(deviceId, out _);
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: false,
-                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
-            session.Dispose();
         }
     }
 
@@ -242,6 +225,47 @@ public sealed class TlsTransport : ITransport, IDisposable
             }
 
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(session.DeviceId, payloadBuffer));
+        }
+    }
+
+    private async Task RunSessionLifetimeAsync(ActiveSession session, CancellationToken cancellationToken)
+    {
+        await RunSessionLifetimeCoreAsync(
+            session.DeviceId,
+            session.SelectedCapabilities,
+            token => RunRegisteredSessionLoopAsync(session, token),
+            () =>
+            {
+                _sessions.TryRemove(session.DeviceId, out _);
+                session.Dispose();
+            },
+            cancellationToken);
+    }
+
+    internal async Task RunSessionLifetimeCoreAsync(
+        string deviceId,
+        IReadOnlyList<CapabilityDescriptor> selectedCapabilities,
+        Func<CancellationToken, Task> sessionLoop,
+        Action cleanup,
+        CancellationToken cancellationToken)
+    {
+        var capabilityNames = selectedCapabilities.Select(capability => capability.Name).ToArray();
+
+        try
+        {
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                deviceId,
+                isOnline: true,
+                capabilityNames));
+            await sessionLoop(cancellationToken);
+        }
+        finally
+        {
+            cleanup();
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                deviceId,
+                isOnline: false,
+                capabilityNames));
         }
     }
 
@@ -299,7 +323,36 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
     }
 
-    private async Task AuthorizePeerAsync(X509Certificate2 remoteCert, string deviceId)
+    internal async Task ValidatePeerBeforeHandshakeAsync(X509Certificate2 remoteCert, string deviceId)
+    {
+        if (_trustStore is null)
+        {
+            return;
+        }
+
+        var peerPublicKey = ExtractEd25519PublicKeyFromCertificate(remoteCert);
+        var certificateFingerprint = remoteCert.GetCertHashString(System.Security.Cryptography.HashAlgorithmName.SHA256).ToLowerInvariant();
+        var existingPeer = _trustStore.GetPeer(deviceId);
+
+        if (existingPeer is null)
+        {
+            return;
+        }
+
+        if (existingPeer.Ed25519PublicKey is not null && !existingPeer.Ed25519PublicKey.SequenceEqual(peerPublicKey))
+        {
+            await LogSecurityEventAsync(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Failure, "AuthenticationFailed");
+            throw new InvalidOperationException("Peer Ed25519 identity did not match the stored trust-store entry.");
+        }
+
+        if (existingPeer.State is TrustState.Blocked or TrustState.Revoked)
+        {
+            await LogSecurityEventAsync(SecurityEventTypes.ConnectionRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, "Unauthorized");
+            throw new UnauthorizedAccessException("Peer identity is blocked or revoked.");
+        }
+    }
+
+    internal void PersistAuthorizedPeer(X509Certificate2 remoteCert, string deviceId)
     {
         if (_trustStore is null)
         {
@@ -321,18 +374,6 @@ public sealed class TlsTransport : ITransport, IDisposable
                 LastStateTransitionAt = DateTimeOffset.UtcNow
             });
             return;
-        }
-
-        if (existingPeer.Ed25519PublicKey is not null && !existingPeer.Ed25519PublicKey.SequenceEqual(peerPublicKey))
-        {
-            await LogSecurityEventAsync(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Failure, "AuthenticationFailed");
-            throw new InvalidOperationException("Peer Ed25519 identity did not match the stored trust-store entry.");
-        }
-
-        if (existingPeer.State is TrustState.Blocked or TrustState.Revoked)
-        {
-            await LogSecurityEventAsync(SecurityEventTypes.ConnectionRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, "Unauthorized");
-            throw new UnauthorizedAccessException("Peer identity is blocked or revoked.");
         }
 
         existingPeer.Ed25519PublicKey ??= peerPublicKey;
@@ -466,7 +507,11 @@ public sealed class TlsTransport : ITransport, IDisposable
     {
         _shutdownCts.Cancel();
         _listener?.Stop();
-        WaitForBackgroundTasks();
+        if (!_backgroundTasks.IsEmpty)
+        {
+            _logger.LogDebug("Transport disposed with {PendingTaskCount} background task(s) still completing.", _backgroundTasks.Count);
+        }
+
         foreach (var session in _sessions.Values)
         {
             session.Dispose();
@@ -493,24 +538,6 @@ public sealed class TlsTransport : ITransport, IDisposable
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
-    }
-
-    private void WaitForBackgroundTasks()
-    {
-        var pendingTasks = _backgroundTasks.Values.ToArray();
-        if (pendingTasks.Length == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            Task.WhenAll(pendingTasks).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Observed background task completion during transport disposal.");
-        }
     }
 
     internal static int GetMaxInboundFrameSize(bool isAuthenticated)

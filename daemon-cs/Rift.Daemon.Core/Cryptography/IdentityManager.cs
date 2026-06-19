@@ -19,9 +19,10 @@ namespace Rift.Daemon.Core.Cryptography;
 
 public class IdentityManager : IIdentityManager
 {
+    private const string PersistedTlsCertificatePassword = "rift-local-tls";
     private readonly ILocalIdentityStore? _localIdentityStore;
     private volatile Ed25519PublicKeyParameters _ed25519PublicKey = null!;
-    private Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
+    private volatile Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
     private volatile X509Certificate2 _tlsCertificate = null!;
     private readonly object _syncRoot = new();
 
@@ -54,6 +55,11 @@ public class IdentityManager : IIdentityManager
 
                 _ed25519PrivateKey = new Ed25519PrivateKeyParameters(persistedIdentity.Ed25519PrivateKey, 0);
                 _ed25519PublicKey = new Ed25519PublicKeyParameters(persistedIdentity.Ed25519PublicKey, 0);
+
+                if (persistedIdentity.TlsCertificatePfx is not null)
+                {
+                    _tlsCertificate = LoadPersistedTlsCertificate(persistedIdentity.TlsCertificatePfx, _ed25519PublicKey);
+                }
             }
             else
             {
@@ -65,16 +71,74 @@ public class IdentityManager : IIdentityManager
                 _ed25519PublicKey = (Ed25519PublicKeyParameters)ed25519Pair.Public;
                 _ed25519PrivateKey = (Ed25519PrivateKeyParameters)ed25519Pair.Private;
 
-                _localIdentityStore?.SaveIdentity(new LocalIdentityRecord
-                {
-                    Ed25519PrivateKey = _ed25519PrivateKey.GetEncoded(),
-                    Ed25519PublicKey = _ed25519PublicKey.GetEncoded(),
-                    CreatedAt = DateTimeOffset.UtcNow
-                });
+                var createdAt = DateTimeOffset.UtcNow;
+                _tlsCertificate = GenerateTlsCertificate(_ed25519PublicKey);
+                PersistIdentity(createdAt);
             }
 
-            _tlsCertificate = GenerateTlsCertificate(_ed25519PublicKey);
+            if (_tlsCertificate is null)
+            {
+                _tlsCertificate = GenerateTlsCertificate(_ed25519PublicKey);
+                PersistIdentity(persistedIdentity?.CreatedAt ?? DateTimeOffset.UtcNow);
+            }
         }
+    }
+
+    private void PersistIdentity(DateTimeOffset createdAt)
+    {
+        _localIdentityStore?.SaveIdentity(new LocalIdentityRecord
+        {
+            Ed25519PrivateKey = _ed25519PrivateKey.GetEncoded(),
+            Ed25519PublicKey = _ed25519PublicKey.GetEncoded(),
+            TlsCertificatePfx = ExportPersistedTlsCertificate(_tlsCertificate),
+            CreatedAt = createdAt
+        });
+    }
+
+    private static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
+    {
+        return certificate.Export(X509ContentType.Pkcs12, PersistedTlsCertificatePassword);
+    }
+
+    private static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
+    {
+        try
+        {
+            var certificate = X509CertificateLoader.LoadPkcs12(
+                pkcs12Bytes,
+                PersistedTlsCertificatePassword,
+                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+            var embeddedKey = ExtractEmbeddedEd25519PublicKey(certificate);
+            if (!embeddedKey.SequenceEqual(expectedEd25519PublicKey.GetEncoded()))
+            {
+                throw new InvalidOperationException("Persisted TLS certificate did not match the persisted Ed25519 identity.");
+            }
+
+            return certificate;
+        }
+        catch (CryptographicException ex)
+        {
+            throw new InvalidOperationException("Persisted TLS certificate material was malformed.", ex);
+        }
+    }
+
+    private static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
+    {
+        var bcParser = new Org.BouncyCastle.X509.X509CertificateParser();
+        var bcCert = bcParser.ReadCertificate(certificate.RawData);
+        var extValue = bcCert.GetExtensionValue(new DerObjectIdentifier("2.25.293029629918709742181702189012786017422"));
+        if (extValue is null)
+        {
+            throw new InvalidOperationException("Persisted TLS certificate did not contain the Rift Ed25519 identity extension.");
+        }
+
+        var rawData = extValue.GetOctets();
+        if (rawData.Length != 36 || rawData[0] != 0x04 || rawData[1] != 0x22 || rawData[2] != 0x04 || rawData[3] != 0x20)
+        {
+            throw new InvalidOperationException("Persisted TLS certificate contained a malformed Rift Ed25519 identity extension.");
+        }
+
+        return rawData.AsSpan(4).ToArray();
     }
 
     public string GetDeviceId()

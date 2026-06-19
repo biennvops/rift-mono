@@ -48,7 +48,7 @@ public interface IDaemonInfoService
 {
     DeviceInfoResult GetDeviceInfo();
 
-    QueryEventLogResult QueryEventLog(SecurityEventQuery query);
+    Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query);
 
     ListTrustedPeersResult ListTrustedPeers();
 

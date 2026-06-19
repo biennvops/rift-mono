@@ -2,11 +2,11 @@ namespace Rift.Daemon.Core.Interfaces;
 
 public interface IPairingProtocolCoordinator
 {
-    void NotifyLocalPairingStarted(string deviceId);
+    Task NotifyLocalPairingStartedAsync(string deviceId, CancellationToken cancellationToken = default);
 
-    void NotifyLocalPairingApproved(string deviceId);
+    Task NotifyLocalPairingApprovedAsync(string deviceId, CancellationToken cancellationToken = default);
 
-    void NotifyLocalPairingRejected(string deviceId);
+    Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default);
 
     Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken);
 }
