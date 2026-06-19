@@ -15,13 +15,13 @@ class PoPException implements Exception {
 class PoPManager {
   static const String popPrefix = 'RiftPoP-v2:';
 
-  // Signing input breakdown (Spec §5.3.1):
-  //   prefix                        : 11 bytes  ('RiftPoP-v2:')
-  //   [len(2)] + channelBinding     : 2 + 32 = 34 bytes
-  //   [len(2)] + ed25519PublicKey   : 2 + 32 = 34 bytes
-  //   [len(2)] + sha256(certDer)    : 2 + 32 = 34 bytes
-  //   Total                         : 11 + 34 + 34 + 34 = 113 bytes
-  static const int _expectedSigningInputLength = 113;
+  // Signing input (Spec §5.3.1): raw concatenation, no length prefixes.
+  //   prefix             : 11 bytes  ('RiftPoP-v2:')
+  //   channelBinding     : 32 bytes
+  //   ed25519PublicKey    : 32 bytes
+  //   sha256(certDer)    : 32 bytes
+  //   Total              : 107 bytes
+  static const int _expectedSigningInputLength = 107;
 
   /// Constructs the PoP signing input exactly as per Spec Section 5.3.1
   static Uint8List buildSigningInput(
@@ -38,15 +38,8 @@ class PoPManager {
     final prefixBytes = utf8.encode(popPrefix);
     final input = BytesBuilder(copy: false);
     input.add(prefixBytes);
-    
-    // Mitigating Canonicalization Attack: 2-byte length prefix for each dynamic field
-    input.add([channelBinding.length >> 8, channelBinding.length & 0xFF]);
     input.add(channelBinding);
-    
-    input.add([ed25519PublicKey.length >> 8, ed25519PublicKey.length & 0xFF]);
     input.add(ed25519PublicKey);
-    
-    input.add([certHash.length >> 8, certHash.length & 0xFF]);
     input.add(certHash);
 
     final result = input.takeBytes();
