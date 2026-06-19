@@ -111,6 +111,10 @@ daemon-dart/
       - WiFi data received: `679.67MB -> 1.05GB` (not an idle baseline)
       - WiFi data sent: `40.52MB -> 52.01MB`
     - **Interpretation:** This A/B run is valid as a “real device snapshot delta”, but it is **not a clean idle baseline** due to significant WiFi traffic during the window. It cannot be used to attribute battery/network impact to Rift heartbeats yet; it mainly proves the measurement pipeline works (snapshot deltas without `batterystats --reset`).
+    - **Clean idle baseline run (Airplane Mode, 2026-06-19):**
+      - **A2 -> B2 window:** `~16m 51s` on-battery (screen-off `~16m 39s`), WiFi and Cellular data `0B` throughout.
+      - **B2 observed:** total partial wakelock time `6s 803ms`, device light idle `11m 53s` (entered Doze).
+      - **Battery drain:** `0 mAh` reported for this window (short-window resolution; treat as “below meter precision” rather than guaranteed zero).
     - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
   - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 is functionally complete in code/tests, but battery impact cannot be signed off until at least one idle A/B delta and one "1 trusted peer heartbeat" C/D delta are recorded.
 
