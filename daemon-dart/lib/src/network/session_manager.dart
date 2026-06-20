@@ -275,6 +275,7 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'fingerprint': _identityManager.getDeviceFingerprint().map((b) => b.toRadixString(16).padLeft(2, '0')).join(''),
         'supportedVersions': ['0.1-draft'],
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }

@@ -9,6 +9,17 @@ import 'package:daemon_dart/src/crypto/cert_builder.dart';
 import 'package:daemon_dart/src/crypto/pop_manager.dart';
 import 'package:basic_utils/basic_utils.dart';
 import 'dart:async';
+import 'package:daemon_dart/src/interfaces/trust_store.dart';
+
+class FakeTrustStore implements TrustStore {
+  @override Future<void> initialize() async {}
+  @override Future<void> upsertPeer(PeerRecord record) async {}
+  @override Future<PeerRecord?> getPeer(String deviceId) async => null;
+  @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
+  @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
+  @override Future<void> deletePeer(String deviceId) async {}
+  @override Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+}
 
 class FakeTransport implements Transport {
   final _onMessage = StreamController<TransportMessage>.broadcast();
@@ -129,12 +140,14 @@ void main() {
       sessionManager1 = SessionManager(
         transport1,
         fm1,
-        isPeerAllowed: (_) async => true,
+        FakeTrustStore(),
+        peerAllowanceResolver: (_) async => true,
       );
       sessionManager2 = SessionManager(
         transport2,
         fm2,
-        isPeerAllowed: (_) async => true,
+        FakeTrustStore(),
+        peerAllowanceResolver: (_) async => true,
       );
     });
 
