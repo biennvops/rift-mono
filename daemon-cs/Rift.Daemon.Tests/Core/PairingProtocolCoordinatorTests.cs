@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core;
@@ -162,6 +163,21 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingComplete_FromUnknownPeer_DoesNotCreateGhostSession()
+    {
+        Assert.Equal(0, GetPairingStateCount());
+
+        await _coordinator.HandleMessageAsync("rift-peer-ghost", CreateEnvelope("rift-peer-ghost", "pairing.complete", new
+        {
+            trustedDeviceId = "rift-peer-ghost",
+            persistedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
+
+        Assert.Equal(0, GetPairingStateCount());
+        Assert.Null(_trustStore.GetPeer("rift-peer-ghost"));
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_WithoutLocalApproval_DoesNotTrustPeer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -318,6 +334,17 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         {
             File.Delete(_databasePath);
         }
+    }
+
+    private int GetPairingStateCount()
+    {
+        var field = typeof(PairingProtocolCoordinator).GetField("_pairingStates", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+
+        var states = field!.GetValue(_coordinator) as System.Collections.IDictionary;
+        Assert.NotNull(states);
+
+        return states!.Count;
     }
 
     private static ReadOnlyMemory<byte> CreateEnvelope(string sourceDeviceId, string type, object payload)

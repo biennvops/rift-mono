@@ -24,7 +24,7 @@ public sealed class ClipboardService : IClipboardService
     private readonly ConcurrentDictionary<string, LocalClipboardOffer> _localOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ClipboardOfferInfo> _remoteOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _peerOfferHighWaterMarks = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<FetchClipboardContentResult>> _pendingFetches = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, PendingClipboardFetch> _pendingFetches = new(StringComparer.Ordinal);
     private long _nextOfferSequence;
 
     public ClipboardService(
@@ -204,8 +204,10 @@ public sealed class ClipboardService : IClipboardService
 
         EnsurePeerCanUseClipboard(offer.SourceDeviceId, RequiredCapability);
 
-        var tcs = new TaskCompletionSource<FetchClipboardContentResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pendingFetches.TryAdd(offerId, tcs))
+        var pendingFetch = new PendingClipboardFetch(
+            offer.SourceDeviceId,
+            new TaskCompletionSource<FetchClipboardContentResult>(TaskCreationOptions.RunContinuationsAsynchronously));
+        if (!_pendingFetches.TryAdd(offerId, pendingFetch))
         {
             throw new ClipboardFailureException("PolicyDenied", -32010, $"A fetch for offer '{offerId}' is already in progress.");
         }
@@ -249,7 +251,7 @@ public sealed class ClipboardService : IClipboardService
 
             try
             {
-                return await tcs.Task.WaitAsync(timeoutCts.Token);
+                return await pendingFetch.CompletionSource.Task.WaitAsync(timeoutCts.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -306,23 +308,24 @@ public sealed class ClipboardService : IClipboardService
 
     public Task HandleFetchResponseAsync(string deviceId, string offerId, string contentBase64, long byteSize, string sha256, CancellationToken cancellationToken)
     {
-        if (_remoteOffers.TryGetValue(offerId, out var offer) && !string.Equals(offer.SourceDeviceId, deviceId, StringComparison.Ordinal))
+        if (_pendingFetches.TryGetValue(offerId, out var pendingFetch) &&
+            !string.Equals(pendingFetch.ExpectedSourceDeviceId, deviceId, StringComparison.Ordinal))
         {
             LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized");
             return Task.CompletedTask;
         }
 
-        if (_pendingFetches.TryGetValue(offerId, out var tcs))
+        if (pendingFetch is not null)
         {
             var verified = VerifyClipboardPayload(contentBase64, byteSize, sha256);
             if (!verified)
             {
                 LogEvent(SecurityEventTypes.ClipboardFetched, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "HashMismatch");
-                tcs.TrySetException(new ClipboardFailureException("HashMismatch", -32006, "Clipboard content failed size or SHA-256 verification."));
+                pendingFetch.CompletionSource.TrySetException(new ClipboardFailureException("HashMismatch", -32006, "Clipboard content failed size or SHA-256 verification."));
                 return Task.CompletedTask;
             }
 
-            tcs.TrySetResult(new FetchClipboardContentResult
+            pendingFetch.CompletionSource.TrySetResult(new FetchClipboardContentResult
             {
                 OfferId = offerId,
                 ContentBase64 = contentBase64,
@@ -337,15 +340,16 @@ public sealed class ClipboardService : IClipboardService
 
     public Task HandleFetchRejectAsync(string deviceId, string offerId, string failureReason, string? message, CancellationToken cancellationToken)
     {
-        if (_remoteOffers.TryGetValue(offerId, out var offer) && !string.Equals(offer.SourceDeviceId, deviceId, StringComparison.Ordinal))
+        if (_pendingFetches.TryGetValue(offerId, out var pendingFetch) &&
+            !string.Equals(pendingFetch.ExpectedSourceDeviceId, deviceId, StringComparison.Ordinal))
         {
             LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized");
             return Task.CompletedTask;
         }
 
-        if (_pendingFetches.TryGetValue(offerId, out var tcs))
+        if (pendingFetch is not null)
         {
-            tcs.TrySetException(CreateFailureException(failureReason, message));
+            pendingFetch.CompletionSource.TrySetException(CreateFailureException(failureReason, message));
         }
 
         return Task.CompletedTask;
@@ -487,4 +491,8 @@ public sealed class ClipboardService : IClipboardService
         public DateTimeOffset ExpiresAt { get; init; }
         public long OfferSequence { get; init; }
     }
+
+    private sealed record PendingClipboardFetch(
+        string ExpectedSourceDeviceId,
+        TaskCompletionSource<FetchClipboardContentResult> CompletionSource);
 }

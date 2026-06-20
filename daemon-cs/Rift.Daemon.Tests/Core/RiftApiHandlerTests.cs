@@ -312,6 +312,16 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task QueryEventLogAsync_InvalidSince_ReturnsInvalidParams()
+    {
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.QueryEventLogAsync(since: "not-a-timestamp"));
+
+        Assert.Equal(-32602, ex.ErrorCode);
+        Assert.Contains("since", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task StartPairingAsync_UnexpectedServiceFailure_ReturnsInternalError()
     {
         var handler = new RiftApiHandler(

@@ -41,6 +41,64 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsStoredPeerWithDifferentEd25519Key()
+    {
+        var trustedIdentity = new IdentityManager();
+        trustedIdentity.EnsureIdentityInitialized();
+        var returningIdentity = new IdentityManager();
+        returningIdentity.EnsureIdentityInitialized();
+
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = trustedIdentity.GetDeviceId(),
+            Ed25519PublicKey = trustedIdentity.GetEd25519PublicKey(),
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _transport.ValidatePeerBeforeHandshakeAsync(returningIdentity.GetTlsCertificate(), trustedIdentity.GetDeviceId()));
+        var authFailures = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.AuthFailed],
+            PeerDeviceId = trustedIdentity.GetDeviceId(),
+            Limit = 10
+        });
+
+        Assert.Contains("did not match", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(authFailures, evt => evt.FailureReason == "AuthenticationFailed");
+    }
+
+    [Theory]
+    [InlineData(TrustState.Blocked)]
+    [InlineData(TrustState.Revoked)]
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsBlockedOrRevokedPeer(TrustState trustState)
+    {
+        var remoteIdentity = new IdentityManager();
+        remoteIdentity.EnsureIdentityInitialized();
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = remoteIdentity.GetDeviceId(),
+            Ed25519PublicKey = remoteIdentity.GetEd25519PublicKey(),
+            State = trustState,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            RevocationEvidence = trustState == TrustState.Revoked ? "user-request" : null
+        });
+
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _transport.ValidatePeerBeforeHandshakeAsync(remoteIdentity.GetTlsCertificate(), remoteIdentity.GetDeviceId()));
+        var rejectionEvents = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.ConnectionRejected],
+            PeerDeviceId = remoteIdentity.GetDeviceId(),
+            Limit = 10
+        });
+
+        Assert.Contains("blocked or revoked", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(rejectionEvents, evt => evt.FailureReason == "Unauthorized");
+    }
+
+    [Fact]
     public void PersistAuthorizedPeer_PersistsUnknownPeerAfterVerifiedHandshake()
     {
         var remoteIdentity = new IdentityManager();
@@ -55,7 +113,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         Assert.Equal(TrustState.Discovered, storedPeer!.State);
         Assert.Equal(remoteDeviceId, storedPeer.DeviceId);
         Assert.NotNull(storedPeer.Ed25519PublicKey);
-        Assert.NotEmpty(storedPeer.EcdsaCertificateFingerprint);
+        Assert.False(string.IsNullOrWhiteSpace(storedPeer.EcdsaCertificateFingerprint));
     }
 
     [Fact]
@@ -97,6 +155,64 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         await WaitAsync(outboundOffline.Task, TimeSpan.FromSeconds(5));
 
         Assert.True(cleanupCalled);
+    }
+
+    [Fact]
+    public async Task RunInboundSessionCoreAsync_WhenHandshakeFails_CleansUpSession()
+    {
+        var cleanupCalls = 0;
+
+        await _transport.RunInboundSessionCoreAsync(
+            "rift-peer-inbound-failure",
+            _ => throw new InvalidOperationException("handshake failed"),
+            _ => Task.CompletedTask,
+            () => cleanupCalls++,
+            CancellationToken.None);
+
+        Assert.Equal(1, cleanupCalls);
+    }
+
+    [Fact]
+    public async Task RunInboundSessionCoreAsync_WhenLifetimeManaged_DoesNotDoubleCleanup()
+    {
+        var cleanupCalls = 0;
+
+        await _transport.RunInboundSessionCoreAsync(
+            "rift-peer-inbound-success",
+            _ => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            () => cleanupCalls++,
+            CancellationToken.None);
+
+        Assert.Equal(0, cleanupCalls);
+    }
+
+    [Fact]
+    public async Task CompleteInboundHandshakeAndRegistrationAsync_HandshakeFailurePreventsPersistence()
+    {
+        var remoteIdentity = new IdentityManager();
+        remoteIdentity.EnsureIdentityInitialized();
+        var remoteCert = remoteIdentity.GetTlsCertificate();
+        var remoteDeviceId = remoteIdentity.GetDeviceId();
+        var persistCalled = false;
+        var addCalled = false;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _transport.CompleteInboundHandshakeAndRegistrationAsync(
+                remoteCert,
+                remoteDeviceId,
+                _ => throw new InvalidOperationException("handshake failed"),
+                () => persistCalled = true,
+                () =>
+                {
+                    addCalled = true;
+                    return true;
+                },
+                CancellationToken.None));
+
+        Assert.False(persistCalled);
+        Assert.False(addCalled);
+        Assert.Null(_trustStore.GetPeer(remoteDeviceId));
     }
 
     public void Dispose()

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Rift.Daemon.Core.Interfaces;
 using StreamJsonRpc;
 
@@ -130,7 +131,19 @@ public class RiftApiHandler : IRiftApi
         DateTimeOffset? sinceTimestamp = null;
         if (!string.IsNullOrWhiteSpace(since))
         {
-            sinceTimestamp = DateTimeOffset.Parse(since);
+            if (!DateTimeOffset.TryParse(
+                    since,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out var parsedSince))
+            {
+                throw new LocalRpcException($"Invalid 'since' timestamp '{since}'. Expected an RFC 3339 / ISO 8601 timestamp.")
+                {
+                    ErrorCode = -32602
+                };
+            }
+
+            sinceTimestamp = parsedSince;
         }
 
         return _daemonInfoService.QueryEventLogAsync(new SecurityEventQuery

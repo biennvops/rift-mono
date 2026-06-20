@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core;
@@ -198,6 +199,118 @@ public sealed class ClipboardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchClipboardContentAsync_IgnoresSpoofedResponseAfterOfferRemovedFromRemoteOffers()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-owner-removed",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-spoof-removed",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-owner-removed", "online", null, ["clipboard.offer_fetch"]);
+        _presenceService.UpdatePeerPresence("rift-peer-spoof-removed", "online", null, ["clipboard.offer_fetch"]);
+
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-owner-removed",
+            PayloadSourceDeviceId = "rift-peer-owner-removed",
+            OfferId = "offer-removed-response",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = hash,
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-response", CancellationToken.None);
+        RemoveRemoteOffer("offer-removed-response");
+
+        await _clipboardService.HandleFetchResponseAsync(
+            "rift-peer-spoof-removed",
+            "offer-removed-response",
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            5,
+            hash,
+            CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => fetchTask);
+        var authFailures = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.AuthFailed],
+            PeerDeviceId = "rift-peer-spoof-removed",
+            Limit = 10
+        });
+
+        Assert.Equal("Timeout", ex.FailureReason);
+        Assert.Contains(authFailures, evt => evt.FailureReason == "Unauthorized");
+    }
+
+    [Fact]
+    public async Task FetchClipboardContentAsync_IgnoresSpoofedRejectAfterOfferRemovedFromRemoteOffers()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-owner-reject",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-spoof-reject",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-owner-reject", "online", null, ["clipboard.offer_fetch"]);
+        _presenceService.UpdatePeerPresence("rift-peer-spoof-reject", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-owner-reject",
+            PayloadSourceDeviceId = "rift-peer-owner-reject",
+            OfferId = "offer-removed-reject",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = "hash",
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-reject", CancellationToken.None);
+        RemoveRemoteOffer("offer-removed-reject");
+
+        await _clipboardService.HandleFetchRejectAsync(
+            "rift-peer-spoof-reject",
+            "offer-removed-reject",
+            "Unauthorized",
+            "spoofed reject",
+            CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => fetchTask);
+        var authFailures = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.AuthFailed],
+            PeerDeviceId = "rift-peer-spoof-reject",
+            Limit = 10
+        });
+
+        Assert.Equal("Timeout", ex.FailureReason);
+        Assert.Contains(authFailures, evt => evt.FailureReason == "Unauthorized");
+    }
+
+    [Fact]
     public async Task FetchClipboardContentAsync_TimesOutAndAllowsRetry()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -301,6 +414,21 @@ public sealed class ClipboardServiceTests : IDisposable
         {
             File.Delete(_databasePath);
         }
+    }
+
+    private void RemoveRemoteOffer(string offerId)
+    {
+        var field = typeof(ClipboardService).GetField("_remoteOffers", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+
+        var remoteOffers = field!.GetValue(_clipboardService);
+        Assert.NotNull(remoteOffers);
+
+        var tryRemove = remoteOffers!.GetType().GetMethod("TryRemove", [typeof(string), field.FieldType.GenericTypeArguments[1].MakeByRefType()]);
+        Assert.NotNull(tryRemove);
+
+        var parameters = new object?[] { offerId, null };
+        _ = tryRemove!.Invoke(remoteOffers, parameters);
     }
 
     private sealed class FakeTransport : ITransport

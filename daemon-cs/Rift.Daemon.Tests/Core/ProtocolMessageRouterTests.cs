@@ -193,6 +193,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-fetch-response", CancellationToken.None);
+        await WaitForConditionAsync(
+            () => _clipboardTransport.SentMessages.Any(sent => sent.PeerDeviceId == "rift-peer-fetch-response" && sent.Type == "clipboard.fetchRequest"),
+            TimeSpan.FromSeconds(1));
         await _router.HandleMessageAsync("rift-peer-fetch-response", CreateEnvelope("rift-peer-fetch-response", "clipboard.fetchResponse", new
         {
             offerId = "offer-fetch-response",
@@ -248,6 +251,20 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         if (File.Exists(_databasePath))
         {
             File.Delete(_databasePath);
+        }
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException("Condition was not met within the allotted time.");
+            }
+
+            await Task.Delay(10);
         }
     }
 

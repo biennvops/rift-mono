@@ -1,10 +1,13 @@
 using Microsoft.Data.Sqlite;
+using System.Text.RegularExpressions;
 
 namespace Rift.Daemon.Core.Data;
 
 public sealed class DatabaseContext
 {
     private const int BusyTimeoutMs = 5000;
+    private static readonly Regex SqlIdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+    private static readonly Regex ColumnDefinitionPattern = new("^[A-Za-z0-9_(), ]+$", RegexOptions.Compiled);
     private readonly string _connectionString;
 
     public DatabaseContext(string databasePath)
@@ -106,6 +109,10 @@ public sealed class DatabaseContext
 
     private static void EnsureColumnExists(SqliteConnection connection, string tableName, string columnName, string columnDefinition)
     {
+        EnsureSafeSqlIdentifier(tableName, nameof(tableName));
+        EnsureSafeSqlIdentifier(columnName, nameof(columnName));
+        EnsureSafeColumnDefinition(columnDefinition);
+
         using var schemaCommand = connection.CreateCommand();
         schemaCommand.CommandText = $"PRAGMA table_info({tableName});";
 
@@ -121,5 +128,31 @@ public sealed class DatabaseContext
         using var alterCommand = connection.CreateCommand();
         alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
         alterCommand.ExecuteNonQuery();
+    }
+
+    private static void EnsureSafeSqlIdentifier(string identifier, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(identifier, parameterName);
+
+        if (!SqlIdentifierPattern.IsMatch(identifier))
+        {
+            throw new ArgumentException($"Unsafe SQL identifier '{identifier}'.", parameterName);
+        }
+    }
+
+    private static void EnsureSafeColumnDefinition(string columnDefinition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(columnDefinition);
+
+        if (!ColumnDefinitionPattern.IsMatch(columnDefinition) ||
+            columnDefinition.Contains(';', StringComparison.Ordinal) ||
+            columnDefinition.Contains("--", StringComparison.Ordinal) ||
+            columnDefinition.Contains("/*", StringComparison.Ordinal) ||
+            columnDefinition.Contains("*/", StringComparison.Ordinal) ||
+            columnDefinition.Contains('"', StringComparison.Ordinal) ||
+            columnDefinition.Contains('\'', StringComparison.Ordinal))
+        {
+            throw new ArgumentException($"Unsafe SQL column definition '{columnDefinition}'.", nameof(columnDefinition));
+        }
     }
 }

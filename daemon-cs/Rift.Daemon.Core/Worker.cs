@@ -27,8 +27,8 @@ public class Worker(
 
         var ipcTask = ipcListener.ListenAsync(stoppingToken);
         var transportTask = transport.StartListeningAsync(stoppingToken);
-        ObserveFault(ipcTask);
-        ObserveFault(transportTask);
+        ObserveFault(ipcTask, "IPC listener");
+        ObserveFault(transportTask, "transport listener");
 
         try
         {
@@ -54,12 +54,12 @@ public class Worker(
             discoveryService.StopDiscovery();
         }
 
-        void ObserveFault(Task task)
+        void ObserveFault(Task task, string component)
         {
             _ = task.ContinueWith(
                 completedTask =>
                 {
-                    _ = completedTask.Exception;
+                    logger.LogError(completedTask.Exception, "{Component} task faulted.", component);
                 },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,

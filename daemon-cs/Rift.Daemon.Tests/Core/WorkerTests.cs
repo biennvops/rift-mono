@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Cryptography;
@@ -121,6 +122,7 @@ public sealed class WorkerTests
     [Fact]
     public async Task ExecuteAsync_ObservesFaultedSiblingTaskWhenOtherTaskCompletesFirst()
     {
+        var logger = new ListLogger<Worker>();
         var ipcListener = new DelayedFaultIpcListener(TimeSpan.FromMilliseconds(50), new InvalidOperationException("ipc boom"));
         var discoveryService = new FakeDiscoveryService();
         var transport = new CompletingTransport();
@@ -128,7 +130,7 @@ public sealed class WorkerTests
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
         await using var worker = new TestWorker(
-            NullLogger<Worker>.Instance,
+            logger,
             ipcListener,
             identityManager,
             discoveryService,
@@ -138,6 +140,15 @@ public sealed class WorkerTests
 
         await worker.RunExecuteAsync(CancellationToken.None);
         await ipcListener.Faulted.Task;
+        await WaitUntilAsync(() => logger.Entries.Any(entry =>
+            entry.LogLevel == LogLevel.Error &&
+            entry.Exception?.ToString().Contains("ipc boom", StringComparison.Ordinal) == true &&
+            entry.Message.Contains("IPC listener", StringComparison.Ordinal)));
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.LogLevel == LogLevel.Error &&
+            entry.Exception?.ToString().Contains("ipc boom", StringComparison.Ordinal) == true &&
+            entry.Message.Contains("IPC listener", StringComparison.Ordinal));
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 3000)
@@ -290,4 +301,34 @@ public sealed class WorkerTests
     private sealed record SentMessage(string PeerDeviceId, string Type, IReadOnlyList<string> Capabilities);
 
     private sealed record RoutedMessage(string PeerDeviceId, string Payload);
+
+    private sealed class ListLogger<T> : ILogger<T>
+    {
+        public ConcurrentBag<LogEntry> Entries { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
+        }
+    }
+
+    private sealed record LogEntry(LogLevel LogLevel, string Message, Exception? Exception);
+
+    private sealed class NullScope : IDisposable
+    {
+        public static NullScope Instance { get; } = new();
+
+        public void Dispose()
+        {
+        }
+    }
 }

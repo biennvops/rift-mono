@@ -19,7 +19,6 @@ namespace Rift.Daemon.Core.Cryptography;
 
 public class IdentityManager : IIdentityManager
 {
-    private const string PersistedTlsCertificatePassword = "rift-local-tls";
     private readonly ILocalIdentityStore? _localIdentityStore;
     private volatile Ed25519PublicKeyParameters _ed25519PublicKey = null!;
     private volatile Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
@@ -97,7 +96,7 @@ public class IdentityManager : IIdentityManager
 
     private static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
     {
-        return certificate.Export(X509ContentType.Pkcs12, PersistedTlsCertificatePassword);
+        return certificate.Export(X509ContentType.Pkcs12, string.Empty);
     }
 
     private static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
@@ -106,7 +105,7 @@ public class IdentityManager : IIdentityManager
         {
             var certificate = X509CertificateLoader.LoadPkcs12(
                 pkcs12Bytes,
-                PersistedTlsCertificatePassword,
+                string.Empty,
                 X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
             var embeddedKey = ExtractEmbeddedEd25519PublicKey(certificate);
             if (!embeddedKey.SequenceEqual(expectedEd25519PublicKey.GetEncoded()))
@@ -236,8 +235,8 @@ public class IdentityManager : IIdentityManager
         var store = new Org.BouncyCastle.Pkcs.Pkcs12StoreBuilder().Build();
         store.SetKeyEntry("rift", new Org.BouncyCastle.Pkcs.AsymmetricKeyEntry(ecPair.Private), new[] { new Org.BouncyCastle.Pkcs.X509CertificateEntry(bouncyCert) });
         using var ms = new MemoryStream();
-        store.Save(ms, "password".ToCharArray(), random);
+        store.Save(ms, Array.Empty<char>(), random);
 
-        return X509CertificateLoader.LoadPkcs12(ms.ToArray(), "password", X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+        return X509CertificateLoader.LoadPkcs12(ms.ToArray(), string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
     }
 }

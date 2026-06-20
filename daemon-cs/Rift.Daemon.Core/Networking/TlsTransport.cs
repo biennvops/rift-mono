@@ -168,18 +168,38 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
 
         var session = new ActiveSession(sslStream, client, deviceId, isInitiator: false);
+        await RunInboundSessionCoreAsync(
+            deviceId,
+            token => CompleteInboundHandshakeAndRegistrationAsync(
+                remoteCert,
+                deviceId,
+                token => CompleteSessionHandshakeAsync(session, remoteCert, token),
+                () => PersistAuthorizedPeer(remoteCert, deviceId),
+                () => _sessions.TryAdd(deviceId, session),
+                token),
+            _ => RunSessionLifetimeAsync(session, cancellationToken),
+            () =>
+            {
+                _sessions.TryRemove(deviceId, out _);
+                session.Dispose();
+            },
+            cancellationToken);
+    }
 
-        try
+    internal async Task CompleteInboundHandshakeAndRegistrationAsync(
+        X509Certificate2 remoteCert,
+        string deviceId,
+        Func<CancellationToken, Task> completeHandshake,
+        Action persistAuthorizedPeer,
+        Func<bool> tryAddSession,
+        CancellationToken cancellationToken)
+    {
+        await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
+        await completeHandshake(cancellationToken);
+        persistAuthorizedPeer();
+        if (!tryAddSession())
         {
-            await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
-            await CompleteSessionHandshakeAsync(session, remoteCert, cancellationToken);
-            PersistAuthorizedPeer(remoteCert, deviceId);
-            _sessions.TryAdd(deviceId, session);
-            await RunSessionLifetimeAsync(session, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+            throw new InvalidOperationException($"A session for {deviceId} is already registered.");
         }
     }
 
@@ -266,6 +286,34 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: false,
                 capabilityNames));
+        }
+    }
+
+    internal async Task RunInboundSessionCoreAsync(
+        string deviceId,
+        Func<CancellationToken, Task> handshakeAndRegister,
+        Func<CancellationToken, Task> sessionLifetime,
+        Action cleanup,
+        CancellationToken cancellationToken)
+    {
+        var lifetimeManaged = false;
+
+        try
+        {
+            await handshakeAndRegister(cancellationToken);
+            lifetimeManaged = true;
+            await sessionLifetime(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+        }
+        finally
+        {
+            if (!lifetimeManaged)
+            {
+                cleanup();
+            }
         }
     }
 

@@ -170,16 +170,18 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
-        var state = _pairingStates.AddOrUpdate(
-            peerDeviceId,
-            _ => CreatePairingSessionState(),
-            (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
-
         var peer = _trustStore.GetPeer(peerDeviceId);
         if (peer is null)
         {
             return;
         }
+
+        if (!_pairingStates.TryGetValue(peerDeviceId, out var state))
+        {
+            return;
+        }
+
+        state.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs));
 
         if (peer.State == TrustState.Trusted)
         {
