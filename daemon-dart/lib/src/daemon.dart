@@ -29,6 +29,7 @@ class RiftDaemon {
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
   final Map<String, DiscoveredPeer> _discoveredPeers = {};
+  bool _isDiscovering = false;
 
   final String storagePath;
   final int port;
@@ -73,6 +74,7 @@ class RiftDaemon {
     );
     await _discoveryService!.startAdvertising();
     await _discoveryService!.startDiscovery();
+    _isDiscovering = true;
     // Discovery remains passive for browsing, but pairing may trigger an
     // explicit connect/handshake when the UI selects a discovered peer.
   }
@@ -162,22 +164,25 @@ class RiftDaemon {
     for (final entry in _discoveredPeers.entries) {
       final peer = entry.value;
       final hintedDeviceId = peer.deviceIdHint;
-      final trustState = hintedDeviceId != null && trustStore != null
+      if (hintedDeviceId == null) {
+        // Skip peers without a valid Rift device ID according to ipc.md.
+        continue;
+      }
+      final trustState = trustStore != null
           ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ?? 'discovered'
           : 'discovered';
 
       results.add({
-        'deviceId': hintedDeviceId ?? peer.instanceId,
+        'deviceId': hintedDeviceId,
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
         'txtRecord': {
           'minV': peer.minVersion,
           'maxV': peer.maxVersion,
-          if (peer.deviceIdHint != null) 'did': peer.deviceIdHint,
+          'did': peer.deviceIdHint,
           if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
         },
-        if (hintedDeviceId == null) 'instanceId': peer.instanceId,
       });
     }
 
@@ -214,13 +219,15 @@ class RiftDaemon {
           'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
         };
       case 'rift.listDiscoveredPeers':
-        return {'peers': await listDiscoveredPeers()};
+        return {'peers': await listDiscoveredPeers(), 'isDiscovering': _isDiscovering};
       case 'rift.startDiscovery':
         await _discoveryService?.startDiscovery();
+        _isDiscovering = true;
         return {'started': true};
       case 'rift.stopDiscovery':
         await _discoveryService?.stopDiscovery();
         _discoveredPeers.clear();
+        _isDiscovering = false;
         return {'stopped': true};
       case 'rift.startPairing':
         final requestedPeerId = RpcUtils.requireStringParam(params, 'deviceId');
@@ -287,7 +294,16 @@ class RiftDaemon {
   }
 
   void trackDiscoveredPeer(DiscoveredPeer peer) {
-    _discoveredPeers[peer.instanceId] = peer;
+    if (peer.deviceIdHint != null) {
+      // DiscoveryPeerTracker deduplicates at the mDNS instance level, but the
+      // daemon UI model is keyed by Rift device ID so multiple instance records
+      // for the same device collapse into one visible peer entry.
+      _discoveredPeers[peer.deviceIdHint!] = peer;
+    }
+  }
+
+  void untrackDiscoveredPeer(String deviceId) {
+    _discoveredPeers.remove(deviceId);
   }
 
   static Map<String, dynamic> jsonRpcResult(Object? id, Map<String, dynamic> result) {
@@ -445,20 +461,32 @@ class RiftDaemon {
 
           daemon._discoveryService!.onDeviceDiscovered.listen((peer) {
             if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
+            if (peer.deviceIdHint == null) return; // Ignore non-Rift devices
             daemon.trackDiscoveredPeer(peer);
             sendPort.send({
               'jsonrpc': '2.0',
               'method': 'rift.onPeerDiscovered',
               'params': {
-                'deviceId': peer.deviceIdHint ?? peer.instanceId,
+                'deviceId': peer.deviceIdHint,
                 'address': peer.address,
                 'port': peer.port,
                 'txtRecord': {
                   'minV': peer.minVersion,
                   'maxV': peer.maxVersion,
-                  if (peer.deviceIdHint != null) 'did': peer.deviceIdHint,
+                  'did': peer.deviceIdHint,
                   if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
                 }
+              }
+            });
+          });
+
+          daemon._discoveryService!.onDeviceLost.listen((deviceId) {
+            daemon.untrackDiscoveredPeer(deviceId);
+            sendPort.send({
+              'jsonrpc': '2.0',
+              'method': 'rift.onPeerLost',
+              'params': {
+                'deviceId': deviceId,
               }
             });
           });

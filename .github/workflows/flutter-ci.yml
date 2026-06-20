@@ -25,3 +25,22 @@ jobs:
       - name: Run tests
         run: flutter test --coverage
         working-directory: app-flutter
+
+  daemon-dart-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: daemon-dart
+      - name: Analyze
+        run: dart analyze
+        working-directory: daemon-dart
+      - name: Run tests
+        run: dart test -x network
+        working-directory: daemon-dart

@@ -16,7 +16,6 @@ void main() {
       final input = PoPManager.buildSigningInput(channelBinding, pubKey, certDer);
 
       expect(input.length, equals(107));
-
       final prefix = utf8.encode('RiftPoP-v2:');
       expect(input.sublist(0, 11), equals(prefix));
 

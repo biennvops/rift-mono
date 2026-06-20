@@ -38,6 +38,7 @@ class PoPManager {
     final prefixBytes = utf8.encode(popPrefix);
     final input = BytesBuilder(copy: false);
     input.add(prefixBytes);
+
     input.add(channelBinding);
     input.add(ed25519PublicKey);
     input.add(certHash);

@@ -2,7 +2,7 @@
 
 This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
 
-> **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), but it is **not yet fully compliant with `spec/doc/protocol.md`** because Dart does not expose `tls-exporter` / TLS 1.2 EMS state. The current implementation uses an Application Nonce fallback (`sessionNonce` + cert hashing) for channel binding. While this provides true per-session replay protection, it deviates from the formal specification and requires cross-implementation support.
+> **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), and it now follows the current `spec/doc/protocol.md` channel-binding rules via Tier 3 `app-nonce`. Because Dart does not expose `tls-exporter` / `tls-unique`, the daemon sends `bindingType: "app-nonce"` plus a 32-byte `sessionNonce`, then computes `SHA-256(sessionNonce || signerCertDer || verifierCertDer)` exactly as defined in the spec and ADR-0011. The residual limitation is the one already documented by the spec itself: Tier 3 is session-unique, but not as strong as TLS-exporter because it is not cryptographically bound to the underlying TLS transcript.
 >
 > **Discovery privacy note:** The current Android daemon advertises `did` and `fp` TXT hints by default to make explicit peer recognition and auto-pair/connect flows workable from the Flutter UI. This is an intentional UX trade-off and is less privacy-preserving than the protocol's default recommendation.
 
@@ -17,7 +17,7 @@ This is the core background module (daemon) on Android for the Rift project, dev
   - `cert_builder.dart`: Automatically wraps the Ed25519 key into an X.509 certificate using the *Double OCTET STRING* technique. Replaced static sentinels with random 64-bit entropy serials.
   - `cert_decoder.dart`: A secure X.509 Parser (Fail-Closed).
   - `identity_manager_impl.dart`: Generates/stores the Ed25519 key. Implements **Atomic Write** against corruption and strict heap zeroing (`dispose()`).
-  - `pop_manager.dart`: Manages the Ed25519 Proof of Possession (PoP) verification with a 113-byte dynamic structure mitigating Canonicalization attacks and fails closed on malformed proof hex.
+  - `pop_manager.dart`: Manages the Ed25519 Proof of Possession (PoP) verification with the exact 107-byte signing input required by `protocol.md` Section 5.3.1 and fails closed on malformed proof hex.
 - `lib/src/network/`: 
   - `frame_codec.dart`: Safe stream transformer handling Length prefix + JSON frames. Strictly limits sizes to 64 KiB pre-auth and 32 MiB post-auth without order-sensitive aliasing hazards.
   - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, emits `onPeerDisconnected` events to clear stale sessions, and tracks unauthenticated connection timeouts per socket to avoid reconnect races.
@@ -32,18 +32,18 @@ This is the core background module (daemon) on Android for the Rift project, dev
 - `lib/src/storage/`:
   - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
 - `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
-- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, and storage. At the time of this README update, `dart test` passes with 77 tests.
+- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, storage, and discovery integration. At the time of this README update, `dart test` passes with 92 tests.
 
 ---
 
 ## 2. Usage Guide & Basic Commands
 
-> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before typing any `dart` commands.
+> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before running the package commands.
 
 ### 2.1. Install Dependencies
 Before working, ensure you have downloaded enough libraries (`pointycastle`, `asn1lib`, `cryptography`, `nsd`, `uuid`, `crypto`):
 ```bash
-dart pub get
+flutter pub get
 ```
 
 ### 2.2. Code Quality Check (Linter)
@@ -54,14 +54,15 @@ dart analyze
 > **Note:** Must output `No issues found!` to create a Pull Request.
 
 ### 2.3. Run Security Unit Tests
-The test suite currently covers the core cryptography, framing, session, pairing, and storage subsystems. At the time of this README update, `dart test` reports 77 passing tests:
+The test suite currently covers the core cryptography, framing, session, pairing, storage, and discovery subsystems. At the time of this README update, `dart test` reports 92 passing tests:
 1. **ASN.1 Encryption (`crypto_test`):** Verifies the generated byte array contains the correct Ed25519 OID and randomized RFC 5280 serials (64-bit entropy).
 2. **Fail-Closed Decoding (`decoder_test`):** Strictly verifies 10 advanced CVE-class attack vectors (missing OID, duplicate OID, unsupported critical flags, length manipulation, truncated DER, and fragile OID modifications).
 3. **Stream Network Frame (`frame_codec_test`):** Verifies memory purging, explicit frame boundary upgrades (64 KiB rejection pre-auth vs 32 MiB acceptance post-auth), and prevents double-parsing by directly returning Maps.
 4. **Identity (`identity_test`):** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
-5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession dynamic structures (113 bytes) against Canonicalization attacks and Client-side Auth Bypass.
+5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession construction/verification against the 107-byte spec shape, strict `bindingType` / `sessionNonce` handling, required envelope fields such as `messageId`, and client-side auth bypass rejection.
 6. **Pairing State Machine (`pairing_manager_test`):** Validates strict protocol transitions, 120s auto-timeouts, Double-Approve Bypass prevention, and Fingerprint spoofing rejections.
-7. **Storage ACID (`trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, schema migration, and durable `lastSeenAt` persistence.
+7. **Storage ACID (`trust_store_test` & `trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, prevents mDNS `discovered` downgrade attacks, schema migration, and durable `lastSeenAt` persistence.
+8. **Discovery Integration (`discovery_integration_test`):** Verifies `_rift._tcp` advertisement/discovery over the local UDP/mDNS stack and then feeds the discovered result through the same pure-Dart dedup/eviction tracker used by the daemon discovery path.
 
 ```bash
 dart test
@@ -76,7 +77,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:03 +77: All tests passed!`
+- `dart test` -> `00:03 +92: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository currently contains a standalone entrypoint at `bin/daemon.dart`, but it is still a stub intended for future CI/conformance work. There is currently **no checked-in `demo_cert.dart` script** in this package.
@@ -139,7 +140,7 @@ This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart 
 ## 3. Compliance Level with System Specification (Protocol & IPC)
 - **With `protocol.md`:** 
   - Implemented the main crypto building blocks required by the spec: ECDSA P-256 self-signed certificates, the custom Ed25519 X.509 extension, fail-closed extension parsing, `rift-` device ID derivation, and state-dependent frame limits (64 KiB pre-auth / 32 MiB post-auth).
-  - Implemented session bootstrap, PoP verification, client-side `session.accept` verification, pairing hardening, and trust-store persistence.
-  - **Known gaps:** The current code does not yet fully match the normative peer message schema in `protocol.md` and is blocked on proper TLS channel binding because `dart:io` does not expose `tls-exporter` / EMS state.
+  - Implemented session bootstrap, PoP verification, strict envelope/schema validation (`messageId`, `destinationDeviceId`, `requiredExtensions`), client-side `session.accept` verification, pairing hardening, and trust-store persistence.
+  - **Known gaps:** Dart still cannot use Tier 1 `tls-exporter` or Tier 2 `tls-unique`, so the implementation remains on the spec-approved Tier 3 `app-nonce` path rather than stronger TLS-bound channel binding.
 - **With `ipc.md`:** 
   - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., and now routes application failures primarily through typed Rift exceptions with standard JSON-RPC 2.0 error codes (`-32009`, `-32004`, etc.).
