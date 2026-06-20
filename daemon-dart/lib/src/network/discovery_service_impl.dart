@@ -8,6 +8,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
   final int port;
   final String minVersion;
   final String maxVersion;
+  final String? deviceIdHint;
+  final String? fingerprintPrefix;
   final String _instanceId;
 
   nsd.Registration? _registration;
@@ -20,6 +22,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
     required this.port,
     this.minVersion = '0.1-draft',
     this.maxVersion = '0.1-draft',
+    this.deviceIdHint,
+    this.fingerprintPrefix,
   }) : _instanceId = 'rift-peer-${DateTime.now().millisecondsSinceEpoch}';
 
   @override
@@ -34,6 +38,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
         txt: {
           'minV': Uint8List.fromList(minVersion.codeUnits),
           'maxV': Uint8List.fromList(maxVersion.codeUnits),
+          if (deviceIdHint != null) 'did': Uint8List.fromList(deviceIdHint!.codeUnits),
+          if (fingerprintPrefix != null) 'fp': Uint8List.fromList(fingerprintPrefix!.codeUnits),
         },
       ),
     );

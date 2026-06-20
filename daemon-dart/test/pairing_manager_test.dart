@@ -1,9 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi';
-
 import 'dart:typed_data';
-import 'package:sqlite3/open.dart';
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
@@ -17,11 +14,21 @@ import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/src/crypto/base32_utils.dart';
 import 'package:basic_utils/basic_utils.dart';
 
-DynamicLibrary _openOnLinux() {
-  return DynamicLibrary.open('libsqlite3.so.0');
-}
-
 class MockSessionManager implements SessionManager {
+  @override
+  Future<bool> Function(String)? get peerAllowanceResolver => null;
+
+  @override
+  SessionContext? getContext(String peerDeviceId) => null;
+  @override
+  void injectContextForTesting(SessionContext ctx) {}
+  @override
+  void requireCapability(String peerDeviceId, String capabilityName) {}
+  @override
+  Future<void> waitForSessionEstablished(String peerDeviceId, {Duration timeout = const Duration(seconds: 10)}) async {}
+  @override
+  Stream<SessionContext> get onPresenceUpdate => const Stream.empty();
+
   final _messageController = StreamController<ProtocolMessage>.broadcast();
   final _disconnectController = StreamController<String>.broadcast();
   final List<Map<String, dynamic>> sentMessages = [];
@@ -67,8 +74,7 @@ class FakeIdentityManager implements IdentityManager {
 }
 
 void main() {
-  open.overrideFor(OperatingSystem.linux, _openOnLinux);
-
+  
   group('PairingManager Tests', () {
     late TrustStoreImpl trustStore;
     late MockSessionManager sessionManager;

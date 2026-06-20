@@ -152,11 +152,12 @@ class RiftCertDecoder {
       }
 
       throw CertificateDecoderException('Rift Custom OID extension not found in certificate');
-    } catch (e) {
-      if (e is CertificateDecoderException) {
-        rethrow;
-      }
-      throw CertificateDecoderException('Failed to parse certificate: $e');
+    } on FormatException catch (e) {
+      throw CertificateDecoderException('Format error while parsing certificate: $e');
+    } on RangeError catch (e) {
+      throw CertificateDecoderException('Range error while parsing certificate (likely malformed ASN.1): $e');
+    } on ArgumentError catch (e) {
+      throw CertificateDecoderException('Invalid argument while parsing certificate: $e');
     }
   }
 }

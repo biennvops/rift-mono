@@ -3,6 +3,8 @@
 This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
 
 > **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), and it now follows the current `spec/doc/protocol.md` channel-binding rules via Tier 3 `app-nonce`. Because Dart does not expose `tls-exporter` / `tls-unique`, the daemon sends `bindingType: "app-nonce"` plus a 32-byte `sessionNonce`, then computes `SHA-256(sessionNonce || signerCertDer || verifierCertDer)` exactly as defined in the spec and ADR-0011. The residual limitation is the one already documented by the spec itself: Tier 3 is session-unique, but not as strong as TLS-exporter because it is not cryptographically bound to the underlying TLS transcript.
+>
+> **Discovery privacy note:** The current Android daemon advertises `did` and `fp` TXT hints by default to make explicit peer recognition and auto-pair/connect flows workable from the Flutter UI. This is an intentional UX trade-off and is less privacy-preserving than the protocol's default recommendation.
 
 ---
 
@@ -59,7 +61,7 @@ The test suite currently covers the core cryptography, framing, session, pairing
 4. **Identity (`identity_test`):** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
 5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession construction/verification against the 107-byte spec shape and Client-side Auth Bypass.
 6. **Pairing State Machine (`pairing_manager_test`):** Validates strict protocol transitions, 120s auto-timeouts, Double-Approve Bypass prevention, and Fingerprint spoofing rejections.
-7. **Storage ACID (`trust_store_test`):** Verifies SQLite WAL mode, atomic `transitionState`, and prevents mDNS `discovered` downgrade attacks.
+7. **Storage ACID (`trust_store_test` & `trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, prevents mDNS `discovered` downgrade attacks, schema migration, and durable `lastSeenAt` persistence.
 8. **Discovery Integration (`discovery_integration_test`):** Verifies `_rift._tcp` advertisement/discovery over the local UDP/mDNS stack and then feeds the discovered result through the same pure-Dart dedup/eviction tracker used by the daemon discovery path.
 
 ```bash
@@ -131,7 +133,7 @@ void startDaemon() async {
   });
 }
 ```
-This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon, matching the current notification/request model described in `ipc.md` while still retaining isolate-specific `SendPort` transport details.
+This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and other backlog IPC methods mean the daemon should not yet be described as fully conformant.
 
 ---
 

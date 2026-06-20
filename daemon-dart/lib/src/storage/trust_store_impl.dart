@@ -1,17 +1,49 @@
 import 'dart:io';
+import 'dart:ffi';
 import 'dart:typed_data';
+import 'package:sqlite3/open.dart' as sqlite_open;
 import 'package:sqlite3/sqlite3.dart';
 import '../core/rift_exceptions.dart';
 import '../interfaces/trust_store.dart';
 
+DynamicLibrary _openSqliteOnLinux() {
+  const candidates = <String>[
+    'libsqlite3.so',
+    'libsqlite3.so.0',
+    '/lib/x86_64-linux-gnu/libsqlite3.so.0',
+    '/usr/lib/x86_64-linux-gnu/libsqlite3.so.0',
+    '/lib/aarch64-linux-gnu/libsqlite3.so.0',
+    '/usr/lib/aarch64-linux-gnu/libsqlite3.so.0',
+  ];
+
+  Object? lastError;
+  for (final candidate in candidates) {
+    try {
+      return DynamicLibrary.open(candidate);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw ArgumentError(
+    'Failed to load sqlite3 dynamic library on Linux. Tried: ${candidates.join(', ')}. Last error: $lastError',
+  );
+}
+
 class TrustStoreImpl implements TrustStore {
   final String dbPath;
   Database? _db;
+  static bool _sqliteOpenConfigured = false;
 
   TrustStoreImpl(this.dbPath);
 
   @override
   Future<void> initialize() async {
+    if (!_sqliteOpenConfigured && Platform.isLinux) {
+      sqlite_open.open.overrideFor(sqlite_open.OperatingSystem.linux, _openSqliteOnLinux);
+      _sqliteOpenConfigured = true;
+    }
+
     if (dbPath != ':memory:') {
       final file = File(dbPath);
       if (!file.parent.existsSync()) {
@@ -24,6 +56,14 @@ class TrustStoreImpl implements TrustStore {
     // Use WAL mode to avoid lock contention
     _db!.execute('PRAGMA journal_mode=WAL;');
     
+    // Create config table for schema version tracking
+    _db!.execute('''
+      CREATE TABLE IF NOT EXISTS config (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    ''');
+
     _db!.execute('''
       CREATE TABLE IF NOT EXISTS peers (
         device_id    TEXT PRIMARY KEY,
@@ -31,23 +71,48 @@ class TrustStoreImpl implements TrustStore {
         cert_der     BLOB NOT NULL,
         state        TEXT NOT NULL,
         paired_at    INTEGER,
-        updated_at   INTEGER NOT NULL
+        updated_at   INTEGER NOT NULL,
+        last_seen_at INTEGER
       );
     ''');
+    
+    // Migration v1 -> v2 (Add last_seen_at)
+    final versionResult = _db!.select("SELECT value FROM config WHERE key = 'schema_version'");
+    int currentVersion = 1;
+    if (versionResult.isNotEmpty) {
+      currentVersion = int.tryParse(versionResult.first['value'] as String) ?? 1;
+    } else {
+      _db!.execute("INSERT INTO config (key, value) VALUES ('schema_version', '1')");
+    }
+
+    if (currentVersion < 2) {
+      try {
+        _db!.execute("ALTER TABLE peers ADD COLUMN last_seen_at INTEGER;");
+      } on SqliteException catch (e) {
+        // Column might already exist if migration failed halfway previously.
+        // Fail closed on other sqlite errors (corruption, disk full, etc.).
+        final msg = e.message.toLowerCase();
+        if (!msg.contains('duplicate column') && !msg.contains('already exists')) {
+          rethrow;
+        }
+      }
+      _db!.execute("UPDATE config SET value = '2' WHERE key = 'schema_version'");
+    }
   }
 
   @override
   Future<void> upsertPeer(PeerRecord record) async {
     _ensureInitialized();
     final stmt = _db!.prepare('''
-      INSERT INTO peers (device_id, display_name, cert_der, state, paired_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (device_id, display_name, cert_der, state, paired_at, updated_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         display_name = excluded.display_name,
         cert_der = CASE
           WHEN peers.state IN ('trusted', 'blocked', 'revoked') THEN peers.cert_der
           ELSE excluded.cert_der
         END,
+        last_seen_at = COALESCE(excluded.last_seen_at, peers.last_seen_at),
         updated_at = excluded.updated_at;
     ''');
     
@@ -62,6 +127,7 @@ class TrustStoreImpl implements TrustStore {
         record.state.toJson(),
         record.pairedAt?.millisecondsSinceEpoch,
         record.updatedAt.millisecondsSinceEpoch,
+        record.lastSeenAt?.toUtc().millisecondsSinceEpoch,
       ]);
     } finally {
       stmt.dispose();
@@ -145,6 +211,21 @@ class TrustStoreImpl implements TrustStore {
   }
 
   @override
+  Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {
+    _ensureInitialized();
+    final stmt = _db!.prepare('''
+      UPDATE peers 
+      SET last_seen_at = ?
+      WHERE device_id = ?
+    ''');
+    try {
+      stmt.execute([lastSeenAt.toUtc().millisecondsSinceEpoch, deviceId]);
+    } finally {
+      stmt.dispose();
+    }
+  }
+
+  @override
   Future<void> deletePeer(String deviceId) async {
     _ensureInitialized();
     // SECURITY HARDENING: AGENTS.md dictates "Revocation keeps negative-trust evidence".
@@ -167,6 +248,7 @@ class TrustStoreImpl implements TrustStore {
   
   PeerRecord _rowToPeerRecord(Row row) {
     final pairedAtMs = row['paired_at'] as int?;
+    final lastSeenAtMs = row['last_seen_at'] as int?;
     return PeerRecord(
       deviceId: row['device_id'] as String,
       displayName: row['display_name'] as String?,
@@ -178,6 +260,9 @@ class TrustStoreImpl implements TrustStore {
           ? DateTime.fromMillisecondsSinceEpoch(pairedAtMs, isUtc: true)
           : null,
       updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int, isUtc: true),
+      lastSeenAt: lastSeenAtMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(lastSeenAtMs, isUtc: true)
+          : null,
     );
   }
   

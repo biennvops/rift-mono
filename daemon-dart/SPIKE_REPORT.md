@@ -97,6 +97,36 @@ daemon-dart/
   - **Documentation & Technical Debt:** Executed a massive comment cleanup across the repository to ensure all code is strictly English-first. Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
   - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 81 tests.
 
+- **`[daemon-dart] Capability Negotiation & Presence` (Week 6):** Added authenticated capability negotiation, trusted-peer presence tracking, and durable presence history.
+  - Implemented `capability.advertise` / `capability.selected` negotiation with version intersection, responder-side validation, and a 5-second negotiation timeout.
+  - Added `SessionContext` tracking for negotiated capabilities, trust state, heartbeat timers, and `lastHeartbeatReceived`.
+  - Implemented trusted-peer `presence.update` handling with strict status validation, negotiated-capability enforcement, and durable `lastSeenAt` persistence through `TrustStoreImpl`.
+  - Added SQLite schema migration from trust-store v1 to v2 to preserve older installs while introducing `lastSeenAt`.
+  - Exposed `getPeerPresence` and `listTrustedPeers` responses through the daemon isolate bridge, including capability summaries and persisted timestamps.
+  - Added unit coverage for malformed capability payloads, invalid selected sets, presence validation, heartbeat gating, trust-store persistence, and migration behavior.
+  - **Battery Impact Check Status (Evidence):**
+    - **Snapshot A captured (2026-06-19):** using `adb shell dumpsys battery unplug` + `adb shell dumpsys batterystats com.example.app_flutter` (simulated on-battery while keeping USB connected for ADB).
+    - **Snapshot B captured (2026-06-19):** same commands after an idle window.
+    - **A -> B delta (device-level signals):**
+      - Time on battery: `+32m 36s`
+      - Total partial wakelock time: `+4m 31s`
+      - Connectivity changes: `343 -> 345`
+      - WiFi data received: `679.67MB -> 1.05GB` (not an idle baseline)
+      - WiFi data sent: `40.52MB -> 52.01MB`
+    - **Interpretation:** This A/B run is valid as a “real device snapshot delta”, but it is **not a clean idle baseline** due to significant WiFi traffic during the window. It cannot be used to attribute battery/network impact to Rift heartbeats yet; it mainly proves the measurement pipeline works (snapshot deltas without `batterystats --reset`).
+    - **Clean idle baseline run (Airplane Mode, 2026-06-19):**
+      - **A2 -> B2 window:** `~16m 51s` on-battery (screen-off `~16m 39s`), WiFi and Cellular data `0B` throughout.
+      - **B2 observed:** total partial wakelock time `6s 803ms`, device light idle `11m 53s` (entered Doze).
+      - **Battery drain:** `0 mAh` reported for this window (short-window resolution; treat as “below meter precision” rather than guaranteed zero).
+    - **1 trusted peer heartbeat run (WiFi on, 2026-06-19):**
+      - **C -> D window:** `~15m 5s` on-battery (screen-off `~15m 5s`), screen-on delta `~0s`.
+      - **C -> D deltas:** partial wakelock `+25s` (48.9s -> 74.3s), connectivity changes `13 -> 19`.
+      - **C -> D network deltas:** WiFi RX `+302KB`, WiFi TX `+544KB` (Cellular `0B` throughout).
+      - **Battery drain:** `0 mAh` reported for this window (again: likely below meter precision at this duration).
+      - **Comparison to clean idle:** baseline shows `~0.40s/min` partial wakelock, while this run shows `~1.68s/min` partial wakelock delta. This suggests additional periodic work during the window (consistent with “heartbeat present”), but attribution remains imperfect because system jobs can also contribute; repeating the run with a longer window (30-60m) would improve confidence.
+    - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
+  - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 battery evidence has been captured on a physical device for both a clean idle baseline and a 1 trusted peer heartbeat run (see above), with the caveat that short-window `batterystats` may under-report mAh deltas.
+
 ---
 
 ## 2. System Specification Alignment (Protocol & IPC)
@@ -131,6 +161,9 @@ The implementation is clearly derived from the two core specifications, but it s
 
 4. **TLS Cert Extraction Race Condition (Technical Debt):**
    This was an earlier concern, but the current `SessionManager` already receives `peerCertDer` on each `TransportMessage` and validates PoP against that message-bound certificate context. This item should be considered resolved in the current code unless a new race is demonstrated elsewhere.
+
+5. **Discovery Privacy Trade-off (Current Behavior):**
+   The daemon now advertises `did` and `fp` TXT hints by default so that the Flutter UI can recognize peers pre-connect and the daemon can normalize discovered peers into working auto-connect/pairing flows. This improves usability, but it is intentionally less privacy-preserving than the protocol's "SHOULD NOT include by default" guidance. Keep this as an explicit product/security decision rather than silent behavior.
 
 ## 4. Reality Check Against the Repository
 
