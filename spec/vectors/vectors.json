@@ -30,5 +30,20 @@
         "lengthPrefixHex": "02000001"
       }
     ]
+  },
+  "popInterop": {
+    "description": "Cross-implementation PoP signing input test vector (Spec §5.3.1). Both daemons MUST produce identical signingInputHex from the given inputs using Tier 3 (app-nonce) channel binding.",
+    "bindingType": "app-nonce",
+    "signerNonceHex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "signerCertDerHex": "aabbccdd",
+    "verifierCertDerHex": "eeff0011",
+    "channelBindingInputDescription": "SHA-256(signerNonce || signerCertDER || verifierCertDER)",
+    "channelBindingHex": "c27ec22512ef4f08cbb55cca019d1eb26d09ad24efeaff2626e56f6cb3afca36",
+    "ed25519PublicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3",
+    "certDerForHash": "aabbccdd",
+    "certHashHex": "8d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297",
+    "signingInputDescription": "RiftPoP-v2: || channelBinding[32] || ed25519PubKey[32] || certHash[32] = 107 bytes",
+    "signingInputHex": "52696674506f502d76323ac27ec22512ef4f08cbb55cca019d1eb26d09ad24efeaff2626e56f6cb3afca36d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e38d70d691c822d55638b6e7fd54cd94170c87d19eb1f628b757506ede5688d297",
+    "signingInputLength": 107
   }
 }

@@ -159,7 +159,16 @@ To bind the Ed25519 identity to the TLS session, each peer MUST prove possession
 
 The proof is an Ed25519 signature over a channel-bound and certificate-bound challenge. The signer MUST construct the challenge as follows:
 
-1. Extract the TLS channel binding value using `tls-exporter` (RFC 9266) with label `EXPORTER-RIFT-Ed25519-PoP` and no context, producing 32 bytes. If `tls-exporter` is unavailable (e.g., TLS 1.2 fallback), use `tls-unique` (RFC 5929); in this case, the TLS 1.2 session MUST have negotiated the Extended Master Secret extension (RFC 7627) — see Section 5.3.4. Implementations MUST prefer `tls-exporter` when available.
+1. Obtain a 32-byte channel binding value using the highest available tier from the following hierarchy (see also ADR 0011):
+
+   **Tier 1 — `tls-exporter` (preferred):** Extract the TLS channel binding value using `tls-exporter` (RFC 9266) with label `EXPORTER-RIFT-Ed25519-PoP` and no context, producing 32 bytes. Implementations MUST use this tier when the platform exposes TLS keying material export.
+
+   **Tier 2 — `tls-unique`:** If `tls-exporter` is unavailable but the platform exposes `tls-unique` (RFC 5929), use it as the channel binding value. The TLS 1.2 session MUST have negotiated the Extended Master Secret extension (RFC 7627) — see Section 5.3.4. This tier is valid only for TLS 1.2 sessions; TLS 1.3 removed `tls-unique`.
+
+   **Tier 3 — Mutual Application Nonce:** If neither `tls-exporter` nor `tls-unique` is available on the platform (e.g., Dart `SecureSocket`, .NET `SslStream` on macOS), the signer MUST generate a cryptographically random 32-byte `sessionNonce` and compute the channel binding as: `SHA-256(signerNonce || signerCertDER || verifierCertDER)`. The `sessionNonce` MUST be included in the `session.hello` or `session.accept` payload as a base64-encoded string. The verifier reconstructs the same binding by swapping the local/peer certificate roles. This tier provides per-session uniqueness via the random nonce and certificate binding, but does not cryptographically bind to the TLS session itself — see Section 5.3.5 for the residual risk analysis.
+
+   Implementations MUST include a `bindingType` field in `session.hello` and `session.accept` indicating the tier used: `"tls-exporter"`, `"tls-unique"`, or `"app-nonce"`. A message without `bindingType` MUST be rejected with `AuthenticationFailed`.
+
 2. Compute the SHA-256 hash of the signer's own DER-encoded ECDSA P-256 certificate, producing 32 bytes.
 3. Construct the signing input by concatenating in order: the ASCII string `RiftPoP-v2:`, the 32-byte channel binding value, the 32-byte Ed25519 public key of the signer, and the 32-byte SHA-256 certificate hash (96 bytes of key material total, 107 bytes total with prefix).
 4. Sign the concatenated input with the Ed25519 private key, producing a 64-byte signature.
@@ -170,12 +179,16 @@ The proof is transmitted as `identityProof` in the `session.hello` payload, enco
 
 On receiving a `session.hello` with `identityProof`, the verifier MUST:
 
-1. Extract the same TLS channel binding value from its side of the session.
-2. Extract the Ed25519 public key from the peer's certificate extension.
-3. Compute the SHA-256 hash of the peer's DER-encoded ECDSA P-256 certificate as presented during the TLS handshake.
-4. Reconstruct the expected signing input using the same concatenation as Section 5.3.1 (prefix, channel binding, peer's Ed25519 public key, hash of peer's ECDSA certificate).
-5. Verify the Ed25519 signature over the reconstructed input using the extracted public key.
-6. If verification fails, reject the session with `AuthenticationFailed` and log a `critical` security event of type `auth.failed` with details indicating identity-proof failure.
+1. Read the peer's `bindingType` field. If absent, reject with `AuthenticationFailed`. If the value is unrecognized, reject with `AuthenticationFailed`.
+2. Obtain the channel binding value corresponding to the peer's declared `bindingType`:
+   - For `tls-exporter`: extract via `tls-exporter` (RFC 9266) from the local side of the TLS session.
+   - For `tls-unique`: extract via `tls-unique` (RFC 5929) from the local side of the TLS session.
+   - For `app-nonce`: decode the peer's `sessionNonce` from the payload, then compute `SHA-256(peerNonce || peerCertDER || localCertDER)`.
+3. Extract the Ed25519 public key from the peer's certificate extension.
+4. Compute the SHA-256 hash of the peer's DER-encoded ECDSA P-256 certificate as presented during the TLS handshake.
+5. Reconstruct the expected signing input using the same concatenation as Section 5.3.1 (prefix, channel binding, peer's Ed25519 public key, hash of peer's ECDSA certificate).
+6. Verify the Ed25519 signature over the reconstructed input using the extracted public key.
+7. If verification fails, reject the session with `AuthenticationFailed` and log a `critical` security event of type `auth.failed` with details indicating identity-proof failure.
 
 A `session.hello` message without `identityProof` MUST be rejected with `AuthenticationFailed`. Implementations MUST NOT fall back to extension-only verification.
 
@@ -189,7 +202,15 @@ Binding the proof to the signer's ECDSA certificate prevents the Triple Handshak
 
 #### 5.3.4 TLS 1.2 Extended Master Secret Requirement
 
-When a TLS 1.2 session is used (i.e., `tls-exporter` is unavailable and `tls-unique` is the channel binding), the session MUST have negotiated the Extended Master Secret (EMS) extension defined in RFC 7627. If EMS was not negotiated, the implementation MUST reject the session with `AuthenticationFailed` before attempting PoP verification. This requirement prevents the class of Triple Handshake attacks where the attacker synchronizes the master secret across two non-EMS sessions. TLS 1.3 is not affected because it incorporates equivalent protections by design.
+When a TLS 1.2 session is used with Tier 2 (`tls-unique`) channel binding, the session MUST have negotiated the Extended Master Secret (EMS) extension defined in RFC 7627. If EMS was not negotiated, the implementation MUST reject the session with `AuthenticationFailed` before attempting PoP verification. This requirement prevents the class of Triple Handshake attacks where the attacker synchronizes the master secret across two non-EMS sessions. TLS 1.3 is not affected because it incorporates equivalent protections by design.
+
+#### 5.3.5 Tier 3 Residual Risk
+
+Tier 3 (`app-nonce`) provides per-session replay protection via the random nonce and certificate binding via the DER certificate hashes in the SHA-256 input. However, it does not cryptographically bind the PoP signature to the underlying TLS session. An active attacker who controls the TLS layer itself (e.g., by compromising a device's ECDSA private key) could theoretically intercept the nonce exchange and construct a valid channel binding for a separate session.
+
+This risk is acceptable for Rift's threat model because: (1) Rift uses self-signed certificates with trust established through explicit pairing and fingerprint verification — there is no CA to compromise; (2) post-pairing, a TLS-layer MitM requires the attacker to hold the trusted device's ECDSA private key, at which point the attacker already has full impersonation capability regardless of channel binding; (3) Tier 3 is a transitional measure until platform APIs expose `tls-exporter`.
+
+Implementations using Tier 3 SHOULD log a `warning` security event of type `connection.established` noting the reduced binding tier in the event details.
 
 ## 6. Peer Message Envelope and Version Negotiation
 
@@ -229,13 +250,19 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
   "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+  "bindingType": "app-nonce",
+  "sessionNonce": "base64-encoded-32-bytes",
   "identityProof": "a]1b2c3...128 hex chars...f4e5d6"
 }
 ```
 
 The `identityProof` field is REQUIRED. It contains a 128-character lowercase hexadecimal string encoding the 64-byte Ed25519 signature defined in Section 5.3.
 
-`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
+The `bindingType` field is REQUIRED. It MUST be one of `"tls-exporter"`, `"tls-unique"`, or `"app-nonce"`, indicating which channel binding tier the signer used for the PoP construction (Section 5.3.1).
+
+The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUST be absent otherwise. It contains a base64-encoded 32-byte cryptographically random nonce used in the Tier 3 channel binding computation.
+
+`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
 `session.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
@@ -668,6 +695,8 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
     "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
     "implementationId": "riftd-cs/0.1.0",
     "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
+    "bindingType": "app-nonce",
+    "sessionNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
     "identityProof": "a1b2c3d4...128 hex characters...e5f6a7b8"
   }
 }
