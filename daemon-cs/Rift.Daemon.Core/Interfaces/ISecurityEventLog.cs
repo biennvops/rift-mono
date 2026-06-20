@@ -57,10 +57,25 @@ public class SecurityEventRecord
     public IDictionary<string, object>? Details { get; init; }
 }
 
+public sealed class SecurityEventQuery
+{
+    public IReadOnlyList<string>? EventTypes { get; init; }
+    public IReadOnlyList<string>? Severities { get; init; }
+    public string? PeerDeviceId { get; init; }
+    public DateTimeOffset? Since { get; init; }
+    public int Limit { get; init; } = 100;
+    public int Offset { get; init; }
+}
+
 public interface ISecurityEventLog
 {
     /// <summary>
     /// Appends a new security event to the append-only log.
     /// </summary>
     Task LogEventAsync(SecurityEventRecord securityEvent);
+
+    /// <summary>
+    /// Queries security events using optional filters.
+    /// </summary>
+    Task<IReadOnlyList<SecurityEventRecord>> QueryEventsAsync(SecurityEventQuery query);
 }

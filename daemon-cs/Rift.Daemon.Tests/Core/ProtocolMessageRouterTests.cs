@@ -1,0 +1,316 @@
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Data.Sqlite;
+using Rift.Daemon.Core;
+using Rift.Daemon.Core.Cryptography;
+using Rift.Daemon.Core.Data;
+using Rift.Daemon.Core.Interfaces;
+
+namespace Rift.Daemon.Tests.Core;
+
+public sealed class ProtocolMessageRouterTests : IDisposable
+{
+    private readonly string _databasePath;
+    private readonly DatabaseContext _databaseContext;
+    private readonly SqliteTrustStore _trustStore;
+    private readonly SqliteSecurityEventLog _securityEventLog;
+    private readonly IdentityManager _identityManager;
+    private readonly PresenceService _presenceService;
+    private readonly PairingProtocolCoordinator _pairingCoordinator;
+    private readonly ClipboardService _clipboardService;
+    private readonly FakeTransport _clipboardTransport;
+    private readonly FakeTransport _pairingTransport;
+    private readonly ProtocolMessageRouter _router;
+
+    public ProtocolMessageRouterTests()
+    {
+        _databasePath = Path.Combine(Path.GetTempPath(), $"rift-router-{Guid.NewGuid():N}.db");
+        _databaseContext = new DatabaseContext(_databasePath);
+        _databaseContext.Initialize();
+        _trustStore = new SqliteTrustStore(_databaseContext);
+        _securityEventLog = new SqliteSecurityEventLog(_databaseContext);
+        _identityManager = new IdentityManager(new SqliteLocalIdentityStore(_databaseContext));
+        _presenceService = new PresenceService();
+        var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore);
+        _clipboardTransport = new FakeTransport();
+        _pairingTransport = new FakeTransport();
+        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(75));
+        _pairingCoordinator = new PairingProtocolCoordinator(
+            _pairingTransport,
+            discoveryCoordinator,
+            _trustStore,
+            _identityManager,
+            _securityEventLog,
+            NullLogger<PairingProtocolCoordinator>.Instance);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PresenceUpdate_UpdatesPresenceState()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-presence",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _router.HandleMessageAsync("rift-peer-presence", CreateEnvelope("rift-peer-presence", "presence.update", new
+        {
+            status = "online",
+            lastSeenAt = "2026-06-18T11:00:00Z",
+            capabilities = new[] { "presence.basic", "security.event_log" }
+        }), CancellationToken.None);
+
+        var presence = _presenceService.GetPeerPresence("rift-peer-presence");
+        Assert.NotNull(presence);
+        Assert.Equal("online", presence!.Status);
+        Assert.Equal("2026-06-18T11:00:00Z", presence.LastSeenAt);
+        Assert.Contains("presence.basic", presence.Capabilities);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PresenceUpdate_RejectsSpoofedSourceDeviceId()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-presence-spoof",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync("rift-peer-presence-spoof", CreateEnvelope("rift-spoofed", "presence.update", new
+        {
+            status = "online",
+            lastSeenAt = "2026-06-18T11:00:00Z",
+            capabilities = new[] { "presence.basic" }
+        }), CancellationToken.None));
+
+        Assert.Contains("sourceDeviceId", ex.Message, StringComparison.Ordinal);
+        Assert.Null(_presenceService.GetPeerPresence("rift-peer-presence-spoof"));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_ClipboardOffer_UsesAuthenticatedSessionIdentity()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-clipboard",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-clipboard", "online", null, ["clipboard.offer_fetch"]);
+
+        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => _router.HandleMessageAsync("rift-peer-clipboard", CreateEnvelope("rift-peer-clipboard", "clipboard.offer", new
+        {
+            offerId = "offer-identity-check",
+            contentType = "text/plain",
+            byteSize = 5,
+            sha256 = "hash",
+            expiresInMs = 120000,
+            sourceDeviceId = "rift-spoofed",
+            requiredCapability = "clipboard.offer_fetch",
+            offerSequence = 1
+        }), CancellationToken.None));
+
+        Assert.Equal("Unauthorized", ex.FailureReason);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PairingMessage_RejectsSpoofedSourceDeviceId()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-pairing-spoof",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync("rift-peer-pairing-spoof", CreateEnvelope("rift-spoofed", "pairing.start", new
+        {
+            expiresInMs = 120000
+        }), CancellationToken.None));
+
+        var peer = _trustStore.GetPeer("rift-peer-pairing-spoof");
+
+        Assert.Contains("sourceDeviceId", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(TrustState.Discovered, peer!.State);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_ClipboardFetchRequest_RoutesToClipboardService()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-fetch-request",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-fetch-request", "online", null, ["clipboard.offer_fetch"]);
+
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        var offer = await _clipboardService.NotifyClipboardChangeAsync("text/plain", 5, hash, Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")), CancellationToken.None);
+
+        await _router.HandleMessageAsync("rift-peer-fetch-request", CreateEnvelope("rift-peer-fetch-request", "clipboard.fetchRequest", new
+        {
+            offerId = offer.OfferId,
+            requestingDeviceId = "rift-peer-fetch-request"
+        }), CancellationToken.None);
+
+        Assert.Contains(_clipboardTransport.SentMessages, sent => sent.PeerDeviceId == "rift-peer-fetch-request" && sent.Type == "clipboard.fetchResponse");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_ClipboardFetchResponse_RoutesToClipboardService()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-fetch-response",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-fetch-response", "online", null, ["clipboard.offer_fetch"]);
+
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-fetch-response",
+            PayloadSourceDeviceId = "rift-peer-fetch-response",
+            OfferId = "offer-fetch-response",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = hash,
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-fetch-response", CancellationToken.None);
+        await WaitForConditionAsync(
+            () => _clipboardTransport.SentMessages.Any(sent => sent.PeerDeviceId == "rift-peer-fetch-response" && sent.Type == "clipboard.fetchRequest"),
+            TimeSpan.FromSeconds(1));
+        await _router.HandleMessageAsync("rift-peer-fetch-response", CreateEnvelope("rift-peer-fetch-response", "clipboard.fetchResponse", new
+        {
+            offerId = "offer-fetch-response",
+            contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            byteSize = 5,
+            sha256 = hash
+        }), CancellationToken.None);
+
+        var result = await fetchTask;
+        Assert.True(result.Verified);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_ClipboardFetchReject_RoutesToClipboardService()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-fetch-reject",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-fetch-reject", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-fetch-reject",
+            PayloadSourceDeviceId = "rift-peer-fetch-reject",
+            OfferId = "offer-fetch-reject",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = "hash",
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-fetch-reject", CancellationToken.None);
+        await _router.HandleMessageAsync("rift-peer-fetch-reject", CreateEnvelope("rift-peer-fetch-reject", "clipboard.fetchReject", new
+        {
+            offerId = "offer-fetch-reject",
+            failureReason = "Unauthorized",
+            message = "not allowed"
+        }), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => fetchTask);
+        Assert.Equal("Unauthorized", ex.FailureReason);
+    }
+
+    public void Dispose()
+    {
+        SqliteConnection.ClearAllPools();
+        if (File.Exists(_databasePath))
+        {
+            File.Delete(_databasePath);
+        }
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow.Add(timeout);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException("Condition was not met within the allotted time.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
+    private static ReadOnlyMemory<byte> CreateEnvelope(string sourceDeviceId, string type, object payload)
+    {
+        return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            rift = "0.1-draft",
+            type,
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId,
+            payload
+        }));
+    }
+
+    private sealed class FakeDiscoveryService : IDiscoveryService
+    {
+        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
+
+        public void StartAdvertising(string deviceId, string minVersion, string maxVersion) { }
+
+        public void StopAdvertising() { }
+
+        public void StartDiscovery() { }
+
+        public void StopDiscovery() { }
+    }
+
+    private sealed class FakeTransport : ITransport
+    {
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+
+        public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+
+        public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
+        {
+            using var document = JsonDocument.Parse(frameBody);
+            SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            return Task.CompletedTask;
+        }
+
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+}

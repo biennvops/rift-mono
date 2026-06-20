@@ -30,6 +30,22 @@ public sealed class MessageReceivedEventArgs : EventArgs
     }
 }
 
+public sealed class SessionStateChangedEventArgs : EventArgs
+{
+    public string PeerDeviceId { get; }
+
+    public bool IsOnline { get; }
+
+    public IReadOnlyList<string> SelectedCapabilities { get; }
+
+    public SessionStateChangedEventArgs(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities)
+    {
+        PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
+        IsOnline = isOnline;
+        SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+    }
+}
+
 /// <summary>
 /// Peer-transport abstraction for the Rift daemon.
 ///
@@ -61,6 +77,11 @@ public interface ITransport
     /// long-running work inside the handler; dispatch to a channel or queue instead.
     /// </summary>
     event EventHandler<MessageReceivedEventArgs> MessageReceived;
+
+    /// <summary>
+    /// Raised whenever an authenticated peer session becomes available or is torn down.
+    /// </summary>
+    event EventHandler<SessionStateChangedEventArgs> SessionStateChanged;
 
     /// <summary>
     /// Starts accepting incoming mutual TLS 1.3 connections (spec §5.1).

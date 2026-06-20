@@ -1,13 +1,14 @@
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Extensions.DependencyInjection;
 using StreamJsonRpc;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Windows;
 
-public class WindowsIpcListener(ILogger<WindowsIpcListener> logger) : IIpcListener
+public class WindowsIpcListener(ILogger<WindowsIpcListener> logger, IServiceScopeFactory scopeFactory) : IIpcListener
 {
     private const string PipeName = "rift-daemon-v0.1";
 
@@ -82,7 +83,9 @@ public class WindowsIpcListener(ILogger<WindowsIpcListener> logger) : IIpcListen
     {
         try
         {
-            using var jsonRpc = JsonRpc.Attach(pipe, new RiftApiHandler());
+            using var scope = scopeFactory.CreateScope();
+            var apiHandler = scope.ServiceProvider.GetRequiredService<IRiftApi>();
+            using var jsonRpc = JsonRpc.Attach(pipe, apiHandler);
             await jsonRpc.Completion;
             logger.LogInformation("IPC client disconnected.");
         }
