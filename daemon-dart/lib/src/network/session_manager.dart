@@ -196,6 +196,12 @@ class SessionManager {
     });
   }
 
+  static final RegExp _uuidV4Pattern = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  );
+
+  bool _isValidUuidV4(String value) => _uuidV4Pattern.hasMatch(value);
+
   Future<void> dispose() async {
     for (final waiter in _establishmentWaiters.values) {
       if (!waiter.isCompleted) {
@@ -273,8 +279,9 @@ class SessionManager {
       'destinationDeviceId': peerDeviceId,
       'payload': {
         'deviceId': _identityManager.deviceId,
-        'fingerprint': _identityManager.getDeviceFingerprint().map((b) => b.toRadixString(16).padLeft(2, '0')).join(''),
         'supportedVersions': ['0.1-draft'],
+        'implementationId': 'riftd-dart/0.1.0',
+        'capabilities': _defaultCapabilities.map((c) => c.toJson()).toList(),
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
@@ -333,6 +340,18 @@ class SessionManager {
       return;
     }
 
+    final protocolVersion = jsonMap['rift'];
+    if (protocolVersion is! String || protocolVersion != '0.1-draft') {
+      await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unsupported protocol version');
+      return;
+    }
+
+    final messageId = jsonMap['messageId'];
+    if (messageId is! String || !_isValidUuidV4(messageId)) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing or invalid messageId');
+      return;
+    }
+
     final type = jsonMap['type'];
     if (type is! String) {
       await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing or invalid message type');
@@ -344,6 +363,10 @@ class SessionManager {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'requiredExtensions must be a list');
       return;
     }
+    if (requiredExtensions is List && requiredExtensions.isNotEmpty) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Unknown requiredExtensions');
+      return;
+    }
 
     final envelopeSourceDeviceId = jsonMap['sourceDeviceId'];
     if (envelopeSourceDeviceId is! String) {
@@ -352,6 +375,14 @@ class SessionManager {
         'MalformedMessage',
         'Missing or invalid sourceDeviceId',
       );
+      return;
+    }
+
+    final destinationDeviceId = jsonMap['destinationDeviceId'];
+    if (destinationDeviceId != null &&
+        (destinationDeviceId is! String ||
+            destinationDeviceId != _identityManager.deviceId)) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'destinationDeviceId mismatch');
       return;
     }
 
@@ -451,6 +482,22 @@ class SessionManager {
       return;
     }
 
+    final implementationId = payload['implementationId'] as String?;
+    if (implementationId == null || implementationId.isEmpty) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing implementationId');
+      return;
+    }
+
+    final capabilities = payload['capabilities'];
+    if (capabilities is! List) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing capabilities');
+      return;
+    }
+    if (capabilities.length > 64) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Too many capabilities');
+      return;
+    }
+
     if (msg.peerEd25519Key == null || msg.peerCertDer == null) {
       await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing peer certificate context');
       throw SessionException('IdentityError: Missing peer certificate context');
@@ -528,6 +575,7 @@ class SessionManager {
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
+        'capabilities': _defaultCapabilities.map((c) => c.toJson()).toList(),
       }
     };
 
@@ -552,6 +600,28 @@ class SessionManager {
     final identityVerified = payload['identityVerified'];
     if (identityVerified is! bool || !identityVerified) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing or invalid identityVerified');
+      return;
+    }
+
+    final selectedVersion = payload['selectedVersion'] as String?;
+    if (selectedVersion != '0.1-draft') {
+      await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
+      return;
+    }
+
+    final payloadDeviceId = payload['deviceId'] as String?;
+    if (payloadDeviceId != peerDeviceId) {
+      await _rejectSession(peerDeviceId, 'Unauthorized', 'session.accept deviceId mismatch');
+      return;
+    }
+
+    final capabilities = payload['capabilities'];
+    if (capabilities is! List) {
+      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing capabilities');
+      return;
+    }
+    if (capabilities.length > 64) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', 'Too many capabilities');
       return;
     }
 
@@ -638,6 +708,7 @@ class SessionManager {
     final payload = {
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'capability.advertise',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': ctx.peerDeviceId,
@@ -706,6 +777,7 @@ class SessionManager {
       final reply = {
         'rift': '0.1-draft',
         'id': const Uuid().v4(),
+        'messageId': const Uuid().v4(),
         'type': 'capability.selected',
         'sourceDeviceId': _identityManager.deviceId,
         'destinationDeviceId': ctx.peerDeviceId,
@@ -796,6 +868,7 @@ class SessionManager {
     final payload = {
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'presence.update',
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': ctx.peerDeviceId,

@@ -183,7 +183,10 @@ void main() {
       // Since they aren't fully wired synchronously, we capture the sent message and pass it to transport2 manually
       expect(transport1.sentMessages.isNotEmpty, isTrue);
       final helloMsg = transport1.sentMessages.last;
+      expect(helloMsg['messageId'], isNotNull);
       expect(helloMsg['payload']['bindingType'], 'app-nonce');
+      expect(helloMsg['payload']['implementationId'], 'riftd-dart/0.1.0');
+      expect(helloMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(helloMsg['payload']['sessionNonce'] as String),
         hasLength(32),
@@ -195,7 +198,9 @@ void main() {
       
       final acceptMsg = await acceptFuture;
       expect(acceptMsg['type'], 'session.accept');
+      expect(acceptMsg['messageId'], isNotNull);
       expect(acceptMsg['payload']['bindingType'], 'app-nonce');
+      expect(acceptMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(acceptMsg['payload']['sessionNonce'] as String),
         hasLength(32),

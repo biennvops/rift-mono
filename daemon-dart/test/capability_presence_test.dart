@@ -51,6 +51,7 @@ class FakeTransport implements Transport {
     final map = <String, dynamic>{
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': type,
       'sourceDeviceId': sourceDeviceId ?? deviceId,
       'destinationDeviceId': 'rift-local',
