@@ -205,7 +205,7 @@ public sealed class TlsTransport : ITransport, IDisposable
 
     private async Task CompleteSessionHandshakeAsync(ActiveSession session, X509Certificate2 remoteCert, CancellationToken cancellationToken)
     {
-        await _sessionBootstrap.SendSessionHelloAsync(session.Stream, cancellationToken);
+        await _sessionBootstrap.SendSessionHelloAsync(session.Stream, remoteCert.GetRawCertData(), cancellationToken);
 
         var helloPayload = await ReadFramePayloadAsync(session.Stream, RiftFrame.MaxPreAuthSize, cancellationToken);
         if (helloPayload is null)
@@ -215,7 +215,7 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         VerifySessionControlMessage(session.Stream, remoteCert, helloPayload, expectedType: "session.hello");
 
-        await _sessionBootstrap.SendSessionAcceptAsync(session.Stream, cancellationToken);
+        await _sessionBootstrap.SendSessionAcceptAsync(session.Stream, remoteCert.GetRawCertData(), cancellationToken);
 
         var acceptPayload = await ReadFramePayloadAsync(session.Stream, RiftFrame.MaxPreAuthSize, cancellationToken);
         if (acceptPayload is null)
@@ -350,9 +350,35 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException($"{expectedType} did not include identityProof.");
             }
 
+            var bindingType = payload.GetProperty("bindingType").GetString();
+            if (string.IsNullOrWhiteSpace(bindingType))
+            {
+                throw new InvalidOperationException($"{expectedType} did not include bindingType.");
+            }
+
+            if (bindingType is not ("tls-exporter" or "tls-unique" or "app-nonce"))
+            {
+                throw new InvalidOperationException($"{expectedType} contained unrecognized bindingType '{bindingType}'.");
+            }
+
+            byte[]? peerSessionNonce = null;
+            if (bindingType == "app-nonce")
+            {
+                var nonceStr = payload.GetProperty("sessionNonce").GetString();
+                if (string.IsNullOrWhiteSpace(nonceStr))
+                {
+                    throw new InvalidOperationException($"{expectedType} app-nonce binding requires sessionNonce.");
+                }
+                peerSessionNonce = Convert.FromBase64String(nonceStr);
+                if (peerSessionNonce.Length != 32)
+                {
+                    throw new InvalidOperationException($"{expectedType} sessionNonce must be exactly 32 bytes, got {peerSessionNonce.Length}.");
+                }
+            }
+
             var signatureBytes = Convert.FromHexString(identityProofHex);
             var peerEd25519PubKey = ExtractEd25519PublicKeyFromCertificate(remoteCert);
-            if (!_sessionBootstrap.VerifyIdentityProof(sslStream, peerEd25519PubKey, remoteCert, signatureBytes))
+            if (!_sessionBootstrap.VerifyIdentityProof(sslStream, peerEd25519PubKey, remoteCert, signatureBytes, bindingType, peerSessionNonce))
             {
                 throw new InvalidOperationException($"{expectedType} identityProof verification failed.");
             }

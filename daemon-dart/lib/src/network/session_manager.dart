@@ -72,6 +72,25 @@ class SessionManager {
     return Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
   }
 
+  static const Set<String> _validBindingTypes = {'tls-exporter', 'tls-unique', 'app-nonce'};
+
+  Future<String?> _validateBindingType(String peerDeviceId, String? bindingType) async {
+    if (bindingType == null) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing bindingType');
+      return null;
+    }
+    if (!_validBindingTypes.contains(bindingType)) {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Unrecognized bindingType');
+      return null;
+    }
+    if (bindingType != 'app-nonce') {
+      await _rejectSession(peerDeviceId, 'AuthenticationFailed',
+          'Dart daemon only supports app-nonce bindingType');
+      return null;
+    }
+    return bindingType;
+  }
+
   final Set<String> _requiredCapabilityNames = const {
     'clipboard.offer_fetch',
     'presence.basic',
@@ -122,6 +141,7 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'implementationId': RiftConstants.implementationId,
         'capabilities': RiftConstants.capabilities,
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
       }
@@ -213,6 +233,7 @@ class SessionManager {
         final capabilities = payload?['capabilities'] as List?;
         final identityVerified = payload?['identityVerified'];
         final sessionNonceStr = payload?['sessionNonce'] as String?;
+        final bindingType = payload?['bindingType'] as String?;
         if (selectedVersion != RiftConstants.protocolVersion) {
           await _rejectSession(peerDeviceId, 'VersionMismatch', 'Unexpected selectedVersion');
           return;
@@ -229,15 +250,15 @@ class SessionManager {
           await _rejectSession(peerDeviceId, 'CapabilityUnavailable', 'Missing required capabilities');
           return;
         }
+        final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+        if (validatedBinding == null) return;
         if (identityProofHex == null || msg.peerEd25519Key == null || msg.peerCertDer == null) {
           await _rejectSession(peerDeviceId, 'AuthenticationFailed', 'Missing identity proof or cert');
           return;
         }
 
-        // Reconstruct the same channel binding the peer used when signing:
-        // SHA-256(peerCertDer || localCertDer) — note the order is swapped
-        // because from the peer's perspective, their cert is "local" and ours
-        // is "peer". We reverse here to match.
+        // Reconstruct the channel binding the peer used: from the peer's
+        // perspective, their cert is "local" and ours is "peer".
         final localCertDer = _identityManager.tlsCertificateDer;
         final peerCertDer = msg.peerCertDer!;
         
@@ -379,6 +400,10 @@ class SessionManager {
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer!;
     final sessionNonceStr = payload['sessionNonce'] as String?;
+    final bindingType = payload['bindingType'] as String?;
+
+    final validatedBinding = await _validateBindingType(peerDeviceId, bindingType);
+    if (validatedBinding == null) return;
 
     if (sessionNonceStr == null) {
       await _rejectSession(peerDeviceId, 'ProtocolError', 'Missing sessionNonce');
@@ -423,8 +448,6 @@ class SessionManager {
 
   Future<void> _sendSessionAccept(TransportMessage msg) async {
     final peerDeviceId = msg.peerDeviceId;
-    // Same cert-based channel binding used in sendSessionHello:
-    // SHA-256(localCertDer || peerCertDer) — consistent with signing side.
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = msg.peerCertDer ?? _transport.getPeerCert(peerDeviceId);
     if (peerCertDer == null) {
@@ -445,6 +468,7 @@ class SessionManager {
         'selectedVersion': RiftConstants.protocolVersion,
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
         'capabilities': RiftConstants.capabilities,
