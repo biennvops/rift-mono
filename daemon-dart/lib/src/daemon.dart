@@ -49,7 +49,8 @@ class RiftDaemon {
     _sessionManager = SessionManager(
       _transport!,
       _identityManager!,
-      isPeerAllowed: (peerDeviceId) async {
+      _trustStore!,
+      peerAllowanceResolver: (peerDeviceId) async {
         final record = await _trustStore!.getPeer(peerDeviceId);
         return record == null ||
             (record.state != TrustState.blocked && record.state != TrustState.revoked);
@@ -65,10 +66,15 @@ class RiftDaemon {
       },
     );
 
-    _discoveryService = DiscoveryServiceImpl(port: port);
+    _discoveryService = DiscoveryServiceImpl(
+      port: port,
+      deviceIdHint: _identityManager!.deviceId,
+      fingerprintPrefix: _fingerprintPrefix(_identityManager!.getDeviceFingerprint()),
+    );
     await _discoveryService!.startAdvertising();
     await _discoveryService!.startDiscovery();
-    // Discovery is passive — connections are initiated explicitly via IPC from the Flutter UI.
+    // Discovery remains passive for browsing, but pairing may trigger an
+    // explicit connect/handshake when the UI selects a discovered peer.
   }
 
   Future<void> stop() async {
@@ -101,28 +107,50 @@ class RiftDaemon {
     final trustStore = _trustStore;
     if (trustStore == null) return [];
 
-    final peers = <PeerRecord>[];
-    peers.addAll(await trustStore.getPeersByState(TrustState.trusted));
-    peers.addAll(await trustStore.getPeersByState(TrustState.blocked));
-    peers.addAll(await trustStore.getPeersByState(TrustState.revoked));
-    peers.addAll(await trustStore.getPeersByState(TrustState.pairingPending));
+    // ipc.md: listTrustedPeers is a trust-management surface.
+    // Include all non-discovered peers (pairing_pending, trusted, blocked, revoked).
+    final peers = <PeerRecord>[
+      ...await trustStore.getPeersByState(TrustState.pairingPending),
+      ...await trustStore.getPeersByState(TrustState.trusted),
+      ...await trustStore.getPeersByState(TrustState.blocked),
+      ...await trustStore.getPeersByState(TrustState.revoked),
+    ];
 
     return peers.map((peer) {
-      // ipc.md §4.4: listTrustedPeers result includes lastSeenAt, presence, and capabilities.
-      // lastSeenAt and capabilities are not yet tracked at runtime; we surface what we
-      // have and use sensible defaults so the Flutter client never receives a missing field.
+      final ctx = _sessionManager!.getContext(peer.deviceId);
+      final lastSeenAt = ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+          peer.lastSeenAt?.toUtc().toIso8601String();
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
         'trustState': peer.state.toJson(),
-        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toIso8601String(),
-        // updatedAt is used as a best-effort proxy for lastSeenAt until the daemon
-        // tracks separate connection events.
-        'lastSeenAt': peer.updatedAt.toIso8601String(),
-        'presence': 'unknown',
-        // Capabilities are not stored per-peer yet; emit an empty list rather than
-        // omitting the field, so clients using ipc.md do not crash on null.
-        'capabilities': const <String>[],
+        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
+        'lastSeenAt': lastSeenAt,
+        'presence': ctx?.currentPresenceStatus ?? 'offline',
+        'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? <String>[],
+      };
+    }).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> listPeersByState(String trustState) async {
+    final trustStore = _trustStore;
+    if (trustStore == null) return [];
+
+    final state = TrustState.fromJson(trustState);
+    final peers = await trustStore.getPeersByState(state);
+
+    return peers.map((peer) {
+      final ctx = _sessionManager!.getContext(peer.deviceId);
+      final lastSeenAt = ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+          peer.lastSeenAt?.toUtc().toIso8601String();
+      return {
+        'deviceId': peer.deviceId,
+        if (peer.displayName != null) 'displayName': peer.displayName,
+        'trustState': peer.state.toJson(),
+        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
+        'lastSeenAt': lastSeenAt,
+        'presence': ctx?.currentPresenceStatus ?? 'offline',
+        'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? <String>[],
       };
     }).toList();
   }
@@ -165,6 +193,26 @@ class RiftDaemon {
         return getDeviceInfo();
       case 'rift.listTrustedPeers':
         return {'peers': await listTrustedPeers()};
+      case 'rift.listPeersByState':
+        final state = RpcUtils.requireStringParam(params, 'trustState');
+        return {'peers': await listPeersByState(state)};
+      case 'rift.getPeerPresence':
+        final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
+        final trustRecord = await _trustStore!.getPeer(peerDeviceId);
+        if (trustRecord == null) {
+          throw const RiftNotFoundException('Peer not found in TrustStore');
+        }
+        if (trustRecord.state != TrustState.trusted) {
+          throw const RiftUnauthorizedException('Peer is not trusted');
+        }
+        final ctx = _sessionManager!.getContext(peerDeviceId);
+        return {
+          'deviceId': peerDeviceId,
+          'status': ctx?.currentPresenceStatus ?? 'offline',
+          'lastSeenAt': ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+              trustRecord.lastSeenAt?.toUtc().toIso8601String(),
+          'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
+        };
       case 'rift.listDiscoveredPeers':
         return {'peers': await listDiscoveredPeers()};
       case 'rift.startDiscovery':
@@ -175,8 +223,16 @@ class RiftDaemon {
         _discoveredPeers.clear();
         return {'stopped': true};
       case 'rift.startPairing':
-        await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
-        final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
+        final requestedPeerId = RpcUtils.requireStringParam(params, 'deviceId');
+        final peerDeviceId = await _ensureSessionForPairing(requestedPeerId);
+        await _ensurePeerRecordForPairing(peerDeviceId);
+        await _pairingManager?.handleIpcCommand({
+          'method': method,
+          'params': {
+            ...params,
+            'deviceId': peerDeviceId,
+          },
+        });
         final record = await _trustStore?.getPeer(peerDeviceId);
         if (record == null) {
           throw const RiftNotFoundException('Peer not found in TrustStore');
@@ -266,6 +322,77 @@ class RiftDaemon {
     return _formatFingerprint(Uint8List.fromList(hash));
   }
 
+  static String _fingerprintPrefix(Uint8List hashBytes) {
+    final base32Str = Base32Utils.encode(hashBytes).toUpperCase().replaceAll('=', '');
+    return base32Str.substring(0, 8);
+  }
+
+  Future<void> _ensurePeerRecordForPairing(String peerDeviceId) async {
+    final trustStore = _trustStore;
+    final transport = _transport;
+    if (trustStore == null || transport == null) {
+      throw const RiftIdentityNotInitializedException('Daemon services not initialized');
+    }
+
+    final existing = await trustStore.getPeer(peerDeviceId);
+    if (existing != null) {
+      return;
+    }
+
+    final peerCertDer = transport.getPeerCert(peerDeviceId);
+    if (peerCertDer == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+
+    await trustStore.upsertPeer(PeerRecord(
+      deviceId: peerDeviceId,
+      certDer: Uint8List.fromList(peerCertDer),
+      state: TrustState.discovered,
+      updatedAt: DateTime.now().toUtc(),
+    ));
+  }
+
+  Future<String> _ensureSessionForPairing(String peerDeviceId) async {
+    final sessionManager = _sessionManager;
+    final transport = _transport;
+    if (sessionManager == null || transport == null) {
+      throw const RiftIdentityNotInitializedException('Daemon services not initialized');
+    }
+
+    final ctx = sessionManager.getContext(peerDeviceId);
+    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+      return peerDeviceId;
+    }
+
+    final discoveredPeer = _findDiscoveredPeer(peerDeviceId);
+    if (discoveredPeer == null) {
+      throw const RiftNotFoundException('Peer not found in discovery cache');
+    }
+
+    final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId ? peerDeviceId : null;
+    final resolvedPeerDeviceId = await transport.connectTo(
+      discoveredPeer.address,
+      discoveredPeer.port,
+      expectedDeviceId: expectedDeviceId,
+    );
+
+    if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
+      await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+    }
+    await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
+    return resolvedPeerDeviceId;
+  }
+
+  DiscoveredPeer? _findDiscoveredPeer(String peerDeviceId) {
+    for (final entry in _discoveredPeers.entries) {
+      final peer = entry.value;
+      if (peer.deviceIdHint == peerDeviceId || entry.key == peerDeviceId) {
+        return peer;
+      }
+    }
+    return null;
+  }
+
   /// The static entry point for spawning the Isolate from Flutter
   static void isolateEntryPoint(Map<String, dynamic> args) async {
     final storagePath = args['storagePath'] as String;
@@ -332,6 +459,19 @@ class RiftDaemon {
                   if (peer.deviceIdHint != null) 'did': peer.deviceIdHint,
                   if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
                 }
+              }
+            });
+          });
+
+          daemon._sessionManager!.onPresenceUpdate.listen((ctx) {
+            sendPort.send({
+              'jsonrpc': '2.0',
+              'method': 'rift.onPresenceUpdate',
+              'params': {
+                'deviceId': ctx.peerDeviceId,
+                'status': ctx.currentPresenceStatus,
+                'lastSeenAt': ctx.lastHeartbeatReceived?.toUtc().toIso8601String(),
+                'capabilities': ctx.negotiatedCapabilities.map((c) => c.name).toList(),
               }
             });
           });

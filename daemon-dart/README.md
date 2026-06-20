@@ -3,6 +3,8 @@
 This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
 
 > **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), but it is **not yet fully compliant with `spec/doc/protocol.md`** because Dart does not expose `tls-exporter` / TLS 1.2 EMS state. The current implementation uses an Application Nonce fallback (`sessionNonce` + cert hashing) for channel binding. While this provides true per-session replay protection, it deviates from the formal specification and requires cross-implementation support.
+>
+> **Discovery privacy note:** The current Android daemon advertises `did` and `fp` TXT hints by default to make explicit peer recognition and auto-pair/connect flows workable from the Flutter UI. This is an intentional UX trade-off and is less privacy-preserving than the protocol's default recommendation.
 
 ---
 
@@ -59,7 +61,7 @@ The test suite currently covers the core cryptography, framing, session, pairing
 4. **Identity (`identity_test`):** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
 5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession dynamic structures (113 bytes) against Canonicalization attacks and Client-side Auth Bypass.
 6. **Pairing State Machine (`pairing_manager_test`):** Validates strict protocol transitions, 120s auto-timeouts, Double-Approve Bypass prevention, and Fingerprint spoofing rejections.
-7. **Storage ACID (`trust_store_test`):** Verifies SQLite WAL mode, atomic `transitionState`, and prevents mDNS `discovered` downgrade attacks.
+7. **Storage ACID (`trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, schema migration, and durable `lastSeenAt` persistence.
 
 ```bash
 dart test
@@ -130,7 +132,7 @@ void startDaemon() async {
   });
 }
 ```
-This establishes the substantially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon, matching the current notification/request model described in `ipc.md` while still retaining isolate-specific `SendPort` transport details.
+This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and other backlog IPC methods mean the daemon should not yet be described as fully conformant.
 
 ---
 

@@ -28,6 +28,7 @@ class PeerRecord {
   final TrustState state;
   final DateTime? pairedAt;
   final DateTime updatedAt;
+  final DateTime? lastSeenAt;
 
   PeerRecord({
     required this.deviceId,
@@ -36,6 +37,7 @@ class PeerRecord {
     required this.state,
     this.pairedAt,
     required this.updatedAt,
+    this.lastSeenAt,
   });
 
   /// Creates a defensive copy of this PeerRecord to prevent mutation of internal state,
@@ -48,6 +50,7 @@ class PeerRecord {
       state: state,
       pairedAt: pairedAt,
       updatedAt: updatedAt,
+      lastSeenAt: lastSeenAt,
     );
   }
 }
@@ -59,4 +62,5 @@ abstract class TrustStore {
   Future<List<PeerRecord>> getPeersByState(TrustState state);
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt});
   Future<void> deletePeer(String deviceId);
+  Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt);
 }

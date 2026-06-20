@@ -4,6 +4,7 @@ import 'package:test/test.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/identity_manager.dart';
+import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:daemon_dart/src/crypto/cert_builder.dart';
 import 'package:basic_utils/basic_utils.dart';
@@ -61,6 +62,17 @@ class FakeTransport implements Transport {
   }
 }
 
+
+class FakeTrustStore implements TrustStore {
+  @override Future<void> initialize() async {}
+  @override Future<void> upsertPeer(PeerRecord record) async {}
+  @override Future<PeerRecord?> getPeer(String deviceId) async => null;
+  @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
+  @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
+  @override Future<void> deletePeer(String deviceId) async {}
+  @override Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+}
+
 class FakeIdentityManager implements IdentityManager {
   @override String get deviceId => 'rift-local';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
@@ -88,7 +100,8 @@ void main() {
       sessionManager = SessionManager(
         transport,
         FakeIdentityManager(),
-        isPeerAllowed: (_) async => allowPeer,
+        FakeTrustStore(),
+        peerAllowanceResolver: (_) async => allowPeer,
       );
 
       final ecKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
@@ -102,7 +115,7 @@ void main() {
     });
 
     tearDown(() async {
-      await sessionManager.dispose();
+      sessionManager.dispose();
     });
 
     test('Client-side session.accept missing identityVerified fails before PoP validation', () async {
@@ -224,6 +237,8 @@ void main() {
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
           ],
+          'bindingType': 'app-nonce',
+          'sessionNonce': base64.encode(Uint8List(32)),
           'identityProof': '0' * 128,
         }
       });
@@ -248,6 +263,8 @@ void main() {
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
           ],
+          'bindingType': 'app-nonce',
+          'sessionNonce': base64.encode(Uint8List(32)),
           'identityProof': '0' * 128,
         }
       });
@@ -287,6 +304,7 @@ void main() {
           'deviceId': 'rift-peer',
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
+          'bindingType': 'app-nonce',
           'identityProof': '0' * 128,
         }
       });
@@ -308,6 +326,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
           'identityProof': '0' * 128,
+          'bindingType': 'app-nonce',
           'sessionNonce': 'not-base-64!@#',
         }
       });
@@ -329,6 +348,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [],
           'identityProof': '0' * 128,
+          'bindingType': 'app-nonce',
           'sessionNonce': base64.encode(Uint8List(16)), // Only 16 bytes
         }
       });
@@ -354,6 +374,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'capabilities': const [],
+          'bindingType': 'app-nonce',
           'identityProof': '0' * 128,
           'sessionNonce': base64.encode(Uint8List(32)),
           // identityVerified is intentionally omitted
@@ -380,6 +401,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'identityVerified': true,
+          'bindingType': 'app-nonce',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
@@ -412,6 +434,7 @@ void main() {
           'selectedVersion': '0.1-draft',
           'deviceId': 'rift-peer',
           'identityVerified': true,
+          'bindingType': 'app-nonce',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
