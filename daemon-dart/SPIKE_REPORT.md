@@ -87,7 +87,7 @@ daemon-dart/
   - Implemented **`PairingManager`**: Built the strict State Machine orchestrating trust workflows. **Security Hardening:** Mitigated **Double-Approve Bypass** by maintaining an `_outboundPairings` set, silently dropping unsolicited `pairing.approve` packets from rogue peers. Mitigated **UI Spoofing** by deriving the fingerprint mathematically from the TLS Context instead of trusting the packet payload. Enforced a rigid 120s timeout via an explicit `pairing.reject` broadcast and timer cleanup, and later patched the outbound approve path to restore the timer for any exception type instead of only `StateError` / `SocketException`. Added an intermediate `rift.onPairingApproved` IPC notification so the UI can distinguish "peer approved" from final trust persistence.
   - Finalized **Client-side PoP Verification**: Hardened `SessionManager.accept` by validating the inbound PoP signature on the client side before allowing connection completion.
   - **Discovery Automation (M3 Resolved):** Added `discovery_integration_test.dart` using the pure-Dart `mdns_dart` package to actively advertise and discover `_rift._tcp` TXT records over the real local UDP network stack, replacing logical mocks.
-  - **Assessment:** Pairing, discovery automation, and trust persistence are implemented in code. At the time of this report update, `dart test` passes with 81 tests.
+  - **Assessment:** Pairing, discovery automation, and trust persistence are implemented in code. At the time of this report update, `dart test` passes with 92 tests.
 
 - **`[daemon-dart] Security Audit & Hardening` (End of Week 4):** Conducted a deep-dive 16-point security and conformance audit across all Dart implementation files.
   - **Critical (C-1/C-2):** Resolved a severe Integer Overflow vulnerability in `Base32Utils` affecting Dart Web/JS builds (53-bit float limits) by implementing explicit bit clamping. Enforced strict memory zeroing of ephemeral TLS Certificates (`_tlsCertificateDer`) during daemon shutdown to prevent extraction from heap dumps.
@@ -95,11 +95,12 @@ daemon-dart/
   - **Medium (M-1 to M-5):** Solved a silent session starvation state where disconnected peers were locked out from reconnecting by integrating a reactive `onPeerDisconnected` stream. Bounded IPC `ReceivePort` lifecycles in `daemon.dart` behind `try/catch` logic to prevent headless port leaks on startup failures. Implemented dedicated unit tests for pre-auth (64 KiB) and post-auth (32 MiB) promotion boundaries. Later hardening also centralized shared protocol metadata, introduced typed Rift exceptions carrying explicit JSON-RPC error codes, extracted shared JSON-RPC param validation into `rpc_utils.dart`, and updated the isolate bridge naming from `commandPort` to `rpcPort` to reflect its real JSON-RPC role.
   - **Low/Conformance (L-1 to L-5):** Improved mDNS logic to gracefully skip null-named instances without collapsing peers into an 'unknown' namespace. Replaced hardcoded testing payloads with structurally valid ASN.1 DER stubs.
   - **Documentation & Technical Debt:** Executed a massive comment cleanup across the repository to ensure all code is strictly English-first. Purged verbose, redundant, and obsolete issue-tracker labels (`H-1:`, etc.), strictly preserving only non-obvious security rationales (e.g., JS integer bounds, TLS deference, Double OCTET STRING wrapping, and Risk 3/6 enforcement rules).
-  - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 81 tests.
+  - **Assessment:** `dart analyze` reports no issues found, and `dart test` currently passes with 92 tests.
 
 - **`[daemon-dart] Capability Negotiation & Presence` (Week 6):** Added authenticated capability negotiation, trusted-peer presence tracking, and durable presence history.
   - Implemented `capability.advertise` / `capability.selected` negotiation with version intersection, responder-side validation, and a 5-second negotiation timeout.
   - Added `SessionContext` tracking for negotiated capabilities, trust state, heartbeat timers, and `lastHeartbeatReceived`.
+  - Tightened envelope/schema conformance in `SessionManager`: required `messageId` validation, `destinationDeviceId` enforcement, rejection of unknown `requiredExtensions`, restoration of `implementationId` / `capabilities` in `session.hello`, and `capabilities` in `session.accept`.
   - Implemented trusted-peer `presence.update` handling with strict status validation, negotiated-capability enforcement, and durable `lastSeenAt` persistence through `TrustStoreImpl`.
   - Added SQLite schema migration from trust-store v1 to v2 to preserve older installs while introducing `lastSeenAt`.
   - Exposed `getPeerPresence` and `listTrustedPeers` responses through the daemon isolate bridge, including capability summaries and persisted timestamps.
@@ -168,9 +169,9 @@ The implementation is clearly derived from the two core specifications, but it s
 ## 4. Reality Check Against the Repository
 
 - `dart analyze` currently reports `No issues found!`.
-- `dart test` currently passes with 81 tests.
+- `dart test` currently passes with 92 tests.
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
-  `dart test` -> `00:06 +81: All tests passed!`
+  `dart test` -> `00:03 +92: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` exists, but it is still a standalone runner stub and not a full daemon launcher for conformance use yet.
