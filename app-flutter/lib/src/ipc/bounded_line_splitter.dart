@@ -29,7 +29,7 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
           _checkLength(currentBytes + partBytes);
           currentBytes += partBytes;
           buffer.write(part);
-          
+
           var line = buffer.toString();
           if (line.endsWith('\r')) {
             line = line.substring(0, line.length - 1);
@@ -74,3 +74,4 @@ class BoundedLineSplitter extends StreamTransformerBase<String, String> {
     }
   }
 }
+
