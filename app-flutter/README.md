@@ -13,7 +13,7 @@ flutter run -d linux     # on Linux
 flutter run -d <device>  # on Android/emulator
 ```
 
-**Expected Runtime Behavior (Week 4 State):**
+**Expected Runtime Behavior (Week 5 State):**
 - **UI:** The application successfully boots and displays all core navigation screens (Pairing, Trusted Devices, Event Log, Settings). The UI components are decoupled from the transport layer.
 - **Linux/macOS (`UnixSocketTransport`):** You will see background warnings in the console (e.g., `SocketException: Connection failed`) as the IPC client actively attempts to connect to `/tmp/rift-daemon.sock`. This is **expected** because the standalone native daemon is not running. The JSON-RPC client will automatically manage this via its exponential backoff reconnection loop.
 - **Android/Windows (`IsolateTransport` / `NamedPipeTransport`):** The transport layers currently throw an `UnimplementedError` as a strict fail-fast mechanism pending native daemon completion. When accessing screens that call IPC (like `SettingsScreen`), the app gracefully catches this error and displays a safe fallback message (`Feature not available on this platform`) instead of crashing.
@@ -32,6 +32,7 @@ The core tests cover:
 - Decoupled UI injection via Provider (`app_shell_test.dart`).
 - JSON-RPC connection lifecycle, exponential backoff, and timeouts using `fake_async` (`ipc_test.dart`).
 - Strict NDJSON boundary parsing and OOM byte guard (`bounded_line_splitter_test.dart`).
+- Pairing flow widget coverage for incoming requests, auto-start fingerprints, approve/reject actions, expiry countdown, and trust-management confirmation behavior.
 
 ## Directory Structure
 
@@ -105,6 +106,20 @@ app-flutter/
   - Emulated a harsh network failure by explicitly terminating the simulated `Transport` channel.
   - Validated that `SessionManager` detects the disconnection, safely unregisters the session, and throws `SessionException` on subsequent operations, preventing stale connections from persisting.
 
+### Week 5: Pairing Flow & Trust Management
+- **Pairing UI (`pairing_screen.dart`):**
+  - Replaced the previous placeholder screen with a stateful pairing flow that supports explicit peer selection, incoming pairing requests, fingerprint display, approve/reject actions, and request expiry countdowns.
+  - Added pairing status transitions for start, incoming request, approval sent, remote approval, completion, rejection, and expiry.
+- **Expanded IPC Client (`json_rpc_client.dart`):**
+  - Added `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.revokeTrust`, and `rift.unblockPeer`.
+  - Added notification streams for `rift.onPairingRequest`, `rift.onPairingApproved`, and `rift.onPairingComplete`.
+- **Trusted Devices Management (`trusted_devices_screen.dart`):**
+  - Connected discovered peers to the pairing screen through the `Pair` action.
+  - Added confirm dialogs for revoking trust, cancelling pending pairing, and unblocking peers.
+  - Improved trust-state presentation for `trusted`, `pairing_pending`, `blocked`, `revoked`, and `discovered` peers.
+- **Week 5 Test Coverage:**
+  - Added widget coverage for pairing request notifications, auto-start fingerprint population, approve/reject action dispatch, countdown expiry, and trust-management confirmation flows.
+
 ## Technical Debt & Known Limitations
 
 While critical crashes and UI bugs have been resolved, the following areas require future attention:
@@ -112,4 +127,4 @@ While critical crashes and UI bugs have been resolved, the following areas requi
 1. **[Security] Missing Parser Fuzzing:** The custom Dart ASN.1 parser currently relies on 9 static test vectors. A proper fuzzing framework (e.g., AFL++) is required to comprehensively prevent out-of-bounds reads or infinite loops on adversarial DER structures.
 2. **[Engineering] `nsd` Dependency Constraint:** The daemon side still depends on `nsd` for production discovery, while pure-Dart mDNS testing uses `mdns_dart`. This split should be revisited if the team later wants one shared discovery stack or stronger cross-platform discovery parity in tests.
 3. **[UX] Reactive State for Settings Screen:** The `SettingsScreen` currently uses a `FutureBuilder` to fetch device info once upon initialization. It should be refactored to use `Stream` or `ChangeNotifier` so the UI automatically updates if the daemon restarts or the device fingerprint changes.
-4. **[Engineering] Incomplete Platform Transports:** Android (`IsolateTransport`) and Windows (`NamedPipeTransport`) remain stubs. Integration will require coordination with the native daemon implementations.
+4. **[Engineering] Incomplete Platform Transports:** Android (`IsolateTransport`) and Windows (`NamedPipeTransport`) remain stubs. The app-side pairing/trust flow is now wired for the JSON-RPC contract, but full live UX still depends on those native transports being completed.

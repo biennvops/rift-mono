@@ -1,7 +1,7 @@
 class AppStrings {
   // Centralized UI strings to avoid hardcoding across widgets/tests.
   static const appTitle = 'Rift';
-  static const homeSubtitle = 'Week 1 app shell';
+  static const homeSubtitle = 'Secure local-first continuity';
   static const openPairing = 'Open pairing';
   static const openTrustedDevices = 'Open trusted devices';
   static const openEventLog = 'Open event log';

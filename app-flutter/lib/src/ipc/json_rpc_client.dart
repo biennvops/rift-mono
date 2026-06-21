@@ -24,6 +24,15 @@ class JsonRpcRiftClient {
   late final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onTrustChanged => _trustChangedController.stream;
 
+  late final _pairingRequestController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPairingRequest => _pairingRequestController.stream;
+
+  late final _pairingApprovedController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPairingApproved => _pairingApprovedController.stream;
+
+  late final _pairingCompleteController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPairingComplete => _pairingCompleteController.stream;
+
   Future<void> connect() async {
     if (_isConnected) return;
 
@@ -63,6 +72,21 @@ class JsonRpcRiftClient {
       _client!.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
         if (params.value is Map) {
           _trustChangedController.add(Map<String, dynamic>.from(params.value as Map));
+        }
+      });
+      _client!.registerMethod('rift.onPairingRequest', (json_rpc.Parameters params) {
+        if (params.value is Map) {
+          _pairingRequestController.add(Map<String, dynamic>.from(params.value as Map));
+        }
+      });
+      _client!.registerMethod('rift.onPairingApproved', (json_rpc.Parameters params) {
+        if (params.value is Map) {
+          _pairingApprovedController.add(Map<String, dynamic>.from(params.value as Map));
+        }
+      });
+      _client!.registerMethod('rift.onPairingComplete', (json_rpc.Parameters params) {
+        if (params.value is Map) {
+          _pairingCompleteController.add(Map<String, dynamic>.from(params.value as Map));
         }
       });
       // Start listening to the RPC channel
@@ -144,6 +168,9 @@ class JsonRpcRiftClient {
     await _peerDiscoveredController.close();
     await _peerLostController.close();
     await _trustChangedController.close();
+    await _pairingRequestController.close();
+    await _pairingApprovedController.close();
+    await _pairingCompleteController.close();
   }
 
   Future<dynamic> getDeviceInfo() async {
@@ -179,5 +206,46 @@ class JsonRpcRiftClient {
       throw StateError('Not connected to daemon');
     }
     return _client!.sendRequest('rift.stopDiscovery');
+  }
+
+  Future<dynamic> startPairing(String deviceId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
+  }
+
+  Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.approvePairing', {
+      'deviceId': deviceId,
+      'fingerprint': fingerprint,
+    });
+  }
+
+  Future<dynamic> rejectPairing(String deviceId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.rejectPairing', {'deviceId': deviceId});
+  }
+
+  Future<dynamic> revokeTrust(String deviceId, String reason) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.revokeTrust', {
+      'deviceId': deviceId,
+      'reason': reason,
+    });
+  }
+
+  Future<dynamic> unblockPeer(String deviceId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    return _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
   }
 }

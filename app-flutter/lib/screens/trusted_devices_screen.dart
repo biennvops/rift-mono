@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants.dart';
 import '../src/ipc/json_rpc_client.dart';
+import 'pairing_screen.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -20,6 +21,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
+  StreamSubscription? _pairingCompleteSub;
 
   @override
   void initState() {
@@ -36,6 +38,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _discoverySub?.cancel();
     _peerLostSub?.cancel();
     _trustSub?.cancel();
+    _pairingCompleteSub?.cancel();
     super.dispose();
   }
 
@@ -44,6 +47,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _discoverySub = client.onPeerDiscovered.listen((_) => _loadData());
     _peerLostSub = client.onPeerLost.listen((_) => _loadData());
     _trustSub = client.onTrustChanged.listen((_) => _loadData());
+    _pairingCompleteSub = client.onPairingComplete.listen((_) => _loadData());
   }
 
   Future<void> _loadData() async {
@@ -103,13 +107,105 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }
   }
 
+  String _trustStateLabel(String trustState) {
+    switch (trustState) {
+      case 'pairing_pending':
+        return 'Pairing pending';
+      case 'blocked':
+        return 'Blocked';
+      case 'revoked':
+        return 'Revoked';
+      case 'trusted':
+        return 'Trusted';
+      default:
+        return 'Discovered';
+    }
+  }
+
+  Future<bool> _confirmTrustAction({
+    required String title,
+    required String message,
+    required String confirmLabel,
+  }) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(confirmLabel),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
+  }
+
   Widget _buildPeerCard(Map<String, dynamic> peer, bool isTrusted) {
     final isOnline = peer['presence'] == 'online';
+    final trustState = peer['trustState']?.toString() ?? (isTrusted ? 'trusted' : 'discovered');
+    final trustLabel = _trustStateLabel(trustState);
     final theme = Theme.of(context);
     
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
     final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
     final String titleText = peer['displayName'] ?? (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
+
+    Future<void> handlePeerAction() async {
+      final client = context.read<JsonRpcRiftClient>();
+      final deviceId = peer['deviceId']?.toString();
+      if (deviceId == null) return;
+
+      try {
+        if (!isTrusted) {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => PairingScreen(
+                initialDeviceId: deviceId,
+                initialDisplayName: titleText,
+                autoStart: true,
+              ),
+            ),
+          );
+          await _loadData();
+          return;
+        }
+
+        if (trustState == 'blocked') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Unblock device?',
+            message: 'This will return $titleText to discovered state.',
+            confirmLabel: 'Unblock',
+          );
+          if (!confirmed) return;
+          await client.unblockPeer(deviceId);
+        } else if (trustState == 'trusted' || trustState == 'pairing_pending') {
+          final confirmed = await _confirmTrustAction(
+            title: trustState == 'pairing_pending' ? 'Cancel pairing?' : 'Revoke trust?',
+            message: trustState == 'pairing_pending'
+                ? 'This will drop the pending trust flow for $titleText.'
+                : 'This will revoke trust for $titleText and disconnect active sessions.',
+            confirmLabel: trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke',
+          );
+          if (!confirmed) return;
+          await client.revokeTrust(deviceId, 'User revoked trust from device manager');
+        }
+        await _loadData();
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    }
 
     return Card(
       elevation: 0,
@@ -144,36 +240,55 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             const SizedBox(height: 8),
             Text('ID: ${peer['deviceId']}', style: theme.textTheme.bodySmall),
             const SizedBox(height: 4),
+            Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Chip(
+                  label: Text(trustLabel),
+                  visualDensity: VisualDensity.compact,
+                ),
+                if (isTrusted)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isOnline ? Icons.circle : Icons.circle_outlined,
+                        size: 12,
+                        color: isOnline ? Colors.green : Colors.grey,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        isOnline ? 'Online' : 'Offline',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: isOnline ? Colors.green : Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
             if (isTrusted)
-               Row(
-                 children: [
-                   Icon(
-                     isOnline ? Icons.circle : Icons.circle_outlined,
-                     size: 12,
-                     color: isOnline ? Colors.green : Colors.grey,
-                   ),
-                   const SizedBox(width: 4),
-                   Text(
-                     isOnline ? 'Online' : 'Offline',
-                     style: theme.textTheme.labelMedium?.copyWith(
-                       color: isOnline ? Colors.green : Colors.grey,
-                     ),
-                   ),
-                 ],
-               ),
+              if (peer['capabilities'] is List && (peer['capabilities'] as List).isNotEmpty)
+                Text(
+                  'Capabilities: ${(peer['capabilities'] as List).join(', ')}',
+                  style: theme.textTheme.bodySmall,
+                ),
             if (!isTrusted && peer['address'] != null)
                Text('Address: ${peer['address']}:${peer['port']}', style: theme.textTheme.bodySmall),
           ],
         ),
-        trailing: isTrusted 
-          ? const IconButton(
-              icon: Icon(Icons.settings),
-              onPressed: null, // Future config options
-            )
-          : const ElevatedButton(
-              onPressed: null, // Future pair logic
-              child: Text('Pair'),
-            ),
+        trailing: isTrusted
+            ? IconButton(
+                icon: Icon(trustState == 'blocked' ? Icons.lock_open : Icons.gpp_bad),
+                tooltip: trustState == 'blocked' ? 'Unblock device' : (trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke trust'),
+                onPressed: handlePeerAction,
+              )
+            : ElevatedButton(
+                onPressed: handlePeerAction,
+                child: const Text('Pair'),
+              ),
       ),
     );
   }
