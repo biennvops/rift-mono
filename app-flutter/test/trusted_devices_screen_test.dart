@@ -33,7 +33,6 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
         'trustState': 'discovered',
       }
     ],
-    'isDiscovering': true,
   };
   @override Future<dynamic> listTrustedPeers() async => {
     'peers': [

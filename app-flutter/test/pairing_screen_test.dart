@@ -33,9 +33,6 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onPairingRequest => _pairingRequestController.stream;
 
   @override
-  Stream<Map<String, dynamic>> get onPairingApproved => Stream.empty();
-
-  @override
   Stream<Map<String, dynamic>> get onPairingComplete => Stream.empty();
 
   Future<void> emitPairingRequest(Map<String, dynamic> event) async {

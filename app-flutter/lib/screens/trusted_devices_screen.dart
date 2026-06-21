@@ -22,6 +22,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
   StreamSubscription? _pairingCompleteSub;
+  Timer? _reloadDebounce;
+  Timer? _fullReloadThrottle;
 
   @override
   void initState() {
@@ -35,6 +37,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   @override
   void dispose() {
+    _reloadDebounce?.cancel();
+    _fullReloadThrottle?.cancel();
     _discoverySub?.cancel();
     _peerLostSub?.cancel();
     _trustSub?.cancel();
@@ -44,10 +48,99 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   void _setupListeners() {
     final client = context.read<JsonRpcRiftClient>();
-    _discoverySub = client.onPeerDiscovered.listen((_) => _loadData());
-    _peerLostSub = client.onPeerLost.listen((_) => _loadData());
-    _trustSub = client.onTrustChanged.listen((_) => _loadData());
-    _pairingCompleteSub = client.onPairingComplete.listen((_) => _loadData());
+    _discoverySub = client.onPeerDiscovered.listen(_handlePeerDiscovered);
+    _peerLostSub = client.onPeerLost.listen(_handlePeerLost);
+    _trustSub = client.onTrustChanged.listen(_handleTrustChanged);
+    _pairingCompleteSub = client.onPairingComplete.listen(_handlePairingComplete);
+  }
+
+  void _scheduleReload() {
+    if (!mounted) return;
+    _reloadDebounce?.cancel();
+    _reloadDebounce = Timer(const Duration(milliseconds: 250), () {
+      _loadData();
+    });
+  }
+
+  void _scheduleFullReloadThrottled() {
+    if (!mounted) return;
+    // Coalesce noisy event bursts into at most 1 full reload per 2 seconds.
+    if (_fullReloadThrottle != null) return;
+    _fullReloadThrottle = Timer(const Duration(seconds: 2), () {
+      _fullReloadThrottle = null;
+    });
+    _scheduleReload();
+  }
+
+  void _handlePeerDiscovered(Map<String, dynamic> event) {
+    final deviceId = event['deviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty) return;
+    if (!mounted) return;
+
+    setState(() {
+      // Upsert into discovered list.
+      final existing = _discoveredPeers.indexWhere((p) => p is Map && p['deviceId']?.toString() == deviceId);
+      if (existing >= 0) {
+        final merged = Map<String, dynamic>.from(_discoveredPeers[existing] as Map);
+        merged.addAll(event);
+        _discoveredPeers[existing] = merged;
+      } else {
+        _discoveredPeers = [event, ..._discoveredPeers];
+      }
+    });
+
+    // Full reload is still needed to pick up trust state/capabilities accurately.
+    _scheduleFullReloadThrottled();
+  }
+
+  void _handlePeerLost(Map<String, dynamic> event) {
+    final deviceId = event['deviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty) return;
+    if (!mounted) return;
+
+    setState(() {
+      _discoveredPeers = _discoveredPeers
+          .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
+          .toList(growable: false);
+    });
+
+    _scheduleFullReloadThrottled();
+  }
+
+  void _handleTrustChanged(Map<String, dynamic> event) {
+    final deviceId = event['deviceId']?.toString();
+    final newState = event['newState']?.toString();
+    if (deviceId == null || deviceId.isEmpty || newState == null || newState.isEmpty) return;
+    if (!mounted) return;
+
+    final reason = event['reason']?.toString();
+    final previous = event['previousState']?.toString();
+
+    // Quick UI feedback for state transitions (helps triage).
+    if (reason != null && reason.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Trust changed: $newState${previous != null ? ' (from $previous)' : ''} - $reason')),
+      );
+    }
+
+    // We can't fully materialize trusted peer details from the event alone,
+    // so do a throttled full reload. Still, update minimal local state to
+    // prevent the UI from feeling stale.
+    setState(() {
+      // Remove from discovered if it is no longer discovered/pairing_pending.
+      if (newState == 'trusted' || newState == 'blocked' || newState == 'revoked') {
+        _discoveredPeers = _discoveredPeers
+            .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
+            .toList(growable: false);
+      }
+    });
+
+    _scheduleFullReloadThrottled();
+  }
+
+  void _handlePairingComplete(Map<String, dynamic> event) {
+    // Spec: includes persistedAt, but listTrustedPeers is the source of truth.
+    _scheduleFullReloadThrottled();
   }
 
   Future<void> _loadData() async {
@@ -71,9 +164,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _trustedPeers = trustedResult['peers'] ?? [];
           _discoveredPeers = discoveredResult['peers'] ?? [];
-          if (discoveredResult['isDiscovering'] != null) {
-            _isDiscovering = discoveredResult['isDiscovering'] as bool;
-          }
           _error = null;
         });
       }
@@ -196,7 +286,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             confirmLabel: trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke',
           );
           if (!confirmed) return;
-          await client.revokeTrust(deviceId, 'User revoked trust from device manager');
+          if (trustState == 'pairing_pending') {
+            // Spec-aligned: canceling a pending pairing is a rejection of the flow,
+            // not a permanent revoke.
+            await client.rejectPairing(deviceId);
+          } else {
+            await client.revokeTrust(deviceId, 'User revoked trust from device manager');
+          }
         }
         await _loadData();
       } catch (e) {

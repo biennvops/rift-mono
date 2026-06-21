@@ -22,7 +22,6 @@ class PairingScreen extends StatefulWidget {
 
 class _PairingScreenState extends State<PairingScreen> {
   StreamSubscription<Map<String, dynamic>>? _requestSub;
-  StreamSubscription<Map<String, dynamic>>? _approvedSub;
   StreamSubscription<Map<String, dynamic>>? _completeSub;
   StreamSubscription<Map<String, dynamic>>? _trustSub;
   Timer? _countdownTimer;
@@ -55,7 +54,6 @@ class _PairingScreenState extends State<PairingScreen> {
   void dispose() {
     _countdownTimer?.cancel();
     _requestSub?.cancel();
-    _approvedSub?.cancel();
     _completeSub?.cancel();
     _trustSub?.cancel();
     super.dispose();
@@ -69,20 +67,12 @@ class _PairingScreenState extends State<PairingScreen> {
         _deviceId = event['deviceId']?.toString();
         _displayName = event['displayName']?.toString() ?? _deviceId;
         _peerFingerprint = event['fingerprint']?.toString();
-        _expiresInMs = event['expiresInMs'] as int?;
+        _expiresInMs = (event['expiresInMs'] as num?)?.toInt();
         _startCountdown(_expiresInMs);
         _status = 'Incoming pairing request';
         _error = null;
         _busy = false;
         _completed = false;
-      });
-    });
-    _approvedSub = client.onPairingApproved.listen((event) {
-      if (!mounted || event['deviceId']?.toString() != _deviceId) return;
-      setState(() {
-        _status = 'Peer approved. Waiting for trust persistence';
-        _error = null;
-        _busy = false;
       });
     });
     _completeSub = client.onPairingComplete.listen((event) {
@@ -100,7 +90,13 @@ class _PairingScreenState extends State<PairingScreen> {
     _trustSub = client.onTrustChanged.listen((event) {
       if (!mounted || event['deviceId']?.toString() != _deviceId) return;
       final newState = event['newState']?.toString();
-      if (newState == 'discovered' && !_completed) {
+      if (newState == 'trusted' && !_completed) {
+        setState(() {
+          _status = 'Trust persisted';
+          _error = null;
+          _busy = false;
+        });
+      } else if (newState == 'discovered' && !_completed) {
         setState(() {
           _status = 'Pairing closed';
           _busy = false;
@@ -159,7 +155,7 @@ class _PairingScreenState extends State<PairingScreen> {
         _displayName ??= deviceId;
         _localFingerprint = result['fingerprint']?.toString();
         _peerFingerprint = result['peerFingerprint']?.toString();
-        _expiresInMs = result['expiresInMs'] as int?;
+        _expiresInMs = (result['expiresInMs'] as num?)?.toInt();
         _startCountdown(_expiresInMs);
         _status = 'Confirm fingerprint to continue';
         _busy = false;
@@ -191,7 +187,7 @@ class _PairingScreenState extends State<PairingScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _status = 'Approval sent';
+        _status = 'Approval sent. Waiting for completion';
       });
     } catch (e) {
       if (!mounted) return;
@@ -280,8 +276,8 @@ class _PairingScreenState extends State<PairingScreen> {
           _buildFingerprintCard('Local fingerprint', _localFingerprint),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: widget.initialDeviceId != null && !_busy && !_completed
-                ? () => _startPairing(widget.initialDeviceId!)
+            onPressed: _deviceId != null && !_busy && !_completed
+                ? () => _startPairing(_deviceId!)
                 : null,
             icon: const Icon(Icons.link),
             label: const Text('Start pairing'),

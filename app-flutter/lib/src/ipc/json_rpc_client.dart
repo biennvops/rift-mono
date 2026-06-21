@@ -27,11 +27,35 @@ class JsonRpcRiftClient {
   late final _pairingRequestController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onPairingRequest => _pairingRequestController.stream;
 
-  late final _pairingApprovedController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onPairingApproved => _pairingApprovedController.stream;
-
   late final _pairingCompleteController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onPairingComplete => _pairingCompleteController.stream;
+
+  Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
+    if (params.value is! Map) return null;
+    return Map<String, dynamic>.from(params.value as Map);
+  }
+
+  bool _hasString(Map<String, dynamic> m, String key) =>
+      m[key] is String && (m[key] as String).isNotEmpty;
+
+  void _emitIfValid(
+    String method,
+    Map<String, dynamic>? payload,
+    StreamController<Map<String, dynamic>> controller, {
+    required List<String> requiredStringKeys,
+  }) {
+    if (payload == null) {
+      _log.warning('$method notification ignored: payload is not an object');
+      return;
+    }
+    for (final k in requiredStringKeys) {
+      if (!_hasString(payload, k)) {
+        _log.warning('$method notification ignored: missing/invalid "$k": $payload');
+        return;
+      }
+    }
+    controller.add(payload);
+  }
 
   Future<void> connect() async {
     if (_isConnected) return;
@@ -60,34 +84,49 @@ class JsonRpcRiftClient {
       _client = json_rpc.Peer(loggingChannel);
 
       _client!.registerMethod('rift.onPeerDiscovered', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _peerDiscoveredController.add(Map<String, dynamic>.from(params.value as Map));
-        }
+        // Spec: { deviceId, address, port, txtRecord }. We minimally require
+        // deviceId to protect UI from garbage notifications.
+        _emitIfValid(
+          'rift.onPeerDiscovered',
+          _asMap(params),
+          _peerDiscoveredController,
+          requiredStringKeys: const ['deviceId'],
+        );
       });
       _client!.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _peerLostController.add(Map<String, dynamic>.from(params.value as Map));
-        }
+        _emitIfValid(
+          'rift.onPeerLost',
+          _asMap(params),
+          _peerLostController,
+          requiredStringKeys: const ['deviceId'],
+        );
       });
       _client!.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _trustChangedController.add(Map<String, dynamic>.from(params.value as Map));
-        }
+        // Spec: { deviceId, previousState, newState, reason? }
+        _emitIfValid(
+          'rift.onTrustChanged',
+          _asMap(params),
+          _trustChangedController,
+          requiredStringKeys: const ['deviceId', 'newState'],
+        );
       });
       _client!.registerMethod('rift.onPairingRequest', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _pairingRequestController.add(Map<String, dynamic>.from(params.value as Map));
-        }
-      });
-      _client!.registerMethod('rift.onPairingApproved', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _pairingApprovedController.add(Map<String, dynamic>.from(params.value as Map));
-        }
+        // Spec: { deviceId, fingerprint, displayName?, expiresInMs }
+        _emitIfValid(
+          'rift.onPairingRequest',
+          _asMap(params),
+          _pairingRequestController,
+          requiredStringKeys: const ['deviceId', 'fingerprint'],
+        );
       });
       _client!.registerMethod('rift.onPairingComplete', (json_rpc.Parameters params) {
-        if (params.value is Map) {
-          _pairingCompleteController.add(Map<String, dynamic>.from(params.value as Map));
-        }
+        // Spec: { deviceId, fingerprint, persistedAt }
+        _emitIfValid(
+          'rift.onPairingComplete',
+          _asMap(params),
+          _pairingCompleteController,
+          requiredStringKeys: const ['deviceId', 'fingerprint'],
+        );
       });
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
@@ -169,7 +208,6 @@ class JsonRpcRiftClient {
     await _peerLostController.close();
     await _trustChangedController.close();
     await _pairingRequestController.close();
-    await _pairingApprovedController.close();
     await _pairingCompleteController.close();
   }
 
