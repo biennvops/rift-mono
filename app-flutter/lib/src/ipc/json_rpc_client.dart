@@ -15,20 +15,29 @@ class JsonRpcRiftClient {
 
   bool get isConnected => _isConnected;
 
-  late final _peerDiscoveredController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onPeerDiscovered => _peerDiscoveredController.stream;
+  late final _peerDiscoveredController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPeerDiscovered =>
+      _peerDiscoveredController.stream;
 
-  late final _peerLostController = StreamController<Map<String, dynamic>>.broadcast();
+  late final _peerLostController =
+      StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onPeerLost => _peerLostController.stream;
 
-  late final _trustChangedController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onTrustChanged => _trustChangedController.stream;
+  late final _trustChangedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onTrustChanged =>
+      _trustChangedController.stream;
 
-  late final _pairingRequestController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onPairingRequest => _pairingRequestController.stream;
+  late final _pairingRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPairingRequest =>
+      _pairingRequestController.stream;
 
-  late final _pairingCompleteController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onPairingComplete => _pairingCompleteController.stream;
+  late final _pairingCompleteController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onPairingComplete =>
+      _pairingCompleteController.stream;
 
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
@@ -95,7 +104,9 @@ class JsonRpcRiftClient {
 
   static dynamic _canonicalizeResult(dynamic result) {
     if (result is Map<String, dynamic>) return _canonicalizeMap(result);
-    if (result is Map) return _canonicalizeMap(Map<String, dynamic>.from(result));
+    if (result is Map) {
+      return _canonicalizeMap(Map<String, dynamic>.from(result));
+    }
     return result;
   }
 
@@ -111,7 +122,8 @@ class JsonRpcRiftClient {
     }
     for (final k in requiredStringKeys) {
       if (!_hasString(payload, k)) {
-        _log.warning('$method notification ignored: missing/invalid "$k": $payload');
+        _log.warning(
+            '$method notification ignored: missing/invalid "$k": $payload');
         return;
       }
     }
@@ -144,7 +156,8 @@ class JsonRpcRiftClient {
 
       _client = json_rpc.Peer(loggingChannel);
 
-      _client!.registerMethod('rift.onPeerDiscovered', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onPeerDiscovered',
+          (json_rpc.Parameters params) {
         // Spec: { deviceId, address, port, txtRecord }. We minimally require
         // deviceId to protect UI from garbage notifications.
         _emitIfValid(
@@ -162,7 +175,8 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId'],
         );
       });
-      _client!.registerMethod('rift.onTrustChanged', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onTrustChanged',
+          (json_rpc.Parameters params) {
         // Spec: { deviceId, previousState, newState, reason? }
         _emitIfValid(
           'rift.onTrustChanged',
@@ -171,7 +185,8 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'newState'],
         );
       });
-      _client!.registerMethod('rift.onPairingRequest', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onPairingRequest',
+          (json_rpc.Parameters params) {
         // Spec: { deviceId, fingerprint, displayName?, expiresInMs }
         _emitIfValid(
           'rift.onPairingRequest',
@@ -180,7 +195,8 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
-      _client!.registerMethod('rift.onPairingComplete', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onPairingComplete',
+          (json_rpc.Parameters params) {
         // Spec: { deviceId, fingerprint, persistedAt }
         _emitIfValid(
           'rift.onPairingComplete',
@@ -218,14 +234,14 @@ class JsonRpcRiftClient {
   Future<void> _handleDisconnect() async {
     if (_isReconnecting) return;
     _isReconnecting = true;
-    
+
     _isConnected = false;
     _client = null;
-    
+
     // Fire and forget closures to prevent hanging in async tests
     unawaited(_outController?.close());
     _outController = null;
-    
+
     try {
       await _transport.disconnect();
     } catch (e) {
@@ -316,7 +332,8 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
+    final r =
+        await _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
     return _canonicalizeResult(r);
   }
 
@@ -335,7 +352,8 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.rejectPairing', {'deviceId': deviceId});
+    final r = await _client!
+        .sendRequest('rift.rejectPairing', {'deviceId': deviceId});
     return _canonicalizeResult(r);
   }
 
@@ -354,7 +372,8 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
+    final r =
+        await _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
     return _canonicalizeResult(r);
   }
 }
