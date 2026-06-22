@@ -114,7 +114,7 @@ app-flutter/
   - Added pairing status transitions for start, incoming request, approval sent, remote approval, completion, rejection, and expiry.
 - **Expanded IPC Client (`json_rpc_client.dart`):**
   - Added `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.revokeTrust`, and `rift.unblockPeer`.
-  - Added notification streams for `rift.onPairingRequest`, `rift.onPairingApproved`, and `rift.onPairingComplete`.
+  - Added notification streams for `rift.onPairingRequest`, `rift.onPairingComplete`, and `rift.onTrustChanged`.
 - **Trusted Devices Management (`trusted_devices_screen.dart`):**
   - Connected discovered peers to the pairing screen through the `Pair` action.
   - Added confirm dialogs for revoking trust, cancelling pending pairing, and unblocking peers.
