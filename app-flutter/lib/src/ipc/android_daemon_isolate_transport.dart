@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 
-import 'package:daemon_dart/daemon_dart.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'ipc_transport.dart';
+import 'android_daemon_isolate_entrypoint.dart';
 
 /// Android transport that spawns the Dart daemon in a background isolate and
 /// connects to its JSON-RPC bridge using SendPort/ReceivePort.
@@ -17,6 +18,10 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   ReceivePort? _uiReceive;
   SendPort? _rpcPort;
   StreamSubscription? _uiSub;
+  ReceivePort? _errorPort;
+  StreamSubscription? _errorSub;
+  ReceivePort? _exitPort;
+  StreamSubscription? _exitSub;
 
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
@@ -32,16 +37,39 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     _uiReceive = ReceivePort();
     _incoming = StreamController<String>();
+    _errorPort = ReceivePort();
+    _exitPort = ReceivePort();
 
     // Spawn daemon isolate. It will send notifications/responses back via
     // `_uiReceive`, and report `rpcPort` inside the `rift.daemonReady` message.
+    final token = ServicesBinding.rootIsolateToken;
+    if (token == null) {
+      throw StateError('RootIsolateToken is null; cannot start Android daemon isolate');
+    }
+
     _daemonIsolate = await Isolate.spawn(
-      RiftDaemon.isolateEntryPoint,
+      androidDaemonIsolateEntrypoint,
       <String, dynamic>{
         'storagePath': storagePath,
         'sendPort': _uiReceive!.sendPort,
+        'rootIsolateToken': token,
       },
+      onError: _errorPort!.sendPort,
+      onExit: _exitPort!.sendPort,
+      errorsAreFatal: true,
     );
+
+    _errorSub = _errorPort!.listen((msg) {
+      // Standard isolate error: [error, stack]
+      if (msg is List && msg.length >= 2) {
+        _incoming?.addError(StateError('Daemon isolate error: ${msg[0]}\n${msg[1]}'));
+      } else {
+        _incoming?.addError(StateError('Daemon isolate error: $msg'));
+      }
+    });
+    _exitSub = _exitPort!.listen((_) {
+      _incoming?.addError(StateError('Daemon isolate exited'));
+    });
 
     // Single listener for the lifetime of the ReceivePort.
     final ready = Completer<SendPort>();
@@ -111,6 +139,16 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     _uiReceive?.close();
     _uiReceive = null;
+
+    await _errorSub?.cancel();
+    _errorSub = null;
+    _errorPort?.close();
+    _errorPort = null;
+
+    await _exitSub?.cancel();
+    _exitSub = null;
+    _exitPort?.close();
+    _exitPort = null;
 
     _rpcPort = null;
 
