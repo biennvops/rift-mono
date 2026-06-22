@@ -8,7 +8,8 @@ import 'package:daemon_dart/src/crypto/base32_utils.dart';
 import 'package:daemon_dart/src/core/rift_constants.dart';
 import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/core/rpc_utils.dart';
-import 'package:daemon_dart/src/network/discovery_service_impl.dart';
+import 'package:daemon_dart/src/network/discovery_service_factory.dart'
+    as discovery_factory;
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
@@ -23,7 +24,7 @@ import 'package:path/path.dart' as p;
 /// hosted by an Android Foreground Service.
 class RiftDaemon {
   IdentityManagerImpl? _identityManager;
-  DiscoveryServiceImpl? _discoveryService;
+  DiscoveryService? _discoveryService;
   TransportImpl? _transport;
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
@@ -89,7 +90,7 @@ class RiftDaemon {
 
     if (enableDiscovery) {
       final advertisedPort = _transport?.boundPort ?? port;
-      _discoveryService = DiscoveryServiceImpl(
+      _discoveryService = discovery_factory.createDiscoveryService(
         port: advertisedPort,
         deviceIdHint: _identityManager!.deviceId,
         fingerprintPrefix: _fingerprintPrefix(
