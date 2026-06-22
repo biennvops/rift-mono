@@ -33,9 +33,17 @@ class RiftDaemon {
 
   final String storagePath;
   final int port;
+  final bool enableTransport;
+  final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
 
-  RiftDaemon({required this.storagePath, this.port = 11112, this.onIpcEvent});
+  RiftDaemon({
+    required this.storagePath,
+    this.port = 11112,
+    this.enableTransport = true,
+    this.enableDiscovery = true,
+    this.onIpcEvent,
+  });
 
   Future<void> start() async {
     _identityManager = IdentityManagerImpl(storagePath);
@@ -44,8 +52,21 @@ class RiftDaemon {
     _trustStore = TrustStoreImpl(p.join(storagePath, 'trust_store.db'));
     await _trustStore!.initialize();
 
-    _transport = TransportImpl(_identityManager!, port: port);
-    await _transport!.startServer();
+    if (enableTransport) {
+      // If the requested port is unavailable (common on dev devices), fall back
+      // to an ephemeral port rather than failing the entire IPC layer.
+      try {
+        _transport = TransportImpl(_identityManager!, port: port);
+        await _transport!.startServer();
+      } on SocketException {
+        _transport = TransportImpl(_identityManager!, port: 0);
+        await _transport!.startServer();
+      }
+    }
+
+    if (_transport == null) {
+      throw const RiftException(-32603, 'Transport is not initialized');
+    }
 
     _sessionManager = SessionManager(
       _transport!,
@@ -67,14 +88,17 @@ class RiftDaemon {
       },
     );
 
-    _discoveryService = DiscoveryServiceImpl(
-      port: port,
-      deviceIdHint: _identityManager!.deviceId,
-      fingerprintPrefix: _fingerprintPrefix(_identityManager!.getDeviceFingerprint()),
-    );
-    await _discoveryService!.startAdvertising();
-    await _discoveryService!.startDiscovery();
-    _isDiscovering = true;
+    if (enableDiscovery) {
+      final advertisedPort = _transport?.boundPort ?? port;
+      _discoveryService = DiscoveryServiceImpl(
+        port: advertisedPort,
+        deviceIdHint: _identityManager!.deviceId,
+        fingerprintPrefix: _fingerprintPrefix(_identityManager!.getDeviceFingerprint()),
+      );
+      await _discoveryService!.startAdvertising();
+      await _discoveryService!.startDiscovery();
+      _isDiscovering = true;
+    }
     // Discovery remains passive for browsing, but pairing may trigger an
     // explicit connect/handshake when the UI selects a discovered peer.
   }
@@ -414,10 +438,14 @@ class RiftDaemon {
     final storagePath = args['storagePath'] as String;
     final sendPort = args.containsKey('sendPort') ? args['sendPort'] as SendPort : null;
     final port = args['port'] as int? ?? 11112;
+    final enableDiscovery = args['enableDiscovery'] as bool? ?? true;
+    final enableTransport = args['enableTransport'] as bool? ?? true;
     
     final daemon = RiftDaemon(
       storagePath: storagePath,
       port: port,
+      enableDiscovery: enableDiscovery,
+      enableTransport: enableTransport,
       onIpcEvent: (event) => sendPort?.send(event),
     );
     

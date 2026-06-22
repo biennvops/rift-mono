@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -53,6 +54,14 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         'storagePath': storagePath,
         'sendPort': _uiReceive!.sendPort,
         'rootIsolateToken': token,
+        // In debug builds, many plugins (including older MethodChannel-based ones)
+        // are not isolate-safe and will assert/crash if used off the root isolate.
+        // Keep the daemon IPC alive for getDeviceInfo/etc by disabling discovery.
+        'enableDiscovery': !kDebugMode,
+        'enableTransport': true,
+        // Use stable port in release (discovery), but allow the daemon to fall
+        // back if the port is unavailable.
+        'port': 11112,
       },
       onError: _errorPort!.sendPort,
       onExit: _exitPort!.sendPort,

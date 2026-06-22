@@ -25,6 +25,8 @@ class TransportImpl implements Transport {
 
   TransportImpl(this._identityManager, {required this.port});
 
+  int get boundPort => _serverSocket?.port ?? port;
+
   @override
   Future<void> startServer() async {
     final context = SecurityContext();
