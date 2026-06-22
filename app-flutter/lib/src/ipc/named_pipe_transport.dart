@@ -16,6 +16,7 @@ class NamedPipeTransport implements IpcTransport {
   Isolate? _worker;
   SendPort? _toWorker;
   ReceivePort? _fromWorker;
+  StreamSubscription? _workerSub;
 
   StreamController<List<int>>? _inBytes;
   StreamController<List<int>>? _outBytes;
@@ -34,8 +35,7 @@ class NamedPipeTransport implements IpcTransport {
     _fromWorker = ReceivePort();
 
     final ready = Completer<SendPort>();
-    late final StreamSubscription sub;
-    sub = _fromWorker!.listen((msg) {
+    _workerSub = _fromWorker!.listen((msg) {
       if (msg is SendPort) {
         if (!ready.isCompleted) ready.complete(msg);
         return;
@@ -71,8 +71,6 @@ class NamedPipeTransport implements IpcTransport {
       _toWorker?.send({'type': 'close'});
     });
 
-    await sub.cancel();
-
     return streamJsonRpcFramer(_inBytes!.stream, _outBytes!.sink);
   }
 
@@ -80,6 +78,9 @@ class NamedPipeTransport implements IpcTransport {
   Future<void> disconnect() async {
     _toWorker?.send({'type': 'close'});
     _toWorker = null;
+
+    await _workerSub?.cancel();
+    _workerSub = null;
 
     _fromWorker?.close();
     _fromWorker = null;
