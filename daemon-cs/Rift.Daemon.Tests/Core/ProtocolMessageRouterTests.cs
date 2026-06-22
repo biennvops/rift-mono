@@ -57,7 +57,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
 
-        await _router.HandleMessageAsync("rift-peer-presence", CreateEnvelope("rift-peer-presence", "presence.update", new
+        await _router.HandleMessageAsync(CreateSession("rift-peer-presence", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-peer-presence", "presence.update", new
         {
             status = "online",
             lastSeenAt = "2026-06-18T11:00:00Z",
@@ -82,7 +82,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
 
-        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync("rift-peer-presence-spoof", CreateEnvelope("rift-spoofed", "presence.update", new
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(CreateSession("rift-peer-presence-spoof", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-spoofed", "presence.update", new
         {
             status = "online",
             lastSeenAt = "2026-06-18T11:00:00Z",
@@ -105,7 +105,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         });
         _presenceService.UpdatePeerPresence("rift-peer-clipboard", "online", null, ["clipboard.offer_fetch"]);
 
-        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => _router.HandleMessageAsync("rift-peer-clipboard", CreateEnvelope("rift-peer-clipboard", "clipboard.offer", new
+        var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => _router.HandleMessageAsync(CreateSession("rift-peer-clipboard", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-peer-clipboard", "clipboard.offer", new
         {
             offerId = "offer-identity-check",
             contentType = "text/plain",
@@ -131,7 +131,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
 
-        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync("rift-peer-pairing-spoof", CreateEnvelope("rift-spoofed", "pairing.start", new
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(CreateSession("rift-peer-pairing-spoof", [], allowsProtectedTraffic: false), CreateEnvelope("rift-spoofed", "pairing.start", new
         {
             expiresInMs = 120000
         }), CancellationToken.None));
@@ -157,7 +157,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
         var offer = await _clipboardService.NotifyClipboardChangeAsync("text/plain", 5, hash, Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")), CancellationToken.None);
 
-        await _router.HandleMessageAsync("rift-peer-fetch-request", CreateEnvelope("rift-peer-fetch-request", "clipboard.fetchRequest", new
+        await _router.HandleMessageAsync(CreateSession("rift-peer-fetch-request", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-peer-fetch-request", "clipboard.fetchRequest", new
         {
             offerId = offer.OfferId,
             requestingDeviceId = "rift-peer-fetch-request"
@@ -196,7 +196,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         await WaitForConditionAsync(
             () => _clipboardTransport.SentMessages.Any(sent => sent.PeerDeviceId == "rift-peer-fetch-response" && sent.Type == "clipboard.fetchRequest"),
             TimeSpan.FromSeconds(1));
-        await _router.HandleMessageAsync("rift-peer-fetch-response", CreateEnvelope("rift-peer-fetch-response", "clipboard.fetchResponse", new
+        await _router.HandleMessageAsync(CreateSession("rift-peer-fetch-response", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-peer-fetch-response", "clipboard.fetchResponse", new
         {
             offerId = "offer-fetch-response",
             contentBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
@@ -234,7 +234,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-fetch-reject", CancellationToken.None);
-        await _router.HandleMessageAsync("rift-peer-fetch-reject", CreateEnvelope("rift-peer-fetch-reject", "clipboard.fetchReject", new
+        await _router.HandleMessageAsync(CreateSession("rift-peer-fetch-reject", ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"]), CreateEnvelope("rift-peer-fetch-reject", "clipboard.fetchReject", new
         {
             offerId = "offer-fetch-reject",
             failureReason = "Unauthorized",
@@ -243,6 +243,32 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => fetchTask);
         Assert.Equal("Unauthorized", ex.FailureReason);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_RejectsProtectedMessageWhenCapabilityWasNotNegotiated()
+    {
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession("rift-peer-no-presence", ["clipboard.offer_fetch", "security.event_log", "operation.lifecycle"]),
+            CreateEnvelope("rift-peer-no-presence", "presence.update", new
+            {
+                status = "online",
+                capabilities = new[] { "presence.basic" }
+            }),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_RejectsProtectedMessageForDiagnosticOnlySession()
+    {
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession("rift-peer-diagnostic", ["presence.basic"], allowsProtectedTraffic: false),
+            CreateEnvelope("rift-peer-diagnostic", "presence.update", new
+            {
+                status = "online",
+                capabilities = new[] { "presence.basic" }
+            }),
+            CancellationToken.None));
     }
 
     public void Dispose()
@@ -278,6 +304,11 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             sourceDeviceId,
             payload
         }));
+    }
+
+    private static SessionPeerContext CreateSession(string peerDeviceId, IReadOnlyList<string> capabilities, bool allowsProtectedTraffic = true)
+    {
+        return new SessionPeerContext(peerDeviceId, capabilities, allowsProtectedTraffic);
     }
 
     private sealed class FakeDiscoveryService : IDiscoveryService

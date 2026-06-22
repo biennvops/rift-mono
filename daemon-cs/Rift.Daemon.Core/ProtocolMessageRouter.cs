@@ -8,8 +8,9 @@ public sealed class ProtocolMessageRouter(
     IPresenceService presenceService,
     IClipboardService clipboardService) : IProtocolMessageRouter
 {
-    public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        var peerDeviceId = session.PeerDeviceId;
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var messageType = root.GetProperty("type").GetString();
@@ -28,6 +29,8 @@ public sealed class ProtocolMessageRouter(
             await pairingProtocolCoordinator.HandleMessageAsync(peerDeviceId, payload, cancellationToken);
             return;
         }
+
+        EnsureProtectedMessageAllowed(session, messageType);
 
         if (string.Equals(messageType, "clipboard.offer", StringComparison.Ordinal))
         {
@@ -96,6 +99,29 @@ public sealed class ProtocolMessageRouter(
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
         }
+    }
+
+    private static void EnsureProtectedMessageAllowed(SessionPeerContext session, string messageType)
+    {
+        if (!session.AllowsProtectedTraffic)
+        {
+            throw new UnauthorizedAccessException($"Session for '{session.PeerDeviceId}' is not authorized for protected traffic.");
+        }
+
+        string? requiredCapability = messageType switch
+        {
+            "presence.update" => "presence.basic",
+            "clipboard.offer" or "clipboard.fetchRequest" or "clipboard.fetchResponse" or "clipboard.fetchReject" => "clipboard.offer_fetch",
+            _ when messageType.StartsWith("operation.", StringComparison.Ordinal) => "operation.lifecycle",
+            _ => null
+        };
+
+        if (requiredCapability is null || session.HasCapability(requiredCapability))
+        {
+            return;
+        }
+
+        throw new UnauthorizedAccessException($"{messageType} requires negotiated capability '{requiredCapability}'.");
     }
 
     private static void EnsureEnvelopeIdentityMatches(string authenticatedDeviceId, string sourceDeviceId, string messageType)

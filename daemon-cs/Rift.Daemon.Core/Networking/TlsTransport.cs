@@ -21,6 +21,8 @@ namespace Rift.Daemon.Core.Networking;
 
 public sealed class TlsTransport : ITransport, IDisposable
 {
+    internal static readonly TimeSpan CapabilityNegotiationTimeout = TimeSpan.FromSeconds(10);
+
     private readonly ILogger<TlsTransport> _logger;
     private readonly IIdentityManager _identityManager;
     private readonly ITrustStore? _trustStore;
@@ -229,9 +231,17 @@ public sealed class TlsTransport : ITransport, IDisposable
             _identityManager.GetDeviceId(),
             session.DeviceId,
             session.IsInitiator,
-            ReadFramePayloadAsync,
+            ReadNegotiationFramePayloadAsync,
             cancellationToken);
+        session.AllowsProtectedTraffic = SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities);
         session.IsAuthenticated = true;
+    }
+
+    private static async Task<byte[]?> ReadNegotiationFramePayloadAsync(Stream stream, int maxFrameSize, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(CapabilityNegotiationTimeout);
+        return await ReadFramePayloadAsync(stream, maxFrameSize, timeoutCts.Token);
     }
 
     private async Task RunRegisteredSessionLoopAsync(ActiveSession session, CancellationToken cancellationToken)
@@ -244,7 +254,13 @@ public sealed class TlsTransport : ITransport, IDisposable
                 break;
             }
 
-            MessageReceived?.Invoke(this, new MessageReceivedEventArgs(session.DeviceId, payloadBuffer));
+            MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
+                session.DeviceId,
+                payloadBuffer,
+                new SessionPeerContext(
+                    session.DeviceId,
+                    session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+                    session.AllowsProtectedTraffic)));
         }
     }
 
@@ -276,7 +292,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
                 deviceId,
                 isOnline: true,
-                capabilityNames));
+                capabilityNames,
+                allowsProtectedTraffic: selectedCapabilities.Count > 0 && SessionCapabilityCoordinator.HasRequiredCapabilities(selectedCapabilities)));
             await sessionLoop(cancellationToken);
         }
         finally
@@ -285,7 +302,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
                 deviceId,
                 isOnline: false,
-                capabilityNames));
+                capabilityNames,
+                allowsProtectedTraffic: selectedCapabilities.Count > 0 && SessionCapabilityCoordinator.HasRequiredCapabilities(selectedCapabilities)));
         }
     }
 
@@ -571,7 +589,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
                 peerDeviceId,
                 isOnline: false,
-                session.SelectedCapabilities.Select(capability => capability.Name).ToArray()));
+                session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+                session.AllowsProtectedTraffic));
             session.Dispose();
         }
         return Task.CompletedTask;
@@ -632,6 +651,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         public bool IsInitiator { get; }
         public bool IsAuthenticated { get; set; }
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
+        public bool AllowsProtectedTraffic { get; set; }
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
@@ -641,6 +661,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             IsInitiator = isInitiator;
             IsAuthenticated = false;
             SelectedCapabilities = [];
+            AllowsProtectedTraffic = false;
         }
 
         public void Dispose()
