@@ -45,7 +45,7 @@ void main() {
     expect(find.text('0.1-test'), findsOneWidget);
   });
 
-  testWidgets('SettingsScreen handles UnimplementedError (Android/Windows stub)', (WidgetTester tester) async {
+  testWidgets('SettingsScreen handles unavailable platform feature errors', (WidgetTester tester) async {
     when(() => mockClient.getDeviceInfo()).thenAnswer((_) => Future.error(UnimplementedError('Stub')));
 
     await tester.pumpWidget(

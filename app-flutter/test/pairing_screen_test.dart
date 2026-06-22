@@ -21,7 +21,12 @@ class FakeTransport implements IpcTransport {
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());
 
-  final _pairingRequestController = StreamController<Map<String, dynamic>>.broadcast();
+  final _pairingRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _pairingCompleteController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _trustChangedController =
+      StreamController<Map<String, dynamic>>.broadcast();
   String? approvedDeviceId;
   String? approvedFingerprint;
   String? rejectedDeviceId;
@@ -30,13 +35,27 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   bool get isConnected => true;
 
   @override
-  Stream<Map<String, dynamic>> get onPairingRequest => _pairingRequestController.stream;
+  Stream<Map<String, dynamic>> get onPairingRequest =>
+      _pairingRequestController.stream;
 
   @override
-  Stream<Map<String, dynamic>> get onPairingComplete => Stream.empty();
+  Stream<Map<String, dynamic>> get onPairingComplete =>
+      _pairingCompleteController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onTrustChanged =>
+      _trustChangedController.stream;
 
   Future<void> emitPairingRequest(Map<String, dynamic> event) async {
     _pairingRequestController.add(event);
+  }
+
+  Future<void> emitPairingComplete(Map<String, dynamic> event) async {
+    _pairingCompleteController.add(event);
+  }
+
+  Future<void> emitTrustChanged(Map<String, dynamic> event) async {
+    _trustChangedController.add(event);
   }
 
   @override
@@ -64,7 +83,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 }
 
 void main() {
-  testWidgets('PairingScreen shows pairing data for selected peer', (WidgetTester tester) async {
+  testWidgets('PairingScreen shows pairing data for selected peer',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -82,7 +102,8 @@ void main() {
     expect(find.text('Start pairing'), findsOneWidget);
   });
 
-  testWidgets('PairingScreen reacts to incoming pairing request notification', (WidgetTester tester) async {
+  testWidgets('PairingScreen reacts to incoming pairing request notification',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -106,7 +127,8 @@ void main() {
     expect(find.text('Approve'), findsOneWidget);
   });
 
-  testWidgets('PairingScreen auto-start populates fingerprints', (WidgetTester tester) async {
+  testWidgets('PairingScreen auto-start populates fingerprints',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -127,7 +149,8 @@ void main() {
     expect(find.textContaining('LOCAL-AAAA-BBBB'), findsOneWidget);
   });
 
-  testWidgets('PairingScreen approve and reject call IPC methods', (WidgetTester tester) async {
+  testWidgets('PairingScreen approve and reject call IPC methods',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -146,14 +169,16 @@ void main() {
     await tester.tap(find.text('Approve'));
     await tester.pump();
     expect(client.approvedDeviceId, 'rift-peer');
-    expect(client.approvedFingerprint, 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH');
+    expect(client.approvedFingerprint,
+        'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH');
 
     await tester.tap(find.text('Reject'));
     await tester.pump();
     expect(client.rejectedDeviceId, 'rift-peer');
   });
 
-  testWidgets('PairingScreen shows expired state after countdown elapses', (WidgetTester tester) async {
+  testWidgets('PairingScreen shows expired state after countdown elapses',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
@@ -175,5 +200,57 @@ void main() {
 
     expect(find.text('Pairing request expired'), findsOneWidget);
     expect(find.text('Expired'), findsOneWidget);
+  });
+
+  testWidgets('PairingScreen reacts to trust persisted transition',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer',
+      'newState': 'trusted',
+    });
+    await tester.pump();
+
+    expect(find.text('Trust persisted'), findsOneWidget);
+  });
+
+  testWidgets('PairingScreen reacts to pairing closed transition',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer',
+      'newState': 'discovered',
+    });
+    await tester.pump();
+
+    expect(find.text('Pairing closed'), findsOneWidget);
   });
 }

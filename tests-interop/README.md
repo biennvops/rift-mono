@@ -3,6 +3,15 @@
 This directory tracks recorded Windows <-> Android interop runs and the
 remaining evidence required for Milestone M3 sign-off.
 
+## Sign-off rule
+
+Interop is considered fully complete only when both layers are satisfied:
+
+- **Code health:** platform transports, app analysis, and automated tests are green.
+- **Interop evidence:** real-device pairing/trust behavior has been exercised and recorded.
+
+The first layer is currently in good shape. This file tracks the second.
+
 ## Latest recorded run
 
 - Date: 2026-06-22
@@ -43,3 +52,11 @@ Interop transport and discovery are now validated on real devices, but this
 directory does not yet contain complete pairing evidence. Week 5 app-side IPC
 work is in good shape; full M3 sign-off remains blocked on the remaining
 pairing/trust validation runs above.
+
+## Follow-up engineering work
+
+These items are no longer milestone blockers, but they remain worthwhile
+follow-ups after M3 if profiling or future regressions justify the work:
+
+- Replace or reduce Windows named-pipe polling if power/CPU traces show overhead.
+- Add deeper transport-level tests for Windows named pipes and Android isolate lifecycle.

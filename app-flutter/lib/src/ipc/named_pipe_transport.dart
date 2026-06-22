@@ -45,7 +45,8 @@ class NamedPipeTransport implements IpcTransport {
         return;
       }
       if (msg is Map && msg['type'] == 'error') {
-        _inBytes?.addError(StateError(msg['message']?.toString() ?? 'pipe worker error'));
+        _inBytes?.addError(
+            StateError(msg['message']?.toString() ?? 'pipe worker error'));
         return;
       }
     });
@@ -61,7 +62,8 @@ class NamedPipeTransport implements IpcTransport {
 
     _toWorker = await ready.future.timeout(
       const Duration(seconds: 5),
-      onTimeout: () => throw TimeoutException('Timed out waiting for pipe worker'),
+      onTimeout: () =>
+          throw TimeoutException('Timed out waiting for pipe worker'),
     );
 
     // Outgoing bytes -> worker.
@@ -110,7 +112,9 @@ void _namedPipeWorkerMain(Map<String, dynamic> args) {
   if (handle == 0) {
     toUi.send({
       'type': 'error',
-      'message': 'CreateFile failed for $pipeName (err=${win32.getLastError()})',
+      'message':
+          'CreateFile failed for $pipeName after ${win32.lastOpenAttempts} attempts '
+              '(err=${win32.lastOpenError})',
     });
     fromUi.close();
     return;
@@ -169,36 +173,57 @@ void _namedPipeWorkerMain(Map<String, dynamic> args) {
     }
   }
 
-  Timer.periodic(const Duration(milliseconds: 5), tick);
+  Timer.periodic(const Duration(milliseconds: 15), tick);
 }
 
 // Minimal Win32 wrapper to avoid pulling win32 types into the UI isolate.
 class _Win32Bindings {
+  int _lastOpenAttempts = 0;
+  int _lastOpenError = 0;
+
   int getLastError() => GetLastError();
+  int get lastOpenAttempts => _lastOpenAttempts;
+  int get lastOpenError => _lastOpenError;
 
   int openClientPipe(String name) {
     final namePtr = TEXT(name);
-    final deadline = DateTime.now().add(const Duration(seconds: 5));
-    while (true) {
-      final handle = CreateFile(
-        namePtr,
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        dffi.nullptr,
-        OPEN_EXISTING,
-        0,
-        0,
-      );
-      if (handle != INVALID_HANDLE_VALUE) return handle;
+    final stopwatch = Stopwatch()..start();
+    var attempts = 0;
+    try {
+      while (true) {
+        attempts++;
+        final handle = CreateFile(
+          namePtr,
+          GENERIC_READ | GENERIC_WRITE,
+          0,
+          dffi.nullptr,
+          OPEN_EXISTING,
+          0,
+          0,
+        );
+        if (handle != INVALID_HANDLE_VALUE) {
+          _lastOpenAttempts = attempts;
+          _lastOpenError = ERROR_SUCCESS;
+          return handle;
+        }
 
-      final err = GetLastError();
-      // Common values while the server is starting up.
-      if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PIPE_BUSY) {
-        if (DateTime.now().isAfter(deadline)) return 0;
-        Sleep(50);
-        continue;
+        final err = GetLastError();
+        _lastOpenAttempts = attempts;
+        _lastOpenError = err;
+
+        // Common values while the server is starting up.
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PIPE_BUSY) {
+          if (stopwatch.elapsed >= const Duration(seconds: 5)) {
+            return 0;
+          }
+          Sleep(50);
+          continue;
+        }
+        return 0;
       }
-      return 0;
+    } finally {
+      stopwatch.stop();
+      ffi.calloc.free(namePtr);
     }
   }
 
@@ -207,7 +232,8 @@ class _Win32Bindings {
   int peekAvailable(int handle) {
     final availPtr = ffi.calloc<DWORD>();
     try {
-      final ok = PeekNamedPipe(handle, dffi.nullptr, 0, dffi.nullptr, availPtr, dffi.nullptr);
+      final ok = PeekNamedPipe(
+          handle, dffi.nullptr, 0, dffi.nullptr, availPtr, dffi.nullptr);
       if (ok == 0) return 0;
       return availPtr.value;
     } finally {
@@ -238,7 +264,8 @@ class _Win32Bindings {
       final bufPtr = ffi.calloc<dffi.Uint8>(remaining);
       try {
         bufPtr.asTypedList(remaining).setAll(0, data.sublist(offset));
-        final ok = WriteFile(handle, bufPtr, remaining, writtenPtr, dffi.nullptr);
+        final ok =
+            WriteFile(handle, bufPtr, remaining, writtenPtr, dffi.nullptr);
         if (ok == 0) return false;
         final n = writtenPtr.value;
         if (n == 0) return false;

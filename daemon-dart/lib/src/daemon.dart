@@ -19,7 +19,7 @@ import 'package:path/path.dart' as p;
 
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
-/// and is designed to be executed inside a background Isolate 
+/// and is designed to be executed inside a background Isolate
 /// hosted by an Android Foreground Service.
 class RiftDaemon {
   IdentityManagerImpl? _identityManager;
@@ -64,36 +64,37 @@ class RiftDaemon {
       }
     }
 
-    if (_transport == null) {
-      throw const RiftException(-32603, 'Transport is not initialized');
+    if (_transport != null) {
+      _sessionManager = SessionManager(
+        _transport!,
+        _identityManager!,
+        _trustStore!,
+        peerAllowanceResolver: (peerDeviceId) async {
+          final record = await _trustStore!.getPeer(peerDeviceId);
+          return record == null ||
+              (record.state != TrustState.blocked &&
+                  record.state != TrustState.revoked);
+        },
+      );
+
+      _pairingManager = PairingManager(
+        trustStore: _trustStore!,
+        sessionManager: _sessionManager!,
+        identityManager: _identityManager!,
+        onIpcEvent: (event) {
+          onIpcEvent?.call(event);
+        },
+      );
     }
-
-    _sessionManager = SessionManager(
-      _transport!,
-      _identityManager!,
-      _trustStore!,
-      peerAllowanceResolver: (peerDeviceId) async {
-        final record = await _trustStore!.getPeer(peerDeviceId);
-        return record == null ||
-            (record.state != TrustState.blocked && record.state != TrustState.revoked);
-      },
-    );
-
-    _pairingManager = PairingManager(
-      trustStore: _trustStore!,
-      sessionManager: _sessionManager!,
-      identityManager: _identityManager!,
-      onIpcEvent: (event) {
-        onIpcEvent?.call(event);
-      },
-    );
 
     if (enableDiscovery) {
       final advertisedPort = _transport?.boundPort ?? port;
       _discoveryService = DiscoveryServiceImpl(
         port: advertisedPort,
         deviceIdHint: _identityManager!.deviceId,
-        fingerprintPrefix: _fingerprintPrefix(_identityManager!.getDeviceFingerprint()),
+        fingerprintPrefix: _fingerprintPrefix(
+          _identityManager!.getDeviceFingerprint(),
+        ),
       );
       await _discoveryService!.startAdvertising();
       await _discoveryService!.startDiscovery();
@@ -117,7 +118,9 @@ class RiftDaemon {
   Map<String, dynamic> getDeviceInfo() {
     final identityManager = _identityManager;
     if (identityManager == null) {
-      throw const RiftIdentityNotInitializedException('Identity manager not initialized');
+      throw const RiftIdentityNotInitializedException(
+        'Identity manager not initialized',
+      );
     }
 
     return {
@@ -131,6 +134,7 @@ class RiftDaemon {
 
   Future<List<Map<String, dynamic>>> listTrustedPeers() async {
     final trustStore = _trustStore;
+    final sessionManager = _sessionManager;
     if (trustStore == null) return [];
 
     // ipc.md: listTrustedPeers is a trust-management surface.
@@ -143,40 +147,49 @@ class RiftDaemon {
     ];
 
     return peers.map((peer) {
-      final ctx = _sessionManager!.getContext(peer.deviceId);
-      final lastSeenAt = ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+      final ctx = sessionManager?.getContext(peer.deviceId);
+      final lastSeenAt =
+          ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
         'trustState': peer.state.toJson(),
-        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
+        if (peer.pairedAt != null)
+          'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
         'lastSeenAt': lastSeenAt,
         'presence': ctx?.currentPresenceStatus ?? 'offline',
-        'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? <String>[],
+        'capabilities':
+            ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
+            <String>[],
       };
     }).toList();
   }
 
   Future<List<Map<String, dynamic>>> listPeersByState(String trustState) async {
     final trustStore = _trustStore;
+    final sessionManager = _sessionManager;
     if (trustStore == null) return [];
 
     final state = TrustState.fromJson(trustState);
     final peers = await trustStore.getPeersByState(state);
 
     return peers.map((peer) {
-      final ctx = _sessionManager!.getContext(peer.deviceId);
-      final lastSeenAt = ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+      final ctx = sessionManager?.getContext(peer.deviceId);
+      final lastSeenAt =
+          ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
         'trustState': peer.state.toJson(),
-        if (peer.pairedAt != null) 'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
+        if (peer.pairedAt != null)
+          'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
         'lastSeenAt': lastSeenAt,
         'presence': ctx?.currentPresenceStatus ?? 'offline',
-        'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? <String>[],
+        'capabilities':
+            ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
+            <String>[],
       };
     }).toList();
   }
@@ -193,7 +206,8 @@ class RiftDaemon {
         continue;
       }
       final trustState = trustStore != null
-          ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ?? 'discovered'
+          ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ??
+                'discovered'
           : 'discovered';
 
       results.add({
@@ -213,7 +227,9 @@ class RiftDaemon {
     return results;
   }
 
-  Future<Map<String, dynamic>> handleJsonRpcRequest(Map<String, dynamic> request) async {
+  Future<Map<String, dynamic>> handleJsonRpcRequest(
+    Map<String, dynamic> request,
+  ) async {
     final method = request['method'] as String?;
     final params = RpcUtils.normalizeParams(request['params']);
 
@@ -234,16 +250,21 @@ class RiftDaemon {
         if (trustRecord.state != TrustState.trusted) {
           throw const RiftUnauthorizedException('Peer is not trusted');
         }
-        final ctx = _sessionManager!.getContext(peerDeviceId);
+        final ctx = _sessionManager?.getContext(peerDeviceId);
         return {
           'deviceId': peerDeviceId,
           'status': ctx?.currentPresenceStatus ?? 'offline',
-          'lastSeenAt': ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
+          'lastSeenAt':
+              ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
               trustRecord.lastSeenAt?.toUtc().toIso8601String(),
-          'capabilities': ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
+          'capabilities':
+              ctx?.negotiatedCapabilities.map((c) => c.name).toList() ?? [],
         };
       case 'rift.listDiscoveredPeers':
-        return {'peers': await listDiscoveredPeers(), 'isDiscovering': _isDiscovering};
+        return {
+          'peers': await listDiscoveredPeers(),
+          'isDiscovering': _isDiscovering,
+        };
       case 'rift.startDiscovery':
         await _discoveryService?.startDiscovery();
         _isDiscovering = true;
@@ -254,38 +275,48 @@ class RiftDaemon {
         _isDiscovering = false;
         return {'stopped': true};
       case 'rift.startPairing':
+        _requireTransportServices();
         final requestedPeerId = RpcUtils.requireStringParam(params, 'deviceId');
         final peerDeviceId = await _ensureSessionForPairing(requestedPeerId);
         await _ensurePeerRecordForPairing(peerDeviceId);
-        await _pairingManager?.handleIpcCommand({
+        await _pairingManager!.handleIpcCommand({
           'method': method,
-          'params': {
-            ...params,
-            'deviceId': peerDeviceId,
-          },
+          'params': {...params, 'deviceId': peerDeviceId},
         });
         final record = await _trustStore?.getPeer(peerDeviceId);
         if (record == null) {
           throw const RiftNotFoundException('Peer not found in TrustStore');
         }
         return {
-          'fingerprint': _formatFingerprint(_identityManager!.getDeviceFingerprint()),
+          'fingerprint': _formatFingerprint(
+            _identityManager!.getDeviceFingerprint(),
+          ),
           'peerFingerprint': _deriveFingerprint(record.certDer),
-          'expiresInMs': 120000, // ipc.md §4.3: startPairing always returns 120 000 ms
+          'expiresInMs':
+              120000, // ipc.md §4.3: startPairing always returns 120 000 ms
         };
       case 'rift.approvePairing':
-        await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
+        _requireTransportServices();
+        await _pairingManager!.handleIpcCommand({
+          'method': method,
+          'params': params,
+        });
         return {
           'trustedDeviceId': RpcUtils.requireStringParam(params, 'deviceId'),
           'persistedAt': DateTime.now().toUtc().toIso8601String(),
         };
       case 'rift.rejectPairing':
-        await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
+        _requireTransportServices();
+        await _pairingManager!.handleIpcCommand({
+          'method': method,
+          'params': params,
+        });
         return {'rejected': true};
       case 'rift.revokeTrust':
+        _requireTransportServices();
         RpcUtils.requireStringParam(params, 'deviceId');
         RpcUtils.requireStringParam(params, 'reason');
-        await _pairingManager?.handleIpcCommand({
+        await _pairingManager!.handleIpcCommand({
           'method': 'rift.unpair',
           'params': {
             'deviceId': params['deviceId'],
@@ -297,16 +328,25 @@ class RiftDaemon {
           'revokedAt': DateTime.now().toUtc().toIso8601String(),
         };
       case 'rift.unblockPeer':
-        await _pairingManager?.handleIpcCommand({'method': method, 'params': params});
+        _requireTransportServices();
+        await _pairingManager!.handleIpcCommand({
+          'method': method,
+          'params': params,
+        });
         return {'unblocked': true};
       case 'rift.connect':
+        _requireTransportServices();
         final host = RpcUtils.requireStringParam(params, 'host');
         final port = params['port'];
         if (port is! int) {
           throw ArgumentError.value(port, 'port', 'must be an integer');
         }
         final peerDeviceId = params['peerDeviceId'] as String?;
-        final resolvedPeerDeviceId = await _transport!.connectTo(host, port, expectedDeviceId: peerDeviceId);
+        final resolvedPeerDeviceId = await _transport!.connectTo(
+          host,
+          port,
+          expectedDeviceId: peerDeviceId,
+        );
         await _sessionManager!.sendSessionHello(resolvedPeerDeviceId);
         return {'connected': true, 'deviceId': resolvedPeerDeviceId};
       case 'rift.stop':
@@ -314,6 +354,17 @@ class RiftDaemon {
         return {'stopped': true};
       default:
         throw UnsupportedError('Method not found: $method');
+    }
+  }
+
+  void _requireTransportServices() {
+    if (_transport == null ||
+        _sessionManager == null ||
+        _pairingManager == null) {
+      throw const RiftException(
+        -32603,
+        'Transport-dependent services are not initialized',
+      );
     }
   }
 
@@ -330,40 +381,47 @@ class RiftDaemon {
     _discoveredPeers.remove(deviceId);
   }
 
-  static Map<String, dynamic> jsonRpcResult(Object? id, Map<String, dynamic> result) {
+  static Map<String, dynamic> jsonRpcResult(
+    Object? id,
+    Map<String, dynamic> result,
+  ) {
+    return {'jsonrpc': '2.0', 'id': id, 'result': result};
+  }
+
+  static Map<String, dynamic> jsonRpcError(
+    Object? id,
+    int code,
+    String message,
+  ) {
     return {
       'jsonrpc': '2.0',
       'id': id,
-      'result': result,
+      'error': {'code': code, 'message': message},
     };
   }
-
-  static Map<String, dynamic> jsonRpcError(Object? id, int code, String message) {
-    return {
-      'jsonrpc': '2.0',
-      'id': id,
-      'error': {
-        'code': code,
-        'message': message,
-      }
-    };
-  }
-
 
   static String _formatFingerprint(Uint8List hashBytes) {
-    final base32Str = Base32Utils.encode(hashBytes).toUpperCase().replaceAll('=', '');
+    final base32Str = Base32Utils.encode(
+      hashBytes,
+    ).toUpperCase().replaceAll('=', '');
     final truncated = base32Str.substring(0, 32);
-    return truncated.replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)}-').substring(0, 39);
+    return truncated
+        .replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)}-')
+        .substring(0, 39);
   }
 
   static String _deriveFingerprint(Uint8List certDer) {
-    final peerPublicKey = RiftCertDecoder.extractEd25519PublicKeyFromDer(certDer);
+    final peerPublicKey = RiftCertDecoder.extractEd25519PublicKeyFromDer(
+      certDer,
+    );
     final hash = sha256.convert(peerPublicKey).bytes;
     return _formatFingerprint(Uint8List.fromList(hash));
   }
 
   static String _fingerprintPrefix(Uint8List hashBytes) {
-    final base32Str = Base32Utils.encode(hashBytes).toUpperCase().replaceAll('=', '');
+    final base32Str = Base32Utils.encode(
+      hashBytes,
+    ).toUpperCase().replaceAll('=', '');
     return base32Str.substring(0, 8);
   }
 
@@ -371,7 +429,9 @@ class RiftDaemon {
     final trustStore = _trustStore;
     final transport = _transport;
     if (trustStore == null || transport == null) {
-      throw const RiftIdentityNotInitializedException('Daemon services not initialized');
+      throw const RiftIdentityNotInitializedException(
+        'Daemon services not initialized',
+      );
     }
 
     final existing = await trustStore.getPeer(peerDeviceId);
@@ -384,19 +444,23 @@ class RiftDaemon {
       throw const RiftNotFoundException('Peer not found in TrustStore');
     }
 
-    await trustStore.upsertPeer(PeerRecord(
-      deviceId: peerDeviceId,
-      certDer: Uint8List.fromList(peerCertDer),
-      state: TrustState.discovered,
-      updatedAt: DateTime.now().toUtc(),
-    ));
+    await trustStore.upsertPeer(
+      PeerRecord(
+        deviceId: peerDeviceId,
+        certDer: Uint8List.fromList(peerCertDer),
+        state: TrustState.discovered,
+        updatedAt: DateTime.now().toUtc(),
+      ),
+    );
   }
 
   Future<String> _ensureSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager;
     final transport = _transport;
     if (sessionManager == null || transport == null) {
-      throw const RiftIdentityNotInitializedException('Daemon services not initialized');
+      throw const RiftIdentityNotInitializedException(
+        'Daemon services not initialized',
+      );
     }
 
     final ctx = sessionManager.getContext(peerDeviceId);
@@ -409,7 +473,9 @@ class RiftDaemon {
       throw const RiftNotFoundException('Peer not found in discovery cache');
     }
 
-    final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId ? peerDeviceId : null;
+    final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
+        ? peerDeviceId
+        : null;
     final resolvedPeerDeviceId = await transport.connectTo(
       discoveredPeer.address,
       discoveredPeer.port,
@@ -436,11 +502,13 @@ class RiftDaemon {
   /// The static entry point for spawning the Isolate from Flutter
   static void isolateEntryPoint(Map<String, dynamic> args) async {
     final storagePath = args['storagePath'] as String;
-    final sendPort = args.containsKey('sendPort') ? args['sendPort'] as SendPort : null;
+    final sendPort = args.containsKey('sendPort')
+        ? args['sendPort'] as SendPort
+        : null;
     final port = args['port'] as int? ?? 11112;
     final enableDiscovery = args['enableDiscovery'] as bool? ?? true;
     final enableTransport = args['enableTransport'] as bool? ?? true;
-    
+
     final daemon = RiftDaemon(
       storagePath: storagePath,
       port: port,
@@ -448,10 +516,10 @@ class RiftDaemon {
       enableTransport: enableTransport,
       onIpcEvent: (event) => sendPort?.send(event),
     );
-    
+
     try {
       await daemon.start();
-      
+
       if (args.containsKey('sendPort')) {
         final SendPort sendPort = args['sendPort'] as SendPort;
 
@@ -473,16 +541,38 @@ class RiftDaemon {
                 } on RiftException catch (e) {
                   sendPort.send(RiftDaemon.jsonRpcError(id, e.code, e.message));
                 } on UnsupportedError catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(id, -32601, e.toString()));
+                  sendPort.send(
+                    RiftDaemon.jsonRpcError(id, -32601, e.toString()),
+                  );
                 } on ArgumentError catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(id, -32602, e.message?.toString() ?? e.toString()));
+                  sendPort.send(
+                    RiftDaemon.jsonRpcError(
+                      id,
+                      -32602,
+                      e.message?.toString() ?? e.toString(),
+                    ),
+                  );
                 } on SocketException catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(id, -32000, 'NetworkError: ${e.message}'));
+                  sendPort.send(
+                    RiftDaemon.jsonRpcError(
+                      id,
+                      -32000,
+                      'NetworkError: ${e.message}',
+                    ),
+                  );
                 } catch (e) {
-                  sendPort.send(RiftDaemon.jsonRpcError(id, -32603, e.toString()));
+                  sendPort.send(
+                    RiftDaemon.jsonRpcError(id, -32603, e.toString()),
+                  );
                 }
               } else {
-                sendPort.send(RiftDaemon.jsonRpcError(message['id'], -32600, 'Invalid Request'));
+                sendPort.send(
+                  RiftDaemon.jsonRpcError(
+                    message['id'],
+                    -32600,
+                    'Invalid Request',
+                  ),
+                );
               }
             }
           });
@@ -515,9 +605,10 @@ class RiftDaemon {
                   'minV': peer.minVersion,
                   'maxV': peer.maxVersion,
                   'did': peer.deviceIdHint,
-                  if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
-                }
-              }
+                  if (peer.fingerprintPrefix != null)
+                    'fp': peer.fingerprintPrefix,
+                },
+              },
             });
           });
 
@@ -526,22 +617,24 @@ class RiftDaemon {
             sendPort.send({
               'jsonrpc': '2.0',
               'method': 'rift.onPeerLost',
-              'params': {
-                'deviceId': deviceId,
-              }
+              'params': {'deviceId': deviceId},
             });
           });
 
-          daemon._sessionManager!.onPresenceUpdate.listen((ctx) {
+          daemon._sessionManager?.onPresenceUpdate.listen((ctx) {
             sendPort.send({
               'jsonrpc': '2.0',
               'method': 'rift.onPresenceUpdate',
               'params': {
                 'deviceId': ctx.peerDeviceId,
                 'status': ctx.currentPresenceStatus,
-                'lastSeenAt': ctx.lastHeartbeatReceived?.toUtc().toIso8601String(),
-                'capabilities': ctx.negotiatedCapabilities.map((c) => c.name).toList(),
-              }
+                'lastSeenAt': ctx.lastHeartbeatReceived
+                    ?.toUtc()
+                    .toIso8601String(),
+                'capabilities': ctx.negotiatedCapabilities
+                    .map((c) => c.name)
+                    .toList(),
+              },
             });
           });
         } on SocketException catch (e) {
@@ -549,7 +642,10 @@ class RiftDaemon {
           sendPort.send({
             'jsonrpc': '2.0',
             'method': 'rift.daemonError',
-            'params': {'status': 'error', 'error': 'SocketException: ${e.message}'},
+            'params': {
+              'status': 'error',
+              'error': 'SocketException: ${e.message}',
+            },
           });
         } catch (e) {
           // Close port to avoid ReceivePort leak if IPC setup fails.
@@ -567,7 +663,10 @@ class RiftDaemon {
         sendPort.send({
           'jsonrpc': '2.0',
           'method': 'rift.daemonError',
-          'params': {'status': 'error', 'error': 'SocketException: ${e.message}'},
+          'params': {
+            'status': 'error',
+            'error': 'SocketException: ${e.message}',
+          },
         });
       }
     } catch (e) {

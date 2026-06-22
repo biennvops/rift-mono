@@ -17,7 +17,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
   String? _error;
-  
+
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
@@ -51,7 +51,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _discoverySub = client.onPeerDiscovered.listen(_handlePeerDiscovered);
     _peerLostSub = client.onPeerLost.listen(_handlePeerLost);
     _trustSub = client.onTrustChanged.listen(_handleTrustChanged);
-    _pairingCompleteSub = client.onPairingComplete.listen(_handlePairingComplete);
+    _pairingCompleteSub =
+        client.onPairingComplete.listen(_handlePairingComplete);
   }
 
   void _scheduleReload() {
@@ -79,9 +80,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
     setState(() {
       // Upsert into discovered list.
-      final existing = _discoveredPeers.indexWhere((p) => p is Map && p['deviceId']?.toString() == deviceId);
+      final existing = _discoveredPeers
+          .indexWhere((p) => p is Map && p['deviceId']?.toString() == deviceId);
       if (existing >= 0) {
-        final merged = Map<String, dynamic>.from(_discoveredPeers[existing] as Map);
+        final merged =
+            Map<String, dynamic>.from(_discoveredPeers[existing] as Map);
         merged.addAll(event);
         _discoveredPeers[existing] = merged;
       } else {
@@ -110,7 +113,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   void _handleTrustChanged(Map<String, dynamic> event) {
     final deviceId = event['deviceId']?.toString();
     final newState = event['newState']?.toString();
-    if (deviceId == null || deviceId.isEmpty || newState == null || newState.isEmpty) return;
+    if (deviceId == null ||
+        deviceId.isEmpty ||
+        newState == null ||
+        newState.isEmpty) {
+      return;
+    }
     if (!mounted) return;
 
     final reason = event['reason']?.toString();
@@ -119,7 +127,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     // Quick UI feedback for state transitions (helps triage).
     if (reason != null && reason.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Trust changed: $newState${previous != null ? ' (from $previous)' : ''} - $reason')),
+        SnackBar(
+            content: Text(
+                'Trust changed: $newState${previous != null ? ' (from $previous)' : ''} - $reason')),
       );
     }
 
@@ -128,7 +138,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     // prevent the UI from feeling stale.
     setState(() {
       // Remove from discovered if it is no longer discovered/pairing_pending.
-      if (newState == 'trusted' || newState == 'blocked' || newState == 'revoked') {
+      if (newState == 'trusted' ||
+          newState == 'blocked' ||
+          newState == 'revoked') {
         _discoveredPeers = _discoveredPeers
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
             .toList(growable: false);
@@ -146,12 +158,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   Future<void> _loadData() async {
     if (!mounted) return;
     final client = context.read<JsonRpcRiftClient>();
-    
+
     // Default empty lists if not connected
     if (!client.isConnected) {
       setState(() {
         _trustedPeers = [];
         _discoveredPeers = [];
+        _isDiscovering = false;
         _error = 'Daemon not connected';
       });
       return;
@@ -164,6 +177,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _trustedPeers = trustedResult['peers'] ?? [];
           _discoveredPeers = discoveredResult['peers'] ?? [];
+          _isDiscovering = discoveredResult['isDiscovering'] == true;
           _error = null;
         });
       }
@@ -185,9 +199,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       } else {
         await client.startDiscovery();
       }
-      setState(() {
-        _isDiscovering = !_isDiscovering;
-      });
+      await _loadData();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -241,78 +253,27 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   Widget _buildPeerCard(Map<String, dynamic> peer, bool isTrusted) {
     final isOnline = peer['presence'] == 'online';
-    final trustState = peer['trustState']?.toString() ?? (isTrusted ? 'trusted' : 'discovered');
+    final trustState = peer['trustState']?.toString() ??
+        (isTrusted ? 'trusted' : 'discovered');
     final trustLabel = _trustStateLabel(trustState);
     final theme = Theme.of(context);
-    
+
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
-    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = peer['displayName'] ?? (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
-
-    Future<void> handlePeerAction() async {
-      final client = context.read<JsonRpcRiftClient>();
-      final deviceId = peer['deviceId']?.toString();
-      if (deviceId == null) return;
-
-      try {
-        if (!isTrusted) {
-          await Navigator.of(context).push(
-            MaterialPageRoute<void>(
-              builder: (_) => PairingScreen(
-                initialDeviceId: deviceId,
-                initialDisplayName: titleText,
-                autoStart: true,
-              ),
-            ),
-          );
-          await _loadData();
-          return;
-        }
-
-        if (trustState == 'blocked') {
-          final confirmed = await _confirmTrustAction(
-            title: 'Unblock device?',
-            message: 'This will return $titleText to discovered state.',
-            confirmLabel: 'Unblock',
-          );
-          if (!confirmed) return;
-          await client.unblockPeer(deviceId);
-        } else if (trustState == 'trusted' || trustState == 'pairing_pending') {
-          final confirmed = await _confirmTrustAction(
-            title: trustState == 'pairing_pending' ? 'Cancel pairing?' : 'Revoke trust?',
-            message: trustState == 'pairing_pending'
-                ? 'This will drop the pending trust flow for $titleText.'
-                : 'This will revoke trust for $titleText and disconnect active sessions.',
-            confirmLabel: trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke',
-          );
-          if (!confirmed) return;
-          if (trustState == 'pairing_pending') {
-            // Spec-aligned: canceling a pending pairing is a rejection of the flow,
-            // not a permanent revoke.
-            await client.rejectPairing(deviceId);
-          } else {
-            await client.revokeTrust(deviceId, 'User revoked trust from device manager');
-          }
-        }
-        await _loadData();
-      } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
+    final String shortId =
+        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = peer['displayName'] ??
+        (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
 
     return Card(
       elevation: 0,
-      color: isTrusted 
+      color: isTrusted
           ? theme.colorScheme.surfaceContainerHighest
           : theme.colorScheme.surfaceContainerLow,
       margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
         side: BorderSide(
-          color: isTrusted 
+          color: isTrusted
               ? theme.colorScheme.primaryContainer
               : theme.colorScheme.outlineVariant,
         ),
@@ -320,8 +281,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       child: ListTile(
         contentPadding: const EdgeInsets.all(16),
         leading: CircleAvatar(
-          backgroundColor: isTrusted ? theme.colorScheme.primary : theme.colorScheme.surfaceContainerHighest,
-          foregroundColor: isTrusted ? theme.colorScheme.onPrimary : theme.colorScheme.onSurfaceVariant,
+          backgroundColor: isTrusted
+              ? theme.colorScheme.primary
+              : theme.colorScheme.surfaceContainerHighest,
+          foregroundColor: isTrusted
+              ? theme.colorScheme.onPrimary
+              : theme.colorScheme.onSurfaceVariant,
           child: Icon(
             isTrusted ? Icons.verified_user : Icons.device_unknown,
           ),
@@ -366,27 +331,105 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             ),
             const SizedBox(height: 4),
             if (isTrusted)
-              if (peer['capabilities'] is List && (peer['capabilities'] as List).isNotEmpty)
+              if (peer['capabilities'] is List &&
+                  (peer['capabilities'] as List).isNotEmpty)
                 Text(
                   'Capabilities: ${(peer['capabilities'] as List).join(', ')}',
                   style: theme.textTheme.bodySmall,
                 ),
             if (!isTrusted && peer['address'] != null)
-               Text('Address: ${peer['address']}:${peer['port']}', style: theme.textTheme.bodySmall),
+              Text('Address: ${peer['address']}:${peer['port']}',
+                  style: theme.textTheme.bodySmall),
           ],
         ),
         trailing: isTrusted
             ? IconButton(
-                icon: Icon(trustState == 'blocked' ? Icons.lock_open : Icons.gpp_bad),
-                tooltip: trustState == 'blocked' ? 'Unblock device' : (trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke trust'),
-                onPressed: handlePeerAction,
+                icon: Icon(
+                    trustState == 'blocked' ? Icons.lock_open : Icons.gpp_bad),
+                tooltip: trustState == 'blocked'
+                    ? 'Unblock device'
+                    : (trustState == 'pairing_pending'
+                        ? 'Cancel pairing'
+                        : 'Revoke trust'),
+                onPressed: () => _handlePeerAction(
+                  peer: peer,
+                  isTrusted: isTrusted,
+                  trustState: trustState,
+                  titleText: titleText,
+                ),
               )
             : ElevatedButton(
-                onPressed: handlePeerAction,
+                onPressed: () => _handlePeerAction(
+                  peer: peer,
+                  isTrusted: isTrusted,
+                  trustState: trustState,
+                  titleText: titleText,
+                ),
                 child: const Text('Pair'),
               ),
       ),
     );
+  }
+
+  Future<void> _handlePeerAction({
+    required Map<String, dynamic> peer,
+    required bool isTrusted,
+    required String trustState,
+    required String titleText,
+  }) async {
+    final client = context.read<JsonRpcRiftClient>();
+    final deviceId = peer['deviceId']?.toString();
+    if (deviceId == null) return;
+
+    try {
+      if (!isTrusted) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => PairingScreen(
+              initialDeviceId: deviceId,
+              initialDisplayName: titleText,
+              autoStart: true,
+            ),
+          ),
+        );
+        await _loadData();
+        return;
+      }
+
+      if (trustState == 'blocked') {
+        final confirmed = await _confirmTrustAction(
+          title: 'Unblock device?',
+          message: 'This will return $titleText to discovered state.',
+          confirmLabel: 'Unblock',
+        );
+        if (!confirmed) return;
+        await client.unblockPeer(deviceId);
+      } else if (trustState == 'trusted' || trustState == 'pairing_pending') {
+        final confirmed = await _confirmTrustAction(
+          title: trustState == 'pairing_pending'
+              ? 'Cancel pairing?'
+              : 'Revoke trust?',
+          message: trustState == 'pairing_pending'
+              ? 'This will drop the pending trust flow for $titleText.'
+              : 'This will revoke trust for $titleText and disconnect active sessions.',
+          confirmLabel:
+              trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke',
+        );
+        if (!confirmed) return;
+        if (trustState == 'pairing_pending') {
+          await client.rejectPairing(deviceId);
+        } else {
+          await client.revokeTrust(
+              deviceId, 'User revoked trust from device manager');
+        }
+      }
+      await _loadData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
   }
 
   @override
@@ -404,16 +447,18 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       body: _error != null && _trustedPeers.isEmpty && _discoveredPeers.isEmpty
           ? Center(
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.warning_amber_rounded, size: 48, color: Theme.of(context).colorScheme.error),
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 48, color: Theme.of(context).colorScheme.error),
                   const SizedBox(height: 16),
-                  Text('Error loading devices: $_error', style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                  Text('Error loading devices: $_error',
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error)),
                   const SizedBox(height: 16),
-                  ElevatedButton(onPressed: _loadData, child: const Text('Retry'))
-                ]
-              )
-            )
+                  ElevatedButton(
+                      onPressed: _loadData, child: const Text('Retry'))
+                ]))
           : RefreshIndicator(
               onRefresh: _loadData,
               child: ListView(
@@ -423,32 +468,36 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                     padding: EdgeInsets.fromLTRB(24, 24, 24, 8),
                     child: Text(
                       'Trusted Devices',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                   ),
                   if (_trustedPeers.isEmpty)
                     const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                       child: Text('No trusted devices found.'),
                     )
                   else
                     ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
-                  
+
                   const Padding(
                     padding: EdgeInsets.fromLTRB(24, 24, 24, 8),
                     child: Text(
                       'Discovered Devices',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                   ),
                   if (_discoveredPeers.isEmpty)
                     const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 24, vertical: 8),
                       child: Text('No new devices discovered in your network.'),
                     )
                   else
                     ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
-                  
+
                   const SizedBox(height: 80), // Fab spacing
                 ],
               ),
