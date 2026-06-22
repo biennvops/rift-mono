@@ -7,6 +7,7 @@ namespace Rift.Daemon.Core.Networking;
 
 internal sealed class SessionHeartbeatManager : IAsyncDisposable
 {
+    internal const string PresenceBasicCapability = "presence.basic";
     private static readonly TimeSpan HeartbeatCadence = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OfflineThreshold = TimeSpan.FromSeconds(90);
 
@@ -51,7 +52,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
             return;
         }
 
-        if (!args.AllowsProtectedTraffic || !args.SelectedCapabilities.Contains("presence.basic", StringComparer.Ordinal))
+        if (!ShouldTrackPresence(args))
         {
             _sessions.TryRemove(args.PeerDeviceId, out _);
             return;
@@ -64,7 +65,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
     {
         if (_sessions.TryGetValue(session.PeerDeviceId, out var tracked))
         {
-            tracked.LastHeardTick = Environment.TickCount64;
+            tracked.WriteLastHeardTick(Environment.TickCount64);
         }
     }
 
@@ -86,41 +87,54 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
 
     private async Task EmitHeartbeatsAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var now = Environment.TickCount64;
+        var sendTasks = new List<Task>(_sessions.Count);
 
         foreach (var entry in _sessions)
         {
             var tracked = entry.Value;
-            if (now - tracked.LastSentTick < HeartbeatCadence.TotalMilliseconds)
+            if (now - tracked.ReadLastSentTick() < HeartbeatCadence.TotalMilliseconds)
             {
                 continue;
             }
 
-            var envelope = new
-            {
-                rift = "0.1-draft",
-                type = "presence.update",
-                messageId = Guid.NewGuid().ToString("D"),
-                sourceDeviceId = _identityManager.GetDeviceId(),
-                payload = new
-                {
-                    status = "online",
-                    lastSeenAt = DateTimeOffset.UtcNow.ToString("O"),
-                    capabilities = tracked.SelectedCapabilities
-                }
-            };
+            sendTasks.Add(SendHeartbeatAsync(entry.Key, tracked, now, cancellationToken));
+        }
 
-            var payloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        await Task.WhenAll(sendTasks);
+    }
 
-            try
+    private async Task SendHeartbeatAsync(string peerDeviceId, TrackedSession tracked, long now, CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "presence.update",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            payload = new
             {
-                await _transport.SendAsync(entry.Key, payloadBytes, cancellationToken);
-                tracked.LastSentTick = now;
+                status = "online",
+                lastSeenAt = DateTimeOffset.UtcNow.ToString("O"),
+                capabilities = tracked.SelectedCapabilities
             }
-            catch (Exception)
-            {
-                // Transport teardown drives the actual offline transition.
-            }
+        };
+
+        var payloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+
+        try
+        {
+            await _transport.SendAsync(peerDeviceId, payloadBytes, cancellationToken);
+            tracked.WriteLastSentTick(now);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Transport teardown drives the actual offline transition.
         }
     }
 
@@ -129,7 +143,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         var now = Environment.TickCount64;
         foreach (var entry in _sessions)
         {
-            if (now - entry.Value.LastHeardTick < OfflineThreshold.TotalMilliseconds)
+            if (now - entry.Value.ReadLastHeardTick() < OfflineThreshold.TotalMilliseconds)
             {
                 continue;
             }
@@ -171,19 +185,31 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         }
     }
 
+    internal static bool ShouldTrackPresence(SessionStateChangedEventArgs args)
+    {
+        return args.AllowsProtectedTraffic && args.SelectedCapabilities.Contains(PresenceBasicCapability, StringComparer.Ordinal);
+    }
+
     private sealed class TrackedSession
     {
+        private long _lastSentTick;
+        private long _lastHeardTick;
+
         public TrackedSession(IReadOnlyList<string> selectedCapabilities, long now)
         {
             SelectedCapabilities = selectedCapabilities;
-            LastSentTick = now - (long)HeartbeatCadence.TotalMilliseconds;
-            LastHeardTick = now;
+            _lastSentTick = now - (long)HeartbeatCadence.TotalMilliseconds;
+            _lastHeardTick = now;
         }
 
         public IReadOnlyList<string> SelectedCapabilities { get; }
 
-        public long LastSentTick { get; set; }
+        public long ReadLastSentTick() => Interlocked.Read(ref _lastSentTick);
 
-        public long LastHeardTick { get; set; }
+        public void WriteLastSentTick(long value) => Interlocked.Exchange(ref _lastSentTick, value);
+
+        public long ReadLastHeardTick() => Interlocked.Read(ref _lastHeardTick);
+
+        public void WriteLastHeardTick(long value) => Interlocked.Exchange(ref _lastHeardTick, value);
     }
 }

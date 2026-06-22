@@ -145,6 +145,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         await _transport.RunSessionLifetimeCoreAsync(
             remoteDeviceId,
             selectedCapabilities,
+            allowsProtectedTraffic: true,
             async _ =>
             {
                 await outboundOnline.Task;

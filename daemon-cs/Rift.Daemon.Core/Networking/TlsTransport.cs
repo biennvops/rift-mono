@@ -234,6 +234,10 @@ public sealed class TlsTransport : ITransport, IDisposable
             ReadNegotiationFramePayloadAsync,
             cancellationToken);
         session.AllowsProtectedTraffic = SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities);
+        session.PeerContext = new SessionPeerContext(
+            session.DeviceId,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            session.AllowsProtectedTraffic);
         session.IsAuthenticated = true;
     }
 
@@ -257,10 +261,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
                 session.DeviceId,
                 payloadBuffer,
-                new SessionPeerContext(
-                    session.DeviceId,
-                    session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
-                    session.AllowsProtectedTraffic)));
+                session.PeerContext));
         }
     }
 
@@ -269,6 +270,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         await RunSessionLifetimeCoreAsync(
             session.DeviceId,
             session.SelectedCapabilities,
+            session.AllowsProtectedTraffic,
             token => RunRegisteredSessionLoopAsync(session, token),
             () =>
             {
@@ -281,6 +283,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     internal async Task RunSessionLifetimeCoreAsync(
         string deviceId,
         IReadOnlyList<CapabilityDescriptor> selectedCapabilities,
+        bool allowsProtectedTraffic,
         Func<CancellationToken, Task> sessionLoop,
         Action cleanup,
         CancellationToken cancellationToken)
@@ -293,7 +296,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: true,
                 capabilityNames,
-                allowsProtectedTraffic: selectedCapabilities.Count > 0 && SessionCapabilityCoordinator.HasRequiredCapabilities(selectedCapabilities)));
+                allowsProtectedTraffic));
             await sessionLoop(cancellationToken);
         }
         finally
@@ -303,7 +306,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: false,
                 capabilityNames,
-                allowsProtectedTraffic: selectedCapabilities.Count > 0 && SessionCapabilityCoordinator.HasRequiredCapabilities(selectedCapabilities)));
+                allowsProtectedTraffic));
         }
     }
 
@@ -652,6 +655,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         public bool IsAuthenticated { get; set; }
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
         public bool AllowsProtectedTraffic { get; set; }
+        public SessionPeerContext PeerContext { get; set; }
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
@@ -662,6 +666,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             IsAuthenticated = false;
             SelectedCapabilities = [];
             AllowsProtectedTraffic = false;
+            PeerContext = new SessionPeerContext(deviceId, Array.Empty<string>(), allowsProtectedTraffic: false);
         }
 
         public void Dispose()

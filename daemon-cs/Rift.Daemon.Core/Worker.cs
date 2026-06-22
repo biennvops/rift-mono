@@ -101,7 +101,7 @@ public class Worker(
 
                 heartbeatManager.OnSessionStateChanged(args);
 
-                if (!args.AllowsProtectedTraffic || !args.SelectedCapabilities.Contains("presence.basic", StringComparer.Ordinal))
+                if (!SessionHeartbeatManager.ShouldTrackPresence(args))
                 {
                     return;
                 }
