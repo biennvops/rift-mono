@@ -110,12 +110,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 await HandlePairingStartAsync(peerDeviceId, cancellationToken);
                 break;
             case "pairing.approve":
-                var state = _pairingStates.AddOrUpdate(
-                    peerDeviceId,
-                    _ => CreatePairingSessionState(),
-                    (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
-                state.MarkRemoteApproved();
-                await TrySendPairingCompleteAsync(peerDeviceId, state, _timeProvider.GetUtcNow().ToString("O"), cancellationToken);
+                await HandlePairingApproveAsync(peerDeviceId, cancellationToken);
                 break;
             case "pairing.reject":
                 await HandlePairingRejectAsync(peerDeviceId);
@@ -144,6 +139,22 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             _ => CreatePairingSessionState(),
             (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
         await LogEventAsync(SecurityEventTypes.PairingAttempted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
+    }
+
+    private async Task HandlePairingApproveAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        if (peer is null)
+        {
+            return;
+        }
+
+        var state = _pairingStates.AddOrUpdate(
+            peerDeviceId,
+            _ => CreatePairingSessionState(),
+            (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
+        state.MarkRemoteApproved();
+        await TrySendPairingCompleteAsync(peerDeviceId, state, _timeProvider.GetUtcNow().ToString("O"), cancellationToken);
     }
 
     private async Task HandlePairingRejectAsync(string peerDeviceId)
@@ -193,8 +204,6 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             _trustStore.TryTransition(peerDeviceId, TrustState.Trusted);
             await LogEventAsync(SecurityEventTypes.PairingCompleted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
         }
-
-        await Task.CompletedTask;
     }
 
     private async Task PruneExpiredSessionsAsync(CancellationToken cancellationToken)
