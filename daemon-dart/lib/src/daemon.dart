@@ -500,7 +500,7 @@ class RiftDaemon {
             },
           });
 
-          daemon._discoveryService!.onDeviceDiscovered.listen((peer) {
+          daemon._discoveryService?.onDeviceDiscovered.listen((peer) {
             if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
             if (peer.deviceIdHint == null) return; // Ignore non-Rift devices
             daemon.trackDiscoveredPeer(peer);
@@ -521,7 +521,7 @@ class RiftDaemon {
             });
           });
 
-          daemon._discoveryService!.onDeviceLost.listen((deviceId) {
+          daemon._discoveryService?.onDeviceLost.listen((deviceId) {
             daemon.untrackDiscoveredPeer(deviceId);
             sendPort.send({
               'jsonrpc': '2.0',

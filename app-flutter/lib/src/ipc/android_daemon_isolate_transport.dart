@@ -90,8 +90,6 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       }
 
       if (message is Map) {
-        _incoming?.add(jsonEncode(message));
-
         if (message['jsonrpc'] == '2.0' && message['method'] == 'rift.daemonReady') {
           final params = message['params'];
           if (params is Map && params['rpcPort'] is SendPort) {
@@ -99,11 +97,16 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
             _rpcPort = port;
             if (!ready.isCompleted) ready.complete(port);
           }
+          return;
         }
+
+        _incoming?.add(jsonEncode(message));
 
         if (message['jsonrpc'] == '2.0' && message['method'] == 'rift.daemonError') {
           final params = message['params'];
-          _incoming?.addError(StateError('Daemon error: ${params is Map ? params['error'] : params}'));
+          _incoming?.addError(StateError('Daemon error: ${params['error']}'));
+          _incoming?.close();
+          return;
         }
       }
     }, onDone: () {
