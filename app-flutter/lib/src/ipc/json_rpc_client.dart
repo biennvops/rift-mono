@@ -32,11 +32,72 @@ class JsonRpcRiftClient {
 
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
-    return Map<String, dynamic>.from(params.value as Map);
+    return _canonicalizeMap(Map<String, dynamic>.from(params.value as Map));
   }
 
   bool _hasString(Map<String, dynamic> m, String key) =>
       m[key] is String && (m[key] as String).isNotEmpty;
+
+  // Cross-implementation IPC: daemon-cs serializes PascalCase property names by
+  // default, while daemon-dart uses lowerCamelCase. Canonicalize to the IPC spec
+  // (lowerCamelCase) so UI code can be uniform.
+  static const Map<String, String> _keyAliases = {
+    'DeviceId': 'deviceId',
+    'Fingerprint': 'fingerprint',
+    'PeerFingerprint': 'peerFingerprint',
+    'ExpiresInMs': 'expiresInMs',
+    'ImplementationId': 'implementationId',
+    'ProtocolVersion': 'protocolVersion',
+    'Capabilities': 'capabilities',
+    'Name': 'name',
+    'Version': 'version',
+    'Peers': 'peers',
+    'TrustState': 'trustState',
+    'DisplayName': 'displayName',
+    'Address': 'address',
+    'Port': 'port',
+    'TxtRecord': 'txtRecord',
+    'MinV': 'minV',
+    'MaxV': 'maxV',
+    'Did': 'did',
+    'Fp': 'fp',
+    'PreviousState': 'previousState',
+    'NewState': 'newState',
+    'Reason': 'reason',
+    'Status': 'status',
+    'LastSeenAt': 'lastSeenAt',
+    'TrustedDeviceId': 'trustedDeviceId',
+    'PersistedAt': 'persistedAt',
+    'RevokedAt': 'revokedAt',
+    'Revoked': 'revoked',
+    'Rejected': 'rejected',
+    'Unblocked': 'unblocked',
+  };
+
+  static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
+    final out = <String, dynamic>{};
+    input.forEach((k, v) {
+      final key = _keyAliases[k] ?? k;
+      out[key] = _canonicalizeValue(v);
+    });
+    return out;
+  }
+
+  static dynamic _canonicalizeValue(dynamic v) {
+    if (v is Map) {
+      return _canonicalizeMap(Map<String, dynamic>.from(v));
+    }
+    if (v is List) {
+      return v.map(_canonicalizeValue).toList(growable: false);
+    }
+    return v;
+  }
+
+  static dynamic _canonicalizeResult(dynamic result) {
+    if (result is Map<String, dynamic>) return _canonicalizeMap(result);
+    if (result is Map) return _canonicalizeMap(Map<String, dynamic>.from(result));
+    return result;
+  }
 
   void _emitIfValid(
     String method,
@@ -215,75 +276,85 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.getDeviceInfo');
+    final r = await _client!.sendRequest('rift.getDeviceInfo');
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> listDiscoveredPeers() async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.listDiscoveredPeers');
+    final r = await _client!.sendRequest('rift.listDiscoveredPeers');
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> listTrustedPeers() async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.listTrustedPeers');
+    final r = await _client!.sendRequest('rift.listTrustedPeers');
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> startDiscovery() async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.startDiscovery');
+    final r = await _client!.sendRequest('rift.startDiscovery');
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> stopDiscovery() async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.stopDiscovery');
+    final r = await _client!.sendRequest('rift.stopDiscovery');
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> startPairing(String deviceId) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
+    final r = await _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.approvePairing', {
+    final r = await _client!.sendRequest('rift.approvePairing', {
       'deviceId': deviceId,
       'fingerprint': fingerprint,
     });
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> rejectPairing(String deviceId) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.rejectPairing', {'deviceId': deviceId});
+    final r = await _client!.sendRequest('rift.rejectPairing', {'deviceId': deviceId});
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> revokeTrust(String deviceId, String reason) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.revokeTrust', {
+    final r = await _client!.sendRequest('rift.revokeTrust', {
       'deviceId': deviceId,
       'reason': reason,
     });
+    return _canonicalizeResult(r);
   }
 
   Future<dynamic> unblockPeer(String deviceId) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    return _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
+    final r = await _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
+    return _canonicalizeResult(r);
   }
 }
