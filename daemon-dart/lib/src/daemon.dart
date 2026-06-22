@@ -459,6 +459,19 @@ class RiftDaemon {
             }
           });
 
+          // Signal readiness as early as possible so the Flutter UI can start
+          // issuing requests even if discovery/presence listeners are still
+          // wiring up (those can be slow on some Android builds).
+          sendPort.send({
+            'jsonrpc': '2.0',
+            'method': 'rift.daemonReady',
+            'params': {
+              'status': 'running',
+              'deviceId': daemon._identityManager!.deviceId,
+              'rpcPort': rpcPort.sendPort,
+            },
+          });
+
           daemon._discoveryService!.onDeviceDiscovered.listen((peer) {
             if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
             if (peer.deviceIdHint == null) return; // Ignore non-Rift devices
@@ -502,19 +515,6 @@ class RiftDaemon {
                 'capabilities': ctx.negotiatedCapabilities.map((c) => c.name).toList(),
               }
             });
-          });
-
-          // Wrap startup status in a JSON-RPC 2.0 notification so all transport
-          // messages conform to ipc.md and the Flutter client can use a single
-          // parsing path without special-casing status/error objects.
-          sendPort.send({
-            'jsonrpc': '2.0',
-            'method': 'rift.daemonReady',
-            'params': {
-              'status': 'running',
-              'deviceId': daemon._identityManager!.deviceId,
-              'rpcPort': rpcPort.sendPort,
-            },
           });
         } on SocketException catch (e) {
           rpcPort.close();

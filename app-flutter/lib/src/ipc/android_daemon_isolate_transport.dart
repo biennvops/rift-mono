@@ -16,6 +16,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   Isolate? _daemonIsolate;
   ReceivePort? _uiReceive;
   SendPort? _rpcPort;
+  StreamSubscription? _uiSub;
 
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
@@ -30,6 +31,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     final storagePath = storageDir.path;
 
     _uiReceive = ReceivePort();
+    _incoming = StreamController<String>();
 
     // Spawn daemon isolate. It will send notifications/responses back via
     // `_uiReceive`, and report `rpcPort` inside the `rift.daemonReady` message.
@@ -41,23 +43,44 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       },
     );
 
-    // Wait for rift.daemonReady to learn rpcPort.
-    final rpcPort = await _waitForRpcPort(_uiReceive!);
-    _rpcPort = rpcPort;
+    // Single listener for the lifetime of the ReceivePort.
+    final ready = Completer<SendPort>();
+    _uiSub = _uiReceive!.listen((message) {
+      // Isolate error listener delivers [error, stack] as a List.
+      if (message is List && message.length >= 2) {
+        _incoming?.addError(StateError('Daemon isolate error: ${message[0]}\n${message[1]}'));
+        return;
+      }
 
-    _incoming = StreamController<String>();
-    _outgoing = StreamController<String>();
-
-    // Incoming: Map -> JSON string.
-    _uiReceive!.listen((message) {
       if (message is Map) {
         _incoming?.add(jsonEncode(message));
+
+        if (message['jsonrpc'] == '2.0' && message['method'] == 'rift.daemonReady') {
+          final params = message['params'];
+          if (params is Map && params['rpcPort'] is SendPort) {
+            final port = params['rpcPort'] as SendPort;
+            _rpcPort = port;
+            if (!ready.isCompleted) ready.complete(port);
+          }
+        }
+
+        if (message['jsonrpc'] == '2.0' && message['method'] == 'rift.daemonError') {
+          final params = message['params'];
+          _incoming?.addError(StateError('Daemon error: ${params is Map ? params['error'] : params}'));
+        }
       }
     }, onDone: () {
       _incoming?.close();
     }, onError: (e, st) {
       _incoming?.addError(e, st);
     });
+
+    _outgoing = StreamController<String>();
+    // Wait for rift.daemonReady to learn rpcPort (nsd init can be slow).
+    await ready.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw TimeoutException('Timed out waiting for rift.daemonReady/rpcPort'),
+    );
 
     // Outgoing: JSON string -> Map.
     _outgoing!.stream.listen((json) {
@@ -83,6 +106,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _incoming = null;
     _outgoing = null;
 
+    await _uiSub?.cancel();
+    _uiSub = null;
+
     _uiReceive?.close();
     _uiReceive = null;
 
@@ -92,27 +118,3 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _daemonIsolate = null;
   }
 }
-
-Future<SendPort> _waitForRpcPort(ReceivePort uiReceive) async {
-  final completer = Completer<SendPort>();
-  late final StreamSubscription sub;
-  sub = uiReceive.listen((message) {
-    if (message is Map &&
-        message['jsonrpc'] == '2.0' &&
-        message['method'] == 'rift.daemonReady') {
-      final params = message['params'];
-      if (params is Map && params['rpcPort'] is SendPort) {
-        final port = params['rpcPort'] as SendPort;
-        if (!completer.isCompleted) {
-          completer.complete(port);
-        }
-        sub.cancel();
-      }
-    }
-  });
-  return completer.future.timeout(const Duration(seconds: 10), onTimeout: () async {
-    await sub.cancel();
-    throw TimeoutException('Timed out waiting for rift.daemonReady/rpcPort');
-  });
-}
-
