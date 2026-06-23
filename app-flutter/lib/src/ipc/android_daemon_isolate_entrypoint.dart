@@ -5,9 +5,10 @@ import 'package:flutter/services.dart';
 
 /// Background isolate entrypoint for the Android daemon.
 ///
-/// This exists because `daemon-dart` uses Flutter plugins (e.g. `nsd`) and
-/// plugin channels are not usable from a spawned isolate unless the isolate
-/// initializes the background binary messenger and registers plugins.
+/// The daemon isolate itself must stay plugin-free on Android release builds:
+/// MethodChannel-based plugins such as `nsd` must run on the root isolate.
+/// Discovery is bridged from the root isolate in
+/// `android_root_discovery_bridge.dart`.
 void androidDaemonIsolateEntrypoint(Map<String, dynamic> args) {
   final token = args['rootIsolateToken'];
   if (token is! ui.RootIsolateToken) {
@@ -15,9 +16,9 @@ void androidDaemonIsolateEntrypoint(Map<String, dynamic> args) {
   }
 
   BackgroundIsolateBinaryMessenger.ensureInitialized(token);
-  ui.DartPluginRegistrant.ensureInitialized();
-
-  // Forward to the real daemon entrypoint (pure Dart, but uses plugins).
+  // Do not call DartPluginRegistrant.ensureInitialized() here. Registering the
+  // full plugin set would re-register `nsd` on the background isolate and
+  // crash release builds with "Background isolates do not support
+  // setMessageHandler()". The daemon isolate uses pure Dart services only.
   RiftDaemon.isolateEntryPoint(args);
 }
-

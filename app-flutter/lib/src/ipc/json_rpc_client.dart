@@ -10,6 +10,7 @@ class JsonRpcRiftClient {
 
   json_rpc.Peer? _client;
   bool _isConnected = false;
+  final Map<String, Future<dynamic>> _pendingStartPairings = {};
 
   JsonRpcRiftClient(this._transport);
 
@@ -39,6 +40,11 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
 
+  late final _securityEventController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onSecurityEvent =>
+      _securityEventController.stream;
+
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
     return _canonicalizeMap(Map<String, dynamic>.from(params.value as Map));
@@ -66,6 +72,9 @@ class JsonRpcRiftClient {
     'Address': 'address',
     'Port': 'port',
     'TxtRecord': 'txtRecord',
+    'IsDiscovering': 'isDiscovering',
+    'Started': 'started',
+    'Stopped': 'stopped',
     'MinV': 'minV',
     'MaxV': 'maxV',
     'Did': 'did',
@@ -74,6 +83,8 @@ class JsonRpcRiftClient {
     'NewState': 'newState',
     'Reason': 'reason',
     'Status': 'status',
+    'Presence': 'presence',
+    'PairedAt': 'pairedAt',
     'LastSeenAt': 'lastSeenAt',
     'TrustedDeviceId': 'trustedDeviceId',
     'PersistedAt': 'persistedAt',
@@ -81,13 +92,27 @@ class JsonRpcRiftClient {
     'Revoked': 'revoked',
     'Rejected': 'rejected',
     'Unblocked': 'unblocked',
+    'Reset': 'reset',
+    'Events': 'events',
+    'Total': 'total',
+    'EventId': 'eventId',
+    'EventType': 'eventType',
+    'Severity': 'severity',
+    'LocalDeviceId': 'localDeviceId',
+    'PeerDeviceId': 'peerDeviceId',
+    'OperationId': 'operationId',
+    'Timestamp': 'timestamp',
+    'Outcome': 'outcome',
+    'FailureReason': 'failureReason',
+    'Details': 'details',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
     final out = <String, dynamic>{};
     input.forEach((k, v) {
       final key = _keyAliases[k] ?? k;
-      out[key] = _canonicalizeValue(v);
+      final value = _canonicalizeValue(v);
+      out[key] = _canonicalizeFieldValue(key, value);
     });
     return out;
   }
@@ -108,6 +133,73 @@ class JsonRpcRiftClient {
       return _canonicalizeMap(Map<String, dynamic>.from(result));
     }
     return result;
+  }
+
+  static dynamic _canonicalizeFieldValue(String key, dynamic value) {
+    if (value is! String) {
+      return value;
+    }
+
+    switch (key) {
+      case 'trustState':
+      case 'previousState':
+      case 'newState':
+        return _canonicalizeTrustState(value);
+      case 'severity':
+      case 'outcome':
+        return value.toLowerCase();
+      default:
+        return value;
+    }
+  }
+
+  static String _canonicalizeTrustState(String value) {
+    switch (value.toLowerCase()) {
+      case 'pairingpending':
+      case 'pairing_pending':
+        return 'pairing_pending';
+      case 'trusted':
+        return 'trusted';
+      case 'blocked':
+        return 'blocked';
+      case 'revoked':
+        return 'revoked';
+      case 'discovered':
+        return 'discovered';
+      default:
+        return value.toLowerCase();
+    }
+  }
+
+  static String formatDisplayError(Object error) {
+    final raw = error.toString();
+    final normalized = raw.replaceFirst(RegExp(r'^Exception:\s*'), '');
+    final withoutJsonRpc =
+        normalized.replaceFirst(RegExp(r'^JSON-RPC error -?\d+:\s*'), '');
+
+    if (withoutJsonRpc.contains('Not connected to daemon')) {
+      return 'Daemon not connected.';
+    }
+    if (withoutJsonRpc.contains('Failed to establish a secure session')) {
+      return 'Could not establish a secure session with this device. Make sure both devices are reachable on the same local network, then try again.';
+    }
+    if (withoutJsonRpc.contains('Peer not found')) {
+      return 'This device is no longer available.';
+    }
+    if (withoutJsonRpc.contains('blocked or revoked')) {
+      return 'This device cannot be paired until its trust state is reset.';
+    }
+    if (withoutJsonRpc.contains('No pending pairing exists')) {
+      return 'There is no pending pairing request for this device.';
+    }
+    if (withoutJsonRpc.contains('Fingerprint mismatch')) {
+      return 'Fingerprint verification failed.';
+    }
+    if (withoutJsonRpc.contains('Connection failed. Tried:')) {
+      return 'Could not connect to the local daemon.';
+    }
+
+    return withoutJsonRpc;
   }
 
   void _emitIfValid(
@@ -205,6 +297,15 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
+      _client!.registerMethod('rift.onSecurityEvent',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onSecurityEvent',
+          _asMap(params),
+          _securityEventController,
+          requiredStringKeys: const ['eventId', 'eventType', 'severity'],
+        );
+      });
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
         _log.warning('RPC Connection closed');
@@ -286,6 +387,7 @@ class JsonRpcRiftClient {
     await _trustChangedController.close();
     await _pairingRequestController.close();
     await _pairingCompleteController.close();
+    await _securityEventController.close();
   }
 
   Future<dynamic> getDeviceInfo() async {
@@ -312,6 +414,37 @@ class JsonRpcRiftClient {
     return _canonicalizeResult(r);
   }
 
+  Future<dynamic> queryEventLog({
+    List<String>? eventTypes,
+    List<String>? severities,
+    String? peerDeviceId,
+    String? since,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final params = <String, dynamic>{
+      'limit': limit,
+      'offset': offset,
+    };
+    if (eventTypes != null && eventTypes.isNotEmpty) {
+      params['eventTypes'] = eventTypes;
+    }
+    if (severities != null && severities.isNotEmpty) {
+      params['severities'] = severities;
+    }
+    if (peerDeviceId != null && peerDeviceId.isNotEmpty) {
+      params['peerDeviceId'] = peerDeviceId;
+    }
+    if (since != null && since.isNotEmpty) {
+      params['since'] = since;
+    }
+    final r = await _client!.sendRequest('rift.queryEventLog', params);
+    return _canonicalizeResult(r);
+  }
+
   Future<dynamic> startDiscovery() async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
@@ -332,9 +465,24 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r =
-        await _client!.sendRequest('rift.startPairing', {'deviceId': deviceId});
-    return _canonicalizeResult(r);
+    final pending = _pendingStartPairings[deviceId];
+    if (pending != null) {
+      _log.info('Joining in-flight startPairing request for $deviceId');
+      return pending;
+    }
+
+    final future = _client!
+        .sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
+      _canonicalizeResult,
+    );
+    _pendingStartPairings[deviceId] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_pendingStartPairings[deviceId], future)) {
+        _pendingStartPairings.remove(deviceId);
+      }
+    }
   }
 
   Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
@@ -374,6 +522,15 @@ class JsonRpcRiftClient {
     }
     final r =
         await _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> resetRevokedPeer(String deviceId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!
+        .sendRequest('rift.resetRevokedPeer', {'deviceId': deviceId});
     return _canonicalizeResult(r);
   }
 }

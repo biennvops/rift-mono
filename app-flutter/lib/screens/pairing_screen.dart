@@ -7,12 +7,20 @@ import 'dart:async';
 class PairingScreen extends StatefulWidget {
   final String? initialDeviceId;
   final String? initialDisplayName;
+  final String? initialPeerFingerprint;
+  final int? initialExpiresInMs;
+  final bool initialCanApproveLocally;
+  final String? initialStatus;
   final bool autoStart;
 
   const PairingScreen({
     super.key,
     this.initialDeviceId,
     this.initialDisplayName,
+    this.initialPeerFingerprint,
+    this.initialExpiresInMs,
+    this.initialCanApproveLocally = false,
+    this.initialStatus,
     this.autoStart = false,
   });
 
@@ -36,12 +44,20 @@ class _PairingScreenState extends State<PairingScreen> {
   bool _busy = false;
   bool _completed = false;
   int? _remainingSeconds;
+  bool _hasActivePairingFlow = false;
+  bool _canApproveLocally = false;
 
   @override
   void initState() {
     super.initState();
     _deviceId = widget.initialDeviceId;
     _displayName = widget.initialDisplayName;
+    _peerFingerprint = widget.initialPeerFingerprint;
+    _expiresInMs = widget.initialExpiresInMs;
+    _status = widget.initialStatus ?? _status;
+    _hasActivePairingFlow = widget.initialPeerFingerprint != null;
+    _canApproveLocally = widget.initialCanApproveLocally;
+    _startCountdown(_expiresInMs);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindClient();
       if (widget.autoStart && widget.initialDeviceId != null) {
@@ -67,12 +83,15 @@ class _PairingScreenState extends State<PairingScreen> {
         _deviceId = event['deviceId']?.toString();
         _displayName = event['displayName']?.toString() ?? _deviceId;
         _peerFingerprint = event['fingerprint']?.toString();
+        _localFingerprint = null;
         _expiresInMs = (event['expiresInMs'] as num?)?.toInt();
         _startCountdown(_expiresInMs);
         _status = 'Incoming pairing request';
         _error = null;
         _busy = false;
         _completed = false;
+        _hasActivePairingFlow = true;
+        _canApproveLocally = true;
       });
     });
     _completeSub = client.onPairingComplete.listen((event) {
@@ -83,8 +102,10 @@ class _PairingScreenState extends State<PairingScreen> {
         _error = null;
         _busy = false;
         _completed = true;
+        _hasActivePairingFlow = false;
         _countdownTimer?.cancel();
         _remainingSeconds = null;
+        _canApproveLocally = false;
       });
     });
     _trustSub = client.onTrustChanged.listen((event) {
@@ -95,11 +116,18 @@ class _PairingScreenState extends State<PairingScreen> {
           _status = 'Trust persisted';
           _error = null;
           _busy = false;
+          _hasActivePairingFlow = false;
+          _canApproveLocally = false;
         });
       } else if (newState == 'discovered' && !_completed) {
         setState(() {
           _status = 'Pairing closed';
           _busy = false;
+          _hasActivePairingFlow = false;
+          _peerFingerprint = null;
+          _localFingerprint = null;
+          _expiresInMs = null;
+          _canApproveLocally = false;
         });
         _countdownTimer?.cancel();
         _remainingSeconds = null;
@@ -139,6 +167,10 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _startPairing(String deviceId) async {
+    if (_busy && _deviceId == deviceId) {
+      return;
+    }
+
     final client = context.read<JsonRpcRiftClient>();
     setState(() {
       _busy = true;
@@ -146,6 +178,8 @@ class _PairingScreenState extends State<PairingScreen> {
       _status = 'Starting pairing';
       _error = null;
       _completed = false;
+      _hasActivePairingFlow = false;
+      _canApproveLocally = false;
     });
 
     try {
@@ -159,13 +193,21 @@ class _PairingScreenState extends State<PairingScreen> {
         _startCountdown(_expiresInMs);
         _status = 'Confirm fingerprint to continue';
         _busy = false;
+        _hasActivePairingFlow = true;
+        _canApproveLocally = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _peerFingerprint = null;
+        _localFingerprint = null;
+        _expiresInMs = null;
+        _remainingSeconds = null;
+        _error = _formatUserFacingError(e);
         _status = 'Unable to start pairing';
         _busy = false;
+        _hasActivePairingFlow = false;
+        _canApproveLocally = false;
       });
     }
   }
@@ -188,12 +230,14 @@ class _PairingScreenState extends State<PairingScreen> {
       setState(() {
         _busy = false;
         _status = 'Approval sent. Waiting for completion';
+        _canApproveLocally = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString();
+        _error = _formatUserFacingError(e);
+        _canApproveLocally = false;
       });
     }
   }
@@ -214,6 +258,12 @@ class _PairingScreenState extends State<PairingScreen> {
       setState(() {
         _busy = false;
         _status = 'Pairing rejected';
+        _error = null;
+        _hasActivePairingFlow = false;
+        _peerFingerprint = null;
+        _localFingerprint = null;
+        _expiresInMs = null;
+        _canApproveLocally = false;
         _countdownTimer?.cancel();
         _remainingSeconds = null;
       });
@@ -221,9 +271,17 @@ class _PairingScreenState extends State<PairingScreen> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = e.toString();
+        _error = _formatUserFacingError(e);
       });
     }
+  }
+
+  String _formatUserFacingError(Object error) {
+    final formatted = JsonRpcRiftClient.formatDisplayError(error);
+    if (formatted == 'This device is no longer available.') {
+      return 'This device is no longer available for pairing.';
+    }
+    return formatted;
   }
 
   Widget _buildFingerprintCard(String label, String? value) {
@@ -244,8 +302,19 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasExpired = (_remainingSeconds != null && _remainingSeconds == 0 && !_completed);
-    final canApprove = !_busy && !_completed && !hasExpired && _deviceId != null && _peerFingerprint != null;
+    final hasExpired =
+        (_remainingSeconds != null && _remainingSeconds == 0 && !_completed);
+    final canStart =
+        _deviceId != null && !_busy && !_completed && !_hasActivePairingFlow;
+    final canApprove = !_busy &&
+        !_completed &&
+        !hasExpired &&
+        _hasActivePairingFlow &&
+        _canApproveLocally &&
+        _deviceId != null &&
+        _peerFingerprint != null;
+    final canReject =
+        !_busy && !_completed && _deviceId != null && _hasActivePairingFlow;
 
     return Scaffold(
       appBar: AppBar(title: const Text(AppStrings.pairingTitle)),
@@ -276,11 +345,9 @@ class _PairingScreenState extends State<PairingScreen> {
           _buildFingerprintCard('Local fingerprint', _localFingerprint),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: _deviceId != null && !_busy && !_completed
-                ? () => _startPairing(_deviceId!)
-                : null,
+            onPressed: canStart ? () => _startPairing(_deviceId!) : null,
             icon: const Icon(Icons.link),
-            label: const Text('Start pairing'),
+            label: Text(_error != null ? 'Try again' : 'Start pairing'),
           ),
           const SizedBox(height: 12),
           Row(
@@ -294,7 +361,7 @@ class _PairingScreenState extends State<PairingScreen> {
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton(
-                  onPressed: (!_busy && !_completed && _deviceId != null) ? _rejectPairing : null,
+                  onPressed: canReject ? _rejectPairing : null,
                   child: const Text('Reject'),
                 ),
               ),

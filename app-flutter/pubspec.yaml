@@ -14,6 +14,7 @@ dependencies:
     path: ../daemon-dart
   json_rpc_2: ^4.1.0
   logging: ^1.3.0
+  nsd: ^4.0.0
   path_provider: ^2.1.5
   provider: ^6.1.5+1
   stream_channel: ^2.1.4

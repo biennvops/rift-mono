@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:fake_async/fake_async.dart';
@@ -8,13 +9,37 @@ import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 class MockTransport implements IpcTransport {
   StreamController<String>? _daemonToApp;
   StreamController<String>? _appToDaemon;
+  final List<Map<String, dynamic>> requests = [];
 
   bool isConnected = false;
   int connectionAttempts = 0;
   bool shouldFailConnect = false;
+  String listTrustedPeersJson =
+      '{"Peers":[{"DeviceId":"rift-peer","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
+  Map<String, dynamic> startPairingResult = {
+    'Fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+    'PeerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+    'ExpiresInMs': 120000,
+  };
 
   void triggerDisconnect() {
     _daemonToApp?.close();
+  }
+
+  void emitNotification(String method, Map<String, dynamic> params) {
+    _daemonToApp?.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'method': method,
+      'params': params,
+    }));
+  }
+
+  void _sendResult(dynamic id, dynamic result) {
+    _daemonToApp?.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'result': result,
+      'id': id,
+    }));
   }
 
   @override
@@ -28,15 +53,38 @@ class MockTransport implements IpcTransport {
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
 
-    // Simulate daemon responding to ping
+    // Simulate daemon responding to requests and notifications.
     _appToDaemon!.stream.listen((req) {
-      if (req.contains('"method":"rift.getDeviceInfo"')) {
-        // Extract ID to form proper JSON-RPC response
-        final match = RegExp(r'"id":(\d+)').firstMatch(req);
-        final id = match?.group(1) ?? '1';
-        final mockJson =
-            '{"deviceId":"rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq","fingerprint":"CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ","implementationId":"riftd-cs/0.1.0","protocolVersion":"0.1-draft","capabilities":[{"name":"clipboard.offer_fetch","version":1}]}';
-        _daemonToApp?.add('{"jsonrpc":"2.0","result":$mockJson,"id":$id}');
+      final decoded = jsonDecode(req) as Map<String, dynamic>;
+      requests.add(decoded);
+      final id = decoded['id'];
+      switch (decoded['method']) {
+        case 'rift.getDeviceInfo':
+          _sendResult(id, {
+            'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+            'implementationId': 'riftd-cs/0.1.0',
+            'protocolVersion': '0.1-draft',
+            'capabilities': [
+              {'name': 'clipboard.offer_fetch', 'version': 1}
+            ]
+          });
+          break;
+        case 'rift.listTrustedPeers':
+          _sendResult(id, jsonDecode(listTrustedPeersJson));
+          break;
+        case 'rift.startPairing':
+          _sendResult(id, startPairingResult);
+          break;
+        case 'rift.approvePairing':
+          _sendResult(id, {
+            'TrustedDeviceId': (decoded['params'] as Map<String, dynamic>)['deviceId'],
+            'PersistedAt': '2026-06-24T02:00:00Z',
+          });
+          break;
+        case 'rift.rejectPairing':
+          _sendResult(id, {'Rejected': true});
+          break;
       }
     });
 
@@ -87,6 +135,43 @@ void main() {
           }));
     });
 
+    test('should canonicalize C# trust state enum values to IPC format', () async {
+      await client.connect();
+
+      final result = await client.listTrustedPeers();
+      expect(
+        result,
+        equals({
+          'peers': [
+            {
+              'deviceId': 'rift-peer',
+              'trustState': 'pairing_pending',
+              'presence': 'offline',
+              'capabilities': <dynamic>[],
+            }
+          ]
+        }),
+      );
+    });
+
+    test('should format transport and pairing errors for display', () {
+      expect(
+        JsonRpcRiftClient.formatDisplayError(
+          Exception(
+            'JSON-RPC error -32000: Failed to establish a secure session with peer',
+          ),
+        ),
+        contains('Could not establish a secure session'),
+      );
+
+      expect(
+        JsonRpcRiftClient.formatDisplayError(
+          StateError('Not connected to daemon'),
+        ),
+        equals('Daemon not connected.'),
+      );
+    });
+
     test('should attempt reconnection on unexpected disconnect', () {
       fakeAsync((async) {
         // Connect synchronously within the fake async zone
@@ -126,6 +211,106 @@ void main() {
         client.disconnect();
         async.flushMicrotasks();
       });
+    });
+
+    test('should deliver incoming pairing request notification with canonicalized fields', () async {
+      await client.connect();
+
+      final eventFuture = client.onPairingRequest.first;
+      transport.emitNotification('rift.onPairingRequest', {
+        'DeviceId': 'rift-linux-peer',
+        'DisplayName': 'Linux Laptop',
+        'Fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'ExpiresInMs': 120000,
+      });
+
+      final event = await eventFuture;
+      expect(event, {
+        'deviceId': 'rift-linux-peer',
+        'displayName': 'Linux Laptop',
+        'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'expiresInMs': 120000,
+      });
+    });
+
+    test('Linux to Android style flow: approve sends correct IPC request and receives completion events',
+        () async {
+      await client.connect();
+
+      final requestFuture = client.onPairingRequest.first;
+      transport.emitNotification('rift.onPairingRequest', {
+        'DeviceId': 'rift-android-peer',
+        'DisplayName': 'Android Phone',
+        'Fingerprint': 'PEER-1111-2222-3333-4444-5555-6666-7777-8888',
+        'ExpiresInMs': 120000,
+      });
+      final requestEvent = await requestFuture;
+      expect(requestEvent['deviceId'], 'rift-android-peer');
+
+      await client.approvePairing(
+        requestEvent['deviceId'] as String,
+        requestEvent['fingerprint'] as String,
+      );
+
+      final approveRequest = transport.requests.last;
+      expect(approveRequest['method'], 'rift.approvePairing');
+      expect(approveRequest['params'], {
+        'deviceId': 'rift-android-peer',
+        'fingerprint': 'PEER-1111-2222-3333-4444-5555-6666-7777-8888',
+      });
+
+      final trustChangedFuture = client.onTrustChanged.first;
+      final pairingCompleteFuture = client.onPairingComplete.first;
+      transport.emitNotification('rift.onTrustChanged', {
+        'DeviceId': 'rift-android-peer',
+        'PreviousState': 'pairingPending',
+        'NewState': 'trusted',
+        'Reason': 'pairing.completed',
+      });
+      transport.emitNotification('rift.onPairingComplete', {
+        'DeviceId': 'rift-android-peer',
+        'Fingerprint': 'PEER-1111-2222-3333-4444-5555-6666-7777-8888',
+        'PersistedAt': '2026-06-24T02:01:00Z',
+      });
+
+      final trustChanged = await trustChangedFuture;
+      final pairingComplete = await pairingCompleteFuture;
+      expect(trustChanged['newState'], 'trusted');
+      expect(trustChanged['previousState'], 'pairing_pending');
+      expect(pairingComplete['deviceId'], 'rift-android-peer');
+      expect(pairingComplete['fingerprint'],
+          'PEER-1111-2222-3333-4444-5555-6666-7777-8888');
+    });
+
+    test('Android to Linux style flow: startPairing returns fingerprints and daemon can close pending flow',
+        () async {
+      await client.connect();
+
+      final startResult =
+          await client.startPairing('rift-linux-peer') as Map<String, dynamic>;
+      expect(startResult, {
+        'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'expiresInMs': 120000,
+      });
+
+      final startRequest = transport.requests.last;
+      expect(startRequest['method'], 'rift.startPairing');
+      expect(startRequest['params'], {'deviceId': 'rift-linux-peer'});
+
+      final trustChangedFuture = client.onTrustChanged.first;
+      transport.emitNotification('rift.onTrustChanged', {
+        'DeviceId': 'rift-linux-peer',
+        'PreviousState': 'pairingPending',
+        'NewState': 'discovered',
+        'Reason': 'pairing.closed',
+      });
+
+      final trustChanged = await trustChangedFuture;
+      expect(trustChanged['deviceId'], 'rift-linux-peer');
+      expect(trustChanged['previousState'], 'pairing_pending');
+      expect(trustChanged['newState'], 'discovered');
+      expect(trustChanged['reason'], 'pairing.closed');
     });
   });
 }

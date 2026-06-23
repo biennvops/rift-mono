@@ -77,6 +77,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final deviceId = event['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
     if (!mounted) return;
+    if (_isPeerAlreadyManaged(deviceId)) return;
 
     setState(() {
       // Upsert into discovered list.
@@ -173,10 +174,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     try {
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
+      final trustedPeers = List<dynamic>.from(trustedResult['peers'] ?? const []);
+      final discoveredPeers = _filterDiscoverablePeers(
+        trustedPeers: trustedPeers,
+        discoveredPeers: List<dynamic>.from(
+          discoveredResult['peers'] ?? const [],
+        ),
+      );
       if (mounted) {
         setState(() {
-          _trustedPeers = trustedResult['peers'] ?? [];
-          _discoveredPeers = discoveredResult['peers'] ?? [];
+          _trustedPeers = trustedPeers;
+          _discoveredPeers = discoveredPeers;
           _isDiscovering = discoveredResult['isDiscovering'] == true;
           _error = null;
         });
@@ -184,10 +192,48 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = JsonRpcRiftClient.formatDisplayError(e);
         });
       }
     }
+  }
+
+  bool _isPeerAlreadyManaged(String deviceId) {
+    return _trustedPeers.any(
+      (peer) => peer is Map && peer['deviceId']?.toString() == deviceId,
+    );
+  }
+
+  List<dynamic> _filterDiscoverablePeers({
+    required List<dynamic> trustedPeers,
+    required List<dynamic> discoveredPeers,
+  }) {
+    final trustedDeviceIds = trustedPeers
+        .whereType<Map>()
+        .map((peer) => peer['deviceId']?.toString())
+        .whereType<String>()
+        .where((deviceId) => deviceId.isNotEmpty)
+        .toSet();
+
+    const hiddenTrustStates = {
+      'trusted',
+      'blocked',
+      'revoked',
+      'pairing_pending',
+    };
+
+    return discoveredPeers.where((peer) {
+      if (peer is! Map) return false;
+      final deviceId = peer['deviceId']?.toString();
+      if (deviceId == null || deviceId.isEmpty) return false;
+      if (trustedDeviceIds.contains(deviceId)) return false;
+
+      final trustState = peer['trustState']?.toString();
+      if (trustState != null && hiddenTrustStates.contains(trustState)) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
   }
 
   Future<void> _toggleDiscovery() async {
@@ -203,7 +249,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text(JsonRpcRiftClient.formatDisplayError(e)),
+          ),
         );
       }
     }
@@ -221,6 +269,32 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         return 'Trusted';
       default:
         return 'Discovered';
+    }
+  }
+
+  IconData _trustedActionIcon(String trustState) {
+    switch (trustState) {
+      case 'blocked':
+        return Icons.lock_open;
+      case 'revoked':
+        return Icons.restore;
+      case 'pairing_pending':
+        return Icons.close;
+      default:
+        return Icons.gpp_bad;
+    }
+  }
+
+  String _trustedActionTooltip(String trustState) {
+    switch (trustState) {
+      case 'blocked':
+        return 'Unblock device';
+      case 'revoked':
+        return 'Reset revoked peer';
+      case 'pairing_pending':
+        return 'Cancel pairing';
+      default:
+        return 'Revoke trust';
     }
   }
 
@@ -344,13 +418,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         ),
         trailing: isTrusted
             ? IconButton(
-                icon: Icon(
-                    trustState == 'blocked' ? Icons.lock_open : Icons.gpp_bad),
-                tooltip: trustState == 'blocked'
-                    ? 'Unblock device'
-                    : (trustState == 'pairing_pending'
-                        ? 'Cancel pairing'
-                        : 'Revoke trust'),
+                icon: Icon(_trustedActionIcon(trustState)),
+                tooltip: _trustedActionTooltip(trustState),
                 onPressed: () => _handlePeerAction(
                   peer: peer,
                   isTrusted: isTrusted,
@@ -404,6 +473,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         );
         if (!confirmed) return;
         await client.unblockPeer(deviceId);
+      } else if (trustState == 'revoked') {
+        final confirmed = await _confirmTrustAction(
+          title: 'Reset revoked peer?',
+          message:
+              'This will clear the revoked state for $titleText and return it to discovered devices.',
+          confirmLabel: 'Reset',
+        );
+        if (!confirmed) return;
+        await client.resetRevokedPeer(deviceId);
       } else if (trustState == 'trusted' || trustState == 'pairing_pending') {
         final confirmed = await _confirmTrustAction(
           title: trustState == 'pairing_pending'
@@ -427,7 +505,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+        SnackBar(
+          content: Text(JsonRpcRiftClient.formatDisplayError(e)),
+        ),
       );
     }
   }

@@ -30,6 +30,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   String? approvedDeviceId;
   String? approvedFingerprint;
   String? rejectedDeviceId;
+  Object? startPairingError;
 
   @override
   bool get isConnected => true;
@@ -59,11 +60,16 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 
   @override
-  Future<dynamic> startPairing(String deviceId) async => {
-        'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
-        'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
-        'expiresInMs': 120000,
-      };
+  Future<dynamic> startPairing(String deviceId) async {
+    if (startPairingError != null) {
+      throw startPairingError!;
+    }
+    return {
+      'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    };
+  }
 
   @override
   Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
@@ -147,23 +153,28 @@ void main() {
     expect(find.text('Confirm fingerprint to continue'), findsOneWidget);
     expect(find.textContaining('PEER-AAAA-BBBB'), findsOneWidget);
     expect(find.textContaining('LOCAL-AAAA-BBBB'), findsOneWidget);
+    final approveButton = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Approve'));
+    expect(approveButton.onPressed, isNull);
   });
 
-  testWidgets('PairingScreen approve and reject call IPC methods',
+  testWidgets('PairingScreen incoming request approve and reject call IPC methods',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
       MaterialApp(
         home: Provider<JsonRpcRiftClient>.value(
           value: client,
-          child: const PairingScreen(
-            initialDeviceId: 'rift-peer',
-            initialDisplayName: 'Pixel 9',
-            autoStart: true,
-          ),
+          child: const PairingScreen(),
         ),
       ),
     );
+
+    await client.emitPairingRequest({
+      'deviceId': 'rift-peer',
+      'displayName': 'Pixel 9',
+      'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    });
     await tester.pump();
 
     await tester.tap(find.text('Approve'));
@@ -252,5 +263,39 @@ void main() {
     await tester.pump();
 
     expect(find.text('Pairing closed'), findsOneWidget);
+  });
+
+  testWidgets('PairingScreen resets actions cleanly after start failure',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.startPairingError = Exception(
+      'JSON-RPC error -32000: Failed to establish a secure session with peer',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Unable to start pairing'), findsOneWidget);
+    expect(
+      find.textContaining('Could not establish a secure session'),
+      findsOneWidget,
+    );
+    expect(find.text('Try again'), findsOneWidget);
+
+    final rejectButton = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Reject'),
+    );
+    expect(rejectButton.onPressed, isNull);
   });
 }
