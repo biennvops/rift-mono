@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:nsd/nsd.dart' as nsd;
 
 class AndroidDiscoveredPeer {
@@ -123,7 +123,7 @@ class AndroidRootDiscoveryBridge {
         ),
       );
     } catch (e) {
-      print('[mDNS Error] Failed to register service (advertising disabled): $e');
+      debugPrint('[mDNS Error] Failed to register service (advertising disabled): $e');
     }
   }
 
@@ -162,20 +162,20 @@ class AndroidRootDiscoveryBridge {
     final discovery = _discovery;
     if (discovery == null) return;
 
-    print('[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
+    debugPrint('[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
     final snapshot = <AndroidDiscoveredPeer>[];
     for (final service in discovery.services) {
-      print('[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
+      debugPrint('[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
       final peer = _peerFromService(service);
       if (peer != null) {
-        print('[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
+        debugPrint('[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
         if (peer.deviceIdHint != deviceIdHint) {
           snapshot.add(peer);
         } else {
-          print('[mDNS Debug] Ignored self peer.');
+          debugPrint('[mDNS Debug] Ignored self peer.');
         }
       } else {
-        print('[mDNS Debug] Failed to parse peer from service: ${service.name}');
+        debugPrint('[mDNS Debug] Failed to parse peer from service: ${service.name}');
       }
     }
 
