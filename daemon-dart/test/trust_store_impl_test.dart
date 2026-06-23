@@ -119,6 +119,104 @@ void main() {
       migratedStore.dispose();
     });
 
+    test('Should persist and query security events from SQLite', () async {
+      final store = TrustStoreImpl(dbPath);
+      await store.initialize();
+
+      await store.appendSecurityEvent(
+        SecurityEventRecord(
+          eventId: 'evt-1',
+          eventType: 'pairing.completed',
+          severity: 'info',
+          localDeviceId: 'rift-local',
+          peerDeviceId: 'rift-peer-a',
+          timestamp: DateTime.utc(2026, 6, 24, 1, 2, 3),
+          outcome: 'success',
+          details: {'source': 'test'},
+        ),
+      );
+      await store.appendSecurityEvent(
+        SecurityEventRecord(
+          eventId: 'evt-2',
+          eventType: 'trust.revoked',
+          severity: 'warning',
+          localDeviceId: 'rift-local',
+          peerDeviceId: 'rift-peer-b',
+          timestamp: DateTime.utc(2026, 6, 24, 1, 3, 4),
+          outcome: 'success',
+          failureReason: 'manual',
+        ),
+      );
+
+      final warningOnly = await store.querySecurityEvents(
+        const SecurityEventQuery(severities: ['warning']),
+      );
+      expect(warningOnly, hasLength(1));
+      expect(warningOnly.single.eventId, 'evt-2');
+      expect(warningOnly.single.failureReason, 'manual');
+
+      final totalWarnings = await store.countSecurityEvents(
+        const SecurityEventQuery(severities: ['warning']),
+      );
+      expect(totalWarnings, 1);
+
+      final reloaded = TrustStoreImpl(dbPath);
+      await reloaded.initialize();
+      final allEvents = await reloaded.querySecurityEvents(
+        const SecurityEventQuery(limit: 10),
+      );
+      expect(allEvents, hasLength(2));
+      expect(allEvents.first.eventId, 'evt-2');
+      expect(allEvents.last.eventId, 'evt-1');
+      expect(allEvents.last.details?['source'], 'test');
+
+      store.dispose();
+      reloaded.dispose();
+    });
+
+    test('Should migrate v2 databases to include security_events table', () async {
+      final db = sqlite3.open(dbPath);
+      db.execute('''
+        CREATE TABLE config (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      ''');
+      db.execute('''
+        CREATE TABLE peers (
+          device_id    TEXT PRIMARY KEY,
+          display_name TEXT,
+          cert_der     BLOB NOT NULL,
+          state        TEXT NOT NULL,
+          paired_at    INTEGER,
+          updated_at   INTEGER NOT NULL,
+          last_seen_at INTEGER
+        );
+      ''');
+      db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '2')");
+      db.dispose();
+
+      final migratedStore = TrustStoreImpl(dbPath);
+      await migratedStore.initialize();
+      await migratedStore.appendSecurityEvent(
+        SecurityEventRecord(
+          eventId: 'evt-migrate',
+          eventType: 'connection.established',
+          severity: 'info',
+          localDeviceId: 'rift-local',
+          timestamp: DateTime.utc(2026, 6, 24, 2, 0, 0),
+          outcome: 'success',
+        ),
+      );
+
+      final events = await migratedStore.querySecurityEvents(
+        const SecurityEventQuery(limit: 10),
+      );
+      expect(events, hasLength(1));
+      expect(events.single.eventId, 'evt-migrate');
+      migratedStore.dispose();
+    });
+
     test('Should enforce valid trust state transitions (fail closed)', () async {
       final store = TrustStoreImpl(':memory:');
       await store.initialize();

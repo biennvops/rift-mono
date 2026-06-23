@@ -55,6 +55,64 @@ class PeerRecord {
   }
 }
 
+class SecurityEventRecord {
+  final String eventId;
+  final String eventType;
+  final String severity;
+  final String localDeviceId;
+  final DateTime timestamp;
+  final String outcome;
+  final String? peerDeviceId;
+  final String? failureReason;
+  final Map<String, dynamic>? details;
+
+  SecurityEventRecord({
+    required this.eventId,
+    required this.eventType,
+    required this.severity,
+    required this.localDeviceId,
+    required this.timestamp,
+    required this.outcome,
+    this.peerDeviceId,
+    this.failureReason,
+    this.details,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'eventId': eventId,
+      'eventType': eventType,
+      'severity': severity,
+      'localDeviceId': localDeviceId,
+      'timestamp': timestamp.toUtc().toIso8601String(),
+      'outcome': outcome,
+      if (peerDeviceId != null && peerDeviceId!.isNotEmpty)
+        'peerDeviceId': peerDeviceId,
+      if (failureReason != null && failureReason!.isNotEmpty)
+        'failureReason': failureReason,
+      if (details != null && details!.isNotEmpty) 'details': details,
+    };
+  }
+}
+
+class SecurityEventQuery {
+  final List<String>? eventTypes;
+  final List<String>? severities;
+  final String? peerDeviceId;
+  final DateTime? since;
+  final int limit;
+  final int offset;
+
+  const SecurityEventQuery({
+    this.eventTypes,
+    this.severities,
+    this.peerDeviceId,
+    this.since,
+    this.limit = 100,
+    this.offset = 0,
+  });
+}
+
 abstract class TrustStore {
   Future<void> initialize();
   Future<void> upsertPeer(PeerRecord record);
@@ -63,4 +121,7 @@ abstract class TrustStore {
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt});
   Future<void> deletePeer(String deviceId);
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt);
+  Future<void> appendSecurityEvent(SecurityEventRecord record);
+  Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query);
+  Future<int> countSecurityEvents(SecurityEventQuery query);
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -17,6 +18,7 @@ import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 import 'package:daemon_dart/src/pairing/pairing_manager.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
@@ -30,6 +32,8 @@ class RiftDaemon {
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
   final Map<String, DiscoveredPeer> _discoveredPeers = {};
+  final Map<String, Future<String>> _pendingSessionEnsures = {};
+  final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
   bool _isDiscovering = false;
 
   final String storagePath;
@@ -83,7 +87,7 @@ class RiftDaemon {
         sessionManager: _sessionManager!,
         identityManager: _identityManager!,
         onIpcEvent: (event) {
-          onIpcEvent?.call(event);
+          _forwardIpcEvent(event);
         },
       );
     }
@@ -228,11 +232,53 @@ class RiftDaemon {
     return results;
   }
 
+  Future<Map<String, dynamic>> queryEventLog({
+    List<String>? eventTypes,
+    List<String>? severities,
+    String? peerDeviceId,
+    String? since,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final trustStore = _trustStore;
+    if (trustStore == null) {
+      return {'events': const <Map<String, dynamic>>[], 'total': 0};
+    }
+
+    final sinceTime =
+        since == null || since.isEmpty ? null : DateTime.tryParse(since);
+    final filtered = await trustStore.querySecurityEvents(
+      SecurityEventQuery(
+        eventTypes: eventTypes,
+        severities: severities,
+        peerDeviceId: peerDeviceId,
+        since: sinceTime,
+        limit: limit,
+        offset: offset,
+      ),
+    );
+    final total = await trustStore.countSecurityEvents(
+      SecurityEventQuery(
+        eventTypes: eventTypes,
+        severities: severities,
+        peerDeviceId: peerDeviceId,
+        since: sinceTime,
+      ),
+    );
+    return {
+      'events': filtered.map((event) => event.toJson()).toList(),
+      'total': total,
+    };
+  }
+
   Future<Map<String, dynamic>> handleJsonRpcRequest(
     Map<String, dynamic> request,
   ) async {
     final method = request['method'] as String?;
     final params = RpcUtils.normalizeParams(request['params']);
+    if (method == null) {
+      throw UnsupportedError('Method not found: null');
+    }
 
     switch (method) {
       case 'rift.getDeviceInfo':
@@ -266,6 +312,15 @@ class RiftDaemon {
           'peers': await listDiscoveredPeers(),
           'isDiscovering': _isDiscovering,
         };
+      case 'rift.queryEventLog':
+        return queryEventLog(
+          eventTypes: (params['eventTypes'] as List?)?.cast<String>(),
+          severities: (params['severities'] as List?)?.cast<String>(),
+          peerDeviceId: params['peerDeviceId'] as String?,
+          since: params['since'] as String?,
+          limit: (params['limit'] as int?) ?? 100,
+          offset: (params['offset'] as int?) ?? 0,
+        );
       case 'rift.startDiscovery':
         _requireDiscoveryServices();
         await _discoveryService!.startDiscovery();
@@ -280,30 +335,35 @@ class RiftDaemon {
       case 'rift.startPairing':
         _requireTransportServices();
         final requestedPeerId = RpcUtils.requireStringParam(params, 'deviceId');
-        final peerDeviceId = await _ensureSessionForPairing(requestedPeerId);
-        await _ensurePeerRecordForPairing(peerDeviceId);
-        await _pairingManager!.handleIpcCommand({
-          'method': method,
-          'params': {...params, 'deviceId': peerDeviceId},
-        });
-        final record = await _trustStore?.getPeer(peerDeviceId);
-        if (record == null) {
-          throw const RiftNotFoundException('Peer not found in TrustStore');
+        final pendingStartPairing = _pendingStartPairings[requestedPeerId];
+        if (pendingStartPairing != null) {
+          print(
+            '[Pairing Debug] Joining pending startPairing for peerDeviceId=$requestedPeerId',
+          );
+          return await pendingStartPairing;
         }
-        return {
-          'fingerprint': _formatFingerprint(
-            _identityManager!.getDeviceFingerprint(),
-          ),
-          'peerFingerprint': _deriveFingerprint(record.certDer),
-          'expiresInMs':
-              120000, // ipc.md §4.3: startPairing always returns 120 000 ms
-        };
+
+        final future = _startPairingRpc(requestedPeerId, method, params);
+        _pendingStartPairings[requestedPeerId] = future;
+        try {
+          return await future;
+        } finally {
+          if (identical(_pendingStartPairings[requestedPeerId], future)) {
+            _pendingStartPairings.remove(requestedPeerId);
+          }
+        }
       case 'rift.approvePairing':
         _requireTransportServices();
         await _pairingManager!.handleIpcCommand({
           'method': method,
           'params': params,
         });
+        await _recordSecurityEvent(
+          eventType: 'pairing.completed',
+          severity: 'info',
+          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
+          outcome: 'success',
+        );
         return {
           'trustedDeviceId': RpcUtils.requireStringParam(params, 'deviceId'),
           'persistedAt': DateTime.now().toUtc().toIso8601String(),
@@ -314,6 +374,12 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
+        await _recordSecurityEvent(
+          eventType: 'pairing.rejected',
+          severity: 'warning',
+          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
+          outcome: 'success',
+        );
         return {'rejected': true};
       case 'rift.revokeTrust':
         _requireTransportServices();
@@ -326,6 +392,13 @@ class RiftDaemon {
             'reason': params['reason'],
           },
         });
+        await _recordSecurityEvent(
+          eventType: 'trust.revoked',
+          severity: 'warning',
+          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
+          outcome: 'success',
+          failureReason: params['reason'] as String?,
+        );
         return {
           'revoked': true,
           'revokedAt': DateTime.now().toUtc().toIso8601String(),
@@ -336,7 +409,26 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
+        await _recordSecurityEvent(
+          eventType: 'trust.transitioned',
+          severity: 'info',
+          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
+          outcome: 'success',
+        );
         return {'unblocked': true};
+      case 'rift.resetRevokedPeer':
+        _requireTransportServices();
+        await _pairingManager!.handleIpcCommand({
+          'method': method,
+          'params': params,
+        });
+        await _recordSecurityEvent(
+          eventType: 'trust.transitioned',
+          severity: 'info',
+          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
+          outcome: 'success',
+        );
+        return {'reset': true};
       case 'rift.connect':
         _requireTransportServices();
         final host = RpcUtils.requireStringParam(params, 'host');
@@ -371,6 +463,79 @@ class RiftDaemon {
     }
   }
 
+  void _forwardIpcEvent(Map<String, dynamic> event) {
+    onIpcEvent?.call(event);
+
+    final method = event['method']?.toString();
+    final params = event['params'];
+    if (params is! Map<String, dynamic>) {
+      return;
+    }
+
+    switch (method) {
+      case 'rift.onPairingComplete':
+          unawaited(_recordSecurityEvent(
+            eventType: 'pairing.completed',
+            severity: 'info',
+            peerDeviceId: params['deviceId']?.toString(),
+            outcome: 'success',
+          ));
+        break;
+      case 'rift.onTrustChanged':
+        final newState = params['newState']?.toString();
+        final previousState = params['previousState']?.toString();
+        final reason = params['reason']?.toString();
+        if (newState == 'revoked') {
+          unawaited(_recordSecurityEvent(
+            eventType: 'trust.revoked',
+            severity: 'warning',
+            peerDeviceId: params['deviceId']?.toString(),
+            outcome: 'success',
+            failureReason: reason,
+          ));
+        } else if (newState != null && previousState != null) {
+          unawaited(_recordSecurityEvent(
+            eventType: 'trust.transitioned',
+            severity: 'info',
+            peerDeviceId: params['deviceId']?.toString(),
+            outcome: 'success',
+            details: {
+              'previousState': previousState,
+              'newState': newState,
+            },
+          ));
+        }
+        break;
+    }
+  }
+
+  Future<void> _recordSecurityEvent({
+    required String eventType,
+    required String severity,
+    required String outcome,
+    String? peerDeviceId,
+    String? failureReason,
+    Map<String, dynamic>? details,
+  }) async {
+    final event = SecurityEventRecord(
+      eventId: const Uuid().v4(),
+      eventType: eventType,
+      severity: severity,
+      localDeviceId: _identityManager?.deviceId ?? '',
+      timestamp: DateTime.now().toUtc(),
+      outcome: outcome,
+      peerDeviceId: peerDeviceId,
+      failureReason: failureReason,
+      details: details,
+    );
+    await _trustStore?.appendSecurityEvent(event);
+    onIpcEvent?.call({
+      'jsonrpc': '2.0',
+      'method': 'rift.onSecurityEvent',
+      'params': event.toJson(),
+    });
+  }
+
   void _requireDiscoveryServices() {
     if (_discoveryService == null) {
       throw const RiftException(
@@ -391,6 +556,49 @@ class RiftDaemon {
 
   void untrackDiscoveredPeer(String deviceId) {
     _discoveredPeers.remove(deviceId);
+  }
+
+  void replaceExternalDiscoveredPeers(
+    Iterable<Map<String, dynamic>> rawPeers, {
+    required bool isDiscovering,
+  }) {
+    final previousPeerIds = _discoveredPeers.keys.toSet();
+    final addedPeerIds = <String>{};
+    _discoveredPeers.clear();
+    for (final rawPeer in rawPeers) {
+      final instanceId = rawPeer['instanceId'];
+      final address = rawPeer['address'];
+      final port = rawPeer['port'];
+      final minVersion = rawPeer['minVersion'];
+      final maxVersion = rawPeer['maxVersion'];
+      if (instanceId is! String ||
+          address is! String ||
+          port is! int ||
+          minVersion is! String ||
+          maxVersion is! String) {
+        continue;
+      }
+
+      final peer = DiscoveredPeer(
+        instanceId: instanceId,
+        address: address,
+        port: port,
+        minVersion: minVersion,
+        maxVersion: maxVersion,
+        deviceIdHint: rawPeer['deviceIdHint'] as String?,
+        fingerprintPrefix: rawPeer['fingerprintPrefix'] as String?,
+      );
+      trackDiscoveredPeer(peer);
+      final peerId = peer.deviceIdHint;
+      if (peerId != null && !previousPeerIds.contains(peerId)) {
+        addedPeerIds.add(peerId);
+      }
+    }
+    _isDiscovering = isDiscovering;
+
+    for (final peerId in addedPeerIds) {
+      unawaited(prefetchSessionForDiscoveredPeer(peerId));
+    }
   }
 
   static Map<String, dynamic> jsonRpcResult(
@@ -479,11 +687,47 @@ class RiftDaemon {
     if (ctx != null && ctx.handshakeState == HandshakeState.established) {
       return peerDeviceId;
     }
+    if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
+      print(
+        '[Pairing Debug] Reusing in-flight handshake for peerDeviceId=$peerDeviceId',
+      );
+      await sessionManager.waitForSessionEstablished(peerDeviceId);
+      return peerDeviceId;
+    }
 
+    final pending = _pendingSessionEnsures[peerDeviceId];
+    if (pending != null) {
+      print(
+        '[Pairing Debug] Joining pending ensureSession for peerDeviceId=$peerDeviceId',
+      );
+      return pending;
+    }
+
+    final future = _openSessionForPairing(peerDeviceId);
+    _pendingSessionEnsures[peerDeviceId] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_pendingSessionEnsures[peerDeviceId], future)) {
+        _pendingSessionEnsures.remove(peerDeviceId);
+      }
+    }
+  }
+
+  Future<String> _openSessionForPairing(String peerDeviceId) async {
+    final sessionManager = _sessionManager!;
+    final transport = _transport!;
     final discoveredPeer = _findDiscoveredPeer(peerDeviceId);
     if (discoveredPeer == null) {
       throw const RiftNotFoundException('Peer not found in discovery cache');
     }
+
+    print(
+      '[Pairing Debug] Opening session for peerDeviceId=$peerDeviceId '
+      'using address=${discoveredPeer.address}:${discoveredPeer.port} '
+      'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
+      'instanceId=${discoveredPeer.instanceId}',
+    );
 
     final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
         ? peerDeviceId
@@ -499,6 +743,54 @@ class RiftDaemon {
     }
     await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
     return resolvedPeerDeviceId;
+  }
+
+  Future<Map<String, dynamic>> _startPairingRpc(
+    String requestedPeerId,
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    final peerDeviceId = await _ensureSessionForPairing(requestedPeerId);
+    await _ensurePeerRecordForPairing(peerDeviceId);
+    await _pairingManager!.handleIpcCommand({
+      'method': method,
+      'params': {...params, 'deviceId': peerDeviceId},
+    });
+    final record = await _trustStore?.getPeer(peerDeviceId);
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    return {
+      'fingerprint': _formatFingerprint(
+        _identityManager!.getDeviceFingerprint(),
+      ),
+      'peerFingerprint': _deriveFingerprint(record.certDer),
+      'expiresInMs':
+          120000, // ipc.md §4.3: startPairing always returns 120 000 ms
+    };
+  }
+
+  Future<void> prefetchSessionForDiscoveredPeer(String peerDeviceId) async {
+    try {
+      final sessionManager = _sessionManager;
+      if (sessionManager == null) {
+        return;
+      }
+
+      final ctx = sessionManager.getContext(peerDeviceId);
+      if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+        return;
+      }
+
+      print(
+        '[Session Debug] Prefetching outbound session for discovered peer $peerDeviceId',
+      );
+      await _ensureSessionForPairing(peerDeviceId);
+    } catch (e) {
+      print(
+        '[Session Debug] Session prefetch skipped for $peerDeviceId: $e',
+      );
+    }
   }
 
   DiscoveredPeer? _findDiscoveredPeer(String peerDeviceId) {
@@ -542,6 +834,17 @@ class RiftDaemon {
         try {
           rpcPort.listen((message) async {
             if (message is Map<String, dynamic>) {
+              if (message['internal'] == 'android.discoverySnapshot') {
+                final peers = message['peers'];
+                daemon.replaceExternalDiscoveredPeers(
+                  peers is List
+                      ? peers.whereType<Map>().map(Map<String, dynamic>.from)
+                      : const <Map<String, dynamic>>[],
+                  isDiscovering: message['isDiscovering'] == true,
+                );
+                return;
+              }
+
               if (message['jsonrpc'] == '2.0' && message['method'] is String) {
                 final id = message['id'];
                 try {
@@ -598,6 +901,10 @@ class RiftDaemon {
             'params': {
               'status': 'running',
               'deviceId': daemon._identityManager!.deviceId,
+              'advertisedPort': daemon._transport?.boundPort ?? daemon.port,
+              'fingerprintPrefix': _fingerprintPrefix(
+                daemon._identityManager!.getDeviceFingerprint(),
+              ),
               'rpcPort': rpcPort.sendPort,
             },
           });
@@ -622,6 +929,9 @@ class RiftDaemon {
                 },
               },
             });
+            unawaited(
+              daemon.prefetchSessionForDiscoveredPeer(peer.deviceIdHint!),
+            );
           });
 
           daemon._discoveryService?.onDeviceLost.listen((deviceId) {
