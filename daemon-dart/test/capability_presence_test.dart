@@ -125,6 +125,17 @@ class FakeTrustStore implements TrustStore {
 
   @override
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+
+  @override
+  Future<void> appendSecurityEvent(SecurityEventRecord record) async {}
+
+  @override
+  Future<List<SecurityEventRecord>> querySecurityEvents(
+    SecurityEventQuery query,
+  ) async => [];
+
+  @override
+  Future<int> countSecurityEvents(SecurityEventQuery query) async => 0;
 }
 
 void main() {
@@ -221,6 +232,7 @@ void main() {
   test('presence update accepts only valid status and negotiated capabilities', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;
+    ctx.capabilityNegotiated = true;
     ctx.trustState = TrustState.trusted; // Must be trusted to pass requireCapability
     ctx.negotiatedCapabilities = [Capability(name: 'presence.basic', version: 1)];
     sessionManager.injectContextForTesting(ctx);
@@ -253,6 +265,7 @@ void main() {
   test('presence update rejects missing payload', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;
+    ctx.capabilityNegotiated = true;
     ctx.trustState = TrustState.trusted;
     ctx.negotiatedCapabilities = [Capability(name: 'presence.basic', version: 1)];
     sessionManager.injectContextForTesting(ctx);

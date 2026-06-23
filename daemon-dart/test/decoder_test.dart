@@ -78,6 +78,16 @@ void main() {
       expect(extractedKey, equals(mockEd25519Key));
     });
 
+    test('Class 0b: Should successfully extract direct 34-byte OCTET STRING wrapper', () {
+      var ext = ASN1Sequence();
+      ext.add(ASN1ObjectIdentifier.fromBytes(RiftCertBuilder.riftCustomOidBytes));
+      ext.add(ASN1OctetString(mockEd25519Key));
+      var pem = _createTestCert([ext]);
+
+      var extractedKey = RiftCertDecoder.extractEd25519PublicKey(pem);
+      expect(extractedKey, equals(mockEd25519Key));
+    });
+
     test('Class 1: Should throw on missing extension', () {
       var pem = _createTestCert([]);
       expect(

@@ -199,6 +199,29 @@ void main() {
       expect(ipcEvents[0]['method'], 'rift.onPairingComplete');
     });
 
+    test('resetRevokedPeer returns revoked peer to discovered', () async {
+      await trustStore.upsertPeer(PeerRecord(
+        deviceId: 'rift-revoked',
+        certDer: testCertDer,
+        state: TrustState.revoked,
+        updatedAt: DateTime.now().toUtc(),
+      ));
+
+      await pairingManager.handleIpcCommand({
+        'method': 'rift.resetRevokedPeer',
+        'params': {
+          'deviceId': 'rift-revoked',
+        }
+      });
+
+      final peer = await trustStore.getPeer('rift-revoked');
+      expect(peer, isNotNull);
+      expect(peer!.state, TrustState.discovered);
+      expect(ipcEvents.single['method'], 'rift.onTrustChanged');
+      expect(ipcEvents.single['params']['previousState'], 'revoked');
+      expect(ipcEvents.single['params']['newState'], 'discovered');
+    });
+
     test('approvePairing keeps pairing pending if network send fails', () async {
       await trustStore.upsertPeer(PeerRecord(
         deviceId: 'rift-peer',

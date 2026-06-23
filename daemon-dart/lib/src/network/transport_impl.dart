@@ -41,10 +41,21 @@ class TransportImpl implements Transport {
       port,
       context,
       requestClientCertificate: true,
-      requireClientCertificate: true,
+      // Dart's TLS server stack rejects self-signed client certificates before
+      // application code can inspect them when requireClientCertificate=true.
+      // Rift authenticates peers with the embedded Ed25519 identity + PoP
+      // during session bootstrap, so we request the client cert here and fail
+      // closed below if the peer omits it or later fails PoP/session checks.
+      requireClientCertificate: false,
     );
 
-    _serverSocket!.listen((socket) => _handleConnection(socket, isServer: true));
+    _serverSocket!.listen(
+      (socket) => _handleConnection(socket, isServer: true),
+      onError: (Object error, StackTrace stackTrace) {
+        print('[TLS Debug] Inbound server handshake failed: $error');
+      },
+      cancelOnError: false,
+    );
   }
 
   @override
@@ -72,6 +83,7 @@ class TransportImpl implements Transport {
 
   @override
   Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
+    print('[TLS Debug] connectTo host=$host port=$port expectedDeviceId=${expectedDeviceId ?? "<none>"}');
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
@@ -90,11 +102,17 @@ class TransportImpl implements Transport {
             final hash = sha256.convert(peerEd25519Key);
             final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
             final actualDeviceId = 'rift-${base32Str.substring(0, 32)}';
+            print('[TLS Debug] peer cert check host=$host port=$port actualDeviceId=$actualDeviceId expectedDeviceId=$expectedDeviceId');
             if (actualDeviceId != expectedDeviceId) {
+              print('[TLS Debug] Device ID mismatch during TLS pinning. Rejecting certificate.');
               return false; // Reject MITM immediately during TLS handshake
             }
-          } on CertificateDecoderException {
+          } on CertificateDecoderException catch (e) {
+            print('[TLS Debug] CertificateDecoderException while validating peer cert from $host:$port: $e');
             return false; // Fail-closed on invalid cert
+          } catch (e) {
+            print('[TLS Debug] Unknown error in onBadCertificate for $host:$port: $e');
+            return false;
           }
         }
         // Intentional deferral: when expectedDeviceId is null (e.g. incoming
@@ -121,6 +139,7 @@ class TransportImpl implements Transport {
       final hash = sha256.convert(peerEd25519Key);
       final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
+      print('[TLS Debug] TLS session established with peerDeviceId=$peerDeviceId host=${socket.remoteAddress.address}:${socket.remotePort}');
 
       _peers[peerDeviceId] = socket;
       _peerCerts[peerDeviceId] = peerCert.der;

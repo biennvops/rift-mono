@@ -132,12 +132,18 @@ public class IdentityManager : IIdentityManager
         }
 
         var rawData = extValue.GetOctets();
-        if (rawData.Length != 36 || rawData[0] != 0x04 || rawData[1] != 0x22 || rawData[2] != 0x04 || rawData[3] != 0x20)
+        if (rawData.Length == 36 && rawData[0] == 0x04 && rawData[1] == 0x22 && rawData[2] == 0x04 && rawData[3] == 0x20)
+        {
+            return rawData.AsSpan(4).ToArray(); // Legacy triple-wrapped
+        }
+        else if (rawData.Length == 34 && rawData[0] == 0x04 && rawData[1] == 0x20)
+        {
+            return rawData.AsSpan(2).ToArray(); // Correct double-wrapped
+        }
+        else
         {
             throw new InvalidOperationException("Persisted TLS certificate contained a malformed Rift Ed25519 identity extension.");
         }
-
-        return rawData.AsSpan(4).ToArray();
     }
 
     public string GetDeviceId()
@@ -226,8 +232,8 @@ public class IdentityManager : IIdentityManager
         certGen.SetPublicKey(ecPair.Public);
 
         var extOid = new DerObjectIdentifier("2.25.293029629918709742181702189012786017422");
-        var innerBytes = new DerOctetString(ed25519PublicKey.GetEncoded()).GetEncoded();
-        certGen.AddExtension(extOid, false, innerBytes);
+        // AddExtension automatically wraps the byte array in a DerOctetString and encodes it, resulting in the standard X.509 double-wrapping.
+        certGen.AddExtension(extOid, false, ed25519PublicKey.GetEncoded());
 
         var signatureFactory = new Asn1SignatureFactory("SHA256WITHECDSA", ecPair.Private, random);
         var bouncyCert = certGen.Generate(signatureFactory);

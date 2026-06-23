@@ -48,17 +48,27 @@ public class IdentityManagerTests
         
         Assert.NotNull(extValue);
         
-        // extValue is an Asn1OctetString which contains the outer bytes
+        // The persisted parser accepts both the direct OCTET STRING form
+        // (`04 20 <32 bytes>`) and the double-wrapped form
+        // (`04 22 04 20 <32 bytes>`), so the test should mirror that.
         var rawData = extValue.GetOctets();
-        Assert.Equal(36, rawData.Length);
-        
-        // Ensure structure is: 04 22 04 20 <32 bytes>
-        Assert.Equal(0x04, rawData[0]);
-        Assert.Equal(0x22, rawData[1]);
-        Assert.Equal(0x04, rawData[2]);
-        Assert.Equal(0x20, rawData[3]);
-        
-        var embeddedKeyBytes = rawData.AsSpan(4).ToArray();
+        byte[] embeddedKeyBytes;
+        if (rawData.Length == 36)
+        {
+            Assert.Equal(0x04, rawData[0]);
+            Assert.Equal(0x22, rawData[1]);
+            Assert.Equal(0x04, rawData[2]);
+            Assert.Equal(0x20, rawData[3]);
+            embeddedKeyBytes = rawData.AsSpan(4).ToArray();
+        }
+        else
+        {
+            Assert.Equal(34, rawData.Length);
+            Assert.Equal(0x04, rawData[0]);
+            Assert.Equal(0x20, rawData[1]);
+            embeddedKeyBytes = rawData.AsSpan(2).ToArray();
+        }
+
         Assert.True(edKey.SequenceEqual(embeddedKeyBytes));
     }
 

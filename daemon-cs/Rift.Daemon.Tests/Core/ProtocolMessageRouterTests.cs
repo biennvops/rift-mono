@@ -42,7 +42,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _trustStore,
             _identityManager,
             _securityEventLog,
-            NullLogger<PairingProtocolCoordinator>.Instance);
+            logger: NullLogger<PairingProtocolCoordinator>.Instance);
         _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService);
     }
 
@@ -342,6 +342,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             return Task.CompletedTask;
         }
 
+        public bool HasActiveSession(string peerDeviceId) => false;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

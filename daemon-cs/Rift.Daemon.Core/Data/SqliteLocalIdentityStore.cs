@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using Microsoft.Data.Sqlite;
 using Rift.Daemon.Core.Interfaces;
@@ -6,8 +7,14 @@ namespace Rift.Daemon.Core.Data;
 
 public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : ILocalIdentityStore
 {
-    private static readonly byte[] ProtectedPrivateKeyPrefix = [0x52, 0x49, 0x46, 0x54, 0x01];
-    private static readonly byte[] ProtectedTlsCertificatePrefix = [0x52, 0x49, 0x46, 0x54, 0x02];
+    private static readonly byte[] WindowsProtectedPrivateKeyPrefix = [0x52, 0x49, 0x46, 0x54, 0x01];
+    private static readonly byte[] WindowsProtectedTlsCertificatePrefix = [0x52, 0x49, 0x46, 0x54, 0x02];
+    private static readonly byte[] UnixProtectedPrivateKeyPrefix = [0x52, 0x49, 0x46, 0x54, 0x11];
+    private static readonly byte[] UnixProtectedTlsCertificatePrefix = [0x52, 0x49, 0x46, 0x54, 0x12];
+    private readonly string _keyFilePath = CreateScopedKeyFilePath(databaseContext.DatabasePath);
+    private readonly string _legacyKeyFilePath = Path.Combine(
+        Path.GetDirectoryName(databaseContext.DatabasePath)!,
+        ".rift-secrets.key");
 
     public LocalIdentityRecord? GetIdentity()
     {
@@ -28,9 +35,17 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
 
         return new LocalIdentityRecord
         {
-            Ed25519PrivateKey = UnprotectBlob((byte[])reader["Ed25519PrivateKey"], ProtectedPrivateKeyPrefix),
+            Ed25519PrivateKey = UnprotectBlob(
+                (byte[])reader["Ed25519PrivateKey"],
+                WindowsProtectedPrivateKeyPrefix,
+                UnixProtectedPrivateKeyPrefix),
             Ed25519PublicKey = (byte[])reader["Ed25519PublicKey"],
-            TlsCertificatePfx = reader["TlsCertificatePfx"] is DBNull ? null : UnprotectBlob((byte[])reader["TlsCertificatePfx"], ProtectedTlsCertificatePrefix),
+            TlsCertificatePfx = reader["TlsCertificatePfx"] is DBNull
+                ? null
+                : UnprotectBlob(
+                    (byte[])reader["TlsCertificatePfx"],
+                    WindowsProtectedTlsCertificatePrefix,
+                    UnixProtectedTlsCertificatePrefix),
             CreatedAt = DateTimeOffset.Parse((string)reader["CreatedAt"])
         };
     }
@@ -51,54 +66,166 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 TlsCertificatePfx = excluded.TlsCertificatePfx,
                 CreatedAt = excluded.CreatedAt;
             """;
-        command.Parameters.AddWithValue("$privateKey", ProtectBlob(identity.Ed25519PrivateKey, ProtectedPrivateKeyPrefix));
+        command.Parameters.AddWithValue(
+            "$privateKey",
+            ProtectBlob(
+                identity.Ed25519PrivateKey,
+                WindowsProtectedPrivateKeyPrefix,
+                UnixProtectedPrivateKeyPrefix));
         command.Parameters.AddWithValue("$publicKey", identity.Ed25519PublicKey);
-        command.Parameters.AddWithValue("$tlsCertificatePfx", (object?)ProtectOptionalBlob(identity.TlsCertificatePfx, ProtectedTlsCertificatePrefix) ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$tlsCertificatePfx",
+            (object?)ProtectOptionalBlob(
+                identity.TlsCertificatePfx,
+                WindowsProtectedTlsCertificatePrefix,
+                UnixProtectedTlsCertificatePrefix) ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", identity.CreatedAt.ToString("O"));
         command.ExecuteNonQuery();
     }
 
-    private static byte[] ProtectBlob(byte[] plaintext, byte[] prefix)
+    private byte[] ProtectBlob(byte[] plaintext, byte[] windowsPrefix, byte[] unixPrefix)
     {
-        if (!OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
         {
-            throw new InvalidOperationException("Protected local identity storage is only implemented on Windows. Refusing to persist sensitive identity material without OS-backed secret storage.");
+            var protectedBytes = WindowsDpapi.Protect(plaintext);
+            return [.. windowsPrefix, .. protectedBytes];
         }
 
-        var protectedBytes = WindowsDpapi.Protect(plaintext);
-        return [.. prefix, .. protectedBytes];
+        return UnixFileKeyProtector.Protect(plaintext, unixPrefix, _keyFilePath);
     }
 
-    private static byte[]? ProtectOptionalBlob(byte[]? plaintext, byte[] prefix)
+    private byte[]? ProtectOptionalBlob(byte[]? plaintext, byte[] windowsPrefix, byte[] unixPrefix)
     {
-        return plaintext is null ? null : ProtectBlob(plaintext, prefix);
+        return plaintext is null ? null : ProtectBlob(plaintext, windowsPrefix, unixPrefix);
     }
 
-    private static byte[] UnprotectBlob(byte[] storedValue, byte[] prefix)
+    private byte[] UnprotectBlob(byte[] storedValue, byte[] windowsPrefix, byte[] unixPrefix)
     {
-        if (!IsProtectedBlob(storedValue, prefix))
+        if (IsProtectedBlob(storedValue, windowsPrefix))
         {
             if (!OperatingSystem.IsWindows())
             {
-                throw new InvalidOperationException("Unprotected local identity material cannot be opened on a non-Windows runtime. Platform secret storage integration is required.");
+                throw new InvalidOperationException(
+                    "Windows-protected local identity material cannot be opened on a non-Windows runtime.");
             }
 
-            return storedValue;
+            var protectedBytes = storedValue.AsSpan(windowsPrefix.Length).ToArray();
+            return WindowsDpapi.Unprotect(protectedBytes);
         }
 
-        if (!OperatingSystem.IsWindows())
+        if (IsProtectedBlob(storedValue, unixPrefix))
         {
-            throw new InvalidOperationException("Protected local identity material cannot be opened on a non-Windows runtime.");
+            return UnixFileKeyProtector.Unprotect(
+                storedValue,
+                unixPrefix,
+                _keyFilePath,
+                legacyKeyFilePath: _legacyKeyFilePath);
         }
 
-        var protectedBytes = storedValue.AsSpan(prefix.Length).ToArray();
-        return WindowsDpapi.Unprotect(protectedBytes);
+        // Legacy compatibility: older rows may contain raw identity material
+        // without an at-rest protection prefix.
+        return storedValue;
     }
 
     private static bool IsProtectedBlob(byte[] storedValue, byte[] prefix)
     {
         return storedValue.Length > prefix.Length &&
                storedValue.AsSpan(0, prefix.Length).SequenceEqual(prefix);
+    }
+
+    private static string CreateScopedKeyFilePath(string databasePath)
+    {
+        var directory = Path.GetDirectoryName(databasePath)
+            ?? throw new InvalidOperationException("Database path must have a parent directory.");
+        var fileName = Path.GetFileName(databasePath);
+        return Path.Combine(directory, $"{fileName}.rift-secrets.key");
+    }
+
+    private static class UnixFileKeyProtector
+    {
+        private const int KeyLength = 32;
+        private const int NonceLength = 12;
+        private const int TagLength = 16;
+
+        public static byte[] Protect(byte[] plaintext, byte[] prefix, string keyFilePath)
+        {
+            var key = LoadOrCreateKey(keyFilePath);
+            var nonce = RandomNumberGenerator.GetBytes(NonceLength);
+            var ciphertext = new byte[plaintext.Length];
+            var tag = new byte[TagLength];
+
+            using var aes = new AesGcm(key, TagLength);
+            aes.Encrypt(nonce, plaintext, ciphertext, tag);
+
+            return [.. prefix, .. nonce, .. tag, .. ciphertext];
+        }
+
+        public static byte[] Unprotect(
+            byte[] storedValue,
+            byte[] prefix,
+            string keyFilePath,
+            string? legacyKeyFilePath = null)
+        {
+            var minimumLength = prefix.Length + NonceLength + TagLength;
+            if (storedValue.Length < minimumLength)
+            {
+                throw new InvalidOperationException("Protected local identity material was malformed.");
+            }
+
+            var key = LoadExistingKey(keyFilePath)
+                ?? (legacyKeyFilePath is not null ? LoadExistingKey(legacyKeyFilePath) : null)
+                ?? throw new InvalidOperationException(
+                    "Unix identity protection key was missing for persisted identity material.");
+            var nonceOffset = prefix.Length;
+            var tagOffset = nonceOffset + NonceLength;
+            var ciphertextOffset = tagOffset + TagLength;
+            var ciphertextLength = storedValue.Length - ciphertextOffset;
+            var plaintext = new byte[ciphertextLength];
+
+            using var aes = new AesGcm(key, TagLength);
+            aes.Decrypt(
+                storedValue.AsSpan(nonceOffset, NonceLength),
+                storedValue.AsSpan(ciphertextOffset, ciphertextLength),
+                storedValue.AsSpan(tagOffset, TagLength),
+                plaintext);
+
+            return plaintext;
+        }
+
+        private static byte[] LoadOrCreateKey(string keyFilePath)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(keyFilePath)!);
+
+            var existingKey = LoadExistingKey(keyFilePath);
+            if (existingKey is not null) return existingKey;
+
+            var key = RandomNumberGenerator.GetBytes(KeyLength);
+            File.WriteAllBytes(keyFilePath, key);
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(
+                    keyFilePath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            return key;
+        }
+
+        private static byte[]? LoadExistingKey(string keyFilePath)
+        {
+            if (!File.Exists(keyFilePath))
+            {
+                return null;
+            }
+
+            var existingKey = File.ReadAllBytes(keyFilePath);
+            if (existingKey.Length != KeyLength)
+            {
+                throw new InvalidOperationException("Unix identity protection key was malformed.");
+            }
+
+            return existingKey;
+        }
     }
 
     private static class WindowsDpapi

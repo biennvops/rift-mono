@@ -138,8 +138,11 @@ public class SessionBootstrap
 
     protected virtual bool TryGetTlsChannelBinding(SslStream sslStream, out byte[] channelBinding)
     {
-        ArgumentNullException.ThrowIfNull(sslStream);
+        // Force app-nonce for Android/Dart interop because Dart SecureSocket lacks TLS channel binding APIs.
         channelBinding = [];
+        return false;
+        
+        ArgumentNullException.ThrowIfNull(sslStream);
 
         try
         {

@@ -180,7 +180,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
 
         await _transport.RunInboundSessionCoreAsync(
             "rift-peer-inbound-success",
-            _ => Task.CompletedTask,
+            _ => Task.FromResult(TlsTransport.SessionRegistrationResult.RegisteredNew),
             _ => Task.CompletedTask,
             () => cleanupCalls++,
             CancellationToken.None);
@@ -207,7 +207,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
                 () =>
                 {
                     addCalled = true;
-                    return true;
+                    return TlsTransport.SessionRegistrationResult.RegisteredNew;
                 },
                 CancellationToken.None));
 
