@@ -50,6 +50,22 @@ public sealed class DatabaseContextTests : IDisposable
         Assert.Contains("Unsafe SQL identifier", ex.InnerException!.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EnsureColumnExists_RejectsUnsafeColumnDefinition()
+    {
+        _databaseContext.Initialize();
+
+        using var connection = _databaseContext.CreateOpenConnection();
+        var method = typeof(DatabaseContext).GetMethod("EnsureColumnExists", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var ex = Assert.Throws<TargetInvocationException>(() =>
+            method!.Invoke(null, [connection, "LocalIdentity", "InjectedColumn", "TEXT NULL; DROP TABLE Peers;--"]));
+
+        Assert.IsType<ArgumentException>(ex.InnerException);
+        Assert.Contains("Unsafe SQL column definition", ex.InnerException!.Message, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

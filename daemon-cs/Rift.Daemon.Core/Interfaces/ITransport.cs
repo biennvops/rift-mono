@@ -23,10 +23,35 @@ public sealed class MessageReceivedEventArgs : EventArgs
     /// </summary>
     public ReadOnlyMemory<byte> Payload { get; }
 
-    public MessageReceivedEventArgs(string peerDeviceId, ReadOnlyMemory<byte> payload)
+    public SessionPeerContext Session { get; }
+
+    public MessageReceivedEventArgs(string peerDeviceId, ReadOnlyMemory<byte> payload, SessionPeerContext session)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         Payload = payload;
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+    }
+}
+
+public sealed class SessionPeerContext
+{
+    public string PeerDeviceId { get; }
+
+    public IReadOnlyList<string> SelectedCapabilities { get; }
+
+    public bool AllowsProtectedTraffic { get; }
+
+    public SessionPeerContext(string peerDeviceId, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
+    {
+        PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
+        SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        AllowsProtectedTraffic = allowsProtectedTraffic;
+    }
+
+    public bool HasCapability(string capabilityName)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityName);
+        return SelectedCapabilities.Contains(capabilityName, StringComparer.Ordinal);
     }
 }
 
@@ -38,11 +63,14 @@ public sealed class SessionStateChangedEventArgs : EventArgs
 
     public IReadOnlyList<string> SelectedCapabilities { get; }
 
-    public SessionStateChangedEventArgs(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities)
+    public bool AllowsProtectedTraffic { get; }
+
+    public SessionStateChangedEventArgs(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         IsOnline = isOnline;
         SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        AllowsProtectedTraffic = allowsProtectedTraffic;
     }
 }
 

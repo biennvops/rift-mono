@@ -6,6 +6,11 @@ namespace Rift.Daemon.Core.Networking;
 
 internal sealed class SessionCapabilityCoordinator
 {
+    private const int MaxCapabilityCount = 64;
+    private const int MaxCapabilityNameLength = 128;
+    private const int MaxPolicyFlagCount = 16;
+    private const int MaxPolicyFlagLength = 128;
+
     internal static readonly CapabilityDescriptor[] SupportedCapabilities =
     [
         new("clipboard.offer_fetch", 1),
@@ -13,6 +18,11 @@ internal sealed class SessionCapabilityCoordinator
         new("operation.lifecycle", 1),
         new("security.event_log", 1)
     ];
+
+    private static readonly StringComparer CapabilityNameComparer = StringComparer.Ordinal;
+    private static readonly HashSet<string> SupportedCapabilityNames = SupportedCapabilities
+        .Select(capability => capability.Name)
+        .ToHashSet(CapabilityNameComparer);
 
     public async Task<IReadOnlyList<CapabilityDescriptor>> NegotiateAsync(
         Stream stream,
@@ -24,7 +34,7 @@ internal sealed class SessionCapabilityCoordinator
     {
         await SendCapabilityAdvertiseAsync(stream, localDeviceId, cancellationToken);
 
-        var advertisePayload = await readFramePayloadAsync(stream, RiftFrame.MaxPreAuthSize, cancellationToken)
+        var advertisePayload = await readFramePayloadAsync(stream, RiftFrame.MaxPostAuthSize, cancellationToken)
             ?? throw new InvalidOperationException("Peer closed connection before sending capability.advertise.");
         var remoteAdvertised = ParseAdvertisedCapabilities(advertisePayload, remoteDeviceId);
 
@@ -35,12 +45,13 @@ internal sealed class SessionCapabilityCoordinator
             return selected;
         }
 
-        var selectedPayload = await readFramePayloadAsync(stream, RiftFrame.MaxPreAuthSize, cancellationToken)
+        var selectedPayload = await readFramePayloadAsync(stream, RiftFrame.MaxPostAuthSize, cancellationToken)
             ?? throw new InvalidOperationException("Peer closed connection before sending capability.selected.");
         var selectedCapabilities = ParseSelectedCapabilities(selectedPayload, remoteDeviceId);
 
         if (!ValidateSelectedCapabilities(SupportedCapabilities, remoteAdvertised, selectedCapabilities))
         {
+            await SendProtocolErrorAsync(stream, localDeviceId, cancellationToken);
             throw new InvalidOperationException("Peer selected capabilities that were not valid for this session.");
         }
 
@@ -51,12 +62,19 @@ internal sealed class SessionCapabilityCoordinator
         IReadOnlyList<CapabilityDescriptor> localCapabilities,
         IReadOnlyList<CapabilityDescriptor> remoteCapabilities)
     {
+        var remoteByName = remoteCapabilities
+            .Where(capability => SupportedCapabilityNames.Contains(capability.Name))
+            .GroupBy(capability => capability.Name, CapabilityNameComparer)
+            .ToDictionary(group => group.Key, group => group.Max(capability => capability.Version), CapabilityNameComparer);
+
         return localCapabilities
+            .Where(capability => SupportedCapabilityNames.Contains(capability.Name))
             .Join(
-                remoteCapabilities,
+                remoteByName,
                 local => local.Name,
-                remote => remote.Name,
-                (local, remote) => new CapabilityDescriptor(local.Name, Math.Min(local.Version, remote.Version)))
+                remote => remote.Key,
+                (local, remote) => new CapabilityDescriptor(local.Name, Math.Min(local.Version, remote.Value)))
+            .Where(capability => GetMinimumRequiredVersion(capability.Name) <= capability.Version)
             .OrderBy(capability => capability.Name, StringComparer.Ordinal)
             .ToArray();
     }
@@ -68,9 +86,15 @@ internal sealed class SessionCapabilityCoordinator
     {
         var expected = ComputeSelectedCapabilities(localCapabilities, remoteCapabilities)
             .ToDictionary(capability => capability.Name, capability => capability.Version, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var selected in selectedCapabilities)
         {
+            if (!seen.Add(selected.Name))
+            {
+                return false;
+            }
+
             if (!expected.TryGetValue(selected.Name, out var expectedVersion) || expectedVersion != selected.Version)
             {
                 return false;
@@ -90,7 +114,7 @@ internal sealed class SessionCapabilityCoordinator
             sourceDeviceId = localDeviceId,
             payload = new
             {
-                capabilities = SupportedCapabilities.Select(capability => new { name = capability.Name, version = capability.Version }).ToArray()
+                capabilities = SupportedCapabilities.Select(capability => new { name = capability.Name, version = capability.Version, policyFlags = Array.Empty<string>() }).ToArray()
             }
         };
 
@@ -113,6 +137,24 @@ internal sealed class SessionCapabilityCoordinator
             payload = new
             {
                 selectedCapabilities = selectedCapabilities.Select(capability => new { name = capability.Name, version = capability.Version }).ToArray()
+            }
+        };
+
+        var frame = RiftFrame.Encode(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope)));
+        await stream.WriteAsync(frame, cancellationToken);
+    }
+
+    private static async Task SendProtocolErrorAsync(Stream stream, string localDeviceId, CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "error",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = localDeviceId,
+            payload = new
+            {
+                failureReason = "ProtocolError"
             }
         };
 
@@ -157,16 +199,89 @@ internal sealed class SessionCapabilityCoordinator
 
     private static IReadOnlyList<CapabilityDescriptor> ParseCapabilities(JsonElement capabilities)
     {
-        var parsed = new List<CapabilityDescriptor>();
+        if (capabilities.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Capability payload must be an array.");
+        }
+
+        var parsed = new Dictionary<string, int>(CapabilityNameComparer);
         foreach (var element in capabilities.EnumerateArray())
         {
             var name = element.GetProperty("name").GetString()
                 ?? throw new InvalidOperationException("Capability name was missing.");
+            if (name.Length is 0 or > MaxCapabilityNameLength)
+            {
+                throw new InvalidOperationException("Capability name length exceeded protocol bounds.");
+            }
+
             var version = element.GetProperty("version").GetInt32();
-            parsed.Add(new CapabilityDescriptor(name, version));
+            if (version < 1)
+            {
+                throw new InvalidOperationException("Capability version must be a positive integer.");
+            }
+
+            if (element.TryGetProperty("policyFlags", out var policyFlagsElement))
+            {
+                ValidatePolicyFlags(policyFlagsElement);
+            }
+
+            if (parsed.TryGetValue(name, out var existingVersion))
+            {
+                parsed[name] = Math.Max(existingVersion, version);
+                continue;
+            }
+
+            if (parsed.Count >= MaxCapabilityCount)
+            {
+                throw new InvalidOperationException("Capability advertisement exceeded the maximum capability count.");
+            }
+
+            parsed.Add(name, version);
         }
 
-        return parsed;
+        return parsed
+            .Select(entry => new CapabilityDescriptor(entry.Key, entry.Value))
+            .ToArray();
+    }
+
+    internal static bool HasRequiredCapabilities(IReadOnlyList<CapabilityDescriptor> selectedCapabilities)
+    {
+        var selectedByName = selectedCapabilities.ToDictionary(capability => capability.Name, capability => capability.Version, CapabilityNameComparer);
+        return SupportedCapabilities.All(capability =>
+            selectedByName.TryGetValue(capability.Name, out var selectedVersion) &&
+            selectedVersion >= GetMinimumRequiredVersion(capability.Name));
+    }
+
+    private static int GetMinimumRequiredVersion(string capabilityName)
+    {
+        return capabilityName switch
+        {
+            "clipboard.offer_fetch" or "presence.basic" or "operation.lifecycle" or "security.event_log" => 1,
+            _ => int.MaxValue
+        };
+    }
+
+    private static void ValidatePolicyFlags(JsonElement policyFlagsElement)
+    {
+        if (policyFlagsElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Capability policyFlags must be an array.");
+        }
+
+        var count = 0;
+        foreach (var flagElement in policyFlagsElement.EnumerateArray())
+        {
+            if (++count > MaxPolicyFlagCount)
+            {
+                throw new InvalidOperationException("Capability policyFlags exceeded the maximum count.");
+            }
+
+            var flag = flagElement.GetString() ?? throw new InvalidOperationException("Capability policy flag was missing.");
+            if (flag.Length is 0 or > MaxPolicyFlagLength)
+            {
+                throw new InvalidOperationException("Capability policy flag length exceeded protocol bounds.");
+            }
+        }
     }
 }
 

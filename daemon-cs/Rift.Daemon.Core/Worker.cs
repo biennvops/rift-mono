@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Rift.Daemon.Core.Interfaces;
+using Rift.Daemon.Core.Networking;
 using System.Text;
 using System.Text.Json;
 
@@ -19,6 +20,8 @@ public class Worker(
     {
         logger.LogInformation("Rift Daemon starting...");
         identityManager.EnsureIdentityInitialized();
+        await using var heartbeatManager = new SessionHeartbeatManager(transport, identityManager, presenceService);
+        heartbeatManager.EnsureStarted(stoppingToken);
 
         var deviceId = identityManager.GetDeviceId();
         discoveryService.StartAdvertising(deviceId, "0.1-draft", "0.1-draft");
@@ -72,7 +75,8 @@ public class Worker(
             {
                 try
                 {
-                    await protocolMessageRouter.HandleMessageAsync(args.PeerDeviceId, args.Payload, stoppingToken);
+                    heartbeatManager.ObserveAuthenticatedMessage(args.Session);
+                    await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -95,6 +99,13 @@ public class Worker(
                     DateTimeOffset.UtcNow.ToString("O"),
                     args.SelectedCapabilities);
 
+                heartbeatManager.OnSessionStateChanged(args);
+
+                if (!SessionHeartbeatManager.ShouldTrackPresence(args))
+                {
+                    return;
+                }
+
                 _ = Task.Run(async () =>
                 {
                     try
@@ -113,7 +124,7 @@ public class Worker(
             }
             else
             {
-                presenceService.MarkPeerOffline(args.PeerDeviceId);
+                heartbeatManager.OnSessionStateChanged(args);
             }
         }
 
