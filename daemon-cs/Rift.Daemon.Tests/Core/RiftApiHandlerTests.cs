@@ -145,6 +145,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             peer.PairedAt == "2026-06-18T10:00:00.0000000+00:00" &&
             peer.Presence == "online" &&
             peer.LastSeenAt == "2026-06-18T10:05:00Z");
+        Assert.DoesNotContain(result.Peers, peer => peer.TrustState == "discovered");
     }
 
     [Fact]
@@ -290,6 +291,28 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task ResetRevokedPeerAsync_ReturnsPeerToDiscovered()
+    {
+        var deviceId = "rift-revoked-peer";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _trustStore.RevokePeer(deviceId, "user-request");
+
+        var result = await _handler.ResetRevokedPeerAsync(deviceId);
+        var peer = _trustStore.GetPeer(deviceId);
+
+        Assert.True(result.Reset);
+        Assert.NotNull(peer);
+        Assert.Equal(TrustState.Discovered, peer!.State);
+        Assert.Null(peer.RevocationEvidence);
+    }
+
+    [Fact]
     public async Task QueryEventLogAsync_ReturnsPersistedPairingEvents()
     {
         var peerPublicKey = new byte[32];
@@ -393,6 +416,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             return Task.CompletedTask;
         }
 
+        public bool HasActiveSession(string peerDeviceId) => false;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
@@ -407,5 +431,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         public Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason) => throw new InvalidOperationException("boom");
 
         public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) => throw new InvalidOperationException("boom");
+
+        public Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId) => throw new InvalidOperationException("boom");
     }
 }

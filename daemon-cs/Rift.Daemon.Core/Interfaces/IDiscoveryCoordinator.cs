@@ -12,6 +12,7 @@ public sealed class DiscoveredPeerInfo
 public sealed class ListDiscoveredPeersResult
 {
     public IReadOnlyList<DiscoveredPeerInfo> Peers { get; init; } = [];
+    public bool IsDiscovering { get; init; }
 }
 
 public sealed class DiscoveryToggleResult

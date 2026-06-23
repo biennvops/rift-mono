@@ -42,6 +42,7 @@ public sealed class DaemonInfoService(
     public ListTrustedPeersResult ListTrustedPeers()
     {
         var peers = trustStore.GetAllPeers()
+            .Where(peer => peer.State != TrustState.Discovered)
             .Select(peer =>
             {
                 var presence = presenceService.GetPeerPresence(peer.DeviceId);

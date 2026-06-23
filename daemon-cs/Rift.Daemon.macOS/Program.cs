@@ -4,6 +4,7 @@ using Rift.Daemon.macOS;
 
 var builder = Host.CreateApplicationBuilder(args);
 
+builder.Services.AddRiftCoreServices(DaemonPaths.GetDefaultDatabasePath());
 builder.Services.AddSingleton<IIpcListener, MacIpcListener>();
 builder.Services.AddHostedService<Worker>();
 

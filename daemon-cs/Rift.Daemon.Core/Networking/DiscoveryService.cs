@@ -86,8 +86,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             StartMdnsIfNeeded();
             _isDiscovering = true;
 
-            // Query for pointers to _rift._tcp.local
-            _mdns.SendQuery("_rift._tcp.local", DnsClass.IN, DnsType.PTR);
+            // Makaretu's DNS-SD helper issues the correct service-instance
+            // browse query and wires responses back into
+            // ServiceInstanceDiscovered.
+            _serviceDiscovery.QueryServiceInstances("_rift._tcp");
 
             _logger.LogInformation("Started mDNS discovery for peers.");
         }
@@ -134,6 +136,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private void OnServiceInstanceDiscovered(object? sender, ServiceInstanceDiscoveryEventArgs e)
     {
         var name = e.ServiceInstanceName.ToString();
+        _logger.LogInformation("[mDNS Debug] ServiceDiscovered fired for: {Name}", name);
 
         lock (_syncRoot)
         {
@@ -163,7 +166,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
         if (srvRecord is null)
         {
-            throw new InvalidOperationException($"Discovered service instance '{serviceInstanceName}' did not include an SRV record.");
+            throw new InvalidOperationException($"[mDNS Debug] Discovered service instance '{serviceInstanceName}' did not include an SRV record. Found records: {string.Join(", ", records.Select(r => r.GetType().Name))}");
         }
 
         var txtRecord = records
@@ -171,11 +174,23 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             .FirstOrDefault(record => record.Name == serviceInstanceName);
 
         var txtProperties = ParseTxtProperties(txtRecord);
-        var host = srvRecord.Target.ToString();
+        var host = records
+            .OfType<AddressRecord>()
+            .FirstOrDefault(record => record.Name == srvRecord.Target)
+            ?.Address
+            .ToString()
+            ?? e.RemoteEndPoint?.Address.ToString()
+            ?? srvRecord.Target.ToString();
         var port = srvRecord.Port;
 
+        var deviceIdHint = txtProperties.GetValueOrDefault("did");
+        Console.WriteLine($"[mDNS Debug] Parsed TXT record. DeviceIdHint: '{deviceIdHint}'");
+        foreach (var kvp in txtProperties) {
+            Console.WriteLine($"[mDNS Debug] TXT: {kvp.Key} = {kvp.Value}");
+        }
+
         return new PeerDiscoveredEventArgs(
-            deviceIdHint: txtProperties.GetValueOrDefault("did"),
+            deviceIdHint: deviceIdHint,
             instanceName: serviceInstanceName.ToString(),
             host: host,
             port: port,

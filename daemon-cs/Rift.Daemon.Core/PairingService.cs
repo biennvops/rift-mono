@@ -14,6 +14,7 @@ public sealed class PairingService : IPairingService
     private readonly IIdentityManager _identityManager;
     private readonly ISecurityEventLog _securityEventLog;
     private readonly IPairingProtocolCoordinator? _pairingProtocolCoordinator;
+    private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILogger<PairingService> _logger;
 
     public PairingService(
@@ -21,17 +22,32 @@ public sealed class PairingService : IPairingService
         IIdentityManager identityManager,
         ISecurityEventLog securityEventLog,
         IPairingProtocolCoordinator? pairingProtocolCoordinator = null,
+        IIpcNotificationService? ipcNotificationService = null,
         ILogger<PairingService>? logger = null)
     {
         _trustStore = trustStore;
         _identityManager = identityManager;
         _securityEventLog = securityEventLog;
         _pairingProtocolCoordinator = pairingProtocolCoordinator;
+        _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<PairingService>.Instance;
     }
 
     public async Task<StartPairingResult> StartPairingAsync(string deviceId)
     {
+        if (_pairingProtocolCoordinator is not null)
+        {
+            try
+            {
+                // This will connect to the peer if it's in discovered state, which exchanges TLS certs and saves the public key.
+                await _pairingProtocolCoordinator.NotifyLocalPairingStartedAsync(deviceId);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw CreateRpcException(-32000, ex.Message);
+            }
+        }
+
         var peer = GetExistingPeer(deviceId);
         EnsurePeerHasPublicKey(peer);
 
@@ -50,9 +66,9 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, "Failed to transition peer into pairing_pending.");
         }
 
-        if (_pairingProtocolCoordinator is not null)
+        if (peer.State == TrustState.Discovered)
         {
-            await _pairingProtocolCoordinator.NotifyLocalPairingStartedAsync(deviceId);
+            await NotifyTrustChangedAsync(deviceId, "discovered", "pairing_pending", "Local pairing started.");
         }
 
         await LogEventAsync(SecurityEventTypes.PairingAttempted, deviceId, SecurityEventOutcome.Success, null);
@@ -93,6 +109,8 @@ public sealed class PairingService : IPairingService
         }
 
         await LogEventAsync(SecurityEventTypes.PairingCompleted, deviceId, SecurityEventOutcome.Success, null);
+        await NotifyTrustChangedAsync(deviceId, "pairing_pending", "trusted", "Pairing approved locally.");
+        await NotifyPairingCompleteAsync(deviceId, expectedFingerprint, persistedAt.ToString("O"));
 
         return new ApprovePairingResult
         {
@@ -120,16 +138,18 @@ public sealed class PairingService : IPairingService
         }
 
         await LogEventAsync(SecurityEventTypes.PairingRejected, deviceId, SecurityEventOutcome.Success, null);
+        await NotifyTrustChangedAsync(deviceId, "pairing_pending", "discovered", "Pairing rejected locally.");
         return new RejectPairingResult { Rejected = true };
     }
 
     public async Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason)
     {
-        _ = GetExistingPeer(deviceId);
+        var peer = GetExistingPeer(deviceId);
         _trustStore.RevokePeer(deviceId, reason);
 
         var revokedAt = DateTimeOffset.UtcNow;
         await LogEventAsync(SecurityEventTypes.TrustRevoked, deviceId, SecurityEventOutcome.Success, reason);
+        await NotifyTrustChangedAsync(deviceId, ToJsonState(peer.State), "revoked", reason);
         return new RevokeTrustResult
         {
             Revoked = true,
@@ -151,8 +171,68 @@ public sealed class PairingService : IPairingService
         }
 
         await LogEventAsync(SecurityEventTypes.TrustTransitioned, deviceId, SecurityEventOutcome.Success, null);
+        await NotifyTrustChangedAsync(deviceId, "blocked", "discovered", "Peer unblocked locally.");
         return new UnblockPeerResult { Unblocked = true };
     }
+
+    public async Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId)
+    {
+        var peer = GetExistingPeer(deviceId);
+        if (peer.State != TrustState.Revoked)
+        {
+            throw CreateRpcException(-32008, "Peer is not in revoked state.");
+        }
+
+        if (!_trustStore.TryTransition(deviceId, TrustState.Discovered))
+        {
+            throw CreateRpcException(-32008, "Failed to reset revoked peer.");
+        }
+
+        await LogEventAsync(SecurityEventTypes.TrustTransitioned, deviceId, SecurityEventOutcome.Success, null);
+        await NotifyTrustChangedAsync(deviceId, "revoked", "discovered", "Peer reset from revoked locally.");
+        return new ResetRevokedPeerResult { Reset = true };
+    }
+
+    private Task NotifyTrustChangedAsync(string deviceId, string previousState, string newState, string? reason)
+    {
+        if (_ipcNotificationService is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return _ipcNotificationService.NotifyAsync("rift.onTrustChanged", new
+        {
+            deviceId,
+            previousState,
+            newState,
+            reason
+        });
+    }
+
+    private Task NotifyPairingCompleteAsync(string deviceId, string fingerprint, string persistedAt)
+    {
+        if (_ipcNotificationService is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return _ipcNotificationService.NotifyAsync("rift.onPairingComplete", new
+        {
+            deviceId,
+            fingerprint,
+            persistedAt
+        });
+    }
+
+    private static string ToJsonState(TrustState state) => state switch
+    {
+        TrustState.Discovered => "discovered",
+        TrustState.PairingPending => "pairing_pending",
+        TrustState.Trusted => "trusted",
+        TrustState.Blocked => "blocked",
+        TrustState.Revoked => "revoked",
+        _ => state.ToString().ToLowerInvariant()
+    };
 
     private static LocalRpcException CreateRpcException(int errorCode, string message)
     {

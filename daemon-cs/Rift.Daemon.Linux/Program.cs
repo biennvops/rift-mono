@@ -5,6 +5,7 @@ using Rift.Daemon.Linux;
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddSystemd();
+builder.Services.AddRiftCoreServices(DaemonPaths.GetDefaultDatabasePath());
 builder.Services.AddSingleton<IIpcListener, LinuxIpcListener>();
 builder.Services.AddHostedService<Worker>();
 

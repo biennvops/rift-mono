@@ -119,6 +119,10 @@ public class RiftApiHandler : IRiftApi
     public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) =>
         ExecutePairingAsync(() => _pairingService.UnblockPeerAsync(deviceId));
 
+    [JsonRpcMethod("rift.resetRevokedPeer")]
+    public Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId) =>
+        ExecutePairingAsync(() => _pairingService.ResetRevokedPeerAsync(deviceId));
+
     [JsonRpcMethod("rift.queryEventLog")]
     public Task<QueryEventLogResult> QueryEventLogAsync(
         string[]? eventTypes = null,
@@ -260,6 +264,8 @@ public class RiftApiHandler : IRiftApi
         public Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason) => throw CreateNotConfiguredException();
 
         public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) => throw CreateNotConfiguredException();
+
+        public Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()
         {
