@@ -63,8 +63,8 @@ public class SessionBootstrapTests
 
         var bootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x55));
 
-        var proof = bootstrap.GenerateIdentityProof(stream, pubKey, cert);
-        var isValid = bootstrap.VerifyIdentityProof(stream, pubKey, cert, proof);
+        var (bindingType, proof, sessionNonce) = bootstrap.GenerateIdentityProof(stream, pubKey, cert);
+        var isValid = bootstrap.VerifyIdentityProof(stream, pubKey, cert, proof, bindingType, sessionNonce);
 
         Assert.True(isValid);
     }

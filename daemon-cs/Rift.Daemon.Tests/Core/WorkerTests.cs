@@ -32,7 +32,7 @@ public sealed class WorkerTests
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
 
-        transport.EmitSessionStateChanged("rift-peer-online", isOnline: true, ["clipboard.offer_fetch", "presence.basic"]);
+        transport.EmitSessionStateChanged("rift-peer-online", isOnline: true, ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"], allowsProtectedTraffic: true);
 
         await WaitUntilAsync(() => transport.SentMessages.Count > 0);
 
@@ -72,16 +72,45 @@ public sealed class WorkerTests
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
 
-        transport.EmitSessionStateChanged("rift-peer-offline", isOnline: true, ["presence.basic"]);
+        transport.EmitSessionStateChanged("rift-peer-offline", isOnline: true, ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"], allowsProtectedTraffic: true);
         await WaitUntilAsync(() => presenceService.GetPeerPresence("rift-peer-offline")?.Status == "online");
 
-        transport.EmitSessionStateChanged("rift-peer-offline", isOnline: false, ["presence.basic"]);
+        transport.EmitSessionStateChanged("rift-peer-offline", isOnline: false, ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"], allowsProtectedTraffic: true);
         await WaitUntilAsync(() => presenceService.GetPeerPresence("rift-peer-offline")?.Status == "offline");
 
         var presence = presenceService.GetPeerPresence("rift-peer-offline");
         Assert.NotNull(presence);
         Assert.Equal("offline", presence!.Status);
         Assert.Contains("presence.basic", presence.Capabilities);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SessionOnline_DoesNotBroadcastPresenceForDiagnosticOnlySession()
+    {
+        var ipcListener = new FakeIpcListener();
+        var discoveryService = new FakeDiscoveryService();
+        var transport = new FakeTransport();
+        var protocolRouter = new FakeProtocolMessageRouter();
+        var presenceService = new PresenceService();
+        var identityManager = new IdentityManager();
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            identityManager,
+            discoveryService,
+            transport,
+            protocolRouter,
+            presenceService);
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
+
+        transport.EmitSessionStateChanged("rift-peer-diagnostic", isOnline: true, ["presence.basic"], allowsProtectedTraffic: false);
+        await Task.Delay(150);
+
+        Assert.DoesNotContain(transport.SentMessages, message => message.PeerDeviceId == "rift-peer-diagnostic" && message.Type == "presence.update");
 
         await worker.StopAsync(CancellationToken.None);
     }
@@ -113,8 +142,8 @@ public sealed class WorkerTests
         await WaitUntilAsync(() => protocolRouter.Messages.Count > 0);
 
         Assert.Contains(protocolRouter.Messages, message =>
-            message.PeerDeviceId == "rift-peer-router" &&
-            message.Payload == Encoding.UTF8.GetString(payload));
+                message.PeerDeviceId == "rift-peer-router" &&
+                message.Payload == Encoding.UTF8.GetString(payload));
 
         await worker.StopAsync(CancellationToken.None);
     }
@@ -262,14 +291,17 @@ public sealed class WorkerTests
 
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public void EmitSessionStateChanged(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities)
+        public void EmitSessionStateChanged(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic = true)
         {
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(peerDeviceId, isOnline, selectedCapabilities));
+            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(peerDeviceId, isOnline, selectedCapabilities, allowsProtectedTraffic));
         }
 
         public void EmitMessageReceived(string peerDeviceId, ReadOnlyMemory<byte> payload)
         {
-            MessageReceived?.Invoke(this, new MessageReceivedEventArgs(peerDeviceId, payload));
+            MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
+                peerDeviceId,
+                payload,
+                new SessionPeerContext(peerDeviceId, ["clipboard.offer_fetch", "presence.basic", "operation.lifecycle", "security.event_log"], allowsProtectedTraffic: true)));
         }
     }
 
@@ -291,9 +323,9 @@ public sealed class WorkerTests
     {
         public ConcurrentBag<RoutedMessage> Messages { get; } = [];
 
-        public Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        public Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
         {
-            Messages.Add(new RoutedMessage(peerDeviceId, Encoding.UTF8.GetString(payload.Span)));
+            Messages.Add(new RoutedMessage(session.PeerDeviceId, Encoding.UTF8.GetString(payload.Span)));
             return Task.CompletedTask;
         }
     }

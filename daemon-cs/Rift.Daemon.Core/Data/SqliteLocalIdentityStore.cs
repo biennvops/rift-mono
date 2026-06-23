@@ -62,7 +62,7 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
     {
         if (!OperatingSystem.IsWindows())
         {
-            return plaintext;
+            throw new InvalidOperationException("Protected local identity storage is only implemented on Windows. Refusing to persist sensitive identity material without OS-backed secret storage.");
         }
 
         var protectedBytes = WindowsDpapi.Protect(plaintext);
@@ -78,6 +78,11 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
     {
         if (!IsProtectedBlob(storedValue, prefix))
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                throw new InvalidOperationException("Unprotected local identity material cannot be opened on a non-Windows runtime. Platform secret storage integration is required.");
+            }
+
             return storedValue;
         }
 

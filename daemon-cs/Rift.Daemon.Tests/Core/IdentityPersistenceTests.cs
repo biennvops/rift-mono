@@ -55,8 +55,12 @@ public sealed class IdentityPersistenceTests : IDisposable
 
         using var connection = _databaseContext.CreateOpenConnection();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Ed25519PrivateKey FROM LocalIdentity WHERE Id = 1;";
-        var storedPrivateKey = (byte[])command.ExecuteScalar()!;
+        command.CommandText = "SELECT Ed25519PrivateKey, TlsCertificatePfx FROM LocalIdentity WHERE Id = 1;";
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+
+        var storedPrivateKey = (byte[])reader["Ed25519PrivateKey"];
+        var storedTlsCertificate = (byte[])reader["TlsCertificatePfx"];
         var restoredPrivateKey = new SqliteLocalIdentityStore(_databaseContext).GetIdentity()!.Ed25519PrivateKey;
 
         Assert.NotEqual(manager.GetEd25519PublicKey(), storedPrivateKey);
@@ -64,6 +68,7 @@ public sealed class IdentityPersistenceTests : IDisposable
         if (OperatingSystem.IsWindows())
         {
             Assert.False(storedPrivateKey.AsSpan().SequenceEqual(restoredPrivateKey));
+            Assert.False(storedTlsCertificate.AsSpan().SequenceEqual(manager.GetTlsCertificate().Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12, string.Empty)));
         }
     }
 

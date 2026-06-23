@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Rift.Daemon.Core.Interfaces;
+using Rift.Daemon.Core.Networking;
 
 namespace Rift.Daemon.Core;
 
@@ -8,8 +9,9 @@ public sealed class ProtocolMessageRouter(
     IPresenceService presenceService,
     IClipboardService clipboardService) : IProtocolMessageRouter
 {
-    public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        var peerDeviceId = session.PeerDeviceId;
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var messageType = root.GetProperty("type").GetString();
@@ -31,6 +33,7 @@ public sealed class ProtocolMessageRouter(
 
         if (string.Equals(messageType, "clipboard.offer", StringComparison.Ordinal))
         {
+            EnsureProtectedMessageAllowed(session, "clipboard.offer_fetch", messageType);
             var clipboardPayload = root.GetProperty("payload");
             await clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
             {
@@ -49,6 +52,7 @@ public sealed class ProtocolMessageRouter(
 
         if (string.Equals(messageType, "clipboard.fetchRequest", StringComparison.Ordinal))
         {
+            EnsureProtectedMessageAllowed(session, "clipboard.offer_fetch", messageType);
             var clipboardPayload = root.GetProperty("payload");
             await clipboardService.HandleFetchRequestAsync(
                 peerDeviceId,
@@ -60,6 +64,7 @@ public sealed class ProtocolMessageRouter(
 
         if (string.Equals(messageType, "clipboard.fetchResponse", StringComparison.Ordinal))
         {
+            EnsureProtectedMessageAllowed(session, "clipboard.offer_fetch", messageType);
             var clipboardPayload = root.GetProperty("payload");
             await clipboardService.HandleFetchResponseAsync(
                 peerDeviceId,
@@ -73,6 +78,7 @@ public sealed class ProtocolMessageRouter(
 
         if (string.Equals(messageType, "clipboard.fetchReject", StringComparison.Ordinal))
         {
+            EnsureProtectedMessageAllowed(session, "clipboard.offer_fetch", messageType);
             var clipboardPayload = root.GetProperty("payload");
             await clipboardService.HandleFetchRejectAsync(
                 peerDeviceId,
@@ -85,6 +91,7 @@ public sealed class ProtocolMessageRouter(
 
         if (string.Equals(messageType, "presence.update", StringComparison.Ordinal))
         {
+            EnsureProtectedMessageAllowed(session, SessionHeartbeatManager.PresenceBasicCapability, messageType);
             var presencePayload = root.GetProperty("payload");
             var status = presencePayload.GetProperty("status").GetString() ?? "online";
             var lastSeenAt = presencePayload.TryGetProperty("lastSeenAt", out var lastSeenElement)
@@ -95,7 +102,35 @@ public sealed class ProtocolMessageRouter(
                 : [];
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
+            return;
         }
+
+        if (messageType.StartsWith("operation.", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "operation.lifecycle", messageType);
+            throw new InvalidOperationException($"Unsupported protected message type '{messageType}'.");
+        }
+
+        if (messageType.StartsWith("security.", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "security.event_log", messageType);
+            throw new InvalidOperationException($"Unsupported protected message type '{messageType}'.");
+        }
+    }
+
+    private static void EnsureProtectedMessageAllowed(SessionPeerContext session, string requiredCapability, string messageType)
+    {
+        if (!session.AllowsProtectedTraffic)
+        {
+            throw new UnauthorizedAccessException($"Session for '{session.PeerDeviceId}' is not authorized for protected traffic.");
+        }
+
+        if (session.HasCapability(requiredCapability))
+        {
+            return;
+        }
+
+        throw new UnauthorizedAccessException($"{messageType} requires negotiated capability '{requiredCapability}'.");
     }
 
     private static void EnsureEnvelopeIdentityMatches(string authenticatedDeviceId, string sourceDeviceId, string messageType)

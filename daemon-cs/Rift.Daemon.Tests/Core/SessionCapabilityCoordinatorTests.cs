@@ -82,6 +82,40 @@ public sealed class SessionCapabilityCoordinatorTests
     }
 
     [Fact]
+    public void ComputeSelectedCapabilities_IgnoresUnknownCapabilities()
+    {
+        var local = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1)
+        };
+        var remote = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("custom.future_capability", 7)
+        };
+
+        var selected = SessionCapabilityCoordinator.ComputeSelectedCapabilities(local, remote);
+
+        Assert.DoesNotContain(selected, capability => capability.Name == "custom.future_capability");
+        Assert.Equal(2, selected.Count);
+    }
+
+    [Fact]
+    public void HasRequiredCapabilities_ReturnsFalseWhenAnyRequiredCapabilityIsMissing()
+    {
+        var selected = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("security.event_log", 1)
+        };
+
+        Assert.False(SessionCapabilityCoordinator.HasRequiredCapabilities(selected));
+    }
+
+    [Fact]
     public async Task NegotiateAsync_CompletesEndToEndHandshake()
     {
         var initiatorCoordinator = new SessionCapabilityCoordinator();
@@ -138,6 +172,53 @@ public sealed class SessionCapabilityCoordinatorTests
                 CancellationToken.None));
 
         Assert.Contains("sourceDeviceId", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NegotiateAsync_RejectsAdvertiseMessageThatExceedsCapabilityBounds()
+    {
+        var coordinator = new SessionCapabilityCoordinator();
+        var oversizedCapabilities = Enumerable.Range(0, 65)
+            .Select(index => new { name = $"presence.basic-{index}", version = 1, policyFlags = Array.Empty<string>() })
+            .ToArray();
+        var framedPayload = CreateFramedMessage(
+            "capability.advertise",
+            "rift-remote",
+            new { capabilities = oversizedCapabilities });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.NegotiateAsync(
+                Stream.Null,
+                "rift-local",
+                "rift-remote",
+                isInitiator: true,
+                (_, _, _) => Task.FromResult<byte[]?>(framedPayload),
+                CancellationToken.None));
+
+        Assert.Contains("maximum capability count", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateSelectedCapabilities_RejectsDuplicateCapabilityEntries()
+    {
+        var local = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("operation.lifecycle", 1),
+            new CapabilityDescriptor("security.event_log", 1)
+        };
+        var remote = local;
+        var selected = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("operation.lifecycle", 1),
+            new CapabilityDescriptor("security.event_log", 1)
+        };
+
+        Assert.False(SessionCapabilityCoordinator.ValidateSelectedCapabilities(local, remote, selected));
     }
 
     private static async Task<byte[]?> ReadFramePayloadAsync(Stream stream, int maxFrameSize, CancellationToken cancellationToken)

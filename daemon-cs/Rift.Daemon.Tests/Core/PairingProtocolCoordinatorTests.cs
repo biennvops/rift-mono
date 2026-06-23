@@ -141,6 +141,21 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingApprove_FromUnknownPeer_DoesNotCreateGhostSession()
+    {
+        Assert.Equal(0, GetPairingStateCount());
+
+        await _coordinator.HandleMessageAsync("rift-peer-approve-ghost", CreateEnvelope("rift-peer-approve-ghost", "pairing.approve", new
+        {
+            approvedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
+
+        Assert.Equal(0, GetPairingStateCount());
+        Assert.Null(_trustStore.GetPeer("rift-peer-approve-ghost"));
+        Assert.DoesNotContain(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer-approve-ghost" && sent.Type == "pairing.complete");
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_WithoutRemoteApprove_DoesNotTrustPeer()
     {
         _trustStore.SavePeer(new PeerIdentity
