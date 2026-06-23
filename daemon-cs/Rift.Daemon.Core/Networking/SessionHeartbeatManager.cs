@@ -71,9 +71,11 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
+        var timer = _timer;
+
         try
         {
-            while (_timer is not null && await _timer.WaitForNextTickAsync(cancellationToken))
+            while (timer is not null && await timer.WaitForNextTickAsync(cancellationToken))
             {
                 await EmitHeartbeatsAsync(cancellationToken);
                 MarkTimedOutSessionsOffline();

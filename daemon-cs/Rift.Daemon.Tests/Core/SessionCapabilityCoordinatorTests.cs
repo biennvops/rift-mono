@@ -198,6 +198,29 @@ public sealed class SessionCapabilityCoordinatorTests
         Assert.Contains("maximum capability count", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ValidateSelectedCapabilities_RejectsDuplicateCapabilityEntries()
+    {
+        var local = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("operation.lifecycle", 1),
+            new CapabilityDescriptor("security.event_log", 1)
+        };
+        var remote = local;
+        var selected = new[]
+        {
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("clipboard.offer_fetch", 1),
+            new CapabilityDescriptor("presence.basic", 1),
+            new CapabilityDescriptor("operation.lifecycle", 1),
+            new CapabilityDescriptor("security.event_log", 1)
+        };
+
+        Assert.False(SessionCapabilityCoordinator.ValidateSelectedCapabilities(local, remote, selected));
+    }
+
     private static async Task<byte[]?> ReadFramePayloadAsync(Stream stream, int maxFrameSize, CancellationToken cancellationToken)
     {
         var headerBuffer = new byte[RiftFrame.LengthPrefixBytes];

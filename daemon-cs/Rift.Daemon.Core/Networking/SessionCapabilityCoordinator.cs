@@ -86,9 +86,15 @@ internal sealed class SessionCapabilityCoordinator
     {
         var expected = ComputeSelectedCapabilities(localCapabilities, remoteCapabilities)
             .ToDictionary(capability => capability.Name, capability => capability.Version, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var selected in selectedCapabilities)
         {
+            if (!seen.Add(selected.Name))
+            {
+                return false;
+            }
+
             if (!expected.TryGetValue(selected.Name, out var expectedVersion) || expectedVersion != selected.Version)
             {
                 return false;
@@ -198,14 +204,9 @@ internal sealed class SessionCapabilityCoordinator
             throw new InvalidOperationException("Capability payload must be an array.");
         }
 
-        var parsed = new List<CapabilityDescriptor>();
+        var parsed = new Dictionary<string, int>(CapabilityNameComparer);
         foreach (var element in capabilities.EnumerateArray())
         {
-            if (parsed.Count >= MaxCapabilityCount)
-            {
-                throw new InvalidOperationException("Capability advertisement exceeded the maximum capability count.");
-            }
-
             var name = element.GetProperty("name").GetString()
                 ?? throw new InvalidOperationException("Capability name was missing.");
             if (name.Length is 0 or > MaxCapabilityNameLength)
@@ -224,10 +225,23 @@ internal sealed class SessionCapabilityCoordinator
                 ValidatePolicyFlags(policyFlagsElement);
             }
 
-            parsed.Add(new CapabilityDescriptor(name, version));
+            if (parsed.TryGetValue(name, out var existingVersion))
+            {
+                parsed[name] = Math.Max(existingVersion, version);
+                continue;
+            }
+
+            if (parsed.Count >= MaxCapabilityCount)
+            {
+                throw new InvalidOperationException("Capability advertisement exceeded the maximum capability count.");
+            }
+
+            parsed.Add(name, version);
         }
 
-        return parsed;
+        return parsed
+            .Select(entry => new CapabilityDescriptor(entry.Key, entry.Value))
+            .ToArray();
     }
 
     internal static bool HasRequiredCapabilities(IReadOnlyList<CapabilityDescriptor> selectedCapabilities)

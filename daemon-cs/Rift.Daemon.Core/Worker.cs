@@ -125,7 +125,6 @@ public class Worker(
             else
             {
                 heartbeatManager.OnSessionStateChanged(args);
-                presenceService.MarkPeerOffline(args.PeerDeviceId);
             }
         }
 
