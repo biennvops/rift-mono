@@ -267,11 +267,13 @@ class RiftDaemon {
           'isDiscovering': _isDiscovering,
         };
       case 'rift.startDiscovery':
-        await _discoveryService?.startDiscovery();
+        _requireDiscoveryServices();
+        await _discoveryService!.startDiscovery();
         _isDiscovering = true;
         return {'started': true};
       case 'rift.stopDiscovery':
-        await _discoveryService?.stopDiscovery();
+        _requireDiscoveryServices();
+        await _discoveryService!.stopDiscovery();
         _discoveredPeers.clear();
         _isDiscovering = false;
         return {'stopped': true};
@@ -365,6 +367,15 @@ class RiftDaemon {
       throw const RiftException(
         -32603,
         'Transport-dependent services are not initialized',
+      );
+    }
+  }
+
+  void _requireDiscoveryServices() {
+    if (_discoveryService == null) {
+      throw const RiftException(
+        -32603,
+        'Discovery services are not initialized',
       );
     }
   }

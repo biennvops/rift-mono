@@ -11,11 +11,7 @@ Future<void> main(List<String> args) async {
   final storagePath = _resolveStoragePath();
 
   await Directory(storagePath).create(recursive: true);
-  final socketFile = File(socketPath);
-  if (await socketFile.exists()) {
-    await socketFile.delete();
-  }
-  await Directory(p.dirname(socketPath)).create(recursive: true);
+  final socketFile = await _prepareSocketPath(socketPath);
 
   final daemon = RiftDaemon(
     storagePath: storagePath,
@@ -125,6 +121,45 @@ Future<void> _shutdown(ServerSocket server, RiftDaemon daemon, File socketFile) 
   }
 }
 
+Future<File> _prepareSocketPath(String socketPath) async {
+  final socketDir = Directory(p.dirname(socketPath));
+  await socketDir.create(recursive: true);
+  await _tightenSocketDirectoryPermissions(socketDir);
+
+  final socketFile = File(socketPath);
+  if (!await socketFile.exists()) {
+    return socketFile;
+  }
+
+  try {
+    final probe = await Socket.connect(
+      InternetAddress(socketPath, type: InternetAddressType.unix),
+      0,
+      timeout: const Duration(milliseconds: 300),
+    );
+    await probe.close();
+    throw StateError('Another Rift daemon is already listening on unix://$socketPath');
+  } on SocketException {
+    await socketFile.delete();
+    return socketFile;
+  } on TimeoutException {
+    await socketFile.delete();
+    return socketFile;
+  }
+}
+
+Future<void> _tightenSocketDirectoryPermissions(Directory socketDir) async {
+  if (!Platform.isLinux && !Platform.isMacOS) {
+    return;
+  }
+  try {
+    await Process.run('chmod', ['700', socketDir.path]);
+  } catch (_) {
+    // Best-effort hardening only; local smoke tests should still run even if
+    // chmod is unavailable in the host environment.
+  }
+}
+
 List<int> _encodeJson(Map<String, dynamic> payload) {
   final body = utf8.encode(jsonEncode(payload));
   final header = ascii.encode('Content-Length: ${body.length}\r\n\r\n');
@@ -161,11 +196,34 @@ String _resolveSocketPath() {
   if (xdg != null && xdg.isNotEmpty) {
     return '$xdg/rift-daemon/v0.1.sock';
   }
-  final uid = env['UID'];
+  final uid = _resolveUid();
   if (uid != null && uid.isNotEmpty) {
     return '/tmp/rift-daemon-$uid/v0.1.sock';
   }
   return '/tmp/rift-daemon.sock';
+}
+
+String? _resolveUid() {
+  final envUid = Platform.environment['UID'];
+  if (envUid != null && envUid.isNotEmpty) {
+    return envUid;
+  }
+  try {
+    final statusFile = File('/proc/self/status');
+    if (!statusFile.existsSync()) {
+      return null;
+    }
+    for (final line in statusFile.readAsLinesSync()) {
+      if (!line.startsWith('Uid:')) continue;
+      final parts = line.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+      if (parts.length >= 2) {
+        return parts[1];
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
 }
 
 String _resolveStoragePath() {

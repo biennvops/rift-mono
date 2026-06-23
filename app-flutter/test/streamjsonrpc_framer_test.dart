@@ -90,6 +90,31 @@ void main() {
       unawaited(incoming.close());
       unawaited(outgoing.close());
     });
+
+    test('closes cleanly when stream ends mid-body', () async {
+      final incoming = StreamController<List<int>>();
+      final outgoing = StreamController<List<int>>();
+      final channel = streamJsonRpcFramer(incoming.stream, outgoing.sink);
+
+      final messages = <String>[];
+      final errors = <Object>[];
+      final done = Completer<void>();
+      final sub = channel.stream.listen(
+        messages.add,
+        onError: errors.add,
+        onDone: done.complete,
+      );
+
+      incoming.add(ascii.encode('Content-Length: 20\r\n\r\n{"short":'));
+      await incoming.close();
+      await done.future.timeout(const Duration(seconds: 2));
+
+      expect(messages, isEmpty);
+      expect(errors, isEmpty);
+
+      await sub.cancel();
+      unawaited(outgoing.close());
+    });
   });
 }
 

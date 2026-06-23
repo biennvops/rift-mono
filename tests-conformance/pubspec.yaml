@@ -1,0 +1,10 @@
+name: rift_tests_conformance
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  daemon_dart:
+    path: ../daemon-dart
+  crypto: ^3.0.7

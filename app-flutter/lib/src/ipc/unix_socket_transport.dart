@@ -67,7 +67,7 @@ List<String> _candidateSocketPaths(String configured) {
     paths.add('$tmpdir/rift-daemon/v0.1.sock');
   }
 
-  final uid = env['UID'];
+  final uid = _resolveUid();
   if (uid != null && uid.isNotEmpty) {
     paths.add('/tmp/rift-daemon-$uid/v0.1.sock');
   }
@@ -77,4 +77,27 @@ List<String> _candidateSocketPaths(String configured) {
   // De-dupe while preserving order.
   final seen = <String>{};
   return paths.where((p) => seen.add(p)).toList(growable: false);
+}
+
+String? _resolveUid() {
+  final envUid = Platform.environment['UID'];
+  if (envUid != null && envUid.isNotEmpty) {
+    return envUid;
+  }
+  try {
+    final statusFile = File('/proc/self/status');
+    if (!statusFile.existsSync()) {
+      return null;
+    }
+    for (final line in statusFile.readAsLinesSync()) {
+      if (!line.startsWith('Uid:')) continue;
+      final parts = line.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+      if (parts.length >= 2) {
+        return parts[1];
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
 }
