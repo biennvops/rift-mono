@@ -1,4 +1,5 @@
 using Rift.Daemon.Core;
+using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Windows;
 
 var builder = Host.CreateApplicationBuilder(args);
