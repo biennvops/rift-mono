@@ -358,12 +358,6 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
-        await _recordSecurityEvent(
-          eventType: 'pairing.completed',
-          severity: 'info',
-          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
-          outcome: 'success',
-        );
         return {
           'trustedDeviceId': RpcUtils.requireStringParam(params, 'deviceId'),
           'persistedAt': DateTime.now().toUtc().toIso8601String(),
@@ -374,12 +368,6 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
-        await _recordSecurityEvent(
-          eventType: 'pairing.rejected',
-          severity: 'warning',
-          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
-          outcome: 'success',
-        );
         return {'rejected': true};
       case 'rift.revokeTrust':
         _requireTransportServices();
@@ -392,13 +380,6 @@ class RiftDaemon {
             'reason': params['reason'],
           },
         });
-        await _recordSecurityEvent(
-          eventType: 'trust.revoked',
-          severity: 'warning',
-          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
-          outcome: 'success',
-          failureReason: params['reason'] as String?,
-        );
         return {
           'revoked': true,
           'revokedAt': DateTime.now().toUtc().toIso8601String(),
@@ -409,12 +390,6 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
-        await _recordSecurityEvent(
-          eventType: 'trust.transitioned',
-          severity: 'info',
-          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
-          outcome: 'success',
-        );
         return {'unblocked': true};
       case 'rift.resetRevokedPeer':
         _requireTransportServices();
@@ -422,12 +397,6 @@ class RiftDaemon {
           'method': method,
           'params': params,
         });
-        await _recordSecurityEvent(
-          eventType: 'trust.transitioned',
-          severity: 'info',
-          peerDeviceId: RpcUtils.requireStringParam(params, 'deviceId'),
-          outcome: 'success',
-        );
         return {'reset': true};
       case 'rift.connect':
         _requireTransportServices();
