@@ -110,19 +110,19 @@ public class SessionBootstrap
     private (string bindingType, byte[] channelBinding, byte[]? sessionNonce) GetChannelBinding(
         SslStream sslStream, X509Certificate2 localCert, byte[]? peerCertDer)
     {
-        if (TryGetTlsChannelBinding(sslStream, out var tlsBinding))
-            return ("tls-unique", tlsBinding, null);
-
         if (peerCertDer is null)
             throw new InvalidOperationException(
                 "Cannot compute app-nonce channel binding: peer certificate DER is required.");
 
+        // Prefer Tier 3 (app-nonce) for cross-implementation interop: Dart SecureSocket cannot
+        // verify tls-unique/tls-exporter bindings today, so advertising tls-unique would cause
+        // Android to reject the session during session.hello bootstrap.
         var sessionNonce = new byte[32];
         using var rng = RandomNumberGenerator.Create();
         rng.GetBytes(sessionNonce);
 
         var channelBinding = ComputeAppNonceBinding(sessionNonce, localCert.GetRawCertData(), peerCertDer);
-        _logger.LogWarning("Using app-nonce channel binding (Tier 3) — tls-unique was unavailable.");
+        _logger.LogDebug("Using app-nonce channel binding (Tier 3).");
         return ("app-nonce", channelBinding, sessionNonce);
     }
 
@@ -138,11 +138,8 @@ public class SessionBootstrap
 
     protected virtual bool TryGetTlsChannelBinding(SslStream sslStream, out byte[] channelBinding)
     {
-        // Force app-nonce for Android/Dart interop because Dart SecureSocket lacks TLS channel binding APIs.
-        channelBinding = [];
-        return false;
-        
         ArgumentNullException.ThrowIfNull(sslStream);
+        channelBinding = [];
 
         try
         {
