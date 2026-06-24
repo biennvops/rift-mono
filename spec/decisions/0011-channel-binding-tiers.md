@@ -6,16 +6,17 @@ Accepted
 
 ## Context
 
-The protocol specification (Section 5.3.1) requires TLS channel binding via `tls-exporter` (RFC 9266), with `tls-unique` (RFC 5929) as a TLS 1.2 fallback. Both binding types require platform APIs that expose TLS session internals.
+Rift binds Ed25519 Proof of Possession (PoP) to the session using a tiered channel-binding hierarchy (`tls-exporter`, `tls-unique`, and `app-nonce`).
+The higher tiers require platform APIs that expose TLS session internals.
 
 Neither target platform fully satisfies the preferred requirement:
 
-- **Dart (`dart:io`)**: `SecureSocket` does not expose `tls-exporter`, `tls-unique`, or any channel binding primitive. The tracking issue `dart-lang/sdk#49581` remains open with no indication of progress. The Dart daemon currently uses a non-conforming Application Nonce fallback.
+- **Dart (`dart:io`)**: `SecureSocket` does not expose `tls-exporter`, `tls-unique`, or any channel binding primitive. The tracking issue `dart-lang/sdk#49581` remains open with no indication of progress.
 - **C# (.NET `SslStream`)**: Exposes `ChannelBindingKind.Unique` (`tls-unique`) but not `tls-exporter`. The API proposal `dotnet/runtime#112529` for `ExportKeyingMaterial` is still in `api-suggestion` status and did not ship in .NET 10. On macOS, even `tls-unique` may be unavailable depending on the Secure Transport backend.
 
 The native FFI escape hatch (calling BoringSSL's `SSL_export_keying_material` or Schannel's `SECPKG_ATTR_KEYING_MATERIAL` directly) is technically feasible but architecturally expensive: the platform TLS wrappers do not expose their underlying `SSL*` / security context handles, so the FFI route requires managing the entire TLS handshake natively rather than bolting an exporter onto the existing managed socket.
 
-The result is that the two daemon implementations use incompatible channel binding methods — C# uses `tls-unique`, Dart uses an Application Nonce — and cannot interoperate during the PoP handshake. The Dart signing input format also diverges (113 bytes with length prefixes vs. the spec's 107-byte raw concatenation).
+As a result, current implementations must support Tier 3 (`app-nonce`) for cross-platform interop until Tier 1 (`tls-exporter`) becomes available on both runtimes.
 
 ## Decision
 
@@ -61,8 +62,7 @@ Length prefixes are unnecessary because all fields are fixed-size.
 ## Consequences
 
 - Both daemon implementations can interoperate immediately using Tier 3.
-- The Dart `pop_manager.dart` signing input must be aligned to the spec's 107-byte format (remove 2-byte length prefixes).
-- The C# daemon must implement Tier 3 negotiation as a fallback for interop with Dart and for macOS environments where `tls-unique` may be unavailable.
+- Both implementations should keep the signing input aligned to the spec's 107-byte raw concatenation format (no length prefixes).
 - Tier 3 does not bind the PoP signature to the TLS session itself. The residual risk is documented: an active MitM who controls the TLS layer could inject their own nonce. This risk is mitigated by Rift's use of self-signed pinned certificates — post-pairing, a TLS-layer MitM requires compromising a device's private ECDSA key, at which point stronger attacks are available anyway.
 - When Dart or .NET gains `tls-exporter` support, implementations should upgrade to Tier 1 with no protocol changes required — only the `bindingType` value changes.
 - The `sessionNonce` field is only present when `bindingType` is `app-nonce`. Implementations MUST ignore it for other binding types.

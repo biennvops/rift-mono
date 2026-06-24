@@ -368,7 +368,7 @@ Capability negotiation proceeds as follows:
 2. The session initiator (the peer that sent `session.hello`) computes the selected set: for each capability name present in both advertisements, the selected version is the minimum of the two advertised versions.
 3. If the selected version for any capability is below the minimum required version for that capability (defined per capability), the capability is excluded from the selected set.
 4. The initiator sends `capability.selected` containing the computed intersection.
-5. The responder validates the selection. If the responder disagrees (the initiator selected a capability it did not advertise, or selected a version it cannot support), the responder MUST send `error` with `ProtocolError` and terminate the session.
+5. The responder validates the selection. If the responder disagrees (the initiator selected a capability it did not advertise, or selected a version it cannot support), the responder MUST send `error` with `ProtocolError` and terminate the session. The responder MUST NOT require any additional `session.accept` message beyond the initial `session.hello` → `session.accept` exchange.
 6. After successful capability selection, both peers use only the selected capabilities for the remainder of the session.
 
 If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
