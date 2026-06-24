@@ -14,6 +14,7 @@ class EventLogScreen extends StatefulWidget {
 }
 
 class _EventLogScreenState extends State<EventLogScreen> {
+  List<dynamic> _allEvents = [];
   List<dynamic> _events = [];
   bool _loading = true;
   String? _error;
@@ -39,23 +40,28 @@ class _EventLogScreenState extends State<EventLogScreen> {
     final client = context.read<JsonRpcRiftClient>();
     _securityEventSub = client.onSecurityEvent.listen((event) {
       if (!mounted) return;
-      final severity = event['severity']?.toString();
-      if (_severityFilter != 'all' && severity != _severityFilter) {
-        return;
-      }
       setState(() {
         final eventId = event['eventId']?.toString();
-        _events = [
+        _allEvents = [
           Map<String, dynamic>.from(event),
-          ..._events.where(
+          ..._allEvents.where(
             (existing) =>
                 existing is! Map ||
                 existing['eventId']?.toString() != eventId,
           ),
         ];
+        _events = _applySeverityFilter(_allEvents);
         _error = null;
       });
     });
+  }
+
+  List<dynamic> _applySeverityFilter(List<dynamic> events) {
+    if (_severityFilter == 'all') return events;
+    return events.where((event) {
+      if (event is! Map) return false;
+      return event['severity']?.toString() == _severityFilter;
+    }).toList();
   }
 
   Future<void> _loadEvents() async {
@@ -64,6 +70,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
 
     if (!client.isConnected) {
       setState(() {
+        _allEvents = [];
         _events = [];
         _loading = false;
         _error = 'Daemon not connected';
@@ -79,16 +86,18 @@ class _EventLogScreenState extends State<EventLogScreen> {
     try {
       final result = await client.queryEventLog(
         limit: 100,
-        severities: _severityFilter == 'all' ? null : [_severityFilter],
+        severities: null,
       );
       if (!mounted) return;
       setState(() {
-        _events = List<dynamic>.from(result['events'] ?? const []);
+        _allEvents = List<dynamic>.from(result['events'] ?? const []);
+        _events = _applySeverityFilter(_allEvents);
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        _allEvents = [];
         _events = [];
         _loading = false;
         _error = JsonRpcRiftClient.formatDisplayError(e);
@@ -199,6 +208,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
                 if (next == _severityFilter) return;
                 setState(() {
                   _severityFilter = next;
+                  _events = _applySeverityFilter(_allEvents);
                 });
                 _loadEvents();
               },

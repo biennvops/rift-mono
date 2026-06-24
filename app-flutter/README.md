@@ -19,6 +19,8 @@ flutter run -d <device>  # on Android/emulator
 - **Windows (`NamedPipeTransport`):** The app connects to `\\.\pipe\rift-daemon-v0.1` and speaks StreamJsonRpc-compatible `Content-Length` framing to `daemon-cs`.
 - **Android (`AndroidDaemonIsolateTransport`):** The app spawns the Dart daemon in a background isolate and waits for `rift.daemonReady` before issuing JSON-RPC requests. In debug builds, discovery is intentionally disabled in the isolate to avoid plugin assertions.
 
+IPC framing and size limits are transport-specific; see `spec/doc/ipc.md` for the IPC contract and framing-limit guidance.
+
 ## Testing
 
 ```bash

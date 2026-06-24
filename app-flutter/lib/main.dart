@@ -62,27 +62,34 @@ class _RiftAppState extends State<RiftApp> {
 
       final deviceId = event['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return;
-      if (_activePairingDeviceId == deviceId) return;
+      // Guard against notification bursts stacking multiple pairing screens.
+      if (_activePairingDeviceId != null) return;
 
       _activePairingDeviceId = deviceId;
-      navigator
-          .push(
-            MaterialPageRoute<void>(
-              builder: (_) => PairingScreen(
-                initialDeviceId: deviceId,
-                initialDisplayName: event['displayName']?.toString(),
-                initialPeerFingerprint: event['fingerprint']?.toString(),
-                initialExpiresInMs: (event['expiresInMs'] as num?)?.toInt(),
-                initialCanApproveLocally: true,
-                initialStatus: 'Incoming pairing request',
+      try {
+        navigator
+            .push(
+              MaterialPageRoute<void>(
+                builder: (_) => PairingScreen(
+                  initialDeviceId: deviceId,
+                  initialDisplayName: event['displayName']?.toString(),
+                  initialPeerFingerprint: event['fingerprint']?.toString(),
+                  initialExpiresInMs: (event['expiresInMs'] as num?)?.toInt(),
+                  initialCanApproveLocally: true,
+                  initialStatus: 'Incoming pairing request',
+                ),
               ),
-            ),
-          )
-          .whenComplete(() {
-            if (mounted && _activePairingDeviceId == deviceId) {
-              _activePairingDeviceId = null;
-            }
-          });
+            )
+            .whenComplete(() {
+              if (mounted && _activePairingDeviceId == deviceId) {
+                _activePairingDeviceId = null;
+              }
+            });
+      } catch (_) {
+        if (mounted && _activePairingDeviceId == deviceId) {
+          _activePairingDeviceId = null;
+        }
+      }
     });
   }
 
@@ -119,7 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _syncHomeStatus();
       _statusPollTimer = Timer.periodic(
-        const Duration(seconds: 2),
+        const Duration(seconds: 5),
         (_) => _syncHomeStatus(),
       );
     });
@@ -185,7 +192,11 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (_) {
       if (!_isConnected) return;
       setState(() {
-        _isConnected = nextConnected;
+        _isConnected = false;
+        _trustedCount = 0;
+        _onlineTrustedCount = 0;
+        _discoveredCount = 0;
+        _isDiscovering = false;
       });
     }
   }
