@@ -45,6 +45,7 @@ Future<void> main(List<String> args) async {
 Future<void> _handleClient(Socket client, RiftDaemon daemon) async {
   final buffer = <int>[];
   int? contentLength;
+  const maxContentLength = 1024 * 1024; // 1 MiB
 
   try {
     await for (final chunk in client) {
@@ -59,6 +60,11 @@ Future<void> _handleClient(Socket client, RiftDaemon daemon) async {
           final len = _parseContentLength(headerText);
           if (len == null) {
             client.add(_encodeError(null, -32600, 'Missing or invalid Content-Length header'));
+            buffer.clear();
+            break;
+          }
+          if (len < 0 || len > maxContentLength) {
+            client.add(_encodeError(null, -32600, 'Content-Length out of range'));
             buffer.clear();
             break;
           }

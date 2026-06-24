@@ -25,7 +25,17 @@ class RiftCertDecoder {
     return parts.join(' ');
   }
 
-  static Uint8List _unwrapEd25519ExtensionValue(Uint8List bytes) {
+  static const int _maxEd25519ExtensionUnwrapDepth = 3;
+
+  static Uint8List _unwrapEd25519ExtensionValue(
+    Uint8List bytes, {
+    int depth = 0,
+  }) {
+    if (depth > _maxEd25519ExtensionUnwrapDepth) {
+      throw CertificateDecoderException(
+        'Extension value unwrap exceeded max depth of $_maxEd25519ExtensionUnwrapDepth',
+      );
+    }
     if (bytes.length == 32) {
       return Uint8List.fromList(bytes);
     }
@@ -51,7 +61,10 @@ class RiftCertDecoder {
         throw CertificateDecoderException('Inner value is not an OCTET STRING');
       }
       final innerValue = innerObj.valueBytes();
-      return _unwrapEd25519ExtensionValue(Uint8List.fromList(innerValue));
+      return _unwrapEd25519ExtensionValue(
+        Uint8List.fromList(innerValue),
+        depth: depth + 1,
+      );
     } on CertificateDecoderException {
       rethrow;
     } catch (e) {

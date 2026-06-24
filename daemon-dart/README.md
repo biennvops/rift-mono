@@ -86,6 +86,10 @@ domain socket using StreamJsonRpc-compatible `Content-Length` framing, and uses
 the same socket-path conventions that `app-flutter` probes (`$XDG_RUNTIME_DIR`,
 `/tmp/rift-daemon-<uid>/v0.1.sock`, fallback `/tmp/rift-daemon.sock`).
 
+To reduce the risk of memory exhaustion from malformed or adversarial local IPC
+clients, the standalone runner enforces a maximum `Content-Length` of 1 MiB and
+rejects out-of-range frames with JSON-RPC `-32600` (Invalid request).
+
 ```bash
 dart run bin/daemon.dart
 ```
