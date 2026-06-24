@@ -767,6 +767,18 @@ class SessionManager {
       'sending session.accept and waiting for peer accept before marking established.',
     );
     await _sendSessionAccept(ctx);
+
+    // Sequential (unidirectional) handshake: if we are the responder (no local hello in flight),
+    // the peer may not send a second session.accept back. Move to established immediately and
+    // begin capability negotiation.
+    if (!ctx.isInitiator && ctx.handshakeState == HandshakeState.handshaking) {
+      print(
+        '[Session Debug] Responder handshake established with $peerDeviceId; starting capability negotiation.',
+      );
+      ctx.handshakeState = HandshakeState.established;
+      _transport.setPeerAuthenticated(peerDeviceId);
+      await _startCapabilityNegotiation(ctx);
+    }
   }
 
   Future<void> _sendSessionAccept(SessionContext ctx) async {

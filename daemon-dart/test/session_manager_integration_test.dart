@@ -348,5 +348,82 @@ void main() {
       expect(received.payload['type'], 'operation.test');
       expect(received.payload['payload']['value'], 'hello-from-device1');
     });
+
+    test('Unidirectional handshake (sequential) completes capability negotiation for both peers', () async {
+      // Device1 initiates by sending session.hello. Device2 responds with session.accept.
+      transport1.registerPeerCert('rift-device2', testCertDer2);
+      transport2.registerPeerCert('rift-device1', testCertDer1);
+
+      final advertiseFrom2Future = transport2.onSentMessage.firstWhere(
+        (msg) => msg['type'] == 'capability.advertise',
+      );
+
+      await sessionManager1.sendSessionHello('rift-device2');
+      final helloFrom1 = Map<String, dynamic>.from(transport1.sentMessages.removeLast());
+
+      final acceptFuture = transport2.onSentMessage.firstWhere((msg) => msg['type'] == 'session.accept');
+      transport2.simulateIncomingMessage(
+        'rift-device1',
+        testCertDer1,
+        pubKeyBytes1,
+        helloFrom1,
+      );
+      final acceptFrom2 = Map<String, dynamic>.from(await acceptFuture);
+
+      // Initiator will start capability negotiation after receiving accept.
+      final advertiseFrom1Future = transport1.onSentMessage.firstWhere(
+        (msg) => msg['type'] == 'capability.advertise',
+      );
+
+      // Deliver accept back to device1.
+      transport1.simulateIncomingMessage(
+        'rift-device2',
+        testCertDer2,
+        pubKeyBytes2,
+        acceptFrom2,
+      );
+      final advertiseFrom1 = Map<String, dynamic>.from(await advertiseFrom1Future);
+      final advertiseFrom2 = Map<String, dynamic>.from(await advertiseFrom2Future);
+
+      // Exchange capability.advertise.
+      final selectedFrom1Future = transport1.onSentMessage.firstWhere(
+        (msg) => msg['type'] == 'capability.selected',
+      );
+      transport2.simulateIncomingMessage(
+        'rift-device1',
+        testCertDer1,
+        pubKeyBytes1,
+        advertiseFrom1,
+      );
+      transport1.simulateIncomingMessage(
+        'rift-device2',
+        testCertDer2,
+        pubKeyBytes2,
+        advertiseFrom2,
+      );
+      final selectedFrom1 = Map<String, dynamic>.from(await selectedFrom1Future);
+
+      final wait1 = sessionManager1.waitForSessionEstablished('rift-device2');
+      final wait2 = sessionManager2.waitForSessionEstablished('rift-device1');
+
+      // Initiator (device1) sends capability.selected; responder (device2) completes on receipt.
+      transport2.simulateIncomingMessage(
+        'rift-device1',
+        testCertDer1,
+        pubKeyBytes1,
+        selectedFrom1,
+      );
+
+      await Future.wait([wait1, wait2]);
+
+      final ctx1 = sessionManager1.getContext('rift-device2');
+      final ctx2 = sessionManager2.getContext('rift-device1');
+      expect(ctx1, isNotNull);
+      expect(ctx2, isNotNull);
+      expect(ctx1!.handshakeState, HandshakeState.established);
+      expect(ctx2!.handshakeState, HandshakeState.established);
+      expect(ctx1.capabilityNegotiated, isTrue);
+      expect(ctx2.capabilityNegotiated, isTrue);
+    });
   });
 }
