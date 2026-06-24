@@ -6,17 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/screens/pairing_screen.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:stream_channel/stream_channel.dart';
-
-class FakeTransport implements IpcTransport {
-  @override
-  Future<StreamChannel<String>> connect() async =>
-      StreamChannel(Stream.empty(), StreamController<String>().sink);
-
-  @override
-  Future<void> disconnect() async {}
-}
+import 'test_utils/fake_transport.dart';
 
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());

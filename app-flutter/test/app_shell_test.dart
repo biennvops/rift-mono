@@ -7,20 +7,10 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:stream_channel/stream_channel.dart';
+import 'test_utils/fake_transport.dart';
 
 // Create a Mock for the JsonRpcRiftClient
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
-
-class FakeTransport implements IpcTransport {
-  @override
-  Future<StreamChannel<String>> connect() async =>
-      StreamChannel(Stream.empty(), StreamController<String>().sink);
-
-  @override
-  Future<void> disconnect() async {}
-}
 
 class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   FakeShellJsonRpcClient() : super(FakeTransport());

@@ -71,7 +71,7 @@ class AndroidRootDiscoveryBridge {
       StreamController<AndroidDiscoveredPeer>.broadcast();
   final _peerLostController =
       StreamController<AndroidDiscoveredPeer>.broadcast();
-  final _tracker = _AndroidDiscoveryPeerTracker();
+  final AndroidDiscoveryPeerTracker tracker = AndroidDiscoveryPeerTracker();
 
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
@@ -92,14 +92,14 @@ class AndroidRootDiscoveryBridge {
   bool get isDiscovering => _discovery != null;
 
   List<Map<String, dynamic>> listPeersForIpc() {
-    return _tracker.currentPeers
+    return tracker.currentPeers
         .where((peer) => peer.deviceIdHint != null)
         .map((peer) => peer.toIpcMap())
         .toList(growable: false);
   }
 
   List<Map<String, dynamic>> listPeersForDaemonControl() {
-    return _tracker.currentPeers
+    return tracker.currentPeers
         .map((peer) => peer.toDaemonControlMap())
         .toList(growable: false);
   }
@@ -142,7 +142,7 @@ class AndroidRootDiscoveryBridge {
     await nsd.stopDiscovery(discovery);
     _discovery = null;
 
-    final cleared = _tracker.clear();
+    final cleared = tracker.clear();
     for (final peer in cleared) {
       _peerLostController.add(peer);
     }
@@ -179,7 +179,7 @@ class AndroidRootDiscoveryBridge {
       }
     }
 
-    final delta = _tracker.ingest(snapshot);
+    final delta = tracker.ingest(snapshot);
     for (final peer in delta.removed) {
       _peerLostController.add(peer);
     }
@@ -219,7 +219,7 @@ class AndroidRootDiscoveryBridge {
   }
 }
 
-class _AndroidDiscoveryPeerTracker {
+class AndroidDiscoveryPeerTracker {
   final Map<String, AndroidDiscoveredPeer> _seenPeers = {};
 
   List<AndroidDiscoveredPeer> get currentPeers =>
