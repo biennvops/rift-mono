@@ -427,8 +427,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             var messageType = root.GetProperty("type").GetString();
             if (!string.Equals(messageType, expectedType, StringComparison.Ordinal))
             {
-                var payloadStr = System.Text.Encoding.UTF8.GetString(payloadBuffer);
-                throw new InvalidOperationException($"Expected {expectedType} but received {messageType ?? "<null>"}. Payload: {payloadStr}");
+                throw new InvalidOperationException(
+                    $"Expected {expectedType} but received {messageType ?? "<null>"}.");
             }
 
             var sourceDeviceId = root.GetProperty("sourceDeviceId").GetString();

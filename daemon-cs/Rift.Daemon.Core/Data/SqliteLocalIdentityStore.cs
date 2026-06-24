@@ -33,21 +33,41 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
             return null;
         }
 
-        return new LocalIdentityRecord
+        var privateKeyLegacy = false;
+        var tlsPfxLegacy = false;
+        var record = new LocalIdentityRecord
         {
             Ed25519PrivateKey = UnprotectBlob(
                 (byte[])reader["Ed25519PrivateKey"],
                 WindowsProtectedPrivateKeyPrefix,
-                UnixProtectedPrivateKeyPrefix),
+                UnixProtectedPrivateKeyPrefix,
+                out privateKeyLegacy),
             Ed25519PublicKey = (byte[])reader["Ed25519PublicKey"],
             TlsCertificatePfx = reader["TlsCertificatePfx"] is DBNull
                 ? null
                 : UnprotectBlob(
                     (byte[])reader["TlsCertificatePfx"],
                     WindowsProtectedTlsCertificatePrefix,
-                    UnixProtectedTlsCertificatePrefix),
+                    UnixProtectedTlsCertificatePrefix,
+                    out tlsPfxLegacy),
             CreatedAt = DateTimeOffset.Parse((string)reader["CreatedAt"])
         };
+
+        // Best-effort migration: if legacy unprotected blobs are detected, rewrite them immediately
+        // so future reads are protected at rest.
+        if (privateKeyLegacy || tlsPfxLegacy)
+        {
+            try
+            {
+                SaveIdentity(record);
+            }
+            catch
+            {
+                // If the migration fails (e.g., read-only FS), continue returning the in-memory identity.
+            }
+        }
+
+        return record;
     }
 
     public void SaveIdentity(LocalIdentityRecord identity)
@@ -99,8 +119,9 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
         return plaintext is null ? null : ProtectBlob(plaintext, windowsPrefix, unixPrefix);
     }
 
-    private byte[] UnprotectBlob(byte[] storedValue, byte[] windowsPrefix, byte[] unixPrefix)
+    private byte[] UnprotectBlob(byte[] storedValue, byte[] windowsPrefix, byte[] unixPrefix, out bool legacyUnprotected)
     {
+        legacyUnprotected = false;
         if (IsProtectedBlob(storedValue, windowsPrefix))
         {
             if (!OperatingSystem.IsWindows())
@@ -122,8 +143,15 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 legacyKeyFilePath: _legacyKeyFilePath);
         }
 
-        // Legacy compatibility: older rows may contain raw identity material
-        // without an at-rest protection prefix.
+        // Legacy compatibility: older rows may contain raw identity material without an at-rest
+        // protection prefix. Accept only when the shape is plausible, and migrate on read.
+        legacyUnprotected = true;
+        if (storedValue.Length != 32 && storedValue.Length < 48)
+        {
+            // Ed25519 private keys are 32 bytes; persisted PKCS#12 certs are typically much larger.
+            // If neither shape matches, treat it as corruption/tampering, not legacy data.
+            throw new InvalidOperationException("Unprotected local identity material was malformed.");
+        }
         return storedValue;
     }
 
@@ -200,12 +228,29 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
             if (existingKey is not null) return existingKey;
 
             var key = RandomNumberGenerator.GetBytes(KeyLength);
-            File.WriteAllBytes(keyFilePath, key);
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            try
             {
-                File.SetUnixFileMode(
-                    keyFilePath,
-                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                using (var stream = new FileStream(
+                           keyFilePath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    stream.Write(key, 0, key.Length);
+                }
+                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+                {
+                    File.SetUnixFileMode(
+                        keyFilePath,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
+                }
+            }
+            catch (IOException)
+            {
+                // Another process may have created the key between our read and write.
+                existingKey = LoadExistingKey(keyFilePath);
+                if (existingKey is not null) return existingKey;
+                throw;
             }
 
             return key;

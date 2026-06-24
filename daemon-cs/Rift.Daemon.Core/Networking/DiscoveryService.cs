@@ -155,7 +155,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         PeerDiscovered?.Invoke(this, peerInfo);
     }
 
-    private static PeerDiscoveredEventArgs CreatePeerDiscoveredEventArgs(ServiceInstanceDiscoveryEventArgs e)
+    private PeerDiscoveredEventArgs CreatePeerDiscoveredEventArgs(ServiceInstanceDiscoveryEventArgs e)
     {
         var records = e.Message.Answers.Concat(e.Message.AdditionalRecords).ToArray();
 
@@ -184,9 +184,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         var port = srvRecord.Port;
 
         var deviceIdHint = txtProperties.GetValueOrDefault("did");
-        Console.WriteLine($"[mDNS Debug] Parsed TXT record. DeviceIdHint: '{deviceIdHint}'");
-        foreach (var kvp in txtProperties) {
-            Console.WriteLine($"[mDNS Debug] TXT: {kvp.Key} = {kvp.Value}");
+        _logger.LogDebug("[mDNS Debug] Parsed TXT record. DeviceIdHint: '{DeviceIdHint}'", deviceIdHint);
+        foreach (var kvp in txtProperties)
+        {
+            _logger.LogDebug("[mDNS Debug] TXT: {Key} = {Value}", kvp.Key, kvp.Value);
         }
 
         return new PeerDiscoveredEventArgs(

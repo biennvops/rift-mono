@@ -201,6 +201,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             var expiresInMs = payload.TryGetProperty("expiresInMs", out var expiresElement) && expiresElement.ValueKind == JsonValueKind.Number
                 ? expiresElement.GetInt32()
                 : PairingExpiryMs;
+            expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
             var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
                 ? displayNameElement.GetString()
                 : null;
