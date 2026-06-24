@@ -120,7 +120,10 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
         {
             if (ipAddress.IsIPv6LinkLocal || ipAddress.IsIPv6Multicast || ipAddress.IsIPv6SiteLocal)
             {
-                return 1;
+                // IPv6 link-local/multicast/site-local addresses are frequently unusable for outbound
+                // connects without a scope ID (e.g., fe80::/10). Prefer hostnames or global IPv6
+                // over these to avoid EINVAL on connect.
+                return -1;
             }
 
             return 2;
