@@ -9,6 +9,7 @@ using Rift.Daemon.Core.Interfaces;
 namespace Rift.Daemon.Core;
 
 public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
+    , IDisposable
 {
     private const int PairingExpiryMs = 120000;
     private static readonly TimeSpan InitialSessionReuseWindow = TimeSpan.FromMilliseconds(750);
@@ -43,6 +44,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _logger = logger ?? NullLogger<PairingProtocolCoordinator>.Instance;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _transport.SessionStateChanged += OnSessionStateChanged;
+    }
+
+    public void Dispose()
+    {
+        // The coordinator is typically a singleton in the current DI setup, but unsubscribing is
+        // still the correct lifecycle behavior and prevents accidental leaks in tests or future
+        // hosting configurations.
+        _transport.SessionStateChanged -= OnSessionStateChanged;
     }
 
     public async Task NotifyLocalPairingStartedAsync(string deviceId, CancellationToken cancellationToken = default)
@@ -81,10 +90,10 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 }
                 else
                 {
-                _logger.LogWarning(ex, "Failed to establish outbound pairing session for {DeviceId}.", deviceId);
-                throw new InvalidOperationException(
-                    $"Failed to establish a secure session with {deviceId} at {peer.Address}:{peer.Port}.",
-                    ex);
+                    _logger.LogWarning(ex, "Failed to establish outbound pairing session for {DeviceId}.", deviceId);
+                    throw new InvalidOperationException(
+                        $"Failed to establish a secure session with {deviceId} at {peer.Address}:{peer.Port}.",
+                        ex);
                 }
             }
         }

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import '../core/rift_exceptions.dart';
+import '../core/rift_log.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
@@ -52,7 +53,11 @@ class TransportImpl implements Transport {
     _serverSocket!.listen(
       (socket) => _handleConnection(socket, isServer: true),
       onError: (Object error, StackTrace stackTrace) {
-        print('[TLS Debug] Inbound server handshake failed: $error');
+        RiftLog.error(
+          '[TLS] Inbound server handshake failed',
+          error: error,
+          stackTrace: stackTrace,
+        );
       },
       cancelOnError: false,
     );
@@ -83,7 +88,9 @@ class TransportImpl implements Transport {
 
   @override
   Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
-    print('[TLS Debug] connectTo host=$host port=$port expectedDeviceId=${expectedDeviceId ?? "<none>"}');
+    RiftLog.debug(
+      '[TLS] connectTo host=$host port=$port expectedDeviceId=${expectedDeviceId ?? "<none>"}',
+    );
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
@@ -102,16 +109,24 @@ class TransportImpl implements Transport {
             final hash = sha256.convert(peerEd25519Key);
             final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
             final actualDeviceId = 'rift-${base32Str.substring(0, 32)}';
-            print('[TLS Debug] peer cert check host=$host port=$port actualDeviceId=$actualDeviceId expectedDeviceId=$expectedDeviceId');
+            RiftLog.debug(
+              '[TLS] peer cert check host=$host port=$port actualDeviceId=$actualDeviceId expectedDeviceId=$expectedDeviceId',
+            );
             if (actualDeviceId != expectedDeviceId) {
-              print('[TLS Debug] Device ID mismatch during TLS pinning. Rejecting certificate.');
+              RiftLog.warn(
+                '[TLS] Device ID mismatch during TLS pinning. Rejecting certificate.',
+              );
               return false; // Reject MITM immediately during TLS handshake
             }
           } on CertificateDecoderException catch (e) {
-            print('[TLS Debug] CertificateDecoderException while validating peer cert from $host:$port: $e');
+            RiftLog.warn(
+              '[TLS] Certificate decoder exception while validating peer cert from $host:$port: $e',
+            );
             return false; // Fail-closed on invalid cert
           } catch (e) {
-            print('[TLS Debug] Unknown error in onBadCertificate for $host:$port: $e');
+            RiftLog.warn(
+              '[TLS] Unknown error in onBadCertificate for $host:$port: $e',
+            );
             return false;
           }
         }
@@ -139,7 +154,9 @@ class TransportImpl implements Transport {
       final hash = sha256.convert(peerEd25519Key);
       final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
-      print('[TLS Debug] TLS session established with peerDeviceId=$peerDeviceId host=${socket.remoteAddress.address}:${socket.remotePort}');
+      RiftLog.debug(
+        '[TLS] TLS session established with peerDeviceId=$peerDeviceId host=${socket.remoteAddress.address}:${socket.remotePort}',
+      );
 
       _peers[peerDeviceId] = socket;
       _peerCerts[peerDeviceId] = peerCert.der;

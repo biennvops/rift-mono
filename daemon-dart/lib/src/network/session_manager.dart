@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/rift_log.dart';
 import '../interfaces/transport.dart';
 import '../interfaces/identity_manager.dart';
 import '../interfaces/trust_store.dart';
@@ -213,7 +214,11 @@ class SessionManager {
   }) {
     _transport.onMessageReceived.listen(
       (msg) => _handleMessage(msg).catchError((Object e, StackTrace st) {
-        print('[Session Debug] Unhandled exception in _handleMessage: $e\n$st');
+        RiftLog.error(
+          '[Session] Unhandled exception in _handleMessage',
+          error: e,
+          stackTrace: st,
+        );
         _transport.disconnect(msg.peerDeviceId);
       }),
     );
@@ -326,10 +331,11 @@ class SessionManager {
     }
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = _transport.getPeerCert(peerDeviceId);
-    if (peerCertDer == null)
+    if (peerCertDer == null) {
       throw SessionException(
         'Cannot compute channel binding: peer cert not available',
       );
+    }
     final sessionNonce = _generateSessionNonce();
     final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(
@@ -361,7 +367,7 @@ class SessionManager {
     ctx.trustState = record?.state ?? TrustState.discovered;
     _sessions[peerDeviceId] = ctx;
     _establishmentWaiters.putIfAbsent(peerDeviceId, Completer<void>.new);
-    print('[Session Debug] Sending session.hello to $peerDeviceId');
+    RiftLog.debug('[Session] Sending session.hello to $peerDeviceId');
 
     await _transport.sendMessage(
       peerDeviceId,
@@ -382,9 +388,7 @@ class SessionManager {
       peerDeviceId,
       Completer<void>.new,
     );
-    print(
-      '[Session Debug] Waiting for session establishment with $peerDeviceId',
-    );
+    RiftLog.debug('[Session] Waiting for session establishment with $peerDeviceId');
     await waiter.future.timeout(
       timeout,
       onTimeout: () => throw SessionException(
@@ -453,7 +457,7 @@ class SessionManager {
       );
       return;
     }
-    print('[Session Debug] Received $type from $peerDeviceId');
+    RiftLog.debug('[Session] Received $type from $peerDeviceId');
 
     final requiredExtensions = jsonMap['requiredExtensions'];
     if (requiredExtensions != null && requiredExtensions is! List) {
@@ -547,8 +551,8 @@ class SessionManager {
     String failureReason,
     String message,
   ) async {
-    print(
-      '[Session Debug] REJECTING session with $peerDeviceId: $failureReason - $message',
+    RiftLog.warn(
+      '[Session] Rejecting session with $peerDeviceId: $failureReason - $message',
     );
     final waiter = _establishmentWaiters.remove(peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
@@ -594,8 +598,8 @@ class SessionManager {
         ctx.isInitiator &&
         ctx.localHelloSent &&
         !ctx.remoteHelloReceived) {
-      print(
-        '[Session Debug] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
+      RiftLog.debug(
+        '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
       );
     } else {
       await _rejectSession(
@@ -762,18 +766,15 @@ class SessionManager {
       );
     }
 
-    print(
-      '[Session Debug] Verified session.hello from $peerDeviceId; '
-      'sending session.accept and waiting for peer accept before marking established.',
-    );
+    RiftLog.debug('[Session] Verified session.hello from $peerDeviceId; sending session.accept.');
     await _sendSessionAccept(ctx);
 
     // Sequential (unidirectional) handshake: if we are the responder (no local hello in flight),
     // the peer may not send a second session.accept back. Move to established immediately and
     // begin capability negotiation.
     if (!ctx.isInitiator && ctx.handshakeState == HandshakeState.handshaking) {
-      print(
-        '[Session Debug] Responder handshake established with $peerDeviceId; starting capability negotiation.',
+      RiftLog.debug(
+        '[Session] Responder handshake established with $peerDeviceId; starting capability negotiation.',
       );
       ctx.handshakeState = HandshakeState.established;
       _transport.setPeerAuthenticated(peerDeviceId);
@@ -784,10 +785,11 @@ class SessionManager {
   Future<void> _sendSessionAccept(SessionContext ctx) async {
     final localCertDer = _identityManager.tlsCertificateDer;
     final peerCertDer = _transport.getPeerCert(ctx.peerDeviceId);
-    if (peerCertDer == null)
+    if (peerCertDer == null) {
       throw SessionException(
         'Cannot compute channel binding: peer cert not available',
       );
+    }
     final sessionNonce = _generateSessionNonce();
     final channelBinding = _computeChannelBinding(sessionNonce, peerCertDer);
     final proofHex = await _identityManager.generateIdentityProof(
@@ -978,9 +980,8 @@ class SessionManager {
       );
     }
 
-    print(
-      '[Session Debug] Verified session.accept from $peerDeviceId; '
-      'marking handshake established and starting capability negotiation.',
+    RiftLog.debug(
+      '[Session] Verified session.accept from $peerDeviceId; marking established and starting capability negotiation.',
     );
     ctx.handshakeState = HandshakeState.established;
     _transport.setPeerAuthenticated(peerDeviceId);
@@ -1003,9 +1004,7 @@ class SessionManager {
 
   Future<void> _startCapabilityNegotiation(SessionContext ctx) async {
     ctx.localAdvertisedCapabilities = _defaultCapabilities;
-    print(
-      '[Session Debug] Starting capability negotiation with ${ctx.peerDeviceId}',
-    );
+    RiftLog.debug('[Session] Starting capability negotiation with ${ctx.peerDeviceId}');
 
     ctx.capabilityNegotiationTimer?.cancel();
     ctx.capabilityNegotiationTimer = Timer(const Duration(seconds: 5), () {
@@ -1097,9 +1096,7 @@ class SessionManager {
     }
 
     ctx.peerAdvertisedCapabilities = peerCaps;
-    print(
-      '[Session Debug] Received capability.advertise from ${ctx.peerDeviceId}',
-    );
+    RiftLog.debug('[Session] Received capability.advertise from ${ctx.peerDeviceId}');
     for (final c in ctx.peerAdvertisedCapabilities) {
       if (c.name.length > 128 ||
           c.policyFlags.length > 16 ||
@@ -1149,7 +1146,7 @@ class SessionManager {
         ctx.peerDeviceId,
         Uint8List.fromList(utf8.encode(json.encode(reply))),
       );
-      print('[Session Debug] Sent capability.selected to ${ctx.peerDeviceId}');
+      RiftLog.debug('[Session] Sent capability.selected to ${ctx.peerDeviceId}');
       _markSessionReady(ctx, 'initiator selected capabilities');
 
       _startHeartbeatIfTrusted(ctx);
@@ -1228,8 +1225,8 @@ class SessionManager {
 
     ctx.negotiatedCapabilities = selectedCaps;
     ctx.capabilityNegotiationTimer?.cancel();
-    print(
-      '[Session Debug] Capability negotiation completed with ${ctx.peerDeviceId}',
+    RiftLog.debug(
+      '[Session] Capability negotiation completed with ${ctx.peerDeviceId}',
     );
     _markSessionReady(ctx, 'responder received selected capabilities');
     _startHeartbeatIfTrusted(ctx);
@@ -1242,9 +1239,7 @@ class SessionManager {
     ctx.capabilityNegotiated = true;
     final waiter = _establishmentWaiters.remove(ctx.peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
-      print(
-        '[Session Debug] Session fully established with ${ctx.peerDeviceId}: $reason',
-      );
+      RiftLog.info('[Session] Session fully established with ${ctx.peerDeviceId}: $reason');
       waiter.complete();
     }
   }

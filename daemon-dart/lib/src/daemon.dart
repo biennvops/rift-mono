@@ -8,6 +8,7 @@ import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/crypto/base32_utils.dart';
 import 'package:daemon_dart/src/core/rift_constants.dart';
 import 'package:daemon_dart/src/core/rift_exceptions.dart';
+import 'package:daemon_dart/src/core/rift_log.dart';
 import 'package:daemon_dart/src/core/rpc_utils.dart';
 import 'package:daemon_dart/src/network/discovery_service_factory.dart'
     as discovery_factory;
@@ -337,8 +338,8 @@ class RiftDaemon {
         final requestedPeerId = RpcUtils.requireStringParam(params, 'deviceId');
         final pendingStartPairing = _pendingStartPairings[requestedPeerId];
         if (pendingStartPairing != null) {
-          print(
-            '[Pairing Debug] Joining pending startPairing for peerDeviceId=$requestedPeerId',
+          RiftLog.debug(
+            '[Pairing] Joining pending startPairing for peerDeviceId=$requestedPeerId',
           );
           return await pendingStartPairing;
         }
@@ -657,8 +658,8 @@ class RiftDaemon {
       return peerDeviceId;
     }
     if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
-      print(
-        '[Pairing Debug] Reusing in-flight handshake for peerDeviceId=$peerDeviceId',
+      RiftLog.debug(
+        '[Pairing] Reusing in-flight handshake for peerDeviceId=$peerDeviceId',
       );
       await sessionManager.waitForSessionEstablished(peerDeviceId);
       return peerDeviceId;
@@ -666,8 +667,8 @@ class RiftDaemon {
 
     final pending = _pendingSessionEnsures[peerDeviceId];
     if (pending != null) {
-      print(
-        '[Pairing Debug] Joining pending ensureSession for peerDeviceId=$peerDeviceId',
+      RiftLog.debug(
+        '[Pairing] Joining pending ensureSession for peerDeviceId=$peerDeviceId',
       );
       return pending;
     }
@@ -691,8 +692,8 @@ class RiftDaemon {
       throw const RiftNotFoundException('Peer not found in discovery cache');
     }
 
-    print(
-      '[Pairing Debug] Opening session for peerDeviceId=$peerDeviceId '
+    RiftLog.debug(
+      '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
       'using address=${discoveredPeer.address}:${discoveredPeer.port} '
       'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
       'instanceId=${discoveredPeer.instanceId}',
@@ -751,13 +752,13 @@ class RiftDaemon {
         return;
       }
 
-      print(
-        '[Session Debug] Prefetching outbound session for discovered peer $peerDeviceId',
+      RiftLog.debug(
+        '[Session] Prefetching outbound session for discovered peer $peerDeviceId',
       );
       await _ensureSessionForPairing(peerDeviceId);
     } catch (e) {
-      print(
-        '[Session Debug] Session prefetch skipped for $peerDeviceId: $e',
+      RiftLog.debug(
+        '[Session] Session prefetch skipped for $peerDeviceId: $e',
       );
     }
   }
