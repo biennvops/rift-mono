@@ -30,6 +30,7 @@ class FakeTransport implements Transport {
   @override void disconnect(String d) {
     isDisconnected = true;
     disconnectedPeers.add(d);
+    _onDisconnect.add(d);
   }
   
   @override Future<void> sendMessage(String d, Uint8List payload) async {
@@ -60,6 +61,10 @@ class FakeTransport implements Transport {
   void registerPeerCert(String peerDeviceId, Uint8List cert) {
     _peerCerts[peerDeviceId] = cert;
   }
+
+  void simulateNetworkDrop(String peerDeviceId) {
+    _onDisconnect.add(peerDeviceId);
+  }
 }
 
 
@@ -71,6 +76,9 @@ class FakeTrustStore implements TrustStore {
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
   @override Future<void> deletePeer(String deviceId) async {}
   @override Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+  @override Future<void> appendSecurityEvent(SecurityEventRecord record) async {}
+  @override Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query) async => [];
+  @override Future<int> countSecurityEvents(SecurityEventQuery query) async => 0;
 }
 
 class FakeIdentityManager implements IdentityManager {
@@ -228,31 +236,10 @@ void main() {
     });
 
     test('second session.hello on same connection is rejected with ProtocolError', () async {
-      transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
-        'rift': '0.1-draft',
-        'messageId': '55555555-5555-4555-8555-555555555555',
-        'type': 'session.hello',
-        'sourceDeviceId': 'rift-peer',
-        'destinationDeviceId': 'rift-local',
-        'payload': {
-          'supportedVersions': ['0.1-draft'],
-          'deviceId': 'rift-peer',
-          'implementationId': 'riftd-peer/0.1.0',
-          'capabilities': const [
-            {'name': 'clipboard.offer_fetch', 'version': 1},
-            {'name': 'presence.basic', 'version': 1},
-            {'name': 'operation.lifecycle', 'version': 1},
-            {'name': 'security.event_log', 'version': 1},
-          ],
-          'bindingType': 'app-nonce',
-          'sessionNonce': base64.encode(Uint8List(32)),
-          'identityProof': '0' * 128,
-        }
-      });
-      await Future.delayed(Duration.zero);
-
-      transport.sentMessages.clear();
-      transport.isDisconnected = false;
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
+        ..handshakeState = HandshakeState.handshaking
+        ..remoteHelloReceived = true;
+      sessionManager.injectContextForTesting(ctx);
 
       transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
         'rift': '0.1-draft',
@@ -299,6 +286,65 @@ void main() {
       expect(transport.isDisconnected, isTrue);
       expect(transport.sentMessages.single['payload']['failureReason'], 'MalformedMessage');
     });
+
+    test('sendMessage succeeds once session is established, trusted, and capability negotiated', () async {
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+        ..handshakeState = HandshakeState.established
+        ..trustState = TrustState.trusted
+        ..capabilityNegotiated = true
+        ..negotiatedCapabilities = [
+          Capability(name: 'presence.basic', version: 1),
+          Capability(name: 'clipboard.offer_fetch', version: 1),
+        ];
+      sessionManager.injectContextForTesting(ctx);
+
+      await sessionManager.sendMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'type': 'presence.update',
+        'payload': {'status': 'online'},
+      });
+
+      expect(transport.sentMessages, hasLength(1));
+      expect(transport.sentMessages.single['type'], 'presence.update');
+      expect(transport.sentMessages.single['payload']['status'], 'online');
+    });
+
+    test('waitForSessionEstablished completes on disconnect and then reports session not established', () async {
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true);
+      sessionManager.injectContextForTesting(ctx);
+
+      final future = sessionManager.waitForSessionEstablished(
+        'rift-peer',
+        timeout: const Duration(seconds: 1),
+      );
+
+      transport.simulateNetworkDrop('rift-peer');
+
+      await expectLater(
+        future,
+        throwsA(
+          isA<SessionException>().having(
+            (e) => e.message,
+            'message',
+            contains('Session not established with rift-peer'),
+          ),
+        ),
+      );
+      expect(sessionManager.getContext('rift-peer'), isNull);
+    });
+
+    test('disconnectPeer clears context and notifies transport', () async {
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
+        ..handshakeState = HandshakeState.established
+        ..capabilityNegotiated = true;
+      sessionManager.injectContextForTesting(ctx);
+
+      sessionManager.disconnectPeer('rift-peer');
+
+      expect(sessionManager.getContext('rift-peer'), isNull);
+      expect(transport.disconnectedPeers, contains('rift-peer'));
+    });
+
     test('session.hello rejects missing sessionNonce', () async {
       transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
         'rift': '0.1-draft',

@@ -449,6 +449,7 @@ public sealed class ClipboardServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
+        public bool HasActiveSession(string peerDeviceId) => false;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

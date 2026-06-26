@@ -29,6 +29,11 @@ public sealed class UnblockPeerResult
     public bool Unblocked { get; init; }
 }
 
+public sealed class ResetRevokedPeerResult
+{
+    public bool Reset { get; init; }
+}
+
 public interface IPairingService
 {
     Task<StartPairingResult> StartPairingAsync(string deviceId);
@@ -40,4 +45,6 @@ public interface IPairingService
     Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason);
 
     Task<UnblockPeerResult> UnblockPeerAsync(string deviceId);
+
+    Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId);
 }

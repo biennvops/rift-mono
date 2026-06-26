@@ -80,13 +80,23 @@ Latest local verification snapshot:
 - `dart test` -> `00:03 +92: All tests passed!`
 
 ### 2.4. Standalone Runner Status
-The repository currently contains a standalone entrypoint at `bin/daemon.dart`, but it is still a stub intended for future CI/conformance work. There is currently **no checked-in `demo_cert.dart` script** in this package.
+The repository now contains a minimal standalone entrypoint at `bin/daemon.dart`
+for local Linux IPC smoke tests. It starts `RiftDaemon`, listens on a Unix
+domain socket using StreamJsonRpc-compatible `Content-Length` framing, and uses
+the same socket-path conventions that `app-flutter` probes (`$XDG_RUNTIME_DIR`,
+`/tmp/rift-daemon-<uid>/v0.1.sock`, fallback `/tmp/rift-daemon.sock`).
+
+To reduce the risk of memory exhaustion from malformed or adversarial local IPC
+clients, the standalone runner enforces a maximum `Content-Length` of 1 MiB and
+rejects out-of-range frames with JSON-RPC `-32600` (Invalid request).
 
 ```bash
 dart run bin/daemon.dart
 ```
 
-This currently prints a placeholder message and exits.
+This runner is useful for local desktop verification such as `rift.getDeviceInfo`
+and other IPC smoke tests. It is not yet the final conformance/interop harness,
+and it currently starts with discovery disabled.
 
 ### 2.5. Flutter Integration Guide (Week 5 / M3)
 The root orchestrator is designed to run inside a background isolate hosted by the Android app. The current implementation exposes a `SendPort`/`ReceivePort` bridge, centered around a JSON-RPC-focused `rpcPort`, and operates substantially via JSON-RPC 2.0 complying with `spec/doc/ipc.md`.

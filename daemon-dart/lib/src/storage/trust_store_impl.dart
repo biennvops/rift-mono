@@ -1,5 +1,6 @@
-import 'dart:io';
 import 'dart:ffi';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:sqlite3/open.dart' as sqlite_open;
 import 'package:sqlite3/sqlite3.dart';
@@ -97,6 +98,40 @@ class TrustStoreImpl implements TrustStore {
         }
       }
       _db!.execute("UPDATE config SET value = '2' WHERE key = 'schema_version'");
+      currentVersion = 2;
+    }
+
+    if (currentVersion < 3) {
+      _db!.execute('''
+        CREATE TABLE IF NOT EXISTS security_events (
+          event_id       TEXT PRIMARY KEY,
+          event_type     TEXT NOT NULL,
+          severity       TEXT NOT NULL,
+          local_device_id TEXT NOT NULL,
+          peer_device_id TEXT,
+          timestamp      TEXT NOT NULL,
+          outcome        TEXT NOT NULL,
+          failure_reason TEXT,
+          details_json   TEXT
+        );
+      ''');
+      _db!.execute('''
+        CREATE INDEX IF NOT EXISTS idx_security_events_timestamp
+        ON security_events (timestamp DESC);
+      ''');
+      _db!.execute('''
+        CREATE INDEX IF NOT EXISTS idx_security_events_event_type
+        ON security_events (event_type, timestamp DESC);
+      ''');
+      _db!.execute('''
+        CREATE INDEX IF NOT EXISTS idx_security_events_severity
+        ON security_events (severity, timestamp DESC);
+      ''');
+      _db!.execute('''
+        CREATE INDEX IF NOT EXISTS idx_security_events_peer
+        ON security_events (peer_device_id, timestamp DESC);
+      ''');
+      _db!.execute("UPDATE config SET value = '3' WHERE key = 'schema_version'");
     }
   }
 
@@ -245,6 +280,91 @@ class TrustStoreImpl implements TrustStore {
       stmt.dispose();
     }
   }
+
+  @override
+  Future<void> appendSecurityEvent(SecurityEventRecord record) async {
+    _ensureInitialized();
+    final stmt = _db!.prepare('''
+      INSERT INTO security_events (
+        event_id,
+        event_type,
+        severity,
+        local_device_id,
+        peer_device_id,
+        timestamp,
+        outcome,
+        failure_reason,
+        details_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    ''');
+    try {
+      stmt.execute([
+        record.eventId,
+        record.eventType,
+        record.severity,
+        record.localDeviceId,
+        record.peerDeviceId,
+        record.timestamp.toUtc().toIso8601String(),
+        record.outcome,
+        record.failureReason,
+        record.details == null ? null : jsonEncode(record.details),
+      ]);
+      _db!.execute('''
+        DELETE FROM security_events
+        WHERE event_id NOT IN (
+          SELECT event_id
+          FROM security_events
+          ORDER BY timestamp DESC
+          LIMIT 10000
+        );
+      ''');
+    } finally {
+      stmt.dispose();
+    }
+  }
+
+  @override
+  Future<List<SecurityEventRecord>> querySecurityEvents(
+    SecurityEventQuery query,
+  ) async {
+    _ensureInitialized();
+
+    final (whereSql, bindings) = _buildSecurityEventWhereClause(query);
+    final stmt = _db!.prepare('''
+      SELECT *
+      FROM security_events
+      $whereSql
+      ORDER BY timestamp DESC
+      LIMIT ? OFFSET ?;
+    ''');
+
+    try {
+      final results = stmt.select([...bindings, query.limit, query.offset]);
+      return results.map(_rowToSecurityEventRecord).toList();
+    } finally {
+      stmt.dispose();
+    }
+  }
+
+  @override
+  Future<int> countSecurityEvents(SecurityEventQuery query) async {
+    _ensureInitialized();
+    final (whereSql, bindings) = _buildSecurityEventWhereClause(query);
+    final stmt = _db!.prepare('''
+      SELECT COUNT(*) AS count
+      FROM security_events
+      $whereSql;
+    ''');
+    try {
+      final results = stmt.select(bindings);
+      if (results.isEmpty) {
+        return 0;
+      }
+      return results.first['count'] as int? ?? 0;
+    } finally {
+      stmt.dispose();
+    }
+  }
   
   PeerRecord _rowToPeerRecord(Row row) {
     final pairedAtMs = row['paired_at'] as int?;
@@ -260,10 +380,63 @@ class TrustStoreImpl implements TrustStore {
           ? DateTime.fromMillisecondsSinceEpoch(pairedAtMs, isUtc: true)
           : null,
       updatedAt: DateTime.fromMillisecondsSinceEpoch(row['updated_at'] as int, isUtc: true),
-      lastSeenAt: lastSeenAtMs != null
+      lastSeenAt: lastSeenAtMs != null 
           ? DateTime.fromMillisecondsSinceEpoch(lastSeenAtMs, isUtc: true)
           : null,
     );
+  }
+
+  SecurityEventRecord _rowToSecurityEventRecord(Row row) {
+    final detailsJson = row['details_json'] as String?;
+    return SecurityEventRecord(
+      eventId: row['event_id'] as String,
+      eventType: row['event_type'] as String,
+      severity: row['severity'] as String,
+      localDeviceId: row['local_device_id'] as String,
+      peerDeviceId: row['peer_device_id'] as String?,
+      timestamp: DateTime.parse(row['timestamp'] as String).toUtc(),
+      outcome: row['outcome'] as String,
+      failureReason: row['failure_reason'] as String?,
+      details: detailsJson == null || detailsJson.isEmpty
+          ? null
+          : Map<String, dynamic>.from(jsonDecode(detailsJson) as Map),
+    );
+  }
+
+  (String, List<Object?>) _buildSecurityEventWhereClause(
+    SecurityEventQuery query,
+  ) {
+    final whereClauses = <String>[];
+    final bindings = <Object?>[];
+
+    if (query.eventTypes != null && query.eventTypes!.isNotEmpty) {
+      whereClauses.add(
+        'event_type IN (${List.filled(query.eventTypes!.length, '?').join(', ')})',
+      );
+      bindings.addAll(query.eventTypes!);
+    }
+
+    if (query.severities != null && query.severities!.isNotEmpty) {
+      whereClauses.add(
+        'severity IN (${List.filled(query.severities!.length, '?').join(', ')})',
+      );
+      bindings.addAll(query.severities!);
+    }
+
+    if (query.peerDeviceId != null && query.peerDeviceId!.isNotEmpty) {
+      whereClauses.add('peer_device_id = ?');
+      bindings.add(query.peerDeviceId);
+    }
+
+    if (query.since != null) {
+      whereClauses.add('timestamp >= ?');
+      bindings.add(query.since!.toUtc().toIso8601String());
+    }
+
+    final whereSql = whereClauses.isEmpty
+        ? ''
+        : 'WHERE ${whereClauses.join(' AND ')}';
+    return (whereSql, bindings);
   }
   
   void _ensureInitialized() {

@@ -174,4 +174,6 @@ The implementation is clearly derived from the two core specifications, but it s
   `dart analyze` -> `No issues found!`
   `dart test` -> `00:03 +92: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
-- `bin/daemon.dart` exists, but it is still a standalone runner stub and not a full daemon launcher for conformance use yet.
+- `bin/daemon.dart` now provides a minimal standalone Unix-socket runner for
+  local Linux IPC smoke tests. It is useful for desktop verification, but it is
+  not yet a full conformance/interop harness.

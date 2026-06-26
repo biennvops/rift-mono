@@ -1,12 +1,16 @@
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using StreamJsonRpc;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Linux;
 
-public class LinuxIpcListener(ILogger<LinuxIpcListener> logger) : IIpcListener, IDisposable
+public class LinuxIpcListener(
+    ILogger<LinuxIpcListener> logger,
+    IServiceScopeFactory scopeFactory,
+    IIpcNotificationService notificationService) : IIpcListener, IDisposable
 {
     private const string SocketDirName = "rift-daemon";
     private const string SocketFileName = "v0.1.sock";
@@ -227,7 +231,10 @@ public class LinuxIpcListener(ILogger<LinuxIpcListener> logger) : IIpcListener, 
         try
         {
             await using var stream = new NetworkStream(client, ownsSocket: true);
-            using var jsonRpc = JsonRpc.Attach(stream, new RiftApiHandler());
+            using var scope = scopeFactory.CreateScope();
+            var apiHandler = scope.ServiceProvider.GetRequiredService<IRiftApi>();
+            using var jsonRpc = JsonRpc.Attach(stream, apiHandler);
+            using var registration = notificationService.RegisterClient(jsonRpc);
             await jsonRpc.Completion;
             logger.LogInformation("IPC client disconnected.");
         }

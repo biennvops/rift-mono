@@ -13,6 +13,65 @@ class CertificateDecoderException implements Exception {
 
 /// A highly secure, fail-closed X.509 ASN.1 Parser specifically built for Rift.
 class RiftCertDecoder {
+  static String _hexPreview(Uint8List bytes, {int maxBytes = 12}) {
+    final end = bytes.length < maxBytes ? bytes.length : maxBytes;
+    final parts = <String>[];
+    for (var i = 0; i < end; i++) {
+      parts.add(bytes[i].toRadixString(16).padLeft(2, '0'));
+    }
+    if (bytes.length > end) {
+      parts.add('...');
+    }
+    return parts.join(' ');
+  }
+
+  static const int _maxEd25519ExtensionUnwrapDepth = 3;
+
+  static Uint8List _unwrapEd25519ExtensionValue(
+    Uint8List bytes, {
+    int depth = 0,
+  }) {
+    if (depth > _maxEd25519ExtensionUnwrapDepth) {
+      throw CertificateDecoderException(
+        'Extension value unwrap exceeded max depth of $_maxEd25519ExtensionUnwrapDepth',
+      );
+    }
+    if (bytes.length == 32) {
+      return Uint8List.fromList(bytes);
+    }
+
+    // Direct OCTET STRING wrapper: 04 <len> <payload>
+    if (bytes.length >= 2 && bytes[0] == 0x04 && bytes[1] == bytes.length - 2) {
+      return Uint8List.sublistView(bytes, 2);
+    }
+
+    // Double-wrapped OCTET STRING: 04 22 04 20 <32 bytes>
+    if (bytes.length == 36 &&
+        bytes[0] == 0x04 &&
+        bytes[1] == 0x22 &&
+        bytes[2] == 0x04 &&
+        bytes[3] == 0x20) {
+      return Uint8List.sublistView(bytes, 4);
+    }
+
+    try {
+      final innerParser = ASN1Parser(bytes);
+      final innerObj = innerParser.nextObject();
+      if (innerObj.encodedBytes.length != bytes.length || innerObj.tag != 0x04) {
+        throw CertificateDecoderException('Inner value is not an OCTET STRING');
+      }
+      final innerValue = innerObj.valueBytes();
+      return _unwrapEd25519ExtensionValue(
+        Uint8List.fromList(innerValue),
+        depth: depth + 1,
+      );
+    } on CertificateDecoderException {
+      rethrow;
+    } catch (e) {
+      throw CertificateDecoderException('Malformed inner OCTET STRING: $e');
+    }
+  }
+
   /// Extracts the Ed25519 public key from a Rift mTLS certificate.
   /// Throws [CertificateDecoderException] if the certificate is malformed,
   /// missing the custom extension, or if the key length is invalid (Fail-Closed).
@@ -112,27 +171,14 @@ class RiftCertDecoder {
             throw CertificateDecoderException('Extension value is not an OCTET STRING');
           }
 
-          // Unpack Outer OCTET STRING
-          var innerBytes = octetStringObj.valueBytes();
-          
-          // Unpack Inner OCTET STRING (Double wrapping)
-          if (innerBytes.isEmpty || innerBytes[0] != 0x04) {
-            throw CertificateDecoderException('Inner value is not an OCTET STRING');
-          }
-          
-          var innerParser = ASN1Parser(innerBytes);
-          var innerOctetObj = innerParser.nextObject();
-          if (innerOctetObj.encodedBytes.length != innerBytes.length) {
-            throw CertificateDecoderException('Malformed inner OCTET STRING');
-          }
-          if (innerOctetObj.tag != 0x04) {
-            throw CertificateDecoderException('Inner value is not an OCTET STRING');
-          }
-          
-          var pubKeyBytes = innerOctetObj.valueBytes();
+          final innerBytes = Uint8List.fromList(octetStringObj.valueBytes());
+          final pubKeyBytes = _unwrapEd25519ExtensionValue(innerBytes);
           
           if (pubKeyBytes.length != 32) {
-            throw CertificateDecoderException('Invalid Ed25519 public key length: ${pubKeyBytes.length} bytes (expected 32)');
+            throw CertificateDecoderException(
+              'Invalid Ed25519 public key length: ${pubKeyBytes.length} bytes (expected 32); '
+              'preview=${_hexPreview(pubKeyBytes)}',
+            );
           }
           
           extractedKey = Uint8List.fromList(pubKeyBytes);

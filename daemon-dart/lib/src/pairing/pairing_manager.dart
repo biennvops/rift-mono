@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import 'package:crypto/crypto.dart';
 
 import '../core/rift_exceptions.dart';
+import '../core/rift_log.dart';
 import '../interfaces/trust_store.dart';
 import '../interfaces/identity_manager.dart';
 import '../network/session_manager.dart';
@@ -46,7 +47,14 @@ class PairingManager {
       }
     } catch (e, stackTrace) {
       // Best-effort cleanup only, but log for observability.
-      print('Warning: Failed to handle peer disconnect for $peerDeviceId: $e\n$stackTrace');
+      RiftLog.warn(
+        '[Pairing] Failed to handle peer disconnect for $peerDeviceId',
+      );
+      RiftLog.error(
+        '[Pairing] Peer disconnect cleanup exception',
+        error: e,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -78,11 +86,15 @@ class PairingManager {
       case 'rift.unblockPeer':
         await _unblockPeer(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
+      case 'rift.resetRevokedPeer':
+        await _resetRevokedPeer(RpcUtils.requireStringParam(params, 'deviceId'));
+        break;
     }
   }
 
   /// Sends a pairing initialization request to a peer
   Future<void> _startPairing(String peerDeviceId) async {
+    RiftLog.debug('[Pairing] Sending pairing.start to $peerDeviceId');
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
     if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
@@ -122,6 +134,7 @@ class PairingManager {
 
   /// Called by Flutter App when User clicks "Approve"
   Future<void> _approvePairing(String peerDeviceId, String expectedFingerprint) async {
+    RiftLog.debug('[Pairing] Approving pairing with $peerDeviceId');
     _cancelTimeoutTimer(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
@@ -193,6 +206,7 @@ class PairingManager {
 
   /// Called by Flutter App when User clicks "Reject"
   Future<void> _rejectPairing(String peerDeviceId) async {
+    RiftLog.debug('[Pairing] Rejecting pairing with $peerDeviceId');
     _cancelTimeoutTimer(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) return;
@@ -267,10 +281,42 @@ class PairingManager {
     });
   }
 
+  Future<void> _resetRevokedPeer(String peerDeviceId) async {
+    final record = await trustStore.getPeer(peerDeviceId);
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    if (record.state != TrustState.revoked) {
+      throw RiftInvalidTransitionException(
+        'Invalid state transition from ${record.state.name} to discovered.',
+      );
+    }
+
+    await trustStore.transitionState(
+      peerDeviceId,
+      TrustState.revoked,
+      TrustState.discovered,
+    );
+
+    onIpcEvent({
+      'jsonrpc': '2.0',
+      'method': 'rift.onTrustChanged',
+      'params': {
+        'deviceId': peerDeviceId,
+        'previousState': TrustState.revoked.toJson(),
+        'newState': TrustState.discovered.toJson(),
+        'reason': 'Peer reset from revoked by user',
+      }
+    });
+  }
+
   /// Listens to packets sent from peers via TLS Session
   Future<void> _handleNetworkMessage(ProtocolMessage msg) async {
     final type = msg.payload['type'] as String?;
     final peerDeviceId = msg.peerDeviceId;
+    RiftLog.debug(
+      '[Pairing] Received network message ${type ?? "<unknown>"} from $peerDeviceId',
+    );
 
     // Ensure peer is stored with the latest certificate before processing
     await _ensurePeerInTrustStore(peerDeviceId, msg.peerCertDer);

@@ -70,6 +70,23 @@ public sealed class IdentityPersistenceTests : IDisposable
             Assert.False(storedPrivateKey.AsSpan().SequenceEqual(restoredPrivateKey));
             Assert.False(storedTlsCertificate.AsSpan().SequenceEqual(manager.GetTlsCertificate().Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pkcs12, string.Empty)));
         }
+        else
+        {
+            var keyFilePath = Path.Combine(
+                Path.GetDirectoryName(_databaseContext.DatabasePath)!,
+                $"{Path.GetFileName(_databaseContext.DatabasePath)}.rift-secrets.key");
+
+            Assert.False(storedPrivateKey.AsSpan().SequenceEqual(restoredPrivateKey));
+            Assert.True(File.Exists(keyFilePath));
+
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                var mode = File.GetUnixFileMode(keyFilePath);
+                Assert.Equal(
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite,
+                    mode);
+            }
+        }
     }
 
     [Fact]

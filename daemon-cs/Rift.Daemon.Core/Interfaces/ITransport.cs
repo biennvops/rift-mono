@@ -135,6 +135,12 @@ public interface ITransport
     Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns <see langword="true"/> when an authenticated session already exists
+    /// for the specified peer device ID and can be reused for protocol traffic.
+    /// </summary>
+    bool HasActiveSession(string peerDeviceId);
+
+    /// <summary>
     /// Writes a single framed message to the authenticated session identified by
     /// <paramref name="peerDeviceId"/>.
     ///

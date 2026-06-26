@@ -19,6 +19,12 @@ Future transports (Unix domain sockets on macOS/Linux, in-process channels on iO
 
 All transports carry JSON-RPC 2.0 messages. Each message is a single JSON object. Framing (length-prefix, newline-delimited, or transport-native) is transport-specific and outside this specification.
 
+### 1.1 Framing Limits (IPC)
+
+IPC transports that use explicit length framing (for example, `Content-Length` headers in a stream-based local socket) MUST enforce a reasonable maximum frame size and reject oversized messages with `-32600` (Invalid request).
+
+This limit is independent from the peer-to-peer framing limits in `protocol.md` (4-byte length prefix with state-dependent size caps). IPC limits exist to prevent a local client (or a corrupted stream) from exhausting daemon memory.
+
 ## 2. JSON-RPC 2.0 Conventions
 
 All messages conform to the JSON-RPC 2.0 specification.

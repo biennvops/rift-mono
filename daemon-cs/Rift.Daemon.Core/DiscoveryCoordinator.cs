@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Core;
@@ -39,7 +41,8 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
         return new ListDiscoveredPeersResult
         {
-            Peers = peers
+            Peers = peers,
+            IsDiscovering = Volatile.Read(ref _isDiscovering) == 1
         };
     }
 
@@ -63,13 +66,69 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
         }
 
         var trustState = _trustStore.GetPeer(e.DeviceIdHint)?.State.ToString().ToLowerInvariant() ?? "discovered";
-        _discoveredPeers[e.DeviceIdHint] = new DiscoveredPeerInfo
+        var candidateAddress = SelectPreferredAddress(e.Host, e.RemoteEndPoint?.Address);
+
+        _discoveredPeers.AddOrUpdate(
+            e.DeviceIdHint,
+            _ => new DiscoveredPeerInfo
+            {
+                DeviceId = e.DeviceIdHint,
+                Address = candidateAddress,
+                Port = e.Port,
+                TrustState = trustState,
+                TxtRecord = new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal)
+            },
+            (_, existing) => new DiscoveredPeerInfo
+            {
+                DeviceId = e.DeviceIdHint,
+                Address = PreferAddress(existing.Address, candidateAddress),
+                Port = e.Port,
+                TrustState = trustState,
+                TxtRecord = new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal)
+            });
+    }
+
+    private static string SelectPreferredAddress(string host, IPAddress? remoteAddress)
+    {
+        var remote = remoteAddress?.ToString();
+        if (string.IsNullOrWhiteSpace(remote))
         {
-            DeviceId = e.DeviceIdHint,
-            Address = e.Host,
-            Port = e.Port,
-            TrustState = trustState,
-            TxtRecord = new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal)
-        };
+            return host;
+        }
+
+        return PreferAddress(host, remote);
+    }
+
+    private static string PreferAddress(string current, string candidate)
+    {
+        return GetAddressScore(candidate) > GetAddressScore(current) ? candidate : current;
+    }
+
+    private static int GetAddressScore(string address)
+    {
+        if (!IPAddress.TryParse(address, out var ipAddress))
+        {
+            return 0;
+        }
+
+        if (ipAddress.AddressFamily == AddressFamily.InterNetwork)
+        {
+            return 3;
+        }
+
+        if (ipAddress.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            if (ipAddress.IsIPv6LinkLocal || ipAddress.IsIPv6Multicast || ipAddress.IsIPv6SiteLocal)
+            {
+                // IPv6 link-local/multicast/site-local addresses are frequently unusable for outbound
+                // connects without a scope ID (e.g., fe80::/10). Prefer hostnames or global IPv6
+                // over these to avoid EINVAL on connect.
+                return -1;
+            }
+
+            return 2;
+        }
+
+        return 0;
     }
 }
