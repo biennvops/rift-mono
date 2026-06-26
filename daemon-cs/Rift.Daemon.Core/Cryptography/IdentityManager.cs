@@ -14,6 +14,7 @@ using Org.BouncyCastle.Security;
 using Org.BouncyCastle.X509;
 using Rift.Daemon.Core.Interfaces;
 using X509Extension = Org.BouncyCastle.Asn1.X509.X509Extension;
+using System.Runtime.InteropServices;
 
 namespace Rift.Daemon.Core.Cryptography;
 
@@ -243,6 +244,13 @@ public class IdentityManager : IIdentityManager
         using var ms = new MemoryStream();
         store.Save(ms, Array.Empty<char>(), random);
 
-        return X509CertificateLoader.LoadPkcs12(ms.ToArray(), string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+        // TODO: implement ephemeral key writing to macOS Keychain.
+        var flags = X509KeyStorageFlags.Exportable;
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            flags |= X509KeyStorageFlags.EphemeralKeySet;
+        }
+
+        return X509CertificateLoader.LoadPkcs12(ms.ToArray(), string.Empty, flags);
     }
 }
