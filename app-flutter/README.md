@@ -124,6 +124,17 @@ app-flutter/
 - **Week 5 Test Coverage:**
   - Added widget coverage for pairing request notifications, auto-start fingerprint population, approve/reject action dispatch, trust-state transitions, countdown expiry, and trust-management confirmation flows.
 
+### Week 6: Capability Negotiation & Presence
+- **Trusted Devices Management (`trusted_devices_screen.dart`):**
+  - Updated the UI to display capability summaries visually using badges (chips with icons) instead of raw strings.
+  - Added periodic trusted-peer refresh so presence indicators do not stay stale when no other trust/discovery event fires.
+- **Interop Harness Groundwork (`tests-interop`):**
+  - Scaffolded the Dart test package for cross-platform interoperability testing.
+  - Added a simulated session harness for presence-update propagation and disconnect cleanup.
+  - Updated the test matrix in the interop documentation to cover macOS and capability-aware failure scenarios.
+- **Week 6 Test Coverage:**
+  - Extended widget tests to verify capability badges and presence status are accurately displayed on the trusted devices screen.
+
 ## Completion Criteria
 
 To treat the Flutter client work as fully complete, the project needs both of

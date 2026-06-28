@@ -16,6 +16,19 @@ satisfied:
 
 This file tracks the second layer.
 
+## Automated coverage in this directory
+
+The Dart tests currently checked in under `tests-interop/test/` are a
+lightweight harness around in-memory `SessionManager` instances from
+`daemon-dart`. They are useful for:
+
+- validating message-shape assumptions around presence updates
+- exercising disconnect cleanup logic in a controlled environment
+- keeping the Week 6 harness package alive in CI
+
+They are **not** a substitute for real host-to-host or daemon-to-daemon interop
+evidence, and they do not by themselves satisfy the sign-off matrix below.
+
 ## Latest update
 
 - Date: 2026-06-24
@@ -33,11 +46,12 @@ Legend:
 - `FAIL`: reproduced failure remains open
 - `UNKNOWN`: not evaluated in this directory yet
 
-| Pair | Transport / discovery readiness | Pairing A -> B | Pairing B -> A | Trust sync | Notes |
-| --- | --- | --- | --- | --- | --- |
-| Windows <-> Android | PARTIAL | UNKNOWN | UNKNOWN | UNKNOWN | Windows Flutter <-> `daemon-cs` IPC readiness verified; Android Flutter <-> `daemon-dart` IPC readiness verified; real peer discovery observed. Full pairing evidence still missing. |
-| Linux <-> Android | PARTIAL | PARTIAL | PARTIAL | PARTIAL | Real pairing work was exercised on devices on 2026-06-23 and 2026-06-24. Both directions established secure sessions and reached `trusted` in active debugging, but the full regression matrix below is not yet recorded cleanly enough for sign-off. |
-| Linux <-> Windows | READY | UNKNOWN | UNKNOWN | UNKNOWN | Both sides now share the same C# pairing/session core, but no recorded real-device run is captured here yet. |
+| Pair | Transport / discovery readiness | Pairing A -> B | Pairing B -> A | Trust sync | Presence Sync | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Windows <-> Android | PARTIAL | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Windows Flutter <-> `daemon-cs` IPC readiness verified; Android Flutter <-> `daemon-dart` IPC readiness verified; real peer discovery observed. Full pairing evidence still missing. |
+| Linux <-> Android | PARTIAL | PARTIAL | PARTIAL | PARTIAL | UNKNOWN | Real pairing work was exercised on devices on 2026-06-23 and 2026-06-24. Both directions established secure sessions and reached `trusted` in active debugging, but the full regression matrix below is not yet recorded cleanly enough for sign-off. |
+| macOS <-> Android | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Week 6 expansion scope: Evaluate macOS launchd daemon with Android. |
+| Linux <-> Windows | READY | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Both sides now share the same C# pairing/session core, but no recorded real-device run is captured here yet. |
 
 ## Recorded evidence by platform
 
@@ -92,16 +106,20 @@ fully signed off.
 The following runs still need a clean recorded result before Milestone M3 can be
 considered complete for each relevant pair:
 
-| Case | Windows <-> Android | Linux <-> Android | Linux <-> Windows |
-| --- | --- | --- | --- |
-| Pairing happy path A -> B | TODO | TODO | TODO |
-| Pairing happy path B -> A | TODO | TODO | TODO |
-| Reject flow | TODO | TODO | TODO |
-| Cancel / timeout flow | TODO | TODO | TODO |
-| Trust persistence after app / daemon restart | TODO | TODO | TODO |
-| Revoke / untrust flow | TODO | TODO | TODO |
-| Disconnect behavior after `trusted` | TODO | TODO | TODO |
-| Disconnect behavior during `pairing_pending` | TODO | TODO | TODO |
+| Case | Windows <-> Android | Linux <-> Android | macOS <-> Android | Linux <-> Windows |
+| --- | --- | --- | --- | --- |
+| Pairing happy path A -> B | TODO | TODO | TODO | TODO |
+| Pairing happy path B -> A | TODO | TODO | TODO | TODO |
+| Reject flow | TODO | TODO | TODO | TODO |
+| Cancel / timeout flow | TODO | TODO | TODO | TODO |
+| Trust persistence after app / daemon restart | TODO | TODO | TODO | TODO |
+| Revoke / untrust flow | TODO | TODO | TODO | TODO |
+| Disconnect behavior after `trusted` | TODO | TODO | TODO | TODO |
+| Disconnect behavior during `pairing_pending` | TODO | TODO | TODO | TODO |
+| **Week 6:** Heartbeat latency within threshold | TODO | TODO | TODO | TODO |
+| **Week 6:** Presence sync (offline to online) | TODO | TODO | TODO | TODO |
+| **Week 6:** Presence sync (online to offline) | TODO | TODO | TODO | TODO |
+| **Week 6:** Capability awareness (Unsupported op fails) | TODO | TODO | TODO | TODO |
 
 ## Current conclusion
 

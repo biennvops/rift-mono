@@ -13,10 +13,14 @@ class TrustedDevicesScreen extends StatefulWidget {
 }
 
 class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
+  static const Duration _presenceRefreshInterval = Duration(seconds: 5);
+
   bool _isDiscovering = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
   String? _error;
+  bool _isLoadingData = false;
+  bool _reloadQueued = false;
 
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
@@ -24,6 +28,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   StreamSubscription? _pairingCompleteSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
+  Timer? _presenceRefreshTimer;
 
   @override
   void initState() {
@@ -39,6 +44,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   void dispose() {
     _reloadDebounce?.cancel();
     _fullReloadThrottle?.cancel();
+    _presenceRefreshTimer?.cancel();
     _discoverySub?.cancel();
     _peerLostSub?.cancel();
     _trustSub?.cancel();
@@ -156,8 +162,37 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _scheduleFullReloadThrottled();
   }
 
+  void _syncPresenceRefreshLoop() {
+    final shouldRefresh = mounted && _trustedPeers.isNotEmpty;
+    if (!shouldRefresh) {
+      _presenceRefreshTimer?.cancel();
+      _presenceRefreshTimer = null;
+      return;
+    }
+
+    if (_presenceRefreshTimer != null) {
+      return;
+    }
+
+    _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
+      if (!mounted) return;
+      final client = context.read<JsonRpcRiftClient>();
+      if (!client.isConnected || _trustedPeers.isEmpty) {
+        _syncPresenceRefreshLoop();
+        return;
+      }
+      _loadData();
+    });
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
+    if (_isLoadingData) {
+      _reloadQueued = true;
+      return;
+    }
+
+    _isLoadingData = true;
     final client = context.read<JsonRpcRiftClient>();
 
     // Default empty lists if not connected
@@ -168,13 +203,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         _isDiscovering = false;
         _error = 'Daemon not connected';
       });
+      _syncPresenceRefreshLoop();
+      _isLoadingData = false;
+      if (_reloadQueued) {
+        _reloadQueued = false;
+        _scheduleReload();
+      }
       return;
     }
 
     try {
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
-      final trustedPeers = List<dynamic>.from(trustedResult['peers'] ?? const []);
+      final trustedPeers =
+          List<dynamic>.from(trustedResult['peers'] ?? const []);
       final discoveredPeers = _filterDiscoverablePeers(
         trustedPeers: trustedPeers,
         discoveredPeers: List<dynamic>.from(
@@ -194,6 +236,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _error = JsonRpcRiftClient.formatDisplayError(e);
         });
+      }
+    } finally {
+      _syncPresenceRefreshLoop();
+      _isLoadingData = false;
+      if (_reloadQueued) {
+        _reloadQueued = false;
+        _scheduleReload();
       }
     }
   }
@@ -403,14 +452,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                   ),
               ],
             ),
-            const SizedBox(height: 4),
-            if (isTrusted)
-              if (peer['capabilities'] is List &&
-                  (peer['capabilities'] as List).isNotEmpty)
-                Text(
-                  'Capabilities: ${(peer['capabilities'] as List).join(', ')}',
-                  style: theme.textTheme.bodySmall,
-                ),
+            const SizedBox(height: 8),
+            if (isTrusted &&
+                peer['capabilities'] is List &&
+                (peer['capabilities'] as List).isNotEmpty)
+              _buildCapabilityBadges(peer['capabilities'] as List),
             if (!isTrusted && peer['address'] != null)
               Text('Address: ${peer['address']}:${peer['port']}',
                   style: theme.textTheme.bodySmall),
@@ -437,6 +483,61 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 child: const Text('Pair'),
               ),
       ),
+    );
+  }
+
+  Widget _buildCapabilityBadges(List<dynamic> capabilities) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: capabilities.map((c) {
+        final cap = c.toString();
+        IconData icon = Icons.extension;
+        String label = cap;
+        if (cap.startsWith('clipboard.')) {
+          icon = Icons.content_copy;
+          label = 'Clipboard';
+        } else if (cap.startsWith('presence.')) {
+          icon = Icons.sensors;
+          label = 'Presence';
+        } else if (cap.startsWith('operation.')) {
+          icon = Icons.settings_remote;
+          label = 'Operations';
+        } else if (cap.startsWith('security.')) {
+          icon = Icons.security;
+          label = 'Security';
+        }
+
+        return Tooltip(
+          message: cap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
