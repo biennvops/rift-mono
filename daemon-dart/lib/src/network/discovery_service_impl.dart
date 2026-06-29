@@ -15,7 +15,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
-  final _peerLostController = StreamController<String>.broadcast();
+  final _peerLostController = StreamController<DiscoveredPeer>.broadcast();
   final DiscoveryPeerTracker _tracker = DiscoveryPeerTracker();
 
   DiscoveryServiceImpl({
@@ -58,7 +58,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
   Stream<DiscoveredPeer> get onDeviceDiscovered => _peerStreamController.stream;
 
   @override
-  Stream<String> get onDeviceLost => _peerLostController.stream;
+  Stream<DiscoveredPeer> get onDeviceLost => _peerLostController.stream;
 
   @override
   Future<void> startDiscovery() async {
@@ -80,9 +80,13 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
   DiscoveredPeer? _peerFromNsdService(nsd.Service service) {
     final instanceId = service.name;
+    final address =
+        service.addresses != null && service.addresses!.isNotEmpty
+            ? service.addresses!.first.address
+            : service.host;
     // Skip services without a name — using a fallback would collapse all
     // null-named peers into one dedup entry and suppress re-discovery.
-    if (instanceId == null || service.host == null || service.port == null) {
+    if (instanceId == null || address == null || service.port == null) {
       return null;
     }
 
@@ -102,7 +106,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
     return DiscoveredPeer(
       instanceId: instanceId,
-      address: service.host!,
+      address: address,
       port: service.port!,
       minVersion: minV,
       maxVersion: maxV,
@@ -117,11 +121,12 @@ class DiscoveryServiceImpl implements DiscoveryService {
   void _ingestSnapshot(Iterable<DiscoveredPeer> peers) {
     final delta = _tracker.ingest(peers);
     for (final peer in delta.removed) {
-      if (peer.deviceIdHint != null) {
-        _peerLostController.add(peer.deviceIdHint!);
-      }
+      _peerLostController.add(peer);
     }
     for (final peer in delta.added) {
+      _peerStreamController.add(peer);
+    }
+    for (final peer in delta.updated) {
       _peerStreamController.add(peer);
     }
   }

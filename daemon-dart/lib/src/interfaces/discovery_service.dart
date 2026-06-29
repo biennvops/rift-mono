@@ -18,11 +18,23 @@ class DiscoveredPeer {
   });
 }
 
+class DiscoveredPeerEndpoint {
+  final String instanceId;
+  final String address;
+  final int port;
+
+  const DiscoveredPeerEndpoint({
+    required this.instanceId,
+    required this.address,
+    required this.port,
+  });
+}
+
 abstract class DiscoveryService {
   Future<void> startAdvertising();
   Future<void> stopAdvertising();
   Stream<DiscoveredPeer> get onDeviceDiscovered;
-  Stream<String> get onDeviceLost;
+  Stream<DiscoveredPeer> get onDeviceLost;
   Future<void> startDiscovery();
   Future<void> stopDiscovery();
   /// Stops all discovery/advertising and closes internal stream controllers.

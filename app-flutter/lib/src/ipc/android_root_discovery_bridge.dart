@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:nsd/nsd.dart' as nsd;
@@ -53,14 +55,20 @@ class AndroidDiscoveredPeer {
 class AndroidDiscoverySnapshotDelta {
   final List<AndroidDiscoveredPeer> added;
   final List<AndroidDiscoveredPeer> removed;
+  final List<AndroidDiscoveredPeer> updated;
 
   const AndroidDiscoverySnapshotDelta({
     required this.added,
     required this.removed,
+    required this.updated,
   });
 }
 
 class AndroidRootDiscoveryBridge {
+  static const int _fallbackDiscoveryPort = 9141;
+  static const Duration _fallbackBeaconInterval = Duration(seconds: 2);
+  static const Duration _fallbackPeerTtl = Duration(seconds: 6);
+
   final int port;
   final String deviceIdHint;
   final String? fingerprintPrefix;
@@ -75,6 +83,12 @@ class AndroidRootDiscoveryBridge {
 
   nsd.Registration? _registration;
   nsd.Discovery? _discovery;
+  RawDatagramSocket? _fallbackAdvertiserSocket;
+  Timer? _fallbackAdvertiserTimer;
+  RawDatagramSocket? _fallbackDiscoverySocket;
+  Timer? _fallbackPeerPruneTimer;
+  final Map<String, ({AndroidDiscoveredPeer peer, DateTime lastSeen})>
+      _fallbackPeersByInstanceId = {};
   final String _instanceId;
 
   AndroidRootDiscoveryBridge({
@@ -105,7 +119,10 @@ class AndroidRootDiscoveryBridge {
   }
 
   Future<void> ensureAdvertising() async {
-    if (_registration != null) return;
+    if (_registration != null) {
+      await _ensureFallbackAdvertising();
+      return;
+    }
 
     try {
       _registration = await nsd.register(
@@ -125,6 +142,8 @@ class AndroidRootDiscoveryBridge {
     } catch (e) {
       debugPrint('[mDNS Error] Failed to register service (advertising disabled): $e');
     }
+
+    await _ensureFallbackAdvertising();
   }
 
   Future<void> startDiscovery() async {
@@ -132,17 +151,30 @@ class AndroidRootDiscoveryBridge {
 
     _discovery = await nsd.startDiscovery('_rift._tcp');
     _discovery!.addListener(_onDiscoveryChanged);
+    await _ensureFallbackDiscovery();
   }
 
   Future<void> stopDiscovery() async {
     if (_discovery == null) return;
 
     final discovery = _discovery!;
-    discovery.removeListener(_onDiscoveryChanged);
-    await nsd.stopDiscovery(discovery);
     _discovery = null;
+    discovery.removeListener(_onDiscoveryChanged);
+    try {
+      await nsd.stopDiscovery(discovery);
+    } catch (e) {
+      if (!_isBenignStopDiscoveryError(e)) {
+        rethrow;
+      }
+      debugPrint('[mDNS Debug] Ignoring benign stopDiscovery error: $e');
+    }
 
     final cleared = tracker.clear();
+    _fallbackPeersByInstanceId.clear();
+    _fallbackPeerPruneTimer?.cancel();
+    _fallbackPeerPruneTimer = null;
+    _fallbackDiscoverySocket?.close();
+    _fallbackDiscoverySocket = null;
     for (final peer in cleared) {
       _peerLostController.add(peer);
     }
@@ -150,6 +182,10 @@ class AndroidRootDiscoveryBridge {
 
   Future<void> dispose() async {
     await stopDiscovery();
+    _fallbackAdvertiserTimer?.cancel();
+    _fallbackAdvertiserTimer = null;
+    _fallbackAdvertiserSocket?.close();
+    _fallbackAdvertiserSocket = null;
     if (_registration != null) {
       await nsd.unregister(_registration!);
       _registration = null;
@@ -163,14 +199,21 @@ class AndroidRootDiscoveryBridge {
     if (discovery == null) return;
 
     debugPrint('[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
-    final snapshot = <AndroidDiscoveredPeer>[];
+    final mdnsSnapshot = <AndroidDiscoveredPeer>[];
     for (final service in discovery.services) {
       debugPrint('[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
       final peer = _peerFromService(service);
       if (peer != null) {
         debugPrint('[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
         if (peer.deviceIdHint != deviceIdHint) {
-          snapshot.add(peer);
+          if (_shouldSuppressMdnsPeer(peer)) {
+            debugPrint(
+              '[mDNS Debug] Suppressed stale mDNS peer: ${peer.instanceId} '
+              'at ${peer.address}:${peer.port}',
+            );
+            continue;
+          }
+          mdnsSnapshot.add(peer);
         } else {
           debugPrint('[mDNS Debug] Ignored self peer.');
         }
@@ -178,12 +221,28 @@ class AndroidRootDiscoveryBridge {
         debugPrint('[mDNS Debug] Failed to parse peer from service: ${service.name}');
       }
     }
+    _ingestMergedSnapshot(mdnsSnapshot);
+  }
 
-    final delta = tracker.ingest(snapshot);
+  void _ingestMergedSnapshot([Iterable<AndroidDiscoveredPeer> mdnsSnapshot = const []]) {
+    final mergedByInstanceId = <String, AndroidDiscoveredPeer>{
+      for (final peer in mdnsSnapshot) peer.instanceId: peer,
+      for (final entry in _fallbackPeersByInstanceId.entries)
+        if (entry.value.peer.deviceIdHint != deviceIdHint)
+          entry.key: entry.value.peer,
+    };
+
+    final delta = tracker.ingest(mergedByInstanceId.values);
     for (final peer in delta.removed) {
       _peerLostController.add(peer);
     }
     for (final peer in delta.added) {
+      _peerDiscoveredController.add(peer);
+    }
+    for (final peer in delta.updated) {
+      debugPrint(
+        '[mDNS Debug] Updated peer: ${peer.instanceId} now at ${peer.address}:${peer.port}',
+      );
       _peerDiscoveredController.add(peer);
     }
   }
@@ -191,10 +250,9 @@ class AndroidRootDiscoveryBridge {
   AndroidDiscoveredPeer? _peerFromService(nsd.Service service) {
     final instanceId = service.name;
     final address =
-        service.host ??
         (service.addresses != null && service.addresses!.isNotEmpty
             ? service.addresses!.first.address
-            : null);
+            : service.host);
     if (instanceId == null || address == null || service.port == null) {
       return null;
     }
@@ -217,6 +275,191 @@ class AndroidRootDiscoveryBridge {
       fingerprintPrefix: fp,
     );
   }
+
+  bool _isBenignStopDiscoveryError(Object error) {
+    final message = error.toString().toLowerCase();
+    return message.contains('stopdiscovery') &&
+        message.contains('multicastlock under-locked');
+  }
+
+  Future<void> _ensureFallbackAdvertising() async {
+    if (_fallbackAdvertiserSocket != null) {
+      return;
+    }
+
+    try {
+      final socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        0,
+      );
+      socket.broadcastEnabled = true;
+      _fallbackAdvertiserSocket = socket;
+      _sendFallbackBeacon();
+      _fallbackAdvertiserTimer = Timer.periodic(
+        _fallbackBeaconInterval,
+        (_) => _sendFallbackBeacon(),
+      );
+    } catch (e) {
+      debugPrint('[mDNS Debug] Failed to start UDP fallback advertising: $e');
+    }
+  }
+
+  Future<void> _ensureFallbackDiscovery() async {
+    if (_fallbackDiscoverySocket != null) {
+      return;
+    }
+
+    try {
+      final socket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        _fallbackDiscoveryPort,
+        reuseAddress: true,
+        reusePort: false,
+      );
+      _fallbackDiscoverySocket = socket;
+      socket.listen((event) {
+        if (event != RawSocketEvent.read) {
+          return;
+        }
+        final datagram = socket.receive();
+        if (datagram == null) {
+          return;
+        }
+        _handleFallbackDatagram(datagram);
+      });
+      _fallbackPeerPruneTimer ??= Timer.periodic(
+        _fallbackBeaconInterval,
+        (_) => _pruneExpiredFallbackPeers(),
+      );
+    } catch (e) {
+      debugPrint('[mDNS Debug] Failed to start UDP fallback discovery: $e');
+    }
+  }
+
+  void _handleFallbackDatagram(Datagram datagram) {
+    try {
+      final decoded = jsonDecode(utf8.decode(datagram.data));
+      if (decoded is! Map<String, dynamic>) {
+        return;
+      }
+
+      if (decoded['kind'] != 'fallback-discovery' ||
+          decoded['rift'] != '0.1-draft') {
+        return;
+      }
+
+      final instanceId = decoded['instanceId'];
+      final port = decoded['port'];
+      final minVersion = decoded['minV'];
+      final maxVersion = decoded['maxV'];
+      if (instanceId is! String ||
+          port is! int ||
+          minVersion is! String ||
+          maxVersion is! String) {
+        return;
+      }
+
+      final did = decoded['did'] as String?;
+      if (did == null || did == deviceIdHint) {
+        return;
+      }
+
+      final peer = AndroidDiscoveredPeer(
+        instanceId: instanceId,
+        address: datagram.address.address,
+        port: port,
+        minVersion: minVersion,
+        maxVersion: maxVersion,
+        deviceIdHint: did,
+        fingerprintPrefix: decoded['fp'] as String?,
+      );
+
+      _fallbackPeersByInstanceId[instanceId] = (
+        peer: peer,
+        lastSeen: DateTime.now(),
+      );
+      debugPrint(
+        '[mDNS Debug] Parsed fallback peer: ${peer.instanceId} at ${peer.address}:${peer.port}',
+      );
+      _ingestMergedSnapshot();
+    } catch (e) {
+      debugPrint('[mDNS Debug] Ignoring malformed UDP fallback packet: $e');
+    }
+  }
+
+  bool _shouldSuppressMdnsPeer(AndroidDiscoveredPeer peer) {
+    final deviceId = peer.deviceIdHint;
+    if (deviceId == null) {
+      return false;
+    }
+
+    final freshFallbackPeer = _freshFallbackPeerForDeviceId(deviceId);
+    if (freshFallbackPeer == null) {
+      return false;
+    }
+
+    return freshFallbackPeer.address != peer.address ||
+        freshFallbackPeer.port != peer.port;
+  }
+
+  AndroidDiscoveredPeer? _freshFallbackPeerForDeviceId(String deviceId) {
+    final cutoff = DateTime.now().subtract(_fallbackPeerTtl);
+    for (final entry in _fallbackPeersByInstanceId.values) {
+      if (entry.lastSeen.isBefore(cutoff)) {
+        continue;
+      }
+      final peer = entry.peer;
+      if (peer.deviceIdHint == deviceId) {
+        return peer;
+      }
+    }
+    return null;
+  }
+
+  void _pruneExpiredFallbackPeers() {
+    if (_fallbackPeersByInstanceId.isEmpty) {
+      return;
+    }
+
+    final cutoff = DateTime.now().subtract(_fallbackPeerTtl);
+    final expiredIds = _fallbackPeersByInstanceId.entries
+        .where((entry) => entry.value.lastSeen.isBefore(cutoff))
+        .map((entry) => entry.key)
+        .toList(growable: false);
+
+    if (expiredIds.isEmpty) {
+      return;
+    }
+
+    for (final id in expiredIds) {
+      _fallbackPeersByInstanceId.remove(id);
+    }
+    _ingestMergedSnapshot();
+  }
+
+  void _sendFallbackBeacon() {
+    final socket = _fallbackAdvertiserSocket;
+    if (socket == null) {
+      return;
+    }
+
+    final payload = jsonEncode({
+      'rift': '0.1-draft',
+      'kind': 'fallback-discovery',
+      'instanceId': _instanceId,
+      'port': port,
+      'minV': minVersion,
+      'maxV': maxVersion,
+      'did': deviceIdHint,
+      if (fingerprintPrefix != null) 'fp': fingerprintPrefix,
+    });
+
+    socket.send(
+      Uint8List.fromList(utf8.encode(payload)),
+      InternetAddress('255.255.255.255'),
+      _fallbackDiscoveryPort,
+    );
+  }
 }
 
 class AndroidDiscoveryPeerTracker {
@@ -236,13 +479,35 @@ class AndroidDiscoveryPeerTracker {
     }
 
     final added = <AndroidDiscoveredPeer>[];
+    final updated = <AndroidDiscoveredPeer>[];
     for (final peer in snapshot) {
-      if (_seenPeers.containsKey(peer.instanceId)) continue;
-      _seenPeers[peer.instanceId] = peer;
-      added.add(peer);
+      final existing = _seenPeers[peer.instanceId];
+      if (existing == null) {
+        _seenPeers[peer.instanceId] = peer;
+        added.add(peer);
+        continue;
+      }
+
+      if (!_samePeer(existing, peer)) {
+        _seenPeers[peer.instanceId] = peer;
+        updated.add(peer);
+      }
     }
 
-    return AndroidDiscoverySnapshotDelta(added: added, removed: removed);
+    return AndroidDiscoverySnapshotDelta(
+      added: added,
+      removed: removed,
+      updated: updated,
+    );
+  }
+
+  bool _samePeer(AndroidDiscoveredPeer a, AndroidDiscoveredPeer b) {
+    return a.address == b.address &&
+        a.port == b.port &&
+        a.minVersion == b.minVersion &&
+        a.maxVersion == b.maxVersion &&
+        a.deviceIdHint == b.deviceIdHint &&
+        a.fingerprintPrefix == b.fingerprintPrefix;
   }
 
   List<AndroidDiscoveredPeer> clear() {
