@@ -242,6 +242,18 @@ class SessionManager {
 
   bool _isValidUuidV4(String value) => _uuidV4Pattern.hasMatch(value);
 
+  String _describeContext(SessionContext? ctx) {
+    if (ctx == null) {
+      return 'ctx=<null>';
+    }
+    return 'ctx={peer=${ctx.peerDeviceId}, initiator=${ctx.isInitiator}, '
+        'handshakeState=${ctx.handshakeState.name}, '
+        'localHelloSent=${ctx.localHelloSent}, '
+        'remoteHelloReceived=${ctx.remoteHelloReceived}, '
+        'capabilityNegotiated=${ctx.capabilityNegotiated}, '
+        'trustState=${ctx.trustState.toJson()}}';
+  }
+
   Future<void> dispose() async {
     for (final waiter in _establishmentWaiters.values) {
       if (!waiter.isCompleted) {
@@ -551,8 +563,10 @@ class SessionManager {
     String failureReason,
     String message,
   ) async {
+    final ctx = _sessions[peerDeviceId];
     RiftLog.warn(
-      '[Session] Rejecting session with $peerDeviceId: $failureReason - $message',
+      '[Session] Rejecting session with $peerDeviceId: $failureReason - $message '
+      '${_describeContext(ctx)}',
     );
     final waiter = _establishmentWaiters.remove(peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
@@ -579,6 +593,9 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     var ctx = _sessions[peerDeviceId];
+    RiftLog.info(
+      '[Session] _handleSessionHello entered for $peerDeviceId ${_describeContext(ctx)}',
+    );
     if (ctx == null) {
       if (!await _isPeerAllowedForSession(peerDeviceId)) {
         await _rejectSession(
@@ -594,6 +611,9 @@ class SessionManager {
       final record = await _trustStore.getPeer(peerDeviceId);
       ctx.trustState = record?.state ?? TrustState.discovered;
       _sessions[peerDeviceId] = ctx;
+      RiftLog.info(
+        '[Session] Created responder SessionContext for $peerDeviceId ${_describeContext(ctx)}',
+      );
     } else if (ctx.handshakeState == HandshakeState.handshaking &&
         ctx.isInitiator &&
         ctx.localHelloSent &&
@@ -612,6 +632,9 @@ class SessionManager {
       );
     }
     ctx.remoteHelloReceived = true;
+    RiftLog.info(
+      '[Session] Marked remoteHelloReceived for $peerDeviceId ${_describeContext(ctx)}',
+    );
 
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
     if (payload == null) {
@@ -827,6 +850,9 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     final ctx = _sessions[peerDeviceId];
+    RiftLog.info(
+      '[Session] _handleSessionAccept entered for $peerDeviceId ${_describeContext(ctx)}',
+    );
 
     if (ctx == null || ctx.handshakeState != HandshakeState.handshaking) {
       await _rejectSession(
@@ -984,6 +1010,9 @@ class SessionManager {
       '[Session] Verified session.accept from $peerDeviceId; marking established and starting capability negotiation.',
     );
     ctx.handshakeState = HandshakeState.established;
+    RiftLog.info(
+      '[Session] Marked established after session.accept for $peerDeviceId ${_describeContext(ctx)}',
+    );
     _transport.setPeerAuthenticated(peerDeviceId);
     await _startCapabilityNegotiation(ctx);
   }

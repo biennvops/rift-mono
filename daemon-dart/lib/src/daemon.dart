@@ -21,6 +21,199 @@ import 'package:daemon_dart/src/pairing/pairing_manager.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
+class _DiscoveredPeerRecord {
+  final String deviceId;
+  final Map<String, DiscoveredPeer> peersByInstanceId;
+
+  _DiscoveredPeerRecord({
+    required this.deviceId,
+    required this.peersByInstanceId,
+  });
+
+  List<DiscoveredPeer> get orderedPeers {
+    final peers = peersByInstanceId.values.toList(growable: false);
+    peers.sort(_compareDiscoveredPeers);
+    return peers;
+  }
+
+  DiscoveredPeer? get primaryPeer =>
+      orderedPeers.isEmpty ? null : orderedPeers.first;
+
+  List<DiscoveredPeerEndpoint> get observedEndpoints => orderedPeers
+      .map(
+        (peer) => DiscoveredPeerEndpoint(
+          instanceId: peer.instanceId,
+          address: peer.address,
+          port: peer.port,
+        ),
+      )
+      .toList(growable: false);
+}
+
+int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
+  final scoreCompare = _endpointScore(b.address).compareTo(
+    _endpointScore(a.address),
+  );
+  if (scoreCompare != 0) return scoreCompare;
+
+  final addressCompare = a.address.compareTo(b.address);
+  if (addressCompare != 0) return addressCompare;
+
+  return a.port.compareTo(b.port);
+}
+
+int _endpointScore(String address) {
+  final ip = InternetAddress.tryParse(address);
+  if (ip == null) {
+    return 0;
+  }
+
+  if (ip.type == InternetAddressType.IPv4) {
+    return 3;
+  }
+
+  if (ip.type == InternetAddressType.IPv6) {
+    final raw = ip.rawAddress;
+    final isLinkLocal = raw.length >= 2 && raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80;
+    if (isLinkLocal) {
+      return -1;
+    }
+    return 2;
+  }
+
+  return 0;
+}
+
+String _classifyPairingConnectFailure(Object error) {
+  if (error is RiftAuthenticationFailedException) {
+    if (error.message.contains(
+      'Peer closed connection before sending session.hello',
+    )) {
+      return 'peer-closed-before-hello';
+    }
+
+    return 'authentication-failed';
+  }
+
+  if (error is SocketException) {
+    final code = error.osError?.errorCode;
+    switch (code) {
+      case 111:
+      case 61:
+      case 10061:
+        return 'connection-refused';
+      case 22:
+      case 10022:
+        return 'invalid-endpoint-argument';
+      case 101:
+      case 10051:
+        return 'network-unreachable';
+      case 113:
+      case 10065:
+        return 'host-unreachable';
+      case 8:
+      case 11001:
+      case 11004:
+        return 'host-not-found';
+    }
+
+    final message = error.message.toLowerCase();
+    if (message.contains('connection refused')) {
+      return 'connection-refused';
+    }
+    if (message.contains('no address associated with hostname') ||
+        message.contains('failed host lookup') ||
+        message.contains('name or service not known') ||
+        message.contains('nodename nor servname provided')) {
+      return 'host-not-found';
+    }
+    if (message.contains('network is unreachable')) {
+      return 'network-unreachable';
+    }
+    if (message.contains('no route to host') ||
+        message.contains('host is down')) {
+      return 'host-unreachable';
+    }
+    if (message.contains('invalid argument')) {
+      return 'invalid-endpoint-argument';
+    }
+  }
+
+  if (error is HandshakeException) {
+    return 'tls-handshake-failed';
+  }
+
+  if (error is TimeoutException) {
+    return 'session-timeout';
+  }
+
+  final message = error.toString().toLowerCase();
+  if (message.contains('peer closed connection before sending session.hello')) {
+    return 'peer-closed-before-hello';
+  }
+
+  return 'unknown';
+}
+
+String _describePairingConnectFailure(Object error) {
+  switch (_classifyPairingConnectFailure(error)) {
+    case 'connection-refused':
+      return 'The peer was discovered, but nothing accepted the TLS connection on that endpoint.';
+    case 'invalid-endpoint-argument':
+      return 'The discovered endpoint was not usable on this platform, usually due to an invalid address form or unsupported scope.';
+    case 'host-not-found':
+      return 'The discovered host name could not be resolved to a reachable local-network address.';
+    case 'host-unreachable':
+      return 'The peer address was known, but the host was not reachable on the local network.';
+    case 'network-unreachable':
+      return 'The current network route could not reach that peer endpoint.';
+    case 'peer-closed-before-hello':
+      return 'The peer accepted TCP/TLS, then closed before session bootstrap completed; this often means a duplicate or stale discovery endpoint.';
+    case 'tls-handshake-failed':
+      return 'The TLS handshake failed before Rift session bootstrap could complete.';
+    case 'authentication-failed':
+      return 'The peer certificate or session bootstrap failed authentication.';
+    case 'session-timeout':
+      return 'The secure session did not finish establishing before the timeout expired.';
+    default:
+      return 'The endpoint failed before a secure Rift session could be established.';
+  }
+}
+
+String _summarizePairingFailures(
+  List<({DiscoveredPeer peer, Object error})> failures,
+) {
+  if (failures.isEmpty) {
+    return 'No discovered endpoints were attempted.';
+  }
+
+  final last = failures.last;
+  final samples = failures
+      .map((failure) {
+        final classification = _classifyPairingConnectFailure(failure.error);
+        return '${failure.peer.address}:${failure.peer.port} ($classification)';
+      })
+      .toList(growable: false);
+
+  return 'Attempted ${failures.length} endpoint(s): ${samples.join(', ')}. '
+      'Last endpoint ${last.peer.address}:${last.peer.port}. '
+      '${_describePairingConnectFailure(last.error)}';
+}
+
+bool _isLikelyDuplicateBootstrapRace(Object error) {
+  if (_classifyPairingConnectFailure(error) == 'peer-closed-before-hello') {
+    return true;
+  }
+
+  if (error is SessionException &&
+      error.message.contains('Session already exists for ')) {
+    return true;
+  }
+
+  final message = error.toString().toLowerCase();
+  return message.contains('session already exists for ');
+}
+
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
@@ -32,7 +225,7 @@ class RiftDaemon {
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
-  final Map<String, DiscoveredPeer> _discoveredPeers = {};
+  final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
   bool _isDiscovering = false;
@@ -205,12 +398,9 @@ class RiftDaemon {
     final results = <Map<String, dynamic>>[];
 
     for (final entry in _discoveredPeers.entries) {
-      final peer = entry.value;
-      final hintedDeviceId = peer.deviceIdHint;
-      if (hintedDeviceId == null) {
-        // Skip peers without a valid Rift device ID according to ipc.md.
-        continue;
-      }
+      final peer = entry.value.primaryPeer;
+      if (peer == null) continue;
+      final hintedDeviceId = entry.key;
       final trustState = trustStore != null
           ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ??
                 'discovered'
@@ -221,6 +411,15 @@ class RiftDaemon {
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
+        'observedEndpoints': entry.value.observedEndpoints
+            .map(
+              (endpoint) => {
+                'instanceId': endpoint.instanceId,
+                'address': endpoint.address,
+                'port': endpoint.port,
+              },
+            )
+            .toList(growable: false),
         'txtRecord': {
           'minV': peer.minVersion,
           'maxV': peer.maxVersion,
@@ -516,16 +715,40 @@ class RiftDaemon {
   }
 
   void trackDiscoveredPeer(DiscoveredPeer peer) {
-    if (peer.deviceIdHint != null) {
-      // DiscoveryPeerTracker deduplicates at the mDNS instance level, but the
-      // daemon UI model is keyed by Rift device ID so multiple instance records
-      // for the same device collapse into one visible peer entry.
-      _discoveredPeers[peer.deviceIdHint!] = peer;
-    }
+    final deviceId = peer.deviceIdHint;
+    if (deviceId == null) return;
+
+    final existing = _discoveredPeers[deviceId];
+    final peersByInstanceId = <String, DiscoveredPeer>{
+      if (existing != null) ...existing.peersByInstanceId,
+      peer.instanceId: peer,
+    };
+    _discoveredPeers[deviceId] = _DiscoveredPeerRecord(
+      deviceId: deviceId,
+      peersByInstanceId: peersByInstanceId,
+    );
   }
 
-  void untrackDiscoveredPeer(String deviceId) {
-    _discoveredPeers.remove(deviceId);
+  void untrackDiscoveredPeer(DiscoveredPeer peer) {
+    final deviceId = peer.deviceIdHint;
+    if (deviceId == null) return;
+
+    final existing = _discoveredPeers[deviceId];
+    if (existing == null) return;
+
+    final peersByInstanceId = Map<String, DiscoveredPeer>.from(
+      existing.peersByInstanceId,
+    )..remove(peer.instanceId);
+
+    if (peersByInstanceId.isEmpty) {
+      _discoveredPeers.remove(deviceId);
+      return;
+    }
+
+    _discoveredPeers[deviceId] = _DiscoveredPeerRecord(
+      deviceId: deviceId,
+      peersByInstanceId: peersByInstanceId,
+    );
   }
 
   void replaceExternalDiscoveredPeers(
@@ -534,6 +757,7 @@ class RiftDaemon {
   }) {
     final previousPeerIds = _discoveredPeers.keys.toSet();
     final addedPeerIds = <String>{};
+    final refreshedPeerIds = <String>{};
     _discoveredPeers.clear();
     for (final rawPeer in rawPeers) {
       final instanceId = rawPeer['instanceId'];
@@ -560,13 +784,23 @@ class RiftDaemon {
       );
       trackDiscoveredPeer(peer);
       final peerId = peer.deviceIdHint;
-      if (peerId != null && !previousPeerIds.contains(peerId)) {
-        addedPeerIds.add(peerId);
+      if (peerId != null) {
+        if (!previousPeerIds.contains(peerId)) {
+          addedPeerIds.add(peerId);
+        }
+        refreshedPeerIds.add(peerId);
       }
     }
     _isDiscovering = isDiscovering;
 
-    for (final peerId in addedPeerIds) {
+    // Android inbound mTLS currently cannot provisionally accept arbitrary
+    // self-signed client certificates during server-side TLS handshake
+    // (BoringSSL rejects them before Dart session bootstrap can inspect the
+    // peer cert). To keep the peer protocol unchanged while preserving
+    // cross-platform pairing, the Android daemon prefers proactively opening
+    // outbound sessions to discovered peers and then reuses those authenticated
+    // sessions when the local user initiates pairing later.
+    for (final peerId in refreshedPeerIds) {
       unawaited(prefetchSessionForDiscoveredPeer(peerId));
     }
   }
@@ -687,32 +921,89 @@ class RiftDaemon {
   Future<String> _openSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager!;
     final transport = _transport!;
-    final discoveredPeer = _findDiscoveredPeer(peerDeviceId);
-    if (discoveredPeer == null) {
+    final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
+    if (discoveredPeerRecord == null ||
+        discoveredPeerRecord.orderedPeers.isEmpty) {
       throw const RiftNotFoundException('Peer not found in discovery cache');
     }
 
-    RiftLog.debug(
-      '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
-      'using address=${discoveredPeer.address}:${discoveredPeer.port} '
-      'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
-      'instanceId=${discoveredPeer.instanceId}',
-    );
+    final failures = <({DiscoveredPeer peer, Object error})>[];
+    for (final discoveredPeer in discoveredPeerRecord.orderedPeers) {
+      Future<String> connectCurrentEndpoint() async {
+        final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
+            ? peerDeviceId
+            : null;
+        final resolvedPeerDeviceId = await transport.connectTo(
+          discoveredPeer.address,
+          discoveredPeer.port,
+          expectedDeviceId: expectedDeviceId,
+        );
 
-    final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
-        ? peerDeviceId
-        : null;
-    final resolvedPeerDeviceId = await transport.connectTo(
-      discoveredPeer.address,
-      discoveredPeer.port,
-      expectedDeviceId: expectedDeviceId,
-    );
+        if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
+          await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+        }
+        await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
+        return resolvedPeerDeviceId;
+      }
 
-    if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
-      await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+      RiftLog.debug(
+        '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
+        'using address=${discoveredPeer.address}:${discoveredPeer.port} '
+        'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
+        'instanceId=${discoveredPeer.instanceId}',
+      );
+
+      try {
+        return await connectCurrentEndpoint();
+      } catch (e) {
+        Object failure = e;
+        if (_isLikelyDuplicateBootstrapRace(e)) {
+          RiftLog.info(
+            '[Pairing] Duplicate bootstrap race detected for '
+            'peerDeviceId=$peerDeviceId '
+            'address=${discoveredPeer.address}:${discoveredPeer.port} '
+            'instanceId=${discoveredPeer.instanceId}. '
+            'Waiting briefly for an in-flight session before retrying.',
+          );
+
+          try {
+            await sessionManager.waitForSessionEstablished(
+              peerDeviceId,
+              timeout: const Duration(milliseconds: 300),
+            );
+            return peerDeviceId;
+          } catch (_) {
+            try {
+              return await connectCurrentEndpoint();
+            } catch (retryError) {
+              failure = retryError;
+            }
+          }
+        }
+
+        failures.add((peer: discoveredPeer, error: failure));
+        final classification = _classifyPairingConnectFailure(failure);
+        RiftLog.warn(
+          '[Pairing] Endpoint failed for peerDeviceId=$peerDeviceId '
+          'address=${discoveredPeer.address}:${discoveredPeer.port} '
+          'instanceId=${discoveredPeer.instanceId} '
+          'classification=$classification '
+          'detail=${_describePairingConnectFailure(failure)} '
+          'error=$failure',
+        );
+      }
     }
-    await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
-    return resolvedPeerDeviceId;
+
+    final failureSummary = _summarizePairingFailures(failures);
+    RiftLog.warn(
+      '[Pairing] All discovered endpoints failed for peerDeviceId=$peerDeviceId. '
+      '$failureSummary',
+    );
+    throw RiftException(
+      -32603,
+      'Failed to establish a secure session with $peerDeviceId across all discovered endpoints. '
+      '$failureSummary',
+    );
   }
 
   Future<Map<String, dynamic>> _startPairingRpc(
@@ -757,20 +1048,13 @@ class RiftDaemon {
       );
       await _ensureSessionForPairing(peerDeviceId);
     } catch (e) {
+      final classification = _classifyPairingConnectFailure(e);
+      final detail = _describePairingConnectFailure(e);
       RiftLog.debug(
-        '[Session] Session prefetch skipped for $peerDeviceId: $e',
+        '[Session] Session prefetch skipped for $peerDeviceId '
+        'classification=$classification detail=$detail error=$e',
       );
     }
-  }
-
-  DiscoveredPeer? _findDiscoveredPeer(String peerDeviceId) {
-    for (final entry in _discoveredPeers.entries) {
-      final peer = entry.value;
-      if (peer.deviceIdHint == peerDeviceId || entry.key == peerDeviceId) {
-        return peer;
-      }
-    }
-    return null;
   }
 
   /// The static entry point for spawning the Isolate from Flutter
@@ -899,18 +1183,22 @@ class RiftDaemon {
                 },
               },
             });
-            unawaited(
-              daemon.prefetchSessionForDiscoveredPeer(peer.deviceIdHint!),
-            );
           });
 
-          daemon._discoveryService?.onDeviceLost.listen((deviceId) {
-            daemon.untrackDiscoveredPeer(deviceId);
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPeerLost',
-              'params': {'deviceId': deviceId},
-            });
+          daemon._discoveryService?.onDeviceLost.listen((peer) {
+            final deviceId = peer.deviceIdHint;
+            if (deviceId == null) return;
+
+            final hadVisiblePeer = daemon._discoveredPeers.containsKey(deviceId);
+            daemon.untrackDiscoveredPeer(peer);
+            final stillVisible = daemon._discoveredPeers.containsKey(deviceId);
+            if (hadVisiblePeer && !stillVisible) {
+              sendPort.send({
+                'jsonrpc': '2.0',
+                'method': 'rift.onPeerLost',
+                'params': {'deviceId': deviceId},
+              });
+            }
           });
 
           daemon._sessionManager?.onPresenceUpdate.listen((ctx) {
