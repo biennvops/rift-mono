@@ -16,6 +16,22 @@ satisfied:
 
 This file tracks the second layer.
 
+## Local-network scope reminder
+
+The current Rift profile is LAN-first. Real-device sign-off for a platform pair
+must demonstrate that the pair still works when the devices share a reachable
+local network but the LAN has no upstream internet access. The inverse case
+also matters: internet access alone does not count as readiness if local
+multicast discovery or direct peer reachability is absent.
+
+For Android platform pairs, current real-device evidence also needs to be read
+with one implementation caveat in mind: Android's Dart `SecureServerSocket`
+does not reliably provisionally accept arbitrary self-signed inbound client
+certificates during server-side TLS handshake. Current Linux <-> Android and
+desktop <-> Android success therefore depends on Android proactively opening an
+authenticated outbound session and the desktop side reusing that session rather
+than forcing a fresh inbound Android TLS handshake.
+
 ## Automated coverage in this directory
 
 The Dart tests currently checked in under `tests-interop/test/` are a
@@ -108,6 +124,10 @@ considered complete for each relevant pair:
 
 | Case | Windows <-> Android | Linux <-> Android | macOS <-> Android | Linux <-> Windows |
 | --- | --- | --- | --- | --- |
+| Same LAN, internet available | TODO | TODO | TODO | TODO |
+| Same LAN, no internet uplink | TODO | TODO | TODO | TODO |
+| Same SSID, client isolation enabled | TODO | TODO | TODO | TODO |
+| Multicast unavailable, direct local IP still reachable | TODO | TODO | TODO | TODO |
 | Pairing happy path A -> B | TODO | TODO | TODO | TODO |
 | Pairing happy path B -> A | TODO | TODO | TODO | TODO |
 | Reject flow | TODO | TODO | TODO | TODO |
