@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -12,8 +13,13 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     , IDisposable
 {
     private const int PairingExpiryMs = 120000;
-    private static readonly TimeSpan InitialSessionReuseWindow = TimeSpan.FromMilliseconds(750);
-    private static readonly TimeSpan ActiveSessionFallbackWindow = TimeSpan.FromSeconds(2);
+    // Android's Dart SecureServerSocket cannot provisionally accept arbitrary
+    // self-signed client certificates on inbound TLS, so when pairing against
+    // Android we prefer to wait longer for a peer-initiated authenticated
+    // session to appear before attempting our own outbound connect.
+    private static readonly TimeSpan InitialSessionReuseWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ActiveSessionFallbackWindow = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan DuplicateOutboundRetryDelay = TimeSpan.FromMilliseconds(1250);
 
     private readonly ITransport _transport;
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
@@ -78,7 +84,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         {
             try
             {
-                await _transport.ConnectToPeerAsync(peer.Address, peer.Port, cancellationToken);
+                await ConnectToDiscoveredPeerAsync(deviceId, peer, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -90,9 +96,15 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 }
                 else
                 {
-                    _logger.LogWarning(ex, "Failed to establish outbound pairing session for {DeviceId}.", deviceId);
+                    _logger.LogWarning(
+                        ex,
+                        "Failed to establish outbound pairing session for {DeviceId} using {Address}:{Port}. Classification={Classification}",
+                        deviceId,
+                        peer.Address,
+                        peer.Port,
+                        ClassifyConnectFailure(ex));
                     throw new InvalidOperationException(
-                        $"Failed to establish a secure session with {deviceId} at {peer.Address}:{peer.Port}.",
+                        $"Failed to establish a secure session with {deviceId} at {peer.Address}:{peer.Port}. {DescribeConnectFailure(ex)}",
                         ex);
                 }
             }
@@ -111,6 +123,69 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             throw new InvalidOperationException(
                 $"Failed to start pairing with {deviceId} because no authenticated session is open.",
                 ex);
+        }
+    }
+
+    private async Task ConnectToDiscoveredPeerAsync(
+        string deviceId,
+        DiscoveredPeerInfo peer,
+        CancellationToken cancellationToken)
+    {
+        var endpoints = peer.ObservedEndpoints.Count > 0
+            ? peer.ObservedEndpoints
+            : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
+        var failures = new List<(DiscoveredPeerEndpoint Endpoint, Exception Exception)>();
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
+                return;
+            }
+            catch (Exception ex)
+            {
+                failures.Add((endpoint, ex));
+                _logger.LogInformation(
+                    ex,
+                    "Outbound pairing connect attempt for {DeviceId} via {Address}:{Port} failed. Classification={Classification}",
+                    deviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    ClassifyConnectFailure(ex));
+            }
+        }
+
+        var lastFailure = failures[^1];
+        throw new InvalidOperationException(
+            $"All discovered endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
+            lastFailure.Exception);
+    }
+
+    private async Task ConnectToEndpointWithRetryAsync(
+        string deviceId,
+        DiscoveredPeerEndpoint endpoint,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, cancellationToken);
+        }
+        catch (Exception ex) when (IsLikelyDuplicateOutboundRace(ex))
+        {
+            _logger.LogInformation(
+                ex,
+                "Peer {DeviceId} closed the duplicate outbound connection before session bootstrap completed on endpoint {Address}:{Port}. Waiting briefly for the in-flight inbound/prefetched session, then retrying once if needed.",
+                deviceId,
+                endpoint.Address,
+                endpoint.Port);
+
+            if (await WaitForActiveSessionAsync(deviceId, DuplicateOutboundRetryDelay, cancellationToken))
+            {
+                return;
+            }
+
+            await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, cancellationToken);
         }
     }
 
@@ -328,6 +403,66 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private PairingSessionState CreatePairingSessionState()
     {
         return new PairingSessionState(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs));
+    }
+
+    private static bool IsLikelyDuplicateOutboundRace(Exception ex)
+    {
+        return ex is InvalidOperationException invalidOperationException &&
+               invalidOperationException.Message.Contains(
+                   "Peer closed connection before sending session.hello.",
+                   StringComparison.Ordinal);
+    }
+
+    private static string ClassifyConnectFailure(Exception ex)
+    {
+        if (IsLikelyDuplicateOutboundRace(ex))
+        {
+            return "peer-closed-before-hello";
+        }
+
+        if (ex is System.Net.Sockets.SocketException socketException)
+        {
+            return socketException.SocketErrorCode switch
+            {
+                System.Net.Sockets.SocketError.ConnectionRefused => "connection-refused",
+                System.Net.Sockets.SocketError.InvalidArgument => "invalid-endpoint-argument",
+                System.Net.Sockets.SocketError.HostNotFound => "host-not-found",
+                System.Net.Sockets.SocketError.HostUnreachable => "host-unreachable",
+                System.Net.Sockets.SocketError.NetworkUnreachable => "network-unreachable",
+                _ => $"socket-{socketException.SocketErrorCode.ToString().ToLowerInvariant()}"
+            };
+        }
+
+        return ex.GetType().Name;
+    }
+
+    private static string DescribeConnectFailure(Exception ex)
+    {
+        if (IsLikelyDuplicateOutboundRace(ex))
+        {
+            return "The peer accepted TCP/TLS but closed the bootstrap connection before replying. This commonly means a duplicate-session race or that the peer rejected session bootstrap.";
+        }
+
+        if (ex is System.Net.Sockets.SocketException socketException)
+        {
+            return socketException.SocketErrorCode switch
+            {
+                System.Net.Sockets.SocketError.ConnectionRefused =>
+                    "The advertised peer endpoint refused the TCP connection. The discovery record may be stale, or the peer may no longer be listening on that port.",
+                System.Net.Sockets.SocketError.InvalidArgument =>
+                    "The selected endpoint was not usable for connect(). This commonly happens with an IPv6 link-local address that is missing a scope ID or another invalid local-network endpoint.",
+                System.Net.Sockets.SocketError.HostNotFound =>
+                    "The advertised hostname could not be resolved on the local network.",
+                System.Net.Sockets.SocketError.HostUnreachable =>
+                    "The peer host was discovered but not reachable on the local network.",
+                System.Net.Sockets.SocketError.NetworkUnreachable =>
+                    "No local network route was available to the discovered peer endpoint.",
+                _ =>
+                    $"Socket error: {socketException.SocketErrorCode}."
+            };
+        }
+
+        return $"Underlying error: {ex.Message}";
     }
 
     private async Task<bool> WaitForActiveSessionAsync(string peerDeviceId, TimeSpan timeout, CancellationToken cancellationToken)
