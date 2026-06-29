@@ -39,6 +39,10 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       'trustState': 'discovered',
     }
   ];
+  Map<String, dynamic> deviceInfo = {
+    'deviceId': 'rift-local-device',
+    'displayName': 'Local Device',
+  };
 
   @override
   bool get isConnected => true;
@@ -53,6 +57,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
+  @override
+  Future<dynamic> getDeviceInfo() async => deviceInfo;
   @override
   Future<dynamic> listDiscoveredPeers() async => {
         'peers': discoveredPeers,
