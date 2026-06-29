@@ -15,6 +15,7 @@ class TrustedDevicesScreen extends StatefulWidget {
 class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
 
+  String? _localDeviceId;
   bool _isDiscovering = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
@@ -83,6 +84,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final deviceId = event['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
     if (!mounted) return;
+    if (_isSelfDevice(deviceId)) return;
     if (_isPeerAlreadyManaged(deviceId)) return;
 
     setState(() {
@@ -163,7 +165,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   }
 
   void _syncPresenceRefreshLoop() {
-    final shouldRefresh = mounted && _trustedPeers.isNotEmpty;
+    final shouldRefresh = mounted && (_trustedPeers.isNotEmpty || _isDiscovering);
     if (!shouldRefresh) {
       _presenceRefreshTimer?.cancel();
       _presenceRefreshTimer = null;
@@ -177,7 +179,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
       if (!mounted) return;
       final client = context.read<JsonRpcRiftClient>();
-      if (!client.isConnected || _trustedPeers.isEmpty) {
+      if (!client.isConnected || (_trustedPeers.isEmpty && !_isDiscovering)) {
         _syncPresenceRefreshLoop();
         return;
       }
@@ -213,8 +215,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }
 
     try {
+      final deviceInfo = await client.getDeviceInfo() as Map;
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
+      final localDeviceId = deviceInfo['deviceId']?.toString();
       final trustedPeers =
           List<dynamic>.from(trustedResult['peers'] ?? const []);
       final discoveredPeers = _filterDiscoverablePeers(
@@ -223,11 +227,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           discoveredResult['peers'] ?? const [],
         ),
       );
+      final isDiscovering = discoveredResult['isDiscovering'] == true;
       if (mounted) {
         setState(() {
+          _localDeviceId = localDeviceId;
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
-          _isDiscovering = discoveredResult['isDiscovering'] == true;
+          _isDiscovering = isDiscovering;
           _error = null;
         });
       }
@@ -253,6 +259,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     );
   }
 
+  bool _isSelfDevice(String deviceId) {
+    final localDeviceId = _localDeviceId;
+    return localDeviceId != null &&
+        localDeviceId.isNotEmpty &&
+        deviceId == localDeviceId;
+  }
+
   List<dynamic> _filterDiscoverablePeers({
     required List<dynamic> trustedPeers,
     required List<dynamic> discoveredPeers,
@@ -275,6 +288,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (peer is! Map) return false;
       final deviceId = peer['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return false;
+      if (_isSelfDevice(deviceId)) return false;
       if (trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
@@ -289,10 +303,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final client = context.read<JsonRpcRiftClient>();
     if (!client.isConnected) return;
     try {
+      final nextDiscovering = !_isDiscovering;
       if (_isDiscovering) {
         await client.stopDiscovery();
       } else {
         await client.startDiscovery();
+      }
+      if (mounted) {
+        setState(() {
+          _isDiscovering = nextDiscovering;
+          _error = null;
+        });
       }
       await _loadData();
     } catch (e) {
@@ -550,9 +571,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final client = context.read<JsonRpcRiftClient>();
     final deviceId = peer['deviceId']?.toString();
     if (deviceId == null) return;
+    if (_isSelfDevice(deviceId)) {
+      return;
+    }
 
     try {
       if (!isTrusted) {
+        assert(
+          !_isSelfDevice(deviceId),
+          'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
+        );
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => PairingScreen(

@@ -217,7 +217,6 @@ class _PairingScreenState extends State<PairingScreen> {
     final peerFingerprint = _peerFingerprint;
     if (deviceId == null || peerFingerprint == null) return;
     final client = context.read<JsonRpcRiftClient>();
-
     setState(() {
       _busy = true;
       _error = null;
@@ -246,7 +245,6 @@ class _PairingScreenState extends State<PairingScreen> {
     final deviceId = _deviceId;
     if (deviceId == null) return;
     final client = context.read<JsonRpcRiftClient>();
-
     setState(() {
       _busy = true;
       _error = null;
