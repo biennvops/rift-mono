@@ -51,9 +51,9 @@ class _DiscoveredPeerRecord {
 }
 
 int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
-  final scoreCompare = _endpointScore(b.address).compareTo(
-    _endpointScore(a.address),
-  );
+  final scoreCompare = _endpointScore(
+    b.address,
+  ).compareTo(_endpointScore(a.address));
   if (scoreCompare != 0) return scoreCompare;
 
   final addressCompare = a.address.compareTo(b.address);
@@ -74,7 +74,8 @@ int _endpointScore(String address) {
 
   if (ip.type == InternetAddressType.IPv6) {
     final raw = ip.rawAddress;
-    final isLinkLocal = raw.length >= 2 && raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80;
+    final isLinkLocal =
+        raw.length >= 2 && raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80;
     if (isLinkLocal) {
       return -1;
     }
@@ -445,8 +446,9 @@ class RiftDaemon {
       return {'events': const <Map<String, dynamic>>[], 'total': 0};
     }
 
-    final sinceTime =
-        since == null || since.isEmpty ? null : DateTime.tryParse(since);
+    final sinceTime = since == null || since.isEmpty
+        ? null
+        : DateTime.tryParse(since);
     final filtered = await trustStore.querySecurityEvents(
       SecurityEventQuery(
         eventTypes: eventTypes,
@@ -643,36 +645,39 @@ class RiftDaemon {
 
     switch (method) {
       case 'rift.onPairingComplete':
-          unawaited(_recordSecurityEvent(
+        unawaited(
+          _recordSecurityEvent(
             eventType: 'pairing.completed',
             severity: 'info',
             peerDeviceId: params['deviceId']?.toString(),
             outcome: 'success',
-          ));
+          ),
+        );
         break;
       case 'rift.onTrustChanged':
         final newState = params['newState']?.toString();
         final previousState = params['previousState']?.toString();
         final reason = params['reason']?.toString();
         if (newState == 'revoked') {
-          unawaited(_recordSecurityEvent(
-            eventType: 'trust.revoked',
-            severity: 'warning',
-            peerDeviceId: params['deviceId']?.toString(),
-            outcome: 'success',
-            failureReason: reason,
-          ));
+          unawaited(
+            _recordSecurityEvent(
+              eventType: 'trust.revoked',
+              severity: 'warning',
+              peerDeviceId: params['deviceId']?.toString(),
+              outcome: 'success',
+              failureReason: reason,
+            ),
+          );
         } else if (newState != null && previousState != null) {
-          unawaited(_recordSecurityEvent(
-            eventType: 'trust.transitioned',
-            severity: 'info',
-            peerDeviceId: params['deviceId']?.toString(),
-            outcome: 'success',
-            details: {
-              'previousState': previousState,
-              'newState': newState,
-            },
-          ));
+          unawaited(
+            _recordSecurityEvent(
+              eventType: 'trust.transitioned',
+              severity: 'info',
+              peerDeviceId: params['deviceId']?.toString(),
+              outcome: 'success',
+              details: {'previousState': previousState, 'newState': newState},
+            ),
+          );
         }
         break;
     }
@@ -761,34 +766,72 @@ class RiftDaemon {
     _discoveredPeers.clear();
     for (final rawPeer in rawPeers) {
       final instanceId = rawPeer['instanceId'];
-      final address = rawPeer['address'];
-      final port = rawPeer['port'];
       final minVersion = rawPeer['minVersion'];
       final maxVersion = rawPeer['maxVersion'];
       if (instanceId is! String ||
-          address is! String ||
-          port is! int ||
           minVersion is! String ||
           maxVersion is! String) {
         continue;
       }
 
-      final peer = DiscoveredPeer(
-        instanceId: instanceId,
-        address: address,
-        port: port,
-        minVersion: minVersion,
-        maxVersion: maxVersion,
-        deviceIdHint: rawPeer['deviceIdHint'] as String?,
-        fingerprintPrefix: rawPeer['fingerprintPrefix'] as String?,
-      );
-      trackDiscoveredPeer(peer);
-      final peerId = peer.deviceIdHint;
-      if (peerId != null) {
-        if (!previousPeerIds.contains(peerId)) {
-          addedPeerIds.add(peerId);
+      final deviceIdHint = rawPeer['deviceIdHint'] as String?;
+      final fingerprintPrefix = rawPeer['fingerprintPrefix'] as String?;
+      final observedEndpoints = rawPeer['observedEndpoints'] as List?;
+
+      final expandedPeers = <DiscoveredPeer>[];
+      if (observedEndpoints != null && observedEndpoints.isNotEmpty) {
+        for (var i = 0; i < observedEndpoints.length; i += 1) {
+          final endpoint = observedEndpoints[i];
+          if (endpoint is! Map) continue;
+          final address = endpoint['address'];
+          final port = endpoint['port'];
+          if (address is! String || port is! int) {
+            continue;
+          }
+
+          expandedPeers.add(
+            DiscoveredPeer(
+              instanceId: i == 0 ? instanceId : '$instanceId#$i',
+              address: address,
+              port: port,
+              minVersion: minVersion,
+              maxVersion: maxVersion,
+              deviceIdHint: deviceIdHint,
+              fingerprintPrefix: fingerprintPrefix,
+            ),
+          );
         }
-        refreshedPeerIds.add(peerId);
+      }
+
+      if (expandedPeers.isEmpty) {
+        final address = rawPeer['address'];
+        final port = rawPeer['port'];
+        if (address is! String || port is! int) {
+          continue;
+        }
+
+        expandedPeers.add(
+          DiscoveredPeer(
+            instanceId: instanceId,
+            address: address,
+            port: port,
+            minVersion: minVersion,
+            maxVersion: maxVersion,
+            deviceIdHint: deviceIdHint,
+            fingerprintPrefix: fingerprintPrefix,
+          ),
+        );
+      }
+
+      for (final peer in expandedPeers) {
+        trackDiscoveredPeer(peer);
+        final peerId = peer.deviceIdHint;
+        if (peerId != null) {
+          if (!previousPeerIds.contains(peerId)) {
+            addedPeerIds.add(peerId);
+          }
+          refreshedPeerIds.add(peerId);
+        }
       }
     }
     _isDiscovering = isDiscovering;
@@ -1189,7 +1232,9 @@ class RiftDaemon {
             final deviceId = peer.deviceIdHint;
             if (deviceId == null) return;
 
-            final hadVisiblePeer = daemon._discoveredPeers.containsKey(deviceId);
+            final hadVisiblePeer = daemon._discoveredPeers.containsKey(
+              deviceId,
+            );
             daemon.untrackDiscoveredPeer(peer);
             final stillVisible = daemon._discoveredPeers.containsKey(deviceId);
             if (hadVisiblePeer && !stillVisible) {

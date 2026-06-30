@@ -454,4 +454,45 @@ void main() {
     expect(client.listTrustedPeersCallCount, greaterThan(callsBeforeRefresh));
     expect(find.text('Offline'), findsOneWidget);
   });
+
+  testWidgets(
+      'TrustedDevicesScreen stops presence polling while covered by another route',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-covered',
+        'displayName': 'Covered Peer',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['presence.basic'],
+      }
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final callsBeforeCover = client.listTrustedPeersCallCount;
+
+    Navigator.of(tester.element(find.byType(TrustedDevicesScreen))).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Covered route')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Covered route'), findsOneWidget);
+    expect(client.listTrustedPeersCallCount, equals(callsBeforeCover));
+  });
 }

@@ -31,6 +31,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   Timer? _fullReloadThrottle;
   Timer? _presenceRefreshTimer;
 
+  bool get _isRouteCurrent {
+    final route = ModalRoute.of(context);
+    return route == null || route.isCurrent;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -165,7 +170,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   }
 
   void _syncPresenceRefreshLoop() {
-    final shouldRefresh = mounted && (_trustedPeers.isNotEmpty || _isDiscovering);
+    final shouldRefresh = mounted &&
+        _isRouteCurrent &&
+        (_trustedPeers.isNotEmpty || _isDiscovering);
     if (!shouldRefresh) {
       _presenceRefreshTimer?.cancel();
       _presenceRefreshTimer = null;
@@ -179,11 +186,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
       if (!mounted) return;
       final client = context.read<JsonRpcRiftClient>();
-      if (!client.isConnected || (_trustedPeers.isEmpty && !_isDiscovering)) {
+      if (!_isRouteCurrent ||
+          !client.isConnected ||
+          (_trustedPeers.isEmpty && !_isDiscovering)) {
         _syncPresenceRefreshLoop();
         return;
       }
       _loadData();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncPresenceRefreshLoop();
     });
   }
 

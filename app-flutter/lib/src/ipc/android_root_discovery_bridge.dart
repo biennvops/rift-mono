@@ -9,6 +9,7 @@ class AndroidDiscoveredPeer {
   final String instanceId;
   final String address;
   final int port;
+  final List<({String address, int port})> observedEndpoints;
   final String minVersion;
   final String maxVersion;
   final String? deviceIdHint;
@@ -18,6 +19,7 @@ class AndroidDiscoveredPeer {
     required this.instanceId,
     required this.address,
     required this.port,
+    required this.observedEndpoints,
     required this.minVersion,
     required this.maxVersion,
     this.deviceIdHint,
@@ -30,6 +32,14 @@ class AndroidDiscoveredPeer {
       'address': address,
       'port': port,
       'trustState': 'discovered',
+      'observedEndpoints': observedEndpoints
+          .map(
+            (endpoint) => {
+              'address': endpoint.address,
+              'port': endpoint.port,
+            },
+          )
+          .toList(growable: false),
       'txtRecord': {
         'minV': minVersion,
         'maxV': maxVersion,
@@ -44,6 +54,14 @@ class AndroidDiscoveredPeer {
       'instanceId': instanceId,
       'address': address,
       'port': port,
+      'observedEndpoints': observedEndpoints
+          .map(
+            (endpoint) => {
+              'address': endpoint.address,
+              'port': endpoint.port,
+            },
+          )
+          .toList(growable: false),
       'minVersion': minVersion,
       'maxVersion': maxVersion,
       'deviceIdHint': deviceIdHint,
@@ -140,7 +158,8 @@ class AndroidRootDiscoveryBridge {
         ),
       );
     } catch (e) {
-      debugPrint('[mDNS Error] Failed to register service (advertising disabled): $e');
+      debugPrint(
+          '[mDNS Error] Failed to register service (advertising disabled): $e');
     }
 
     await _ensureFallbackAdvertising();
@@ -198,13 +217,16 @@ class AndroidRootDiscoveryBridge {
     final discovery = _discovery;
     if (discovery == null) return;
 
-    debugPrint('[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
+    debugPrint(
+        '[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
     final mdnsSnapshot = <AndroidDiscoveredPeer>[];
     for (final service in discovery.services) {
-      debugPrint('[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
+      debugPrint(
+          '[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
       final peer = _peerFromService(service);
       if (peer != null) {
-        debugPrint('[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
+        debugPrint(
+            '[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
         if (peer.deviceIdHint != deviceIdHint) {
           if (_shouldSuppressMdnsPeer(peer)) {
             debugPrint(
@@ -218,13 +240,15 @@ class AndroidRootDiscoveryBridge {
           debugPrint('[mDNS Debug] Ignored self peer.');
         }
       } else {
-        debugPrint('[mDNS Debug] Failed to parse peer from service: ${service.name}');
+        debugPrint(
+            '[mDNS Debug] Failed to parse peer from service: ${service.name}');
       }
     }
     _ingestMergedSnapshot(mdnsSnapshot);
   }
 
-  void _ingestMergedSnapshot([Iterable<AndroidDiscoveredPeer> mdnsSnapshot = const []]) {
+  void _ingestMergedSnapshot(
+      [Iterable<AndroidDiscoveredPeer> mdnsSnapshot = const []]) {
     final mergedByInstanceId = <String, AndroidDiscoveredPeer>{
       for (final peer in mdnsSnapshot) peer.instanceId: peer,
       for (final entry in _fallbackPeersByInstanceId.entries)
@@ -249,11 +273,23 @@ class AndroidRootDiscoveryBridge {
 
   AndroidDiscoveredPeer? _peerFromService(nsd.Service service) {
     final instanceId = service.name;
-    final address =
-        (service.addresses != null && service.addresses!.isNotEmpty
-            ? service.addresses!.first.address
-            : service.host);
-    if (instanceId == null || address == null || service.port == null) {
+    final port = service.port;
+    final observedEndpoints = <({String address, int port})>[];
+    final seenAddresses = <String>{};
+
+    for (final candidate in service.addresses ?? const <InternetAddress>[]) {
+      final address = candidate.address;
+      if (seenAddresses.add(address)) {
+        observedEndpoints.add((address: address, port: port ?? 0));
+      }
+    }
+
+    final host = service.host;
+    if (host != null && seenAddresses.add(host)) {
+      observedEndpoints.add((address: host, port: port ?? 0));
+    }
+
+    if (instanceId == null || port == null || observedEndpoints.isEmpty) {
       return null;
     }
 
@@ -267,8 +303,9 @@ class AndroidRootDiscoveryBridge {
 
     return AndroidDiscoveredPeer(
       instanceId: instanceId,
-      address: address,
-      port: service.port!,
+      address: observedEndpoints.first.address,
+      port: port,
+      observedEndpoints: observedEndpoints,
       minVersion: minV,
       maxVersion: maxV,
       deviceIdHint: did,
@@ -368,6 +405,9 @@ class AndroidRootDiscoveryBridge {
         instanceId: instanceId,
         address: datagram.address.address,
         port: port,
+        observedEndpoints: [
+          (address: datagram.address.address, port: port),
+        ],
         minVersion: minVersion,
         maxVersion: maxVersion,
         deviceIdHint: did,
@@ -504,6 +544,14 @@ class AndroidDiscoveryPeerTracker {
   bool _samePeer(AndroidDiscoveredPeer a, AndroidDiscoveredPeer b) {
     return a.address == b.address &&
         a.port == b.port &&
+        listEquals(
+          a.observedEndpoints
+              .map((endpoint) => '${endpoint.address}:${endpoint.port}')
+              .toList(growable: false),
+          b.observedEndpoints
+              .map((endpoint) => '${endpoint.address}:${endpoint.port}')
+              .toList(growable: false),
+        ) &&
         a.minVersion == b.minVersion &&
         a.maxVersion == b.maxVersion &&
         a.deviceIdHint == b.deviceIdHint &&
