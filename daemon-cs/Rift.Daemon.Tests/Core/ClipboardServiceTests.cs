@@ -20,6 +20,7 @@ public sealed class ClipboardServiceTests : IDisposable
     private readonly IdentityManager _identityManager;
     private readonly PresenceService _presenceService;
     private readonly FakeTransport _transport;
+    private readonly FakeIpcNotificationService _ipcNotificationService;
     private readonly ClipboardService _clipboardService;
     private static readonly TimeSpan FetchResponseTimeout = TimeSpan.FromMilliseconds(75);
 
@@ -33,7 +34,8 @@ public sealed class ClipboardServiceTests : IDisposable
         _identityManager = new IdentityManager(new SqliteLocalIdentityStore(_databaseContext));
         _presenceService = new PresenceService();
         _transport = new FakeTransport();
-        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _ipcNotificationService = new FakeIpcNotificationService();
+        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, _ipcNotificationService, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
     }
 
     [Fact]
@@ -64,6 +66,42 @@ public sealed class ClipboardServiceTests : IDisposable
         var offers = await _clipboardService.ListClipboardOffersAsync();
 
         Assert.Contains(offers.Offers, offer => offer.OfferId == "offer-1" && offer.SourceDeviceId == "rift-peer-a");
+    }
+
+    [Fact]
+    public async Task HandleOfferReceivedAsync_EmitsClipboardOfferNotificationWithMetadataOnly()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-notify",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-notify", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-notify",
+            PayloadSourceDeviceId = "rift-peer-notify",
+            OfferId = "offer-notify",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = "hash-notify",
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        var notification = Assert.Single(_ipcNotificationService.Notifications);
+        Assert.Equal("rift.onClipboardOffer", notification.Method);
+        Assert.Equal("offer-notify", notification.Parameters["offerId"]?.ToString());
+        Assert.Equal("rift-peer-notify", notification.Parameters["sourceDeviceId"]?.ToString());
+        Assert.Equal("text/plain", notification.Parameters["contentType"]?.ToString());
+        Assert.Equal("5", notification.Parameters["byteSize"]?.ToString());
+        Assert.Equal("hash-notify", notification.Parameters["sha256"]?.ToString());
+        Assert.Equal("120000", notification.Parameters["expiresInMs"]?.ToString());
+        Assert.DoesNotContain("contentBase64", notification.Parameters.Keys);
     }
 
     [Fact]
@@ -342,6 +380,41 @@ public sealed class ClipboardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListClipboardOffersAsync_PrunesExpiredOfferAndEmitsExpiryNotification()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-expired",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-expired", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-expired",
+            PayloadSourceDeviceId = "rift-peer-expired",
+            OfferId = "offer-expired",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = "hash-expired",
+            ExpiresInMs = -1,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        _ipcNotificationService.Notifications.Clear();
+        var result = await _clipboardService.ListClipboardOffersAsync();
+
+        Assert.Empty(result.Offers);
+        var notification = Assert.Single(_ipcNotificationService.Notifications);
+        Assert.Equal("rift.onClipboardExpired", notification.Method);
+        Assert.Equal("offer-expired", notification.Parameters["offerId"]?.ToString());
+        Assert.DoesNotContain("contentBase64", notification.Parameters.Keys);
+    }
+
+    [Fact]
     public async Task HandleFetchRequestAsync_SendsFetchResponseForLocalOffer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -451,5 +524,31 @@ public sealed class ClipboardServiceTests : IDisposable
 
         public bool HasActiveSession(string peerDeviceId) => false;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class FakeIpcNotificationService : IIpcNotificationService
+    {
+        public List<(string Method, Dictionary<string, object?> Parameters)> Notifications { get; } = [];
+
+        public IDisposable RegisterClient(StreamJsonRpc.JsonRpc jsonRpc) => new NoOpRegistration();
+
+        public Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
+        {
+            var values = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+                JsonSerializer.Serialize(parameters),
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }) ?? [];
+            Notifications.Add((method, values));
+            return Task.CompletedTask;
+        }
+
+        private sealed class NoOpRegistration : IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
     }
 }
