@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:nsd/nsd.dart' as nsd;
 import '../interfaces/discovery_service.dart';
@@ -38,8 +39,10 @@ class DiscoveryServiceImpl implements DiscoveryService {
         txt: {
           'minV': Uint8List.fromList(minVersion.codeUnits),
           'maxV': Uint8List.fromList(maxVersion.codeUnits),
-          if (deviceIdHint != null) 'did': Uint8List.fromList(deviceIdHint!.codeUnits),
-          if (fingerprintPrefix != null) 'fp': Uint8List.fromList(fingerprintPrefix!.codeUnits),
+          if (deviceIdHint != null)
+            'did': Uint8List.fromList(deviceIdHint!.codeUnits),
+          if (fingerprintPrefix != null)
+            'fp': Uint8List.fromList(fingerprintPrefix!.codeUnits),
         },
       ),
     );
@@ -69,25 +72,19 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _discovery!.addListener(() {
       final snapshot = <DiscoveredPeer>[];
       for (final service in _discovery!.services) {
-        final peer = _peerFromNsdService(service);
-        if (peer != null) {
-          snapshot.add(peer);
-        }
+        snapshot.addAll(_peersFromNsdService(service));
       }
       _ingestSnapshot(snapshot);
     });
   }
 
-  DiscoveredPeer? _peerFromNsdService(nsd.Service service) {
+  List<DiscoveredPeer> _peersFromNsdService(nsd.Service service) {
     final instanceId = service.name;
-    final address =
-        service.addresses != null && service.addresses!.isNotEmpty
-            ? service.addresses!.first.address
-            : service.host;
     // Skip services without a name — using a fallback would collapse all
     // null-named peers into one dedup entry and suppress re-discovery.
-    if (instanceId == null || address == null || service.port == null) {
-      return null;
+    final port = service.port;
+    if (instanceId == null || port == null) {
+      return const [];
     }
 
     final txt = service.txt ?? {};
@@ -97,22 +94,51 @@ class DiscoveryServiceImpl implements DiscoveryService {
     final maxV = txt['maxV'] != null
         ? String.fromCharCodes(txt['maxV']!)
         : 'unknown';
-    final did = txt['did'] != null
-        ? String.fromCharCodes(txt['did']!)
-        : null;
-    final fp = txt['fp'] != null
-        ? String.fromCharCodes(txt['fp']!)
-        : null;
+    final did = txt['did'] != null ? String.fromCharCodes(txt['did']!) : null;
+    final fp = txt['fp'] != null ? String.fromCharCodes(txt['fp']!) : null;
 
-    return DiscoveredPeer(
-      instanceId: instanceId,
-      address: address,
-      port: service.port!,
-      minVersion: minV,
-      maxVersion: maxV,
-      deviceIdHint: did,
-      fingerprintPrefix: fp,
-    );
+    final peers = <DiscoveredPeer>[];
+    final seenAddresses = <String>{};
+
+    for (final candidate in service.addresses ?? const <InternetAddress>[]) {
+      final address = candidate.address;
+      if (!seenAddresses.add(address)) {
+        continue;
+      }
+
+      peers.add(
+        DiscoveredPeer(
+          instanceId: peers.isEmpty
+              ? instanceId
+              : '$instanceId#${peers.length}',
+          address: address,
+          port: port,
+          minVersion: minV,
+          maxVersion: maxV,
+          deviceIdHint: did,
+          fingerprintPrefix: fp,
+        ),
+      );
+    }
+
+    final host = service.host;
+    if (host != null && seenAddresses.add(host)) {
+      peers.add(
+        DiscoveredPeer(
+          instanceId: peers.isEmpty
+              ? instanceId
+              : '$instanceId#${peers.length}',
+          address: host,
+          port: port,
+          minVersion: minV,
+          maxVersion: maxV,
+          deviceIdHint: did,
+          fingerprintPrefix: fp,
+        ),
+      );
+    }
+
+    return peers;
   }
 
   // Shared dedup/eviction path for the real nsd listener. Integration tests
