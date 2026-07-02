@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
@@ -45,6 +49,36 @@ class _RiftAppState extends State<RiftApp> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
+      _bindClipboardChannel();
+    });
+  }
+
+  static const _clipboardChannel = MethodChannel('com.biennvops.rift/clipboard');
+
+  void _bindClipboardChannel() {
+    // The native clipboard channel only exists on Android.
+    if (!Platform.isAndroid) return;
+    final client = context.read<JsonRpcRiftClient>();
+    _clipboardChannel.invokeMethod('startService');
+    _clipboardChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onClipboardChanged') {
+        final text = call.arguments['text'] as String?;
+        if (text != null) {
+          final bytes = utf8.encode(text);
+          final hash = sha256.convert(bytes).toString();
+          final contentBase64 = base64.encode(bytes);
+          try {
+             await client.notifyClipboardChange(
+               contentType: 'text/plain',
+               byteSize: bytes.length,
+               sha256: hash,
+               contentBase64: contentBase64,
+             );
+          } catch (e) {
+             debugPrint('Failed to notify daemon: $e');
+          }
+        }
+      }
     });
   }
 
