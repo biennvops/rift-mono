@@ -30,6 +30,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamSubscription? _discoveryAddedSub;
   StreamSubscription? _discoveryLostSub;
   int _nextSyntheticId = 1000000;
+  String? _daemonDeviceId;
+  int? _daemonAdvertisedPort;
+  String? _daemonFingerprintPrefix;
 
   @override
   Future<StreamChannel<String>> connect() async {
@@ -104,13 +107,24 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
           if (params is Map && params['rpcPort'] is SendPort) {
             final port = params['rpcPort'] as SendPort;
             _rpcPort = port;
+            final deviceId = params['deviceId'];
+            final advertisedPort = params['advertisedPort'];
+            _daemonDeviceId = deviceId is String ? deviceId : null;
+            _daemonAdvertisedPort = advertisedPort is int ? advertisedPort : null;
+            _daemonFingerprintPrefix =
+                params['fingerprintPrefix'] is String
+                    ? params['fingerprintPrefix'] as String
+                    : null;
             if (!ready.isCompleted) ready.complete(port);
-            _bootstrapRootDiscovery(params)
-                .catchError((Object error, StackTrace stackTrace) {
+            unawaited(() async {
+              try {
+                await _ensureDiscoveryBridge();
+              } catch (error) {
               final err =
                   StateError('Android discovery bootstrap failed: $error');
               _incoming?.addError(err);
-            });
+              }
+            }());
           }
           return;
         }
@@ -160,23 +174,11 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     return StreamChannel<String>(_incoming!.stream, _outgoing!.sink);
   }
 
-  Future<void> _bootstrapRootDiscovery(Map params) async {
-    if (_rpcPort == null || _discoveryBridge != null) return;
-
-    final deviceId = params['deviceId'];
-    final advertisedPort = params['advertisedPort'];
-    final fingerprintPrefix = params['fingerprintPrefix'];
-    if (deviceId is! String || advertisedPort is! int) {
-      return;
-    }
-
-    final bridge = AndroidRootDiscoveryBridge(
-      port: advertisedPort,
-      deviceIdHint: deviceId,
-      fingerprintPrefix: fingerprintPrefix as String?,
-    );
-    await bridge.ensureAdvertising();
+  Future<void> _attachDiscoveryBridge(AndroidRootDiscoveryBridge bridge) async {
     _discoveryBridge = bridge;
+
+    await _discoveryAddedSub?.cancel();
+    await _discoveryLostSub?.cancel();
 
     _discoveryAddedSub = bridge.onPeerDiscovered.listen((peer) {
       _incoming?.add(jsonEncode({
@@ -200,6 +202,49 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _syncDiscoverySnapshotToDaemon();
   }
 
+  Future<void> _bootstrapRootDiscovery() async {
+    if (_rpcPort == null || _discoveryBridge != null) return;
+
+    final deviceId = _daemonDeviceId;
+    final advertisedPort = _daemonAdvertisedPort;
+    if (deviceId == null || advertisedPort == null) {
+      throw StateError(
+        'Android discovery metadata is incomplete. Wait for daemon startup to finish, then try again.',
+      );
+    }
+
+    final bridge = AndroidRootDiscoveryBridge(
+      port: advertisedPort,
+      deviceIdHint: deviceId,
+      fingerprintPrefix: _daemonFingerprintPrefix,
+    );
+    await bridge.ensureAdvertising();
+    await _attachDiscoveryBridge(bridge);
+  }
+
+  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {
+    final existing = _discoveryBridge;
+    if (existing != null) {
+      return existing;
+    }
+
+    if (_daemonDeviceId == null || _daemonAdvertisedPort == null) {
+      throw StateError(
+        'Android discovery is not ready yet. Wait a moment for the daemon to finish startup, then try again.',
+      );
+    }
+
+    await _bootstrapRootDiscovery();
+    final bridge = _discoveryBridge;
+    if (bridge == null) {
+      throw StateError(
+        'Android discovery bridge failed to initialize. Restart the app and try discovery again.',
+      );
+    }
+
+    return bridge;
+  }
+
   bool _interceptDiscoveryRpc(Map<String, dynamic> decoded) {
     final method = decoded['method'];
     final id = decoded['id'];
@@ -218,7 +263,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         _handleSyntheticDiscoveryRequest(
           id: id,
           action: () async {
-            final bridge = _requireDiscoveryBridge();
+            final bridge = await _ensureDiscoveryBridge();
             await bridge.startDiscovery();
             _syncDiscoverySnapshotToDaemon();
             return {'started': true};
@@ -229,7 +274,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         _handleSyntheticDiscoveryRequest(
           id: id,
           action: () async {
-            final bridge = _requireDiscoveryBridge();
+            final bridge = await _ensureDiscoveryBridge();
             await bridge.stopDiscovery();
             _syncDiscoverySnapshotToDaemon();
             return {'stopped': true};
@@ -239,14 +284,6 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       default:
         return false;
     }
-  }
-
-  AndroidRootDiscoveryBridge _requireDiscoveryBridge() {
-    final bridge = _discoveryBridge;
-    if (bridge == null) {
-      throw StateError('Android root discovery bridge is not initialized');
-    }
-    return bridge;
   }
 
   void _handleSyntheticDiscoveryRequest({
@@ -322,6 +359,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _exitPort = null;
 
     _rpcPort = null;
+    _daemonDeviceId = null;
+    _daemonAdvertisedPort = null;
+    _daemonFingerprintPrefix = null;
 
     _daemonIsolate?.kill(priority: Isolate.immediate);
     _daemonIsolate = null;

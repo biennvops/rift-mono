@@ -11,6 +11,9 @@ void main() {
       instanceId: 'a',
       address: '192.168.1.10',
       port: 11112,
+      observedEndpoints: const [
+        (address: '192.168.1.10', port: 11112),
+      ],
       minVersion: '0.1-draft',
       maxVersion: '0.1-draft',
       deviceIdHint: 'rift-a',
@@ -20,6 +23,9 @@ void main() {
       instanceId: 'b',
       address: '192.168.1.11',
       port: 11112,
+      observedEndpoints: const [
+        (address: '192.168.1.11', port: 11112),
+      ],
       minVersion: '0.1-draft',
       maxVersion: '0.1-draft',
       deviceIdHint: null,
@@ -39,6 +45,10 @@ void main() {
       instanceId: 'inst',
       address: '192.168.1.10',
       port: 9140,
+      observedEndpoints: const [
+        (address: '192.168.1.10', port: 9140),
+        (address: 'fe80::1234', port: 9140),
+      ],
       minVersion: '0.1-draft',
       maxVersion: '0.1-draft',
       deviceIdHint: 'rift-peer',
@@ -50,8 +60,11 @@ void main() {
     expect(map['address'], '192.168.1.10');
     expect(map['port'], 9140);
     expect(map['trustState'], 'discovered');
+    expect(map['observedEndpoints'], [
+      {'address': '192.168.1.10', 'port': 9140},
+      {'address': 'fe80::1234', 'port': 9140},
+    ]);
     expect(map['txtRecord']['did'], 'rift-peer');
     expect(map['txtRecord']['fp'], 'FPFPFPFP');
   });
 }
-

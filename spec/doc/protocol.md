@@ -92,6 +92,18 @@ On receipt, an implementation MUST reject the session if the extension is absent
 
 Rift uses mDNS-SD for local peer discovery and advertisement. Discovery exists only to find candidate peers and connection endpoints. Discovery data is unauthenticated and MUST be treated as provisional.
 
+The v0.1-draft profile is explicitly designed for local-network operation. Two
+peers on the same reachable LAN segment MUST be able to discover, pair, and
+exchange authenticated peer traffic even when the LAN has no upstream internet
+connectivity. Internet reachability by itself is neither required nor
+authoritative for peer availability.
+
+Conversely, internet-only reachability without local peer reachability is out of
+scope for this profile. Relay transport, NAT traversal, cloud rendezvous, or
+other internet-routed peer-connectivity extensions MAY be specified in a future
+profile, but implementations conforming to v0.1-draft MUST NOT assume those
+mechanisms exist.
+
 Discovery records MUST expose only minimal non-sensitive metadata needed to initiate a connection, such as service type, `minVersion`, `maxVersion`, transport endpoint, and a non-authoritative instance identifier. Discovery records MUST NOT expose trusted device names, icons, clipboard metadata, capability grants, or security state.
 
 Discovery version fields are hints only. The first encrypted peer message performs authoritative version negotiation.

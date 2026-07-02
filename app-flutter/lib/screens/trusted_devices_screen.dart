@@ -13,10 +13,15 @@ class TrustedDevicesScreen extends StatefulWidget {
 }
 
 class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
+  static const Duration _presenceRefreshInterval = Duration(seconds: 5);
+
+  String? _localDeviceId;
   bool _isDiscovering = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
   String? _error;
+  bool _isLoadingData = false;
+  bool _reloadQueued = false;
 
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
@@ -24,6 +29,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   StreamSubscription? _pairingCompleteSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
+  Timer? _presenceRefreshTimer;
+
+  bool get _isRouteCurrent {
+    final route = ModalRoute.of(context);
+    return route == null || route.isCurrent;
+  }
 
   @override
   void initState() {
@@ -39,6 +50,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   void dispose() {
     _reloadDebounce?.cancel();
     _fullReloadThrottle?.cancel();
+    _presenceRefreshTimer?.cancel();
     _discoverySub?.cancel();
     _peerLostSub?.cancel();
     _trustSub?.cancel();
@@ -77,6 +89,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final deviceId = event['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
     if (!mounted) return;
+    if (_isSelfDevice(deviceId)) return;
     if (_isPeerAlreadyManaged(deviceId)) return;
 
     setState(() {
@@ -156,36 +169,84 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _scheduleFullReloadThrottled();
   }
 
+  void _syncPresenceRefreshLoop() {
+    final shouldRefresh = mounted &&
+        _isRouteCurrent &&
+        (_trustedPeers.isNotEmpty || _isDiscovering);
+    if (!shouldRefresh) {
+      _presenceRefreshTimer?.cancel();
+      _presenceRefreshTimer = null;
+      return;
+    }
+
+    if (_presenceRefreshTimer != null) {
+      return;
+    }
+
+    _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
+      if (!mounted) return;
+      final client = context.read<JsonRpcRiftClient>();
+      if (!_isRouteCurrent ||
+          !client.isConnected ||
+          (_trustedPeers.isEmpty && !_isDiscovering)) {
+        _syncPresenceRefreshLoop();
+        return;
+      }
+      _loadData();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncPresenceRefreshLoop();
+    });
+  }
+
   Future<void> _loadData() async {
     if (!mounted) return;
-    final client = context.read<JsonRpcRiftClient>();
-
-    // Default empty lists if not connected
-    if (!client.isConnected) {
-      setState(() {
-        _trustedPeers = [];
-        _discoveredPeers = [];
-        _isDiscovering = false;
-        _error = 'Daemon not connected';
-      });
+    if (_isLoadingData) {
+      _reloadQueued = true;
       return;
     }
 
     try {
+      final client = context.read<JsonRpcRiftClient>();
+      _isLoadingData = true;
+
+      // Default empty lists if not connected
+      if (!client.isConnected) {
+        setState(() {
+          _trustedPeers = [];
+          _discoveredPeers = [];
+          _isDiscovering = false;
+          _error = 'Daemon not connected';
+        });
+        _syncPresenceRefreshLoop();
+        return;
+      }
+
+      final deviceInfo = await client.getDeviceInfo() as Map;
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
-      final trustedPeers = List<dynamic>.from(trustedResult['peers'] ?? const []);
+      final localDeviceId = deviceInfo['deviceId']?.toString();
+      final trustedPeers =
+          List<dynamic>.from(trustedResult['peers'] ?? const []);
       final discoveredPeers = _filterDiscoverablePeers(
         trustedPeers: trustedPeers,
         discoveredPeers: List<dynamic>.from(
           discoveredResult['peers'] ?? const [],
         ),
       );
+      final isDiscovering = discoveredResult['isDiscovering'] == true;
       if (mounted) {
         setState(() {
+          _localDeviceId = localDeviceId;
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
-          _isDiscovering = discoveredResult['isDiscovering'] == true;
+          _isDiscovering = isDiscovering;
           _error = null;
         });
       }
@@ -195,6 +256,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           _error = JsonRpcRiftClient.formatDisplayError(e);
         });
       }
+    } finally {
+      _syncPresenceRefreshLoop();
+      _isLoadingData = false;
+      if (_reloadQueued) {
+        _reloadQueued = false;
+        _scheduleReload();
+      }
     }
   }
 
@@ -202,6 +270,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     return _trustedPeers.any(
       (peer) => peer is Map && peer['deviceId']?.toString() == deviceId,
     );
+  }
+
+  bool _isSelfDevice(String deviceId) {
+    final localDeviceId = _localDeviceId;
+    return localDeviceId != null &&
+        localDeviceId.isNotEmpty &&
+        deviceId == localDeviceId;
   }
 
   List<dynamic> _filterDiscoverablePeers({
@@ -226,6 +301,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (peer is! Map) return false;
       final deviceId = peer['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return false;
+      if (_isSelfDevice(deviceId)) return false;
       if (trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
@@ -240,10 +316,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final client = context.read<JsonRpcRiftClient>();
     if (!client.isConnected) return;
     try {
+      final nextDiscovering = !_isDiscovering;
       if (_isDiscovering) {
         await client.stopDiscovery();
       } else {
         await client.startDiscovery();
+      }
+      if (mounted) {
+        setState(() {
+          _isDiscovering = nextDiscovering;
+          _error = null;
+        });
       }
       await _loadData();
     } catch (e) {
@@ -403,14 +486,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                   ),
               ],
             ),
-            const SizedBox(height: 4),
-            if (isTrusted)
-              if (peer['capabilities'] is List &&
-                  (peer['capabilities'] as List).isNotEmpty)
-                Text(
-                  'Capabilities: ${(peer['capabilities'] as List).join(', ')}',
-                  style: theme.textTheme.bodySmall,
-                ),
+            const SizedBox(height: 8),
+            if (isTrusted &&
+                peer['capabilities'] is List &&
+                (peer['capabilities'] as List).isNotEmpty)
+              _buildCapabilityBadges(peer['capabilities'] as List),
             if (!isTrusted && peer['address'] != null)
               Text('Address: ${peer['address']}:${peer['port']}',
                   style: theme.textTheme.bodySmall),
@@ -440,6 +520,61 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     );
   }
 
+  Widget _buildCapabilityBadges(List<dynamic> capabilities) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: capabilities.map((c) {
+        final cap = c.toString();
+        IconData icon = Icons.extension;
+        String label = cap;
+        if (cap.startsWith('clipboard.')) {
+          icon = Icons.content_copy;
+          label = 'Clipboard';
+        } else if (cap.startsWith('presence.')) {
+          icon = Icons.sensors;
+          label = 'Presence';
+        } else if (cap.startsWith('operation.')) {
+          icon = Icons.settings_remote;
+          label = 'Operations';
+        } else if (cap.startsWith('security.')) {
+          icon = Icons.security;
+          label = 'Security';
+        }
+
+        return Tooltip(
+          message: cap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon,
+                    size: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 10,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Future<void> _handlePeerAction({
     required Map<String, dynamic> peer,
     required bool isTrusted,
@@ -449,9 +584,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final client = context.read<JsonRpcRiftClient>();
     final deviceId = peer['deviceId']?.toString();
     if (deviceId == null) return;
+    if (_isSelfDevice(deviceId)) {
+      return;
+    }
 
     try {
       if (!isTrusted) {
+        assert(
+          !_isSelfDevice(deviceId),
+          'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
+        );
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => PairingScreen(

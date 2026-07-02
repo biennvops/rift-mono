@@ -2,10 +2,12 @@ import '../interfaces/discovery_service.dart';
 
 class DiscoverySnapshotDelta {
   final List<DiscoveredPeer> added;
+  final List<DiscoveredPeer> updated;
   final List<DiscoveredPeer> removed;
 
   const DiscoverySnapshotDelta({
     required this.added,
+    required this.updated,
     required this.removed,
   });
 }
@@ -26,16 +28,38 @@ class DiscoveryPeerTracker {
     }
 
     final added = <DiscoveredPeer>[];
+    final updated = <DiscoveredPeer>[];
     for (final peer in snapshot) {
-      if (_seenPeers.containsKey(peer.instanceId)) continue;
-      _seenPeers[peer.instanceId] = peer;
-      added.add(peer);
+      final existing = _seenPeers[peer.instanceId];
+      if (existing == null) {
+        _seenPeers[peer.instanceId] = peer;
+        added.add(peer);
+        continue;
+      }
+
+      if (!_samePeer(existing, peer)) {
+        _seenPeers[peer.instanceId] = peer;
+        updated.add(peer);
+      }
     }
 
-    return DiscoverySnapshotDelta(added: added, removed: removed);
+    return DiscoverySnapshotDelta(
+      added: added,
+      updated: updated,
+      removed: removed,
+    );
   }
 
   void clear() {
     _seenPeers.clear();
+  }
+
+  bool _samePeer(DiscoveredPeer a, DiscoveredPeer b) {
+    return a.address == b.address &&
+        a.port == b.port &&
+        a.minVersion == b.minVersion &&
+        a.maxVersion == b.maxVersion &&
+        a.deviceIdHint == b.deviceIdHint &&
+        a.fingerprintPrefix == b.fingerprintPrefix;
   }
 }
