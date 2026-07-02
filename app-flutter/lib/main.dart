@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'package:window_manager/window_manager.dart';
+import 'package:tray_manager/tray_manager.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
@@ -10,9 +13,26 @@ import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
+import 'src/clipboard_manager.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    await windowManager.ensureInitialized();
+    WindowOptions windowOptions = const WindowOptions(
+      size: Size(800, 600),
+      center: true,
+      skipTaskbar: false,
+      titleBarStyle: TitleBarStyle.normal,
+    );
+    await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.show();
+      await windowManager.focus();
+      // override close button
+      await windowManager.setPreventClose(true);
+    });
+  }
 
   final client = JsonRpcRiftClient(TransportFactory.create());
   // Start the connection immediately in the background
@@ -20,9 +40,14 @@ void main() {
     debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
   });
 
+  final clipboardManager = ClipboardManager(client);
+
   runApp(
-    Provider<JsonRpcRiftClient>.value(
-      value: client,
+    MultiProvider(
+      providers: [
+        Provider<JsonRpcRiftClient>.value(value: client),
+        Provider<ClipboardManager>.value(value: clipboardManager),
+      ],
       child: const RiftApp(),
     ),
   );
@@ -35,23 +60,94 @@ class RiftApp extends StatefulWidget {
   State<RiftApp> createState() => _RiftAppState();
 }
 
-class _RiftAppState extends State<RiftApp> {
+class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
+  StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
 
   @override
   void initState() {
     super.initState();
+    trayManager.addListener(this);
+    windowManager.addListener(this);
+    _initSystemTray();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
+      _bindClipboardStatus();
     });
+  }
+
+  void _bindClipboardStatus() {
+    final clipboardManager = context.read<ClipboardManager>();
+    _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
+      if (!mounted) return;
+      _scaffoldMessengerKey.currentState?.clearSnackBars();
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(status),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    });
+  }
+
+  Future<void> _initSystemTray() async {
+    try {
+      await trayManager.setIcon(
+        Platform.isWindows ? 'app_icon.ico' : 'app_icon.png',
+      );
+    } catch (e) {
+      debugPrint('Failed to load tray icon: $e');
+    }
+    Menu menu = Menu(
+      items: [
+        MenuItem(
+          key: 'show_window',
+          label: 'Show Rift',
+        ),
+        MenuItem.separator(),
+        MenuItem(
+          key: 'exit_app',
+          label: 'Exit',
+        ),
+      ],
+    );
+    await trayManager.setContextMenu(menu);
   }
 
   @override
   void dispose() {
+    trayManager.removeListener(this);
+    windowManager.removeListener(this);
     _pairingRequestSub?.cancel();
+    _clipboardStatusSub?.cancel();
     super.dispose();
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
+
+  @override
+  void onTrayMenuItemClick(MenuItem menuItem) {
+    if (menuItem.key == 'show_window') {
+      windowManager.show();
+      windowManager.focus();
+    } else if (menuItem.key == 'exit_app') {
+      windowManager.destroy();
+    }
+  }
+
+  @override
+  void onWindowClose() async {
+    bool isPreventClose = await windowManager.isPreventClose();
+    if (isPreventClose) {
+      windowManager.hide();
+    }
   }
 
   void _bindPairingRequests() {
@@ -97,6 +193,7 @@ class _RiftAppState extends State<RiftApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _navigatorKey,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
       theme: ThemeData(useMaterial3: true),

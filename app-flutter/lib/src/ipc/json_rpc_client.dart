@@ -533,4 +533,35 @@ class JsonRpcRiftClient {
         .sendRequest('rift.resetRevokedPeer', {'deviceId': deviceId});
     return _canonicalizeResult(r);
   }
+
+  Future<dynamic> notifyClipboardChange(String contentType, int byteSize, String sha256, String contentBase64) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.notifyClipboardChange', {
+      'contentType': contentType,
+      'byteSize': byteSize,
+      'sha256': sha256,
+      'contentBase64': contentBase64,
+    });
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> listClipboardOffers() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.listClipboardOffers');
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> fetchClipboardContent(String offerId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.fetchClipboardContent', {
+      'offerId': offerId,
+    });
+    return _canonicalizeResult(r);
+  }
 }
