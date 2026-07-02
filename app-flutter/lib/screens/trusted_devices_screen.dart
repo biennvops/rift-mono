@@ -212,27 +212,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       return;
     }
 
-    _isLoadingData = true;
-    final client = context.read<JsonRpcRiftClient>();
-
-    // Default empty lists if not connected
-    if (!client.isConnected) {
-      setState(() {
-        _trustedPeers = [];
-        _discoveredPeers = [];
-        _isDiscovering = false;
-        _error = 'Daemon not connected';
-      });
-      _syncPresenceRefreshLoop();
-      _isLoadingData = false;
-      if (_reloadQueued) {
-        _reloadQueued = false;
-        _scheduleReload();
-      }
-      return;
-    }
-
     try {
+      final client = context.read<JsonRpcRiftClient>();
+      _isLoadingData = true;
+
+      // Default empty lists if not connected
+      if (!client.isConnected) {
+        setState(() {
+          _trustedPeers = [];
+          _discoveredPeers = [];
+          _isDiscovering = false;
+          _error = 'Daemon not connected';
+        });
+        _syncPresenceRefreshLoop();
+        return;
+      }
+
       final deviceInfo = await client.getDeviceInfo() as Map;
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();

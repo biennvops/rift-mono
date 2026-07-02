@@ -164,9 +164,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             {
                 EnableBroadcast = true
             };
+            var instanceId = _profile?.InstanceName.ToString() ?? Guid.NewGuid().ToString("N");
             _fallbackAdvertiser = client;
             _fallbackAdvertiserTask = Task.Run(
-                () => RunFallbackAdvertiserAsync(client, deviceId, minVersion, maxVersion, _shutdownCts.Token),
+                () => RunFallbackAdvertiserAsync(client, deviceId, instanceId, minVersion, maxVersion, _shutdownCts.Token),
                 _shutdownCts.Token);
         }
         catch (Exception ex)
@@ -184,6 +185,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
         _fallbackAdvertiser.Dispose();
         _fallbackAdvertiser = null;
+        _fallbackAdvertiserTask = null;
     }
 
     private void StartFallbackDiscoveryIfNeeded()
@@ -219,6 +221,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
         _fallbackDiscoveryListener.Dispose();
         _fallbackDiscoveryListener = null;
+        _fallbackDiscoveryTask = null;
     }
 
     private void OnServiceInstanceDiscovered(object? sender, ServiceInstanceDiscoveryEventArgs e)
@@ -246,6 +249,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private async Task RunFallbackAdvertiserAsync(
         UdpClient client,
         string deviceId,
+        string instanceId,
         string minVersion,
         string maxVersion,
         CancellationToken cancellationToken)
@@ -259,7 +263,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 {
                     ["rift"] = "0.1-draft",
                     ["kind"] = "fallback-discovery",
-                    ["instanceId"] = _profile?.InstanceName.ToString() ?? Guid.NewGuid().ToString("N"),
+                    ["instanceId"] = instanceId,
                     ["port"] = RiftNetworkDefaults.DefaultPort,
                     ["minV"] = minVersion,
                     ["maxV"] = maxVersion,
