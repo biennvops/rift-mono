@@ -162,11 +162,15 @@ daemon-dart/
     - oversized offer rejection
     - fetch-response hash validation
     - rejection of fetches against non-local offers
+    - malformed and size-mismatched fetch responses
   - Added Android client groundwork in `app-flutter`:
     - `ClipboardForegroundService`
     - Android `MethodChannel` bridge (`com.biennvops.rift/clipboard`)
     - typed clipboard methods/streams in `JsonRpcRiftClient`
-  - **Assessment:** Week 7 clipboard groundwork is implementation-ready at the daemon/API layer. Remaining closure items are manual E2E evidence and a full Flutter clipboard-offer UI flow.
+  - **Verification update (2026-07-03):**
+    - `dart analyze` -> `No issues found!`
+    - `dart test` -> `00:06 +120: All tests passed!`
+  - **Assessment:** Week 7 clipboard groundwork is implementation-ready at the daemon/API layer and currently clean under local analyze/test verification. Remaining closure items are manual E2E evidence and a full Flutter clipboard-offer UI flow.
 
 ---
 
@@ -215,7 +219,7 @@ The implementation is clearly derived from the two core specifications, but it s
 - `dart test` currently passes with 92 tests.
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
-  `dart test` -> `00:03 +92: All tests passed!`
+  `dart test` -> `00:06 +120: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` now provides a minimal standalone Unix-socket runner for
   local Linux IPC smoke tests. It is useful for desktop verification, but it is

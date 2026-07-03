@@ -52,6 +52,8 @@ class MainActivity: FlutterActivity() {
     }
 
     override fun onDestroy() {
+        val serviceIntent = Intent(this, ClipboardForegroundService::class.java)
+        stopService(serviceIntent)
         unregisterReceiver(clipboardReceiver)
         super.onDestroy()
     }

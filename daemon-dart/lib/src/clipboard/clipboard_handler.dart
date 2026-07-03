@@ -69,6 +69,24 @@ class ClipboardProtocolHandler {
           RiftLog.warn('[Clipboard] Unknown clipboard message type: $type');
       }
     } catch (e, st) {
+      if (type == 'clipboard.fetchResponse') {
+        RiftLog.error(
+          '[Clipboard] Malformed fetchResponse',
+          error: e,
+          stackTrace: st,
+        );
+        final offerId = payload['offerId'];
+        if (offerId is String && offerId.isNotEmpty) {
+          _fetchRejectController.add(
+            ClipboardFetchReject(
+              offerId: offerId,
+              failureReason: 'HashMismatch',
+              message: 'Malformed fetchResponse payload',
+            ),
+          );
+          return;
+        }
+      }
       RiftLog.error('[Clipboard] Error handling $type', error: e, stackTrace: st);
     }
   }
@@ -145,7 +163,12 @@ class ClipboardProtocolHandler {
 
     // Verify hash matches what we offered
     if (hash != offer.sha256) {
-       await _sendFetchReject(peerDeviceId, req.offerId, 'InternalError', 'Local content hash mismatch');
+       await _sendFetchReject(
+         peerDeviceId,
+         req.offerId,
+         'HashMismatch',
+         'Local content hash mismatch',
+       );
        return;
     }
 
@@ -168,17 +191,58 @@ class ClipboardProtocolHandler {
 
   Future<void> _handleFetchResponse(String peerDeviceId, Map<String, dynamic> payload) async {
     final resp = ClipboardFetchResponse.fromJson(payload);
-    
-    if (resp.byteSize > 32 * 1024 * 1024) {
-      RiftLog.error('[Clipboard] Payload too large in fetchResponse');
+    late final List<int> bytes;
+    try {
+      bytes = base64.decode(resp.contentBase64);
+    } on FormatException {
+      RiftLog.error('[Clipboard] Malformed base64 in fetchResponse');
+      _fetchRejectController.add(
+        ClipboardFetchReject(
+          offerId: resp.offerId,
+          failureReason: 'HashMismatch',
+          message: 'Malformed base64 payload',
+        ),
+      );
       return;
     }
 
-    final bytes = base64.decode(resp.contentBase64);
+    if (bytes.length > 32 * 1024 * 1024) {
+      RiftLog.error('[Clipboard] Payload too large in fetchResponse');
+      _fetchRejectController.add(
+        ClipboardFetchReject(
+          offerId: resp.offerId,
+          failureReason: 'HashMismatch',
+          message: 'Decoded payload exceeds maximum size',
+        ),
+      );
+      return;
+    }
+
+    if (bytes.length != resp.byteSize) {
+      RiftLog.error(
+        '[Clipboard] byteSize mismatch in fetchResponse: declared ${resp.byteSize}, actual ${bytes.length}',
+      );
+      _fetchRejectController.add(
+        ClipboardFetchReject(
+          offerId: resp.offerId,
+          failureReason: 'HashMismatch',
+          message: 'byteSize mismatch in fetchResponse',
+        ),
+      );
+      return;
+    }
+
     final hash = sha256.convert(bytes).toString();
     if (hash != resp.sha256) {
       RiftLog.error('[Clipboard] Hash mismatch in fetchResponse: expected ${resp.sha256}, got $hash');
-      return; 
+      _fetchRejectController.add(
+        ClipboardFetchReject(
+          offerId: resp.offerId,
+          failureReason: 'HashMismatch',
+          message: 'Hash mismatch in fetchResponse',
+        ),
+      );
+      return;
     }
 
     _fetchResponseController.add(resp);

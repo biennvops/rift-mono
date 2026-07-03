@@ -162,7 +162,9 @@ void main() {
       final bytes = utf8.encode(content);
 
       ClipboardFetchResponse? receivedResponse;
+      ClipboardFetchReject? receivedReject;
       handler.onFetchResponse.listen((r) => receivedResponse = r);
+      handler.onFetchReject.listen((r) => receivedReject = r);
 
       final msg = ProtocolMessage('peerA', null, {
         'type': 'clipboard.fetchResponse',
@@ -178,6 +180,8 @@ void main() {
       await Future.delayed(Duration(milliseconds: 50));
 
       expect(receivedResponse, isNull);
+      expect(receivedReject, isNotNull);
+      expect(receivedReject!.failureReason, 'HashMismatch');
     });
     test('Incoming offer with byteSize > 32MiB is dropped', () async {
       final msg = ProtocolMessage('peerA', null, {
@@ -202,7 +206,9 @@ void main() {
 
     test('Incoming fetchResponse with byteSize > 32MiB is dropped', () async {
       ClipboardFetchResponse? receivedResponse;
+      ClipboardFetchReject? receivedReject;
       handler.onFetchResponse.listen((r) => receivedResponse = r);
+      handler.onFetchReject.listen((r) => receivedReject = r);
 
       final msg = ProtocolMessage('peerA', null, {
         'type': 'clipboard.fetchResponse',
@@ -218,6 +224,59 @@ void main() {
       await Future.delayed(Duration(milliseconds: 50));
 
       expect(receivedResponse, isNull);
+      expect(receivedReject, isNotNull);
+      expect(receivedReject!.failureReason, 'HashMismatch');
+    });
+
+    test('Incoming fetchResponse with mismatched declared byteSize is rejected', () async {
+      final bytes = utf8.encode('hello');
+      final hash = sha256.convert(bytes).toString();
+      ClipboardFetchResponse? receivedResponse;
+      ClipboardFetchReject? receivedReject;
+      handler.onFetchResponse.listen((r) => receivedResponse = r);
+      handler.onFetchReject.listen((r) => receivedReject = r);
+
+      final msg = ProtocolMessage('peerA', null, {
+        'type': 'clipboard.fetchResponse',
+        'payload': {
+          'offerId': 'size-mismatch',
+          'contentBase64': base64.encode(bytes),
+          'byteSize': 1,
+          'sha256': hash,
+        }
+      });
+      sessionManager.injectMessage(msg);
+
+      await Future.delayed(Duration(milliseconds: 50));
+
+      expect(receivedResponse, isNull);
+      expect(receivedReject, isNotNull);
+      expect(receivedReject!.failureReason, 'HashMismatch');
+    });
+
+    test('Malformed fetchResponse emits fast reject instead of timing out', () async {
+      ClipboardFetchResponse? receivedResponse;
+      ClipboardFetchReject? receivedReject;
+      handler.onFetchResponse.listen((r) => receivedResponse = r);
+      handler.onFetchReject.listen((r) => receivedReject = r);
+
+      final msg = ProtocolMessage('peerA', null, {
+        'type': 'clipboard.fetchResponse',
+        'payload': {
+          'offerId': 'malformed-offer',
+          'contentBase64': 123,
+          'byteSize': 5,
+          'sha256': 'abc',
+        }
+      });
+      sessionManager.injectMessage(msg);
+
+      await Future.delayed(Duration(milliseconds: 50));
+
+      expect(receivedResponse, isNull);
+      expect(receivedReject, isNotNull);
+      expect(receivedReject!.offerId, 'malformed-offer');
+      expect(receivedReject!.failureReason, 'HashMismatch');
     });
 
     test('FetchRequest for non-local offer returns OfferExpired reject', () async {

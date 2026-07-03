@@ -49,6 +49,7 @@ app-flutter/
 │   ├── screens/                          # Presentation Layer
 │   │   ├── event_log_screen.dart
 │   │   ├── pairing_screen.dart
+│   │   ├── clipboard_debug_screen.dart   # Temporary Week 7 evidence/debug panel
 │   │   ├── settings_screen.dart          # Settings and device-info UI
 │   │   └── trusted_devices_screen.dart
 │   └── src/                              # Core Domain Logic

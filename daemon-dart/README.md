@@ -77,7 +77,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:03 +92: All tests passed!`
+- `dart test` -> `00:06 +120: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository now contains a minimal standalone entrypoint at `bin/daemon.dart`

@@ -25,6 +25,18 @@ import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
+const int _clipboardFetchTimeoutSeconds = 15;
+
+class _ClipboardFetchWaiter {
+  final Future<ClipboardFetchResponse> future;
+  final Future<void> Function() cancel;
+
+  const _ClipboardFetchWaiter({
+    required this.future,
+    required this.cancel,
+  });
+}
+
 class _DiscoveredPeerRecord {
   final String deviceId;
   final Map<String, DiscoveredPeer> peersByInstanceId;
@@ -578,7 +590,7 @@ class RiftDaemon {
       case 'rift.notifyClipboardChange':
         _requireTransportServices();
         final contentType = RpcUtils.requireStringParam(params, 'contentType');
-        final byteSize = params['byteSize'] as int;
+        final byteSize = RpcUtils.requireIntParam(params, 'byteSize');
         final sha256 = RpcUtils.requireStringParam(params, 'sha256');
         final contentBase64 = RpcUtils.requireStringParam(params, 'contentBase64');
         const expiresInMs = 120000; // 2 minutes per spec default
@@ -599,7 +611,7 @@ class RiftDaemon {
         );
 
         final offerId = const Uuid().v4();
-        _clipboardEngine!.createLocalOffer(
+        final offer = _clipboardEngine!.createLocalOffer(
           offerId: offerId,
           contentType: contentType,
           byteSize: byteSize,
@@ -608,18 +620,18 @@ class RiftDaemon {
           localDeviceId: _identityManager!.deviceId,
           contentBase64: contentBase64,
         );
+        final offerPayload = offer.toJson();
         
         final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
         final broadcastTo = <String>[];
         for (final peer in trustedPeers) {
           try {
-            final offer = _clipboardEngine!.getOffer(offerId)!;
             await _sessionManager!.sendMessage(peer.deviceId, {
               'rift': '0.1-draft',
               'type': 'clipboard.offer',
               'sourceDeviceId': _identityManager!.deviceId,
               'destinationDeviceId': peer.deviceId,
-              'payload': offer.toJson(),
+              'payload': offerPayload,
             });
             broadcastTo.add(peer.deviceId);
           } catch (e) {
@@ -657,20 +669,17 @@ class RiftDaemon {
         if (offer == null) {
           throw const RiftException(-32002, 'Offer expired or not found');
         }
-        
-        await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
-        
+
+        final fetchWait = _awaitClipboardFetchResult(offerId);
         try {
-          final fetchResult = await Future.any([
-            _clipboardHandler!.onFetchResponse.firstWhere((r) => r.offerId == offerId),
-            _clipboardHandler!.onFetchReject
-                .firstWhere((r) => r.offerId == offerId)
-                .then((r) => throw _mapClipboardFetchReject(r)),
-            Future.delayed(
-              const Duration(seconds: 15),
-              () => throw const RiftException(-32000, 'Source peer unreachable'),
-            ),
-          ]);
+          await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
+        } catch (e) {
+          await fetchWait.cancel();
+          rethrow;
+        }
+
+        try {
+          final fetchResult = await fetchWait.future;
           return {
             'offerId': fetchResult.offerId,
             'contentBase64': fetchResult.contentBase64,
@@ -805,6 +814,56 @@ class RiftDaemon {
       default:
         return RiftException(-32603, 'Fetch rejected: ${reject.failureReason}');
     }
+  }
+
+  _ClipboardFetchWaiter _awaitClipboardFetchResult(String offerId) {
+    final completer = Completer<ClipboardFetchResponse>();
+    late final StreamSubscription<ClipboardFetchResponse> responseSub;
+    late final StreamSubscription<ClipboardFetchReject> rejectSub;
+    Timer? timeoutTimer;
+    var isSettled = false;
+
+    Future<void> settle({
+      ClipboardFetchResponse? response,
+      RiftException? error,
+    }) async {
+      if (isSettled) return;
+      isSettled = true;
+      timeoutTimer?.cancel();
+      await responseSub.cancel();
+      await rejectSub.cancel();
+      if (error != null) {
+        completer.completeError(error);
+      } else if (response != null) {
+        completer.complete(response);
+      }
+    }
+
+    responseSub = _clipboardHandler!.onFetchResponse.listen((response) {
+      if (response.offerId != offerId) return;
+      unawaited(settle(response: response));
+    });
+
+    rejectSub = _clipboardHandler!.onFetchReject.listen((reject) {
+      if (reject.offerId != offerId) return;
+      unawaited(settle(error: _mapClipboardFetchReject(reject)));
+    });
+
+    timeoutTimer = Timer(
+      const Duration(seconds: _clipboardFetchTimeoutSeconds),
+      () => unawaited(
+        settle(
+          error: const RiftException(-32000, 'Source peer unreachable'),
+        ),
+      ),
+    );
+
+    return _ClipboardFetchWaiter(
+      future: completer.future,
+      cancel: () => settle(
+        error: const RiftException(-32000, 'Source peer unreachable'),
+      ),
+    );
   }
 
   void _requireTransportServices() {
