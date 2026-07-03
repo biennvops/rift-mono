@@ -77,7 +77,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:03 +92: All tests passed!`
+- `dart test` -> `00:06 +120: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository now contains a minimal standalone entrypoint at `bin/daemon.dart`
@@ -145,6 +145,31 @@ void startDaemon() async {
 ```
 This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and other backlog IPC methods mean the daemon should not yet be described as fully conformant.
 
+### 2.6. Clipboard IPC & Protocol Surface (Week 7 / M4 Groundwork)
+The daemon now includes an in-memory clipboard offer/fetch engine for the
+Week 7 clipboard milestone. The current implementation follows the clipboard
+message families in `protocol.md` and the local IPC methods in `ipc.md`:
+
+- **Peer protocol handlers:** `clipboard.offer`, `clipboard.fetchRequest`,
+  `clipboard.fetchResponse`, `clipboard.fetchReject`
+- **IPC methods:** `rift.notifyClipboardChange`, `rift.listClipboardOffers`,
+  `rift.fetchClipboardContent`
+- **IPC notifications:** `rift.onClipboardOffer`, `rift.onClipboardExpired`
+
+Important implementation notes:
+- `rift.notifyClipboardChange` now requires `contentBase64` in addition to
+  `contentType`, `byteSize`, and `sha256`. The daemon validates that the
+  decoded bytes match both `byteSize` and `sha256` before broadcasting any
+  metadata offer.
+- Local clipboard content is held only in daemon memory for active local
+  offers, and remote offers are tracked separately from local offers so
+  `rift.listClipboardOffers` returns peer offers only.
+- `offerSequence` monotonic replay protection is enforced per peer, and
+  clipboard fetch responses are accepted only after the daemon verifies
+  `byteSize` and `sha256`.
+- Fetch serving is fail-closed: only offers owned by the local device may be
+  served to peers.
+
 ---
 
 ## 3. Compliance Level with System Specification (Protocol & IPC)
@@ -153,4 +178,5 @@ This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart 
   - Implemented session bootstrap, PoP verification, strict envelope/schema validation (`messageId`, `destinationDeviceId`, `requiredExtensions`), client-side `session.accept` verification, pairing hardening, and trust-store persistence.
   - **Known gaps:** Dart still cannot use Tier 1 `tls-exporter` or Tier 2 `tls-unique`, so the implementation remains on the spec-approved Tier 3 `app-nonce` path rather than stronger TLS-bound channel binding.
 - **With `ipc.md`:** 
-  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, etc., and now routes application failures primarily through typed Rift exceptions with standard JSON-RPC 2.0 error codes (`-32009`, `-32004`, etc.).
+  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, plus the Week 7 clipboard surface `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`, `rift.onClipboardOffer`, and `rift.onClipboardExpired`.
+  - Clipboard IPC validation is now stricter at the daemon boundary: malformed base64, mismatched `byteSize`, mismatched `sha256`, and oversized clipboard payloads are rejected before the daemon advertises an offer to peers.

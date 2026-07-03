@@ -8,6 +8,14 @@ class RpcUtils {
     return value;
   }
 
+  static int requireIntParam(Map<String, dynamic> params, String key) {
+    final value = params[key];
+    if (value is! int) {
+      throw ArgumentError.value(value, key, 'must be an integer');
+    }
+    return value;
+  }
+
   static Map<String, dynamic> normalizeParams(Object? params) {
     if (params == null) {
       return <String, dynamic>{};

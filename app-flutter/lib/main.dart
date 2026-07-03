@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
+import 'screens/clipboard_debug_screen.dart';
 import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
@@ -39,18 +44,61 @@ class _RiftAppState extends State<RiftApp> {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
   String? _activePairingDeviceId;
+  bool _clipboardServiceStarted = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
+      _bindClipboardChannel();
+    });
+  }
+
+  static const _clipboardChannel = MethodChannel('com.biennvops.rift/clipboard');
+
+  Future<void> _bindClipboardChannel() async {
+    // The native clipboard channel only exists on Android.
+    if (!Platform.isAndroid) return;
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      await _clipboardChannel.invokeMethod('startService');
+      _clipboardServiceStarted = true;
+    } catch (e) {
+      debugPrint('Failed to start clipboard service: $e');
+    }
+    _clipboardChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onClipboardChanged') {
+        final text = call.arguments['text'] as String?;
+        if (text != null) {
+          final bytes = utf8.encode(text);
+          final hash = sha256.convert(bytes).toString();
+          final contentBase64 = base64.encode(bytes);
+          try {
+             await client.notifyClipboardChange(
+               contentType: 'text/plain',
+               byteSize: bytes.length,
+               sha256: hash,
+               contentBase64: contentBase64,
+             );
+          } catch (e) {
+             debugPrint('Failed to notify daemon: $e');
+          }
+        }
+      }
     });
   }
 
   @override
   void dispose() {
     _pairingRequestSub?.cancel();
+    if (Platform.isAndroid && _clipboardServiceStarted) {
+      unawaited(
+        _clipboardChannel.invokeMethod('stopService').catchError((Object error) {
+          debugPrint('Failed to stop clipboard service: $error');
+        }),
+      );
+    }
     super.dispose();
   }
 
@@ -252,6 +300,16 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 8),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ClipboardDebugScreen(),
+                  ),
+                );
+              },
+              child: const Text('Open Clipboard Debug'),
+            ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).push(
