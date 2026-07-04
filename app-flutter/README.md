@@ -1,6 +1,9 @@
 # Rift Flutter App
 
-This directory contains the Flutter app shell and IPC client for the Rift project. It provides the user interface for pairing, managing trusted devices, viewing security logs, and adjusting settings.
+This directory contains the Flutter app shell and IPC client for the Rift
+project. It provides the user interface for pairing, managing trusted devices,
+viewing security logs, handling clipboard continuity flows, and adjusting
+settings across Android and the active desktop targets in this repository.
 
 ## Installation and Running
 
@@ -9,12 +12,16 @@ Requires the Flutter SDK installed.
 ```bash
 flutter pub get
 flutter run -d windows   # on Windows
+flutter run -d macos     # on macOS
 flutter run -d linux     # on Linux
 flutter run -d <device>  # on Android/emulator
 ```
 
-**Expected Runtime Behavior (Week 5 State):**
-- **UI:** The application successfully boots and displays all core navigation screens (Pairing, Trusted Devices, Event Log, Settings). The UI components are decoupled from the transport layer.
+**Expected Runtime Behavior (Week 7 State):**
+- **UI:** The application successfully boots and displays all core navigation
+  screens (Pairing, Trusted Devices, Event Log, Settings), along with the
+  current Week 7 clipboard shell/debug flow. The UI components are decoupled
+  from the transport layer.
 - **Linux/macOS (`UnixSocketTransport`):** The app connects to a Unix domain socket and expects a running Rift daemon endpoint. If the daemon is absent, the JSON-RPC client logs reconnect attempts with exponential backoff.
 - **Windows (`NamedPipeTransport`):** The app connects to `\\.\pipe\rift-daemon-v0.1` and speaks StreamJsonRpc-compatible `Content-Length` framing to `daemon-cs`.
 - **Android (`AndroidDaemonIsolateTransport`):** The app spawns the Dart daemon in a background isolate and waits for `rift.daemonReady` before issuing JSON-RPC requests. In debug builds, discovery is intentionally disabled in the isolate to avoid plugin assertions.
@@ -27,7 +34,7 @@ IPC framing and size limits are transport-specific; see `spec/doc/ipc.md` for th
 flutter test
 ```
 
-*Latest test result (2026-06-22): `flutter analyze` and `flutter test` passed locally.*
+*Latest targeted local verification for the current clipboard/DesktopClipboardManager work: `flutter analyze` and `flutter test` passed locally.*
 
 The core tests cover:
 - UI rendering and screen-state checks (`widget_test.dart`, `pairing_screen_test.dart`, `trusted_devices_screen_test.dart`, `event_log_screen_test.dart`).
@@ -53,22 +60,29 @@ app-flutter/
 │   │   ├── settings_screen.dart          # Settings and device-info UI
 │   │   └── trusted_devices_screen.dart
 │   └── src/                              # Core Domain Logic
+│       ├── clipboard/
+│       │   └── desktop_clipboard_manager.dart # Desktop clipboard monitor + fetch/apply logic
 │       └── ipc/                          # IPC Communication Layer
 │           ├── android_daemon_isolate_entrypoint.dart # Flutter-side isolate bootstrap for daemon plugins
 │           ├── android_daemon_isolate_transport.dart  # Android isolate IPC transport
+│           ├── android_root_discovery_bridge.dart     # Android discovery bridge / desktop snapshot sync
 │           ├── ipc_transport.dart         # Interface: Platform-agnostic transport
+│           ├── isolate_transport.dart     # Base isolate transport primitives
 │           ├── json_rpc_client.dart       # Core RPC logic (reconnection, requests)
 │           ├── named_pipe_transport.dart  # Windows named pipe transport
 │           ├── streamjsonrpc_framer.dart  # StreamJsonRpc Content-Length framing
 │           ├── transport_factory.dart     # DI: Resolves transport per OS
 │           └── unix_socket_transport.dart # Linux/macOS Socket implementation
 ├── test/
+│   ├── android_root_discovery_bridge_test.dart
 │   ├── app_shell_test.dart
+│   ├── desktop_clipboard_manager_test.dart
 │   ├── event_log_screen_test.dart
 │   ├── ipc_test.dart
 │   ├── pairing_screen_test.dart
 │   ├── settings_screen_test.dart         # Settings data, loading, and error-state tests
 │   ├── streamjsonrpc_framer_test.dart
+│   ├── test_utils/                       # Shared fakes/helpers for widget and IPC tests
 │   ├── trusted_devices_screen_test.dart
 │   └── widget_test.dart
 ├── android/, ios/, windows/, macos/, linux/  # Flutter generated directories
@@ -136,18 +150,37 @@ app-flutter/
 - **Week 6 Test Coverage:**
   - Extended widget tests to verify capability badges and presence status are accurately displayed on the trusted devices screen.
 
-### Week 7: Android Clipboard Bridge & Clipboard IPC Client
+### Week 7: Clipboard Bridge, Desktop Clipboard Manager, and Clipboard IPC Client
 - **Android Clipboard Bridge (`android/app/src/main/...`):**
   - Added `ClipboardForegroundService` with `foregroundServiceType="dataSync"` and the required Android foreground-service permissions so clipboard observation can remain alive while the app is backgrounded.
   - Added a dedicated Android `MethodChannel` (`com.biennvops.rift/clipboard`) to forward clipboard-change events into Flutter only on Android targets.
   - Guarded the clipboard channel bootstrap with `Platform.isAndroid` so Linux and Windows builds do not touch Android-only platform channels.
+- **Desktop Clipboard Manager (`lib/src/clipboard/desktop_clipboard_manager.dart`):**
+  - Replaced the earlier Windows-only clipboard manager with `DesktopClipboardManager`.
+  - Windows now listens on the shared desktop event channel `rift/desktop/clipboard_events`, matching the Windows runner clipboard publisher.
+  - macOS and Linux currently use a Dart polling fallback for local clipboard observation until native runner event channels are implemented on those platforms.
+  - The polling fallback seeds the initial clipboard snapshot without rebroadcasting it as a new offer, then emits only when clipboard text changes after startup.
+  - Added status updates for clipboard send/fetch outcomes so the Flutter shell can surface short-lived user feedback.
 - **Clipboard IPC Client (`json_rpc_client.dart`):**
   - Added typed client helpers for `notifyClipboardChange`, `listClipboardOffers`, and `fetchClipboardContent`.
   - Added notification streams for `rift.onClipboardOffer` and `rift.onClipboardExpired`.
   - Extended result canonicalization so clipboard payload fields (`offerId`, `contentType`, `byteSize`, `sha256`, `expiresAt`, `contentBase64`, `verified`, `broadcastTo`) stay uniform across daemon implementations.
 - **Flutter App Bootstrap (`main.dart`):**
   - The app now hashes copied Android text with SHA-256, base64-encodes the content, and forwards it to the daemon over JSON-RPC via `rift.notifyClipboardChange`.
-  - This keeps protocol and trust logic inside the daemon while Flutter remains a transport/UI boundary.
+  - Desktop clipboard changes are also forwarded through the same JSON-RPC method, keeping clipboard protocol logic inside the daemon while Flutter remains a transport/UI boundary.
+  - The desktop shell now binds clipboard status updates so local users see short success/failure feedback for clipboard send/fetch flows.
+- **Week 7 Test Coverage:**
+  - Added `desktop_clipboard_manager_test.dart` to cover:
+    - startup clipboard-offer resync
+    - auto-fetch for `text/plain` offers
+    - echo suppression after applying fetched content
+    - reconnect/resync cleanup
+    - polling fallback behavior on macOS/Linux
+  - Added a simulated clipboard transfer harness under `../tests-interop/test/clipboard_transfer_test.dart` for protocol-slice verification of:
+    - successful fetch flow
+    - hash/size integrity preservation
+    - oversized and empty payload rejection
+    - UTF-8 / special-character handling
 
 ## Completion Criteria
 
@@ -169,7 +202,8 @@ While critical crashes and UI bugs have been resolved, the following areas requi
 1. **[Security] Missing Parser Fuzzing:** The custom Dart ASN.1 parser currently relies on 9 static test vectors. A proper fuzzing framework (e.g., AFL++) is required to comprehensively prevent out-of-bounds reads or infinite loops on adversarial DER structures.
 2. **[Engineering] `nsd` Dependency Constraint:** The daemon side still depends on `nsd` for production discovery, while pure-Dart mDNS testing uses `mdns_dart`. This split should be revisited if the team later wants one shared discovery stack or stronger cross-platform discovery parity in tests.
 3. **[UX] Reactive State for Settings Screen:** The `SettingsScreen` currently uses a `FutureBuilder` to fetch device info once upon initialization. It should be refactored to use `Stream` or `ChangeNotifier` so the UI automatically updates if the daemon restarts or the device fingerprint changes.
-4. **[Engineering] Manual Interop Evidence Still Incomplete:** The transport implementations are now in place, but full Week 5 / M3 sign-off still depends on recorded manual pairing evidence across platforms (happy path, reject, timeout, persistence, revoke).
+4. **[Engineering] Manual Interop Evidence Still Incomplete:** The transport implementations are now in place, but full milestone sign-off still depends on recorded manual pairing and clipboard evidence across platforms (happy path, reject, timeout, persistence, revoke, and clipboard transfer validation where applicable).
 5. **[Performance] Windows Named Pipe Polling:** The current Windows client uses periodic polling in a dedicated isolate. This is acceptable for now, but if power or CPU profiling shows overhead on laptops, the next step is moving toward overlapped I/O or a less chatty readiness strategy.
 6. **[Testing] Transport-Level Hardening:** Widget and client-layer coverage are in good shape, but deeper transport-specific tests for Windows named pipes and Android isolate lifecycle would further harden IPC against platform regressions.
-7. **[UX] Clipboard Offer UI Still Pending:** The client now exposes clipboard IPC streams and methods, but a full end-user clipboard-offer/fetch screen flow is still a follow-up step beyond the current bootstrap wiring.
+7. **[UX] Clipboard Offer UI Still Partial:** The client now has clipboard status plumbing, auto-fetch handling, and protocol-facing clipboard wiring, but a richer end-user clipboard-offer/fetch workflow remains a follow-up beyond the current milestone-oriented shell behavior.
+8. **[Platform] macOS/Linux Clipboard Fallback Is Polling-Based:** Desktop clipboard monitoring now works on macOS/Linux through a Dart polling fallback, but those platforms do not yet have native runner clipboard event channels equivalent to the Windows implementation.

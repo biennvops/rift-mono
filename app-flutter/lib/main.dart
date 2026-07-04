@@ -17,7 +17,7 @@ import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
-import 'src/clipboard/windows_clipboard_manager.dart';
+import 'src/clipboard/desktop_clipboard_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,28 +39,28 @@ void main() async {
   }
 
   final client = JsonRpcRiftClient(TransportFactory.create());
-  final clipboardManager =
-      Platform.isWindows ? WindowsClipboardManager(client) : null;
+  final clipboardManager = DesktopClipboardManager(client);
   // Start the connection immediately in the background
   client.connect().catchError((Object error, StackTrace stackTrace) {
     debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
   });
-  clipboardManager?.start().catchError((Object error, StackTrace stackTrace) {
+  clipboardManager.start().catchError((Object error, StackTrace stackTrace) {
     debugPrint('Windows clipboard manager failed to start: $error');
   });
 
   runApp(
-    Provider<JsonRpcRiftClient>.value(
-      value: client,
-      child: RiftApp(clipboardManager: clipboardManager),
+    Provider<DesktopClipboardManager?>.value(
+      value: clipboardManager,
+      child: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const RiftApp(),
+      ),
     ),
   );
 }
 
 class RiftApp extends StatefulWidget {
-  const RiftApp({super.key, this.clipboardManager});
-
-  final WindowsClipboardManager? clipboardManager;
+  const RiftApp({super.key});
 
   @override
   State<RiftApp> createState() => _RiftAppState();
@@ -70,6 +70,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
+  StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
 
@@ -82,6 +83,23 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
       _bindClipboardChannel();
+      _bindDesktopClipboardStatus();
+    });
+  }
+
+  void _bindDesktopClipboardStatus() {
+    final clipboardManager = context.read<DesktopClipboardManager?>();
+    if (clipboardManager == null) return;
+    
+    _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
+      if (!mounted) return;
+      _scaffoldMessengerKey.currentState?.clearSnackBars();
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(status),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     });
   }
 
@@ -91,6 +109,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     // The native clipboard channel only exists on Android.
     if (!Platform.isAndroid) return;
     final client = context.read<JsonRpcRiftClient>();
+    final clipboardManager = context.read<DesktopClipboardManager?>();
     try {
       await _clipboardChannel.invokeMethod('startService');
       _clipboardServiceStarted = true;
@@ -111,6 +130,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
                sha256: hash,
                contentBase64: contentBase64,
              );
+             clipboardManager?.notifyStatus('Clipboard sent to peers');
           } catch (e) {
              debugPrint('Failed to notify daemon: $e');
           }
@@ -148,7 +168,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     trayManager.removeListener(this);
     windowManager.removeListener(this);
     _pairingRequestSub?.cancel();
-    unawaited(widget.clipboardManager?.dispose());
+    _clipboardStatusSub?.cancel();
+    final clipboardManager = context.read<DesktopClipboardManager?>();
+    unawaited(clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
         _clipboardChannel.invokeMethod('stopService').catchError((Object error) {

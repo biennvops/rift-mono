@@ -24,7 +24,6 @@ dependencies:
   win32: ^5.14.0
   window_manager: ^0.5.1
   tray_manager: ^0.5.3
-  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

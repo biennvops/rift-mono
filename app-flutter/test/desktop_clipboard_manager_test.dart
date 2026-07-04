@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:app_flutter/src/clipboard/windows_clipboard_manager.dart';
+import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,7 +89,7 @@ Future<void> waitForCondition(
 }
 
 void main() {
-  group('WindowsClipboardManager', () {
+  group('DesktopClipboardManager', () {
     late ClipboardTransport transport;
     late JsonRpcRiftClient client;
     late StreamController<Object?> clipboardChanges;
@@ -134,7 +134,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -176,7 +176,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -256,7 +256,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -291,7 +291,7 @@ void main() {
     test('ignores unsupported content types instead of auto-fetching', () async {
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -326,7 +326,7 @@ void main() {
     test('removes stale offers when expiry notification arrives', () async {
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -376,7 +376,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -412,9 +412,11 @@ void main() {
         ]
       };
       transport.triggerDisconnect();
-      await waitForCondition(() => transport.connectionAttempts >= 2);
+      await waitForCondition(() => transport.connectionAttempts >= 2,
+          timeout: const Duration(seconds: 3));
       await waitForCondition(
         () => manager.activeOffers.keys.contains('offer-new'),
+        timeout: const Duration(seconds: 3),
       );
 
       expect(manager.activeOffers.keys, isNot(contains('offer-old')));
@@ -427,6 +429,39 @@ void main() {
       );
 
       await manager.dispose();
+    });
+    test('polling fallback correctly tracks clipboard changes and ignores initial state', () async {
+      String? mockClipboardState = 'initial_content';
+      Future<String?> mockReader() async => mockClipboardState;
+
+      final pollingStream = DesktopClipboardManager.pollClipboardForTesting(mockReader);
+      final emittedEvents = <Object?>[];
+      final sub = pollingStream.listen(emittedEvents.add);
+
+      // Give it time to do the initial read
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(emittedEvents, isEmpty, reason: 'Should not emit on initial load');
+
+      // First tick with no change
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(emittedEvents, isEmpty, reason: 'Should not emit when content is unchanged');
+
+      // Change content
+      mockClipboardState = 'new_content';
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 1, reason: 'Should emit once when content changes');
+
+      // Change to null
+      mockClipboardState = null;
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 1, reason: 'Should not emit when content becomes null');
+
+      // Change again
+      mockClipboardState = 'another_content';
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 2, reason: 'Should emit when content changes again');
+
+      await sub.cancel();
     });
   });
 }

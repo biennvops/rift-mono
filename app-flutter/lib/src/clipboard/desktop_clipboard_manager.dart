@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:logging/logging.dart';
 
@@ -11,20 +13,72 @@ import '../ipc/json_rpc_client.dart';
 typedef ClipboardTextReader = Future<String?> Function();
 typedef ClipboardTextWriter = Future<void> Function(String text);
 
-class WindowsClipboardManager {
-  WindowsClipboardManager(
+class DesktopClipboardManager {
+  DesktopClipboardManager(
     this._client, {
     Stream<Object?>? clipboardChanges,
     ClipboardTextReader? readClipboardText,
     ClipboardTextWriter? writeClipboardText,
-  })  : _clipboardChanges = clipboardChanges ??
-            const EventChannel(_clipboardEventsChannelName)
-                .receiveBroadcastStream(),
-        _readClipboardText = readClipboardText ?? _defaultReadClipboardText,
-        _writeClipboardText = writeClipboardText ?? _defaultWriteClipboardText;
+  })  : _readClipboardText = readClipboardText ?? _defaultReadClipboardText,
+        _writeClipboardText = writeClipboardText ?? _defaultWriteClipboardText,
+        _clipboardChanges = clipboardChanges ??
+            _defaultClipboardChanges(
+              readClipboardText ?? _defaultReadClipboardText,
+            );
+
+  static Stream<Object?> _defaultClipboardChanges(ClipboardTextReader reader) {
+    if (Platform.isWindows) {
+      return const EventChannel(_clipboardEventsChannelName).receiveBroadcastStream();
+    } else if (Platform.isMacOS || Platform.isLinux) {
+      return _pollClipboard(reader);
+    }
+    return const Stream.empty();
+  }
+
+  static Stream<Object?> _pollClipboard(ClipboardTextReader reader) {
+    late StreamController<Object?> controller;
+    Timer? timer;
+    String? lastText;
+
+    void tick() async {
+      try {
+        final text = await reader();
+        if (text != null && text != lastText) {
+          lastText = text;
+          controller.add(null);
+        }
+      } on PlatformException catch (e) {
+        debugPrint('Polling clipboard failed: $e');
+      } on MissingPluginException catch (e) {
+        debugPrint('Polling clipboard missing plugin: $e');
+      }
+    }
+
+    controller = StreamController<Object?>.broadcast(
+      onListen: () async {
+        try {
+          lastText = await reader();
+        } on PlatformException catch (e) {
+          debugPrint('Initial clipboard read failed: $e');
+        } on MissingPluginException catch (e) {
+          debugPrint('Initial clipboard missing plugin: $e');
+        }
+        timer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
+      },
+      onCancel: () {
+        timer?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  @visibleForTesting
+  static Stream<Object?> pollClipboardForTesting(ClipboardTextReader reader) =>
+      _pollClipboard(reader);
 
   static const String _clipboardEventsChannelName =
-      'rift/windows/clipboard_events';
+      'rift/desktop/clipboard_events';
   static const String _textPlainContentType = 'text/plain';
   static const Duration _echoSuppressionWindow = Duration(seconds: 1);
 
@@ -32,7 +86,7 @@ class WindowsClipboardManager {
   final Stream<Object?> _clipboardChanges;
   final ClipboardTextReader _readClipboardText;
   final ClipboardTextWriter _writeClipboardText;
-  final Logger _log = Logger('WindowsClipboardManager');
+  final Logger _log = Logger('DesktopClipboardManager');
   final Map<String, Map<String, dynamic>> _activeOffers = {};
   final Set<String> _handledOfferIds = <String>{};
   final Map<String, DateTime> _suppressedLocalSha256Deadlines =
@@ -45,6 +99,10 @@ class WindowsClipboardManager {
   bool _started = false;
   bool _resyncInFlight = false;
   bool _resyncRequested = false;
+
+  final StreamController<String> _statusController = StreamController<String>.broadcast();
+  Stream<String> get onStatusUpdate => _statusController.stream;
+  void notifyStatus(String status) => _statusController.add(status);
 
   UnmodifiableMapView<String, Map<String, dynamic>> get activeOffers =>
       UnmodifiableMapView(_activeOffers);
@@ -79,6 +137,7 @@ class WindowsClipboardManager {
     _activeOffers.clear();
     _handledOfferIds.clear();
     _suppressedLocalSha256Deadlines.clear();
+    await _statusController.close();
   }
 
   Future<void> _handleLocalClipboardChanged() async {
@@ -103,6 +162,7 @@ class WindowsClipboardManager {
       sha256: payload.sha256,
       contentBase64: payload.contentBase64,
     );
+    _statusController.add('Clipboard sent to peers');
   }
 
   Future<void> _resyncOffers() async {
@@ -181,6 +241,8 @@ class WindowsClipboardManager {
       return;
     }
 
+    _statusController.add('Fetching clipboard from peer...');
+
     if (offer['contentType']?.toString() != _textPlainContentType) {
       _log.fine('Ignoring unsupported clipboard content type: ${offer['contentType']}.');
       return;
@@ -193,6 +255,7 @@ class WindowsClipboardManager {
       final canonical = Map<String, dynamic>.from(result);
       if (canonical['verified'] != true) {
         _log.warning('Clipboard fetch for $offerId was not verified.');
+        _statusController.add('Clipboard fetch failed: unverified');
         return;
       }
 
@@ -200,6 +263,7 @@ class WindowsClipboardManager {
       final sha256 = canonical['sha256']?.toString();
       if (contentBase64 == null || sha256 == null) {
         _log.warning('Clipboard fetch for $offerId returned an incomplete payload.');
+        _statusController.add('Clipboard fetch failed: incomplete payload');
         return;
       }
 
@@ -207,9 +271,11 @@ class WindowsClipboardManager {
       final text = utf8.decode(bytes);
       _enqueueSuppressedLocalHash(sha256);
       await _writeClipboardText(text);
+      _statusController.add('Clipboard received from peer');
     } catch (error, stackTrace) {
       _handledOfferIds.remove(offerId);
       _log.warning('Failed to fetch/apply clipboard offer $offerId.', error, stackTrace);
+      _statusController.add('Clipboard fetch failed');
     }
   }
 
