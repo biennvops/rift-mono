@@ -73,6 +73,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
+  DesktopClipboardManager? _clipboardManager;
 
   @override
   void initState() {
@@ -87,8 +88,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _clipboardManager ??= context.read<DesktopClipboardManager?>();
+  }
+
   void _bindDesktopClipboardStatus() {
-    final clipboardManager = context.read<DesktopClipboardManager?>();
+    final clipboardManager = _clipboardManager;
     if (clipboardManager == null) return;
     
     _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
@@ -109,7 +116,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     // The native clipboard channel only exists on Android.
     if (!Platform.isAndroid) return;
     final client = context.read<JsonRpcRiftClient>();
-    final clipboardManager = context.read<DesktopClipboardManager?>();
+    final clipboardManager = _clipboardManager;
     try {
       await _clipboardChannel.invokeMethod('startService');
       _clipboardServiceStarted = true;
@@ -169,8 +176,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     windowManager.removeListener(this);
     _pairingRequestSub?.cancel();
     _clipboardStatusSub?.cancel();
-    final clipboardManager = context.read<DesktopClipboardManager?>();
-    unawaited(clipboardManager?.dispose());
+    unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
         _clipboardChannel.invokeMethod('stopService').catchError((Object error) {
