@@ -4,16 +4,20 @@ import 'package:provider/provider.dart';
 import 'dart:async';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
+import 'screens/clipboard_debug_screen.dart';
 import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
-import 'src/clipboard_manager.dart';
+import 'src/clipboard/windows_clipboard_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,26 +39,28 @@ void main() async {
   }
 
   final client = JsonRpcRiftClient(TransportFactory.create());
+  final clipboardManager =
+      Platform.isWindows ? WindowsClipboardManager(client) : null;
   // Start the connection immediately in the background
   client.connect().catchError((Object error, StackTrace stackTrace) {
     debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
   });
-
-  final clipboardManager = ClipboardManager(client);
+  clipboardManager?.start().catchError((Object error, StackTrace stackTrace) {
+    debugPrint('Windows clipboard manager failed to start: $error');
+  });
 
   runApp(
-    MultiProvider(
-      providers: [
-        Provider<JsonRpcRiftClient>.value(value: client),
-        Provider<ClipboardManager>.value(value: clipboardManager),
-      ],
-      child: const RiftApp(),
+    Provider<JsonRpcRiftClient>.value(
+      value: client,
+      child: RiftApp(clipboardManager: clipboardManager),
     ),
   );
 }
 
 class RiftApp extends StatefulWidget {
-  const RiftApp({super.key});
+  const RiftApp({super.key, this.clipboardManager});
+
+  final WindowsClipboardManager? clipboardManager;
 
   @override
   State<RiftApp> createState() => _RiftAppState();
@@ -64,8 +70,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
-  StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
+  bool _clipboardServiceStarted = false;
 
   @override
   void initState() {
@@ -75,21 +81,41 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _initSystemTray();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
-      _bindClipboardStatus();
+      _bindClipboardChannel();
     });
   }
 
-  void _bindClipboardStatus() {
-    final clipboardManager = context.read<ClipboardManager>();
-    _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
-      if (!mounted) return;
-      _scaffoldMessengerKey.currentState?.clearSnackBars();
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text(status),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+  static const _clipboardChannel = MethodChannel('com.biennvops.rift/clipboard');
+
+  Future<void> _bindClipboardChannel() async {
+    // The native clipboard channel only exists on Android.
+    if (!Platform.isAndroid) return;
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      await _clipboardChannel.invokeMethod('startService');
+      _clipboardServiceStarted = true;
+    } catch (e) {
+      debugPrint('Failed to start clipboard service: $e');
+    }
+    _clipboardChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onClipboardChanged') {
+        final text = call.arguments['text'] as String?;
+        if (text != null) {
+          final bytes = utf8.encode(text);
+          final hash = sha256.convert(bytes).toString();
+          final contentBase64 = base64.encode(bytes);
+          try {
+             await client.notifyClipboardChange(
+               contentType: 'text/plain',
+               byteSize: bytes.length,
+               sha256: hash,
+               contentBase64: contentBase64,
+             );
+          } catch (e) {
+             debugPrint('Failed to notify daemon: $e');
+          }
+        }
+      }
     });
   }
 
@@ -122,7 +148,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     trayManager.removeListener(this);
     windowManager.removeListener(this);
     _pairingRequestSub?.cancel();
-    _clipboardStatusSub?.cancel();
+    unawaited(widget.clipboardManager?.dispose());
+    if (Platform.isAndroid && _clipboardServiceStarted) {
+      unawaited(
+        _clipboardChannel.invokeMethod('stopService').catchError((Object error) {
+          debugPrint('Failed to stop clipboard service: $error');
+        }),
+      );
+    }
     super.dispose();
   }
 
@@ -349,6 +382,16 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 8),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const ClipboardDebugScreen(),
+                  ),
+                );
+              },
+              child: const Text('Open Clipboard Debug'),
+            ),
             TextButton(
               onPressed: () {
                 Navigator.of(context).push(

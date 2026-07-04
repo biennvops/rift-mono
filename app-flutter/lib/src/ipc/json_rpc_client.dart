@@ -45,6 +45,20 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onSecurityEvent =>
       _securityEventController.stream;
 
+  late final _clipboardOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onClipboardOffer =>
+      _clipboardOfferController.stream;
+
+  late final _clipboardExpiredController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onClipboardExpired =>
+      _clipboardExpiredController.stream;
+
+  late final _connectionChangedController =
+      StreamController<bool>.broadcast();
+  Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
+
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
     return _canonicalizeMap(Map<String, dynamic>.from(params.value as Map));
@@ -105,6 +119,16 @@ class JsonRpcRiftClient {
     'Outcome': 'outcome',
     'FailureReason': 'failureReason',
     'Details': 'details',
+    'OfferId': 'offerId',
+    'SourceDeviceId': 'sourceDeviceId',
+    'ContentType': 'contentType',
+    'ByteSize': 'byteSize',
+    'Sha256': 'sha256',
+    'ExpiresAt': 'expiresAt',
+    'ContentBase64': 'contentBase64',
+    'Verified': 'verified',
+    'Offers': 'offers',
+    'BroadcastTo': 'broadcastTo',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
@@ -222,6 +246,15 @@ class JsonRpcRiftClient {
     controller.add(payload);
   }
 
+  void _setConnectionState(bool isConnected) {
+    if (_isConnected == isConnected) {
+      return;
+    }
+
+    _isConnected = isConnected;
+    _connectionChangedController.add(isConnected);
+  }
+
   Future<void> connect() async {
     if (_isConnected) return;
 
@@ -306,6 +339,29 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['eventId', 'eventType', 'severity'],
         );
       });
+      _client!.registerMethod('rift.onClipboardOffer',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onClipboardOffer',
+          _asMap(params),
+          _clipboardOfferController,
+          requiredStringKeys: const [
+            'offerId',
+            'sourceDeviceId',
+            'contentType',
+            'sha256',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onClipboardExpired',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onClipboardExpired',
+          _asMap(params),
+          _clipboardExpiredController,
+          requiredStringKeys: const ['offerId'],
+        );
+      });
       // Start listening to the RPC channel
       unawaited(_client!.listen().then((_) {
         _log.warning('RPC Connection closed');
@@ -315,12 +371,12 @@ class JsonRpcRiftClient {
         unawaited(_handleDisconnect());
       }));
 
-      _isConnected = true;
+      _setConnectionState(true);
       _reconnectAttempts = 0;
       _log.info('Connected to daemon successfully');
     } catch (e) {
       _log.severe('Failed to connect: $e');
-      _isConnected = false;
+      _setConnectionState(false);
       rethrow;
     }
   }
@@ -336,7 +392,7 @@ class JsonRpcRiftClient {
     if (_isReconnecting) return;
     _isReconnecting = true;
 
-    _isConnected = false;
+    _setConnectionState(false);
     _client = null;
 
     // Fire and forget closures to prevent hanging in async tests
@@ -371,7 +427,7 @@ class JsonRpcRiftClient {
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
     _reconnectAttempts = 0;
-    _isConnected = false;
+    _setConnectionState(false);
     _isReconnecting = false;
     await _client?.close();
     _client = null;
@@ -388,6 +444,9 @@ class JsonRpcRiftClient {
     await _pairingRequestController.close();
     await _pairingCompleteController.close();
     await _securityEventController.close();
+    await _clipboardOfferController.close();
+    await _clipboardExpiredController.close();
+    await _connectionChangedController.close();
   }
 
   Future<dynamic> getDeviceInfo() async {
@@ -534,7 +593,12 @@ class JsonRpcRiftClient {
     return _canonicalizeResult(r);
   }
 
-  Future<dynamic> notifyClipboardChange(String contentType, int byteSize, String sha256, String contentBase64) async {
+  Future<dynamic> notifyClipboardChange({
+    required String contentType,
+    required int byteSize,
+    required String sha256,
+    required String contentBase64,
+  }) async {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
@@ -559,9 +623,18 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.fetchClipboardContent', {
-      'offerId': offerId,
-    });
+    final r = await _client!.sendRequest(
+      'rift.fetchClipboardContent',
+      {'offerId': offerId},
+    );
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> invokeRpc(String method, [dynamic parameters]) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest(method, parameters);
     return _canonicalizeResult(r);
   }
 }

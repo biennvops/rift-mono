@@ -128,6 +128,50 @@ daemon-dart/
     - **Note:** `adb shell dumpsys batterystats --reset` is not available on this device/user (WRITE_SECURE_SETTINGS), so evidence must be recorded as snapshot deltas (A/B, C/D) rather than absolute "since reset" numbers.
   - **Assessment:** Capability/presence logic is implemented and covered by the current merged test suite. Week 6 battery evidence has been captured on a physical device for both a clean idle baseline and a 1 trusted peer heartbeat run (see above), with the caveat that short-window `batterystats` may under-report mAh deltas.
 
+- **`[daemon-dart] Clipboard Offer/Fetch & Android Bridge` (Week 7 / M4 Groundwork):** Added the first complete clipboard protocol slice across daemon, IPC, and Android client bridge.
+  - Implemented a dedicated clipboard module under `lib/src/clipboard/`:
+    - `clipboard_models.dart` for `ClipboardOffer`, `ClipboardFetchRequest`,
+      `ClipboardFetchResponse`, and `ClipboardFetchReject`
+    - `clipboard_engine.dart` for in-memory active-offer tracking, expiry
+      timers, local/remote offer separation, local content retention, and
+      `offerSequence` replay protection
+    - `clipboard_handler.dart` for `clipboard.offer`,
+      `clipboard.fetchRequest`, `clipboard.fetchResponse`, and
+      `clipboard.fetchReject`
+  - Exposed Week 7 IPC methods through `daemon.dart`:
+    - `rift.notifyClipboardChange`
+    - `rift.listClipboardOffers`
+    - `rift.fetchClipboardContent`
+    - `rift.onClipboardOffer`
+    - `rift.onClipboardExpired`
+  - Hardened the daemon IPC boundary so clipboard changes are validated
+    fail-closed before broadcast:
+    - base64 must decode successfully
+    - decoded byte count must match `byteSize`
+    - SHA-256 must match the declared `sha256`
+    - payloads over 32 MiB are rejected with `-32007`
+  - Tightened fetch semantics:
+    - only local offers can be served to peers
+    - `listClipboardOffers` returns peer offers only
+    - `fetchClipboardContent` now maps key failures to IPC-visible codes
+      aligned with `ipc.md` (`OfferExpired`, `HashMismatch`,
+      `PeerUnreachable`)
+  - Added Week 7 daemon-side tests for:
+    - offer creation/expiry
+    - replay and out-of-order `offerSequence`
+    - oversized offer rejection
+    - fetch-response hash validation
+    - rejection of fetches against non-local offers
+    - malformed and size-mismatched fetch responses
+  - Added Android client groundwork in `app-flutter`:
+    - `ClipboardForegroundService`
+    - Android `MethodChannel` bridge (`com.biennvops.rift/clipboard`)
+    - typed clipboard methods/streams in `JsonRpcRiftClient`
+  - **Verification update (2026-07-03):**
+    - `dart analyze` -> `No issues found!`
+    - `dart test` -> `00:06 +120: All tests passed!`
+  - **Assessment:** Week 7 clipboard groundwork is implementation-ready at the daemon/API layer and currently clean under local analyze/test verification. Remaining closure items are manual E2E evidence and a full Flutter clipboard-offer UI flow.
+
 ---
 
 ## 2. System Specification Alignment (Protocol & IPC)
@@ -144,6 +188,9 @@ The implementation is clearly derived from the two core specifications, but it s
 - **Validated IPC Contracts (Presence & Trust):** The UI/App-layer integration is fully documented and successfully implemented via the following explicit JSON-RPC 2.0 notifications:
   - **Presence:** `rift.onPeerDiscovered` (emitted on mDNS discovery), `rift.onPeerLost` (emitted on mDNS eviction/network drop).
   - **Trust/Pairing:** `rift.onPairingRequest`, `rift.onPairingApproved`, `rift.onPairingComplete`, and `rift.onTrustChanged`.
+- **Validated IPC Contracts (Clipboard):**
+  - **Methods:** `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`
+  - **Notifications:** `rift.onClipboardOffer`, `rift.onClipboardExpired`
 - **Implemented and largely aligned:** The current isolate bridge uses explicit Rift exception codes for key application failures. It still retains isolate-specific `SendPort` transport details, but the old ad-hoc command naming has been cleaned up into `rpcPort`.
 - **Net assessment:** The IPC implementation robustly fulfills the `ipc.md` contract for current app needs (M3), fully propagating presence events and trust transitions to the UI.
 
@@ -172,7 +219,7 @@ The implementation is clearly derived from the two core specifications, but it s
 - `dart test` currently passes with 92 tests.
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
-  `dart test` -> `00:03 +92: All tests passed!`
+  `dart test` -> `00:06 +120: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` now provides a minimal standalone Unix-socket runner for
   local Linux IPC smoke tests. It is useful for desktop verification, but it is
