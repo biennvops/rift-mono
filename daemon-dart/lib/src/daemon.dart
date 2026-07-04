@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -18,8 +19,217 @@ import 'package:daemon_dart/src/interfaces/discovery_service.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 import 'package:daemon_dart/src/pairing/pairing_manager.dart';
+import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
+import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
+import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+
+const int _clipboardFetchTimeoutSeconds = 15;
+
+class _ClipboardFetchWaiter {
+  final Future<ClipboardFetchResponse> future;
+  final Future<void> Function() cancel;
+
+  const _ClipboardFetchWaiter({
+    required this.future,
+    required this.cancel,
+  });
+}
+
+class _DiscoveredPeerRecord {
+  final String deviceId;
+  final Map<String, DiscoveredPeer> peersByInstanceId;
+
+  _DiscoveredPeerRecord({
+    required this.deviceId,
+    required this.peersByInstanceId,
+  });
+
+  List<DiscoveredPeer> get orderedPeers {
+    final peers = peersByInstanceId.values.toList(growable: false);
+    peers.sort(_compareDiscoveredPeers);
+    return peers;
+  }
+
+  DiscoveredPeer? get primaryPeer =>
+      orderedPeers.isEmpty ? null : orderedPeers.first;
+
+  List<DiscoveredPeerEndpoint> get observedEndpoints => orderedPeers
+      .map(
+        (peer) => DiscoveredPeerEndpoint(
+          instanceId: peer.instanceId,
+          address: peer.address,
+          port: peer.port,
+        ),
+      )
+      .toList(growable: false);
+}
+
+int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
+  final scoreCompare = _endpointScore(
+    b.address,
+  ).compareTo(_endpointScore(a.address));
+  if (scoreCompare != 0) return scoreCompare;
+
+  final addressCompare = a.address.compareTo(b.address);
+  if (addressCompare != 0) return addressCompare;
+
+  return a.port.compareTo(b.port);
+}
+
+int _endpointScore(String address) {
+  final ip = InternetAddress.tryParse(address);
+  if (ip == null) {
+    return 0;
+  }
+
+  if (ip.type == InternetAddressType.IPv4) {
+    return 3;
+  }
+
+  if (ip.type == InternetAddressType.IPv6) {
+    final raw = ip.rawAddress;
+    final isLinkLocal =
+        raw.length >= 2 && raw[0] == 0xfe && (raw[1] & 0xc0) == 0x80;
+    if (isLinkLocal) {
+      return -1;
+    }
+    return 2;
+  }
+
+  return 0;
+}
+
+String _classifyPairingConnectFailure(Object error) {
+  if (error is RiftAuthenticationFailedException) {
+    if (error.message.contains(
+      'Peer closed connection before sending session.hello',
+    )) {
+      return 'peer-closed-before-hello';
+    }
+
+    return 'authentication-failed';
+  }
+
+  if (error is SocketException) {
+    final code = error.osError?.errorCode;
+    switch (code) {
+      case 111:
+      case 61:
+      case 10061:
+        return 'connection-refused';
+      case 22:
+      case 10022:
+        return 'invalid-endpoint-argument';
+      case 101:
+      case 10051:
+        return 'network-unreachable';
+      case 113:
+      case 10065:
+        return 'host-unreachable';
+      case 8:
+      case 11001:
+      case 11004:
+        return 'host-not-found';
+    }
+
+    final message = error.message.toLowerCase();
+    if (message.contains('connection refused')) {
+      return 'connection-refused';
+    }
+    if (message.contains('no address associated with hostname') ||
+        message.contains('failed host lookup') ||
+        message.contains('name or service not known') ||
+        message.contains('nodename nor servname provided')) {
+      return 'host-not-found';
+    }
+    if (message.contains('network is unreachable')) {
+      return 'network-unreachable';
+    }
+    if (message.contains('no route to host') ||
+        message.contains('host is down')) {
+      return 'host-unreachable';
+    }
+    if (message.contains('invalid argument')) {
+      return 'invalid-endpoint-argument';
+    }
+  }
+
+  if (error is HandshakeException) {
+    return 'tls-handshake-failed';
+  }
+
+  if (error is TimeoutException) {
+    return 'session-timeout';
+  }
+
+  final message = error.toString().toLowerCase();
+  if (message.contains('peer closed connection before sending session.hello')) {
+    return 'peer-closed-before-hello';
+  }
+
+  return 'unknown';
+}
+
+String _describePairingConnectFailure(Object error) {
+  switch (_classifyPairingConnectFailure(error)) {
+    case 'connection-refused':
+      return 'The peer was discovered, but nothing accepted the TLS connection on that endpoint.';
+    case 'invalid-endpoint-argument':
+      return 'The discovered endpoint was not usable on this platform, usually due to an invalid address form or unsupported scope.';
+    case 'host-not-found':
+      return 'The discovered host name could not be resolved to a reachable local-network address.';
+    case 'host-unreachable':
+      return 'The peer address was known, but the host was not reachable on the local network.';
+    case 'network-unreachable':
+      return 'The current network route could not reach that peer endpoint.';
+    case 'peer-closed-before-hello':
+      return 'The peer accepted TCP/TLS, then closed before session bootstrap completed; this often means a duplicate or stale discovery endpoint.';
+    case 'tls-handshake-failed':
+      return 'The TLS handshake failed before Rift session bootstrap could complete.';
+    case 'authentication-failed':
+      return 'The peer certificate or session bootstrap failed authentication.';
+    case 'session-timeout':
+      return 'The secure session did not finish establishing before the timeout expired.';
+    default:
+      return 'The endpoint failed before a secure Rift session could be established.';
+  }
+}
+
+String _summarizePairingFailures(
+  List<({DiscoveredPeer peer, Object error})> failures,
+) {
+  if (failures.isEmpty) {
+    return 'No discovered endpoints were attempted.';
+  }
+
+  final last = failures.last;
+  final samples = failures
+      .map((failure) {
+        final classification = _classifyPairingConnectFailure(failure.error);
+        return '${failure.peer.address}:${failure.peer.port} ($classification)';
+      })
+      .toList(growable: false);
+
+  return 'Attempted ${failures.length} endpoint(s): ${samples.join(', ')}. '
+      'Last endpoint ${last.peer.address}:${last.peer.port}. '
+      '${_describePairingConnectFailure(last.error)}';
+}
+
+bool _isLikelyDuplicateBootstrapRace(Object error) {
+  if (_classifyPairingConnectFailure(error) == 'peer-closed-before-hello') {
+    return true;
+  }
+
+  if (error is SessionException &&
+      error.message.contains('Session already exists for ')) {
+    return true;
+  }
+
+  final message = error.toString().toLowerCase();
+  return message.contains('session already exists for ');
+}
 
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
@@ -32,7 +242,9 @@ class RiftDaemon {
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
-  final Map<String, DiscoveredPeer> _discoveredPeers = {};
+  ClipboardEngine? _clipboardEngine;
+  ClipboardProtocolHandler? _clipboardHandler;
+  final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
   bool _isDiscovering = false;
@@ -91,6 +303,31 @@ class RiftDaemon {
           _forwardIpcEvent(event);
         },
       );
+
+      _clipboardEngine = ClipboardEngine();
+      _clipboardHandler = ClipboardProtocolHandler(
+        _sessionManager!,
+        _clipboardEngine!,
+        // ContentFetcher: serve content from the in-memory local store
+        (offerId) async => _clipboardEngine!.getLocalContent(offerId),
+        _identityManager!.deviceId,
+      );
+
+      _clipboardEngine!.onOfferAdded.listen((offer) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onClipboardOffer',
+          'params': offer.toJson(),
+        });
+      });
+
+      _clipboardEngine!.onOfferExpired.listen((offerId) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onClipboardExpired',
+          'params': {'offerId': offerId},
+        });
+      });
     }
 
     if (enableDiscovery) {
@@ -110,8 +347,38 @@ class RiftDaemon {
     // explicit connect/handshake when the UI selects a discovered peer.
   }
 
+  void _validateClipboardChangePayload({
+    required int byteSize,
+    required String sha256Hex,
+    required String contentBase64,
+  }) {
+    Uint8List bytes;
+    try {
+      bytes = base64.decode(contentBase64);
+    } on FormatException {
+      throw const RiftException(-32600, 'contentBase64 must be valid base64');
+    }
+
+    if (bytes.length != byteSize) {
+      throw const RiftException(
+        -32600,
+        'byteSize does not match decoded content length',
+      );
+    }
+
+    final actualHash = sha256.convert(bytes).toString();
+    if (actualHash != sha256Hex) {
+      throw const RiftException(
+        -32006,
+        'sha256 does not match decoded content',
+      );
+    }
+  }
+
   Future<void> stop() async {
     await _pairingManager?.dispose();
+    _clipboardHandler?.dispose();
+    _clipboardEngine?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
@@ -205,12 +472,9 @@ class RiftDaemon {
     final results = <Map<String, dynamic>>[];
 
     for (final entry in _discoveredPeers.entries) {
-      final peer = entry.value;
-      final hintedDeviceId = peer.deviceIdHint;
-      if (hintedDeviceId == null) {
-        // Skip peers without a valid Rift device ID according to ipc.md.
-        continue;
-      }
+      final peer = entry.value.primaryPeer;
+      if (peer == null) continue;
+      final hintedDeviceId = entry.key;
       final trustState = trustStore != null
           ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ??
                 'discovered'
@@ -221,6 +485,15 @@ class RiftDaemon {
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
+        'observedEndpoints': entry.value.observedEndpoints
+            .map(
+              (endpoint) => {
+                'instanceId': endpoint.instanceId,
+                'address': endpoint.address,
+                'port': endpoint.port,
+              },
+            )
+            .toList(growable: false),
         'txtRecord': {
           'minV': peer.minVersion,
           'maxV': peer.maxVersion,
@@ -246,8 +519,9 @@ class RiftDaemon {
       return {'events': const <Map<String, dynamic>>[], 'total': 0};
     }
 
-    final sinceTime =
-        since == null || since.isEmpty ? null : DateTime.tryParse(since);
+    final sinceTime = since == null || since.isEmpty
+        ? null
+        : DateTime.tryParse(since);
     final filtered = await trustStore.querySecurityEvents(
       SecurityEventQuery(
         eventTypes: eventTypes,
@@ -313,6 +587,111 @@ class RiftDaemon {
           'peers': await listDiscoveredPeers(),
           'isDiscovering': _isDiscovering,
         };
+      case 'rift.notifyClipboardChange':
+        _requireTransportServices();
+        final contentType = RpcUtils.requireStringParam(params, 'contentType');
+        final byteSize = RpcUtils.requireIntParam(params, 'byteSize');
+        final sha256 = RpcUtils.requireStringParam(params, 'sha256');
+        final contentBase64 = RpcUtils.requireStringParam(params, 'contentBase64');
+        const expiresInMs = 120000; // 2 minutes per spec default
+
+        if (byteSize < 0) {
+          throw const RiftException(-32600, 'byteSize must be non-negative');
+        }
+
+        // Guard: 32 MiB max
+        if (byteSize > 32 * 1024 * 1024) {
+          throw const RiftException(-32007, 'Content exceeds maximum payload size');
+        }
+
+        _validateClipboardChangePayload(
+          byteSize: byteSize,
+          sha256Hex: sha256,
+          contentBase64: contentBase64,
+        );
+
+        final offerId = const Uuid().v4();
+        final offer = _clipboardEngine!.createLocalOffer(
+          offerId: offerId,
+          contentType: contentType,
+          byteSize: byteSize,
+          sha256: sha256,
+          expiresInMs: expiresInMs,
+          localDeviceId: _identityManager!.deviceId,
+          contentBase64: contentBase64,
+        );
+        final offerPayload = offer.toJson();
+        
+        final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+        final broadcastTo = <String>[];
+        for (final peer in trustedPeers) {
+          try {
+            await _sessionManager!.sendMessage(peer.deviceId, {
+              'rift': '0.1-draft',
+              'type': 'clipboard.offer',
+              'sourceDeviceId': _identityManager!.deviceId,
+              'destinationDeviceId': peer.deviceId,
+              'payload': offerPayload,
+            });
+            broadcastTo.add(peer.deviceId);
+          } catch (e) {
+            RiftLog.warn('[Clipboard] Could not send offer to ${peer.deviceId}: $e');
+          }
+        }
+        return {
+          'offerId': offerId,
+          'expiresInMs': expiresInMs,
+          'broadcastTo': broadcastTo,
+        };
+
+      case 'rift.listClipboardOffers':
+        _requireTransportServices();
+        // Spec: only return offers from peers, not our own local offers
+        final incomingOffers = _clipboardEngine!.getIncomingOffers().map((o) {
+          final expiresAt = _clipboardEngine!.getOfferExpiresAt(o.offerId);
+          return {
+            'offerId': o.offerId,
+            'sourceDeviceId': o.sourceDeviceId,
+            'contentType': o.contentType,
+            'byteSize': o.byteSize,
+            'sha256': o.sha256,
+            'expiresAt': expiresAt?.toIso8601String(),
+          };
+        }).toList();
+        return {'offers': incomingOffers};
+
+      case 'rift.fetchClipboardContent':
+        _requireTransportServices();
+        // Spec: only needs offerId - daemon looks up the source peer internally
+        final offerId = RpcUtils.requireStringParam(params, 'offerId');
+
+        final offer = _clipboardEngine!.getOffer(offerId);
+        if (offer == null) {
+          throw const RiftException(-32002, 'Offer expired or not found');
+        }
+
+        final fetchWait = _awaitClipboardFetchResult(offerId);
+        try {
+          await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
+        } catch (e) {
+          await fetchWait.cancel();
+          rethrow;
+        }
+
+        try {
+          final fetchResult = await fetchWait.future;
+          return {
+            'offerId': fetchResult.offerId,
+            'contentBase64': fetchResult.contentBase64,
+            'byteSize': fetchResult.byteSize,
+            'sha256': fetchResult.sha256,
+            'verified': true, // handler already verified hash before emitting
+          };
+        } on RiftException {
+          rethrow;
+        } catch (e) {
+          throw RiftException(-32603, e.toString());
+        }
       case 'rift.queryEventLog':
         return queryEventLog(
           eventTypes: (params['eventTypes'] as List?)?.cast<String>(),
@@ -422,6 +801,71 @@ class RiftDaemon {
     }
   }
 
+  RiftException _mapClipboardFetchReject(ClipboardFetchReject reject) {
+    switch (reject.failureReason) {
+      case 'OfferExpired':
+        return RiftException(-32002, 'Fetch rejected: ${reject.failureReason}');
+      case 'HashMismatch':
+        return RiftException(-32006, 'Fetch rejected: ${reject.failureReason}');
+      case 'PeerUnreachable':
+      case 'ConnectionLost':
+      case 'Timeout':
+        return RiftException(-32000, 'Fetch rejected: ${reject.failureReason}');
+      default:
+        return RiftException(-32603, 'Fetch rejected: ${reject.failureReason}');
+    }
+  }
+
+  _ClipboardFetchWaiter _awaitClipboardFetchResult(String offerId) {
+    final completer = Completer<ClipboardFetchResponse>();
+    late final StreamSubscription<ClipboardFetchResponse> responseSub;
+    late final StreamSubscription<ClipboardFetchReject> rejectSub;
+    Timer? timeoutTimer;
+    var isSettled = false;
+
+    Future<void> settle({
+      ClipboardFetchResponse? response,
+      RiftException? error,
+    }) async {
+      if (isSettled) return;
+      isSettled = true;
+      timeoutTimer?.cancel();
+      await responseSub.cancel();
+      await rejectSub.cancel();
+      if (error != null) {
+        completer.completeError(error);
+      } else if (response != null) {
+        completer.complete(response);
+      }
+    }
+
+    responseSub = _clipboardHandler!.onFetchResponse.listen((response) {
+      if (response.offerId != offerId) return;
+      unawaited(settle(response: response));
+    });
+
+    rejectSub = _clipboardHandler!.onFetchReject.listen((reject) {
+      if (reject.offerId != offerId) return;
+      unawaited(settle(error: _mapClipboardFetchReject(reject)));
+    });
+
+    timeoutTimer = Timer(
+      const Duration(seconds: _clipboardFetchTimeoutSeconds),
+      () => unawaited(
+        settle(
+          error: const RiftException(-32000, 'Source peer unreachable'),
+        ),
+      ),
+    );
+
+    return _ClipboardFetchWaiter(
+      future: completer.future,
+      cancel: () => settle(
+        error: const RiftException(-32000, 'Source peer unreachable'),
+      ),
+    );
+  }
+
   void _requireTransportServices() {
     if (_transport == null ||
         _sessionManager == null ||
@@ -444,36 +888,39 @@ class RiftDaemon {
 
     switch (method) {
       case 'rift.onPairingComplete':
-          unawaited(_recordSecurityEvent(
+        unawaited(
+          _recordSecurityEvent(
             eventType: 'pairing.completed',
             severity: 'info',
             peerDeviceId: params['deviceId']?.toString(),
             outcome: 'success',
-          ));
+          ),
+        );
         break;
       case 'rift.onTrustChanged':
         final newState = params['newState']?.toString();
         final previousState = params['previousState']?.toString();
         final reason = params['reason']?.toString();
         if (newState == 'revoked') {
-          unawaited(_recordSecurityEvent(
-            eventType: 'trust.revoked',
-            severity: 'warning',
-            peerDeviceId: params['deviceId']?.toString(),
-            outcome: 'success',
-            failureReason: reason,
-          ));
+          unawaited(
+            _recordSecurityEvent(
+              eventType: 'trust.revoked',
+              severity: 'warning',
+              peerDeviceId: params['deviceId']?.toString(),
+              outcome: 'success',
+              failureReason: reason,
+            ),
+          );
         } else if (newState != null && previousState != null) {
-          unawaited(_recordSecurityEvent(
-            eventType: 'trust.transitioned',
-            severity: 'info',
-            peerDeviceId: params['deviceId']?.toString(),
-            outcome: 'success',
-            details: {
-              'previousState': previousState,
-              'newState': newState,
-            },
-          ));
+          unawaited(
+            _recordSecurityEvent(
+              eventType: 'trust.transitioned',
+              severity: 'info',
+              peerDeviceId: params['deviceId']?.toString(),
+              outcome: 'success',
+              details: {'previousState': previousState, 'newState': newState},
+            ),
+          );
         }
         break;
     }
@@ -516,16 +963,40 @@ class RiftDaemon {
   }
 
   void trackDiscoveredPeer(DiscoveredPeer peer) {
-    if (peer.deviceIdHint != null) {
-      // DiscoveryPeerTracker deduplicates at the mDNS instance level, but the
-      // daemon UI model is keyed by Rift device ID so multiple instance records
-      // for the same device collapse into one visible peer entry.
-      _discoveredPeers[peer.deviceIdHint!] = peer;
-    }
+    final deviceId = peer.deviceIdHint;
+    if (deviceId == null) return;
+
+    final existing = _discoveredPeers[deviceId];
+    final peersByInstanceId = <String, DiscoveredPeer>{
+      if (existing != null) ...existing.peersByInstanceId,
+      peer.instanceId: peer,
+    };
+    _discoveredPeers[deviceId] = _DiscoveredPeerRecord(
+      deviceId: deviceId,
+      peersByInstanceId: peersByInstanceId,
+    );
   }
 
-  void untrackDiscoveredPeer(String deviceId) {
-    _discoveredPeers.remove(deviceId);
+  void untrackDiscoveredPeer(DiscoveredPeer peer) {
+    final deviceId = peer.deviceIdHint;
+    if (deviceId == null) return;
+
+    final existing = _discoveredPeers[deviceId];
+    if (existing == null) return;
+
+    final peersByInstanceId = Map<String, DiscoveredPeer>.from(
+      existing.peersByInstanceId,
+    )..remove(peer.instanceId);
+
+    if (peersByInstanceId.isEmpty) {
+      _discoveredPeers.remove(deviceId);
+      return;
+    }
+
+    _discoveredPeers[deviceId] = _DiscoveredPeerRecord(
+      deviceId: deviceId,
+      peersByInstanceId: peersByInstanceId,
+    );
   }
 
   void replaceExternalDiscoveredPeers(
@@ -534,39 +1005,88 @@ class RiftDaemon {
   }) {
     final previousPeerIds = _discoveredPeers.keys.toSet();
     final addedPeerIds = <String>{};
+    final refreshedPeerIds = <String>{};
     _discoveredPeers.clear();
     for (final rawPeer in rawPeers) {
       final instanceId = rawPeer['instanceId'];
-      final address = rawPeer['address'];
-      final port = rawPeer['port'];
       final minVersion = rawPeer['minVersion'];
       final maxVersion = rawPeer['maxVersion'];
       if (instanceId is! String ||
-          address is! String ||
-          port is! int ||
           minVersion is! String ||
           maxVersion is! String) {
         continue;
       }
 
-      final peer = DiscoveredPeer(
-        instanceId: instanceId,
-        address: address,
-        port: port,
-        minVersion: minVersion,
-        maxVersion: maxVersion,
-        deviceIdHint: rawPeer['deviceIdHint'] as String?,
-        fingerprintPrefix: rawPeer['fingerprintPrefix'] as String?,
-      );
-      trackDiscoveredPeer(peer);
-      final peerId = peer.deviceIdHint;
-      if (peerId != null && !previousPeerIds.contains(peerId)) {
-        addedPeerIds.add(peerId);
+      final deviceIdHint = rawPeer['deviceIdHint'] as String?;
+      final fingerprintPrefix = rawPeer['fingerprintPrefix'] as String?;
+      final observedEndpoints = rawPeer['observedEndpoints'] as List?;
+
+      final expandedPeers = <DiscoveredPeer>[];
+      if (observedEndpoints != null && observedEndpoints.isNotEmpty) {
+        for (var i = 0; i < observedEndpoints.length; i += 1) {
+          final endpoint = observedEndpoints[i];
+          if (endpoint is! Map) continue;
+          final address = endpoint['address'];
+          final port = endpoint['port'];
+          if (address is! String || port is! int) {
+            continue;
+          }
+
+          expandedPeers.add(
+            DiscoveredPeer(
+              instanceId: i == 0 ? instanceId : '$instanceId#$i',
+              address: address,
+              port: port,
+              minVersion: minVersion,
+              maxVersion: maxVersion,
+              deviceIdHint: deviceIdHint,
+              fingerprintPrefix: fingerprintPrefix,
+            ),
+          );
+        }
+      }
+
+      if (expandedPeers.isEmpty) {
+        final address = rawPeer['address'];
+        final port = rawPeer['port'];
+        if (address is! String || port is! int) {
+          continue;
+        }
+
+        expandedPeers.add(
+          DiscoveredPeer(
+            instanceId: instanceId,
+            address: address,
+            port: port,
+            minVersion: minVersion,
+            maxVersion: maxVersion,
+            deviceIdHint: deviceIdHint,
+            fingerprintPrefix: fingerprintPrefix,
+          ),
+        );
+      }
+
+      for (final peer in expandedPeers) {
+        trackDiscoveredPeer(peer);
+        final peerId = peer.deviceIdHint;
+        if (peerId != null) {
+          if (!previousPeerIds.contains(peerId)) {
+            addedPeerIds.add(peerId);
+          }
+          refreshedPeerIds.add(peerId);
+        }
       }
     }
     _isDiscovering = isDiscovering;
 
-    for (final peerId in addedPeerIds) {
+    // Android inbound mTLS currently cannot provisionally accept arbitrary
+    // self-signed client certificates during server-side TLS handshake
+    // (BoringSSL rejects them before Dart session bootstrap can inspect the
+    // peer cert). To keep the peer protocol unchanged while preserving
+    // cross-platform pairing, the Android daemon prefers proactively opening
+    // outbound sessions to discovered peers and then reuses those authenticated
+    // sessions when the local user initiates pairing later.
+    for (final peerId in refreshedPeerIds) {
       unawaited(prefetchSessionForDiscoveredPeer(peerId));
     }
   }
@@ -687,32 +1207,89 @@ class RiftDaemon {
   Future<String> _openSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager!;
     final transport = _transport!;
-    final discoveredPeer = _findDiscoveredPeer(peerDeviceId);
-    if (discoveredPeer == null) {
+    final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
+    if (discoveredPeerRecord == null ||
+        discoveredPeerRecord.orderedPeers.isEmpty) {
       throw const RiftNotFoundException('Peer not found in discovery cache');
     }
 
-    RiftLog.debug(
-      '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
-      'using address=${discoveredPeer.address}:${discoveredPeer.port} '
-      'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
-      'instanceId=${discoveredPeer.instanceId}',
-    );
+    final failures = <({DiscoveredPeer peer, Object error})>[];
+    for (final discoveredPeer in discoveredPeerRecord.orderedPeers) {
+      Future<String> connectCurrentEndpoint() async {
+        final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
+            ? peerDeviceId
+            : null;
+        final resolvedPeerDeviceId = await transport.connectTo(
+          discoveredPeer.address,
+          discoveredPeer.port,
+          expectedDeviceId: expectedDeviceId,
+        );
 
-    final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
-        ? peerDeviceId
-        : null;
-    final resolvedPeerDeviceId = await transport.connectTo(
-      discoveredPeer.address,
-      discoveredPeer.port,
-      expectedDeviceId: expectedDeviceId,
-    );
+        if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
+          await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+        }
+        await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
+        return resolvedPeerDeviceId;
+      }
 
-    if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
-      await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+      RiftLog.debug(
+        '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
+        'using address=${discoveredPeer.address}:${discoveredPeer.port} '
+        'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
+        'instanceId=${discoveredPeer.instanceId}',
+      );
+
+      try {
+        return await connectCurrentEndpoint();
+      } catch (e) {
+        Object failure = e;
+        if (_isLikelyDuplicateBootstrapRace(e)) {
+          RiftLog.info(
+            '[Pairing] Duplicate bootstrap race detected for '
+            'peerDeviceId=$peerDeviceId '
+            'address=${discoveredPeer.address}:${discoveredPeer.port} '
+            'instanceId=${discoveredPeer.instanceId}. '
+            'Waiting briefly for an in-flight session before retrying.',
+          );
+
+          try {
+            await sessionManager.waitForSessionEstablished(
+              peerDeviceId,
+              timeout: const Duration(milliseconds: 300),
+            );
+            return peerDeviceId;
+          } catch (_) {
+            try {
+              return await connectCurrentEndpoint();
+            } catch (retryError) {
+              failure = retryError;
+            }
+          }
+        }
+
+        failures.add((peer: discoveredPeer, error: failure));
+        final classification = _classifyPairingConnectFailure(failure);
+        RiftLog.warn(
+          '[Pairing] Endpoint failed for peerDeviceId=$peerDeviceId '
+          'address=${discoveredPeer.address}:${discoveredPeer.port} '
+          'instanceId=${discoveredPeer.instanceId} '
+          'classification=$classification '
+          'detail=${_describePairingConnectFailure(failure)} '
+          'error=$failure',
+        );
+      }
     }
-    await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
-    return resolvedPeerDeviceId;
+
+    final failureSummary = _summarizePairingFailures(failures);
+    RiftLog.warn(
+      '[Pairing] All discovered endpoints failed for peerDeviceId=$peerDeviceId. '
+      '$failureSummary',
+    );
+    throw RiftException(
+      -32603,
+      'Failed to establish a secure session with $peerDeviceId across all discovered endpoints. '
+      '$failureSummary',
+    );
   }
 
   Future<Map<String, dynamic>> _startPairingRpc(
@@ -757,20 +1334,13 @@ class RiftDaemon {
       );
       await _ensureSessionForPairing(peerDeviceId);
     } catch (e) {
+      final classification = _classifyPairingConnectFailure(e);
+      final detail = _describePairingConnectFailure(e);
       RiftLog.debug(
-        '[Session] Session prefetch skipped for $peerDeviceId: $e',
+        '[Session] Session prefetch skipped for $peerDeviceId '
+        'classification=$classification detail=$detail error=$e',
       );
     }
-  }
-
-  DiscoveredPeer? _findDiscoveredPeer(String peerDeviceId) {
-    for (final entry in _discoveredPeers.entries) {
-      final peer = entry.value;
-      if (peer.deviceIdHint == peerDeviceId || entry.key == peerDeviceId) {
-        return peer;
-      }
-    }
-    return null;
   }
 
   /// The static entry point for spawning the Isolate from Flutter
@@ -899,18 +1469,24 @@ class RiftDaemon {
                 },
               },
             });
-            unawaited(
-              daemon.prefetchSessionForDiscoveredPeer(peer.deviceIdHint!),
-            );
           });
 
-          daemon._discoveryService?.onDeviceLost.listen((deviceId) {
-            daemon.untrackDiscoveredPeer(deviceId);
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPeerLost',
-              'params': {'deviceId': deviceId},
-            });
+          daemon._discoveryService?.onDeviceLost.listen((peer) {
+            final deviceId = peer.deviceIdHint;
+            if (deviceId == null) return;
+
+            final hadVisiblePeer = daemon._discoveredPeers.containsKey(
+              deviceId,
+            );
+            daemon.untrackDiscoveredPeer(peer);
+            final stillVisible = daemon._discoveredPeers.containsKey(deviceId);
+            if (hadVisiblePeer && !stillVisible) {
+              sendPort.send({
+                'jsonrpc': '2.0',
+                'method': 'rift.onPeerLost',
+                'params': {'deviceId': deviceId},
+              });
+            }
           });
 
           daemon._sessionManager?.onPresenceUpdate.listen((ctx) {

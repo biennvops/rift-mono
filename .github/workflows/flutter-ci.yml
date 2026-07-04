@@ -44,3 +44,22 @@ jobs:
       - name: Run tests
         run: dart test -x network
         working-directory: daemon-dart
+
+  tests-interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install dependencies
+        run: dart pub get
+        working-directory: tests-interop
+      - name: Analyze
+        run: dart analyze
+        working-directory: tests-interop
+      - name: Run tests
+        run: dart test
+        working-directory: tests-interop

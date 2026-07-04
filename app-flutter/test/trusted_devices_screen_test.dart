@@ -21,6 +21,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
   bool rejectCalled = false;
+  int listTrustedPeersCallCount = 0;
   List<Map<String, dynamic>> trustedPeers = [
     {
       'deviceId': 'rift-trusted',
@@ -38,6 +39,10 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       'trustState': 'discovered',
     }
   ];
+  Map<String, dynamic> deviceInfo = {
+    'deviceId': 'rift-local-device',
+    'displayName': 'Local Device',
+  };
 
   @override
   bool get isConnected => true;
@@ -53,12 +58,18 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
   @override
+  Future<dynamic> getDeviceInfo() async => deviceInfo;
+  @override
   Future<dynamic> listDiscoveredPeers() async => {
         'peers': discoveredPeers,
         'isDiscovering': false,
       };
   @override
-  Future<dynamic> listTrustedPeers() async => {'peers': trustedPeers};
+  Future<dynamic> listTrustedPeers() async {
+    listTrustedPeersCallCount += 1;
+    return {'peers': trustedPeers};
+  }
+
   @override
   Future<dynamic> startDiscovery() async => {'started': true};
   @override
@@ -199,7 +210,8 @@ void main() {
     expect(client.rejectCalled, isTrue);
   });
 
-  testWidgets('TrustedDevicesScreen hides discovered entry once peer is trusted',
+  testWidgets(
+      'TrustedDevicesScreen hides discovered entry once peer is trusted',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     client.trustedPeers = [
@@ -243,7 +255,8 @@ void main() {
     expect(find.text('Pending Box'), findsNothing);
   });
 
-  testWidgets('TrustedDevicesScreen refreshes discovered peer into trusted peer on trust change',
+  testWidgets(
+      'TrustedDevicesScreen refreshes discovered peer into trusted peer on trust change',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     client.trustedPeers = const [];
@@ -296,7 +309,8 @@ void main() {
     expect(find.text('Pair'), findsNothing);
   });
 
-  testWidgets('TrustedDevicesScreen shows peer as discoverable again after revoked peer is reset',
+  testWidgets(
+      'TrustedDevicesScreen shows peer as discoverable again after revoked peer is reset',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     client.trustedPeers = [
@@ -350,5 +364,135 @@ void main() {
     expect(find.text('Tablet'), findsOneWidget);
     expect(find.text('Discovered'), findsOneWidget);
     expect(find.text('Pair'), findsOneWidget);
+  });
+
+  testWidgets(
+      'TrustedDevicesScreen shows presence indicators and capability badges',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-capable',
+        'displayName': 'Linux Workstation',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': [
+          'presence.basic',
+          'clipboard.offer_fetch',
+          'security.event_log'
+        ],
+      }
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Verify Presence indicator
+    expect(find.text('Linux Workstation'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
+
+    // Verify Capability Badges
+    expect(find.text('Presence'), findsOneWidget);
+    expect(find.text('Clipboard'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+
+    // Verify Icons
+    expect(find.byIcon(Icons.sensors), findsOneWidget);
+    expect(find.byIcon(Icons.content_copy), findsOneWidget);
+    expect(find.byIcon(Icons.security), findsOneWidget);
+  });
+
+  testWidgets(
+      'TrustedDevicesScreen refreshes trusted peer presence without extra daemon events',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-refresh',
+        'displayName': 'Desk Node',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['presence.basic'],
+      }
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Online'), findsOneWidget);
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-refresh',
+        'displayName': 'Desk Node',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': ['presence.basic'],
+      }
+    ];
+
+    final callsBeforeRefresh = client.listTrustedPeersCallCount;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(client.listTrustedPeersCallCount, greaterThan(callsBeforeRefresh));
+    expect(find.text('Offline'), findsOneWidget);
+  });
+
+  testWidgets(
+      'TrustedDevicesScreen stops presence polling while covered by another route',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-covered',
+        'displayName': 'Covered Peer',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['presence.basic'],
+      }
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final callsBeforeCover = client.listTrustedPeersCallCount;
+
+    Navigator.of(tester.element(find.byType(TrustedDevicesScreen))).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Covered route')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Covered route'), findsOneWidget);
+    expect(client.listTrustedPeersCallCount, equals(callsBeforeCover));
   });
 }

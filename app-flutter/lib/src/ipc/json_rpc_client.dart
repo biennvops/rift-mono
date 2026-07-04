@@ -129,6 +129,7 @@ class JsonRpcRiftClient {
     'Verified': 'verified',
     'Offers': 'offers',
     'BroadcastTo': 'broadcastTo',
+    'SourceDeviceId': 'sourceDeviceId',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
@@ -625,6 +626,18 @@ class JsonRpcRiftClient {
     }
     final r = await _client!
         .sendRequest('rift.fetchClipboardContent', {'offerId': offerId});
+    final r = await _client!.sendRequest(
+      'rift.fetchClipboardContent',
+      {'offerId': offerId},
+    );
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> invokeRpc(String method, [dynamic parameters]) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest(method, parameters);
     return _canonicalizeResult(r);
   }
 }

@@ -49,6 +49,7 @@ app-flutter/
 │   ├── screens/                          # Presentation Layer
 │   │   ├── event_log_screen.dart
 │   │   ├── pairing_screen.dart
+│   │   ├── clipboard_debug_screen.dart   # Temporary Week 7 evidence/debug panel
 │   │   ├── settings_screen.dart          # Settings and device-info UI
 │   │   └── trusted_devices_screen.dart
 │   └── src/                              # Core Domain Logic
@@ -124,6 +125,30 @@ app-flutter/
 - **Week 5 Test Coverage:**
   - Added widget coverage for pairing request notifications, auto-start fingerprint population, approve/reject action dispatch, trust-state transitions, countdown expiry, and trust-management confirmation flows.
 
+### Week 6: Capability Negotiation & Presence
+- **Trusted Devices Management (`trusted_devices_screen.dart`):**
+  - Updated the UI to display capability summaries visually using badges (chips with icons) instead of raw strings.
+  - Added periodic trusted-peer refresh so presence indicators do not stay stale when no other trust/discovery event fires.
+- **Interop Harness Groundwork (`tests-interop`):**
+  - Scaffolded the Dart test package for cross-platform interoperability testing.
+  - Added a simulated session harness for presence-update propagation and disconnect cleanup.
+  - Updated the test matrix in the interop documentation to cover macOS and capability-aware failure scenarios.
+- **Week 6 Test Coverage:**
+  - Extended widget tests to verify capability badges and presence status are accurately displayed on the trusted devices screen.
+
+### Week 7: Android Clipboard Bridge & Clipboard IPC Client
+- **Android Clipboard Bridge (`android/app/src/main/...`):**
+  - Added `ClipboardForegroundService` with `foregroundServiceType="dataSync"` and the required Android foreground-service permissions so clipboard observation can remain alive while the app is backgrounded.
+  - Added a dedicated Android `MethodChannel` (`com.biennvops.rift/clipboard`) to forward clipboard-change events into Flutter only on Android targets.
+  - Guarded the clipboard channel bootstrap with `Platform.isAndroid` so Linux and Windows builds do not touch Android-only platform channels.
+- **Clipboard IPC Client (`json_rpc_client.dart`):**
+  - Added typed client helpers for `notifyClipboardChange`, `listClipboardOffers`, and `fetchClipboardContent`.
+  - Added notification streams for `rift.onClipboardOffer` and `rift.onClipboardExpired`.
+  - Extended result canonicalization so clipboard payload fields (`offerId`, `contentType`, `byteSize`, `sha256`, `expiresAt`, `contentBase64`, `verified`, `broadcastTo`) stay uniform across daemon implementations.
+- **Flutter App Bootstrap (`main.dart`):**
+  - The app now hashes copied Android text with SHA-256, base64-encodes the content, and forwards it to the daemon over JSON-RPC via `rift.notifyClipboardChange`.
+  - This keeps protocol and trust logic inside the daemon while Flutter remains a transport/UI boundary.
+
 ## Completion Criteria
 
 To treat the Flutter client work as fully complete, the project needs both of
@@ -147,3 +172,4 @@ While critical crashes and UI bugs have been resolved, the following areas requi
 4. **[Engineering] Manual Interop Evidence Still Incomplete:** The transport implementations are now in place, but full Week 5 / M3 sign-off still depends on recorded manual pairing evidence across platforms (happy path, reject, timeout, persistence, revoke).
 5. **[Performance] Windows Named Pipe Polling:** The current Windows client uses periodic polling in a dedicated isolate. This is acceptable for now, but if power or CPU profiling shows overhead on laptops, the next step is moving toward overlapped I/O or a less chatty readiness strategy.
 6. **[Testing] Transport-Level Hardening:** Widget and client-layer coverage are in good shape, but deeper transport-specific tests for Windows named pipes and Android isolate lifecycle would further harden IPC against platform regressions.
+7. **[UX] Clipboard Offer UI Still Pending:** The client now exposes clipboard IPC streams and methods, but a full end-user clipboard-offer/fetch screen flow is still a follow-up step beyond the current bootstrap wiring.

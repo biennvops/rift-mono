@@ -1,5 +1,11 @@
 namespace Rift.Daemon.Core.Interfaces;
 
+public sealed class DiscoveredPeerEndpoint
+{
+    public string Address { get; init; } = string.Empty;
+    public int Port { get; init; }
+}
+
 public sealed class DiscoveredPeerInfo
 {
     public string DeviceId { get; init; } = string.Empty;
@@ -7,6 +13,7 @@ public sealed class DiscoveredPeerInfo
     public int Port { get; init; }
     public string TrustState { get; init; } = string.Empty;
     public IReadOnlyDictionary<string, string> TxtRecord { get; init; } = new Dictionary<string, string>();
+    public IReadOnlyList<DiscoveredPeerEndpoint> ObservedEndpoints { get; init; } = [];
 }
 
 public sealed class ListDiscoveredPeersResult

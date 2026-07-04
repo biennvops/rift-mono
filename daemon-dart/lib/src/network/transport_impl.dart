@@ -18,6 +18,7 @@ class TransportImpl implements Transport {
   
   SecureServerSocket? _serverSocket;
   final Map<String, SecureSocket> _peers = {};
+  final Map<String, bool> _peerSocketIsServer = {};
   final Map<String, Uint8List> _peerCerts = {};
   final Set<String> _authenticatedPeers = {};
   final Map<String, Timer> _unauthenticatedTimeouts = {};
@@ -51,7 +52,19 @@ class TransportImpl implements Transport {
     );
 
     _serverSocket!.listen(
-      (socket) => _handleConnection(socket, isServer: true),
+      (socket) {
+        unawaited(
+          () async {
+            try {
+              await _handleConnection(socket, isServer: true);
+            } catch (error) {
+              RiftLog.debug(
+                '[TLS] Inbound connection setup finished with a handled error: $error',
+              );
+            }
+          }(),
+        );
+      },
       onError: (Object error, StackTrace stackTrace) {
         RiftLog.error(
           '[TLS] Inbound server handshake failed',
@@ -154,12 +167,66 @@ class TransportImpl implements Transport {
       final hash = sha256.convert(peerEd25519Key);
       final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
-      RiftLog.debug(
+      RiftLog.info(
         '[TLS] TLS session established with peerDeviceId=$peerDeviceId host=${socket.remoteAddress.address}:${socket.remotePort}',
       );
 
+      final previousSocket = _peers[peerDeviceId];
+      final previousIsServer = _peerSocketIsServer[peerDeviceId];
+      if (previousSocket != null &&
+          previousIsServer != null &&
+          !identical(previousSocket, socket)) {
+        if (_authenticatedPeers.contains(peerDeviceId)) {
+          RiftLog.debug(
+            '[TLS] Closing duplicate socket for authenticated peerDeviceId=$peerDeviceId '
+            'existingRole=${previousIsServer ? "inbound" : "outbound"} '
+            'duplicateRole=${isServer ? "inbound" : "outbound"}',
+          );
+          socket.destroy();
+          if (isServer) {
+            return peerDeviceId;
+          }
+          throw const RiftAuthenticationFailedException(
+            'Duplicate connection closed in favor of the existing authenticated session',
+          );
+        }
+
+        final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
+        if (previousIsServer == preferredIsServer) {
+          RiftLog.debug(
+            '[TLS] Closing duplicate pre-auth socket for peerDeviceId=$peerDeviceId '
+            'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
+            'existingRole=${previousIsServer ? "inbound" : "outbound"} '
+            'duplicateRole=${isServer ? "inbound" : "outbound"}',
+          );
+          socket.destroy();
+          if (isServer) {
+            return peerDeviceId;
+          }
+          throw const RiftAuthenticationFailedException(
+            'Duplicate connection closed in favor of the preferred pre-auth session',
+          );
+        }
+
+        RiftLog.debug(
+          '[TLS] Replacing pre-auth socket for peerDeviceId=$peerDeviceId '
+          'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
+          'existingRole=${previousIsServer ? "inbound" : "outbound"} '
+          'replacementRole=${isServer ? "inbound" : "outbound"}',
+        );
+        try {
+          previousSocket.destroy();
+        } catch (_) {
+          // Best-effort cleanup while switching to the preferred bootstrap path.
+        }
+      }
+
       _peers[peerDeviceId] = socket;
+      _peerSocketIsServer[peerDeviceId] = isServer;
       _peerCerts[peerDeviceId] = peerCert.der;
+      RiftLog.info(
+        '[TLS] Registered socket for peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
+      );
 
       int frameSizeProvider() {
         return _authenticatedPeers.contains(peerDeviceId) 
@@ -177,10 +244,10 @@ class TransportImpl implements Transport {
           ));
         },
         onError: (e) {
-          disconnect(peerDeviceId);
+          _disconnectIfCurrent(peerDeviceId, socket);
         },
         onDone: () {
-          disconnect(peerDeviceId);
+          _disconnectIfCurrent(peerDeviceId, socket);
         },
         cancelOnError: true,
       );
@@ -189,6 +256,9 @@ class TransportImpl implements Transport {
       _unauthenticatedTimeouts[peerDeviceId]?.cancel();
       _unauthenticatedTimeouts[peerDeviceId] = Timer(const Duration(seconds: 10), () {
         if (identical(_peers[peerDeviceId], socket) && !_authenticatedPeers.contains(peerDeviceId)) {
+          RiftLog.warn(
+            '[TLS] Closing unauthenticated peer after timeout peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
+          );
           disconnect(peerDeviceId);
         }
       });
@@ -203,14 +273,36 @@ class TransportImpl implements Transport {
 
   @override
   void disconnect(String peerDeviceId) {
+    RiftLog.debug(
+      '[TLS] disconnect(peerDeviceId=$peerDeviceId) authenticated=${_authenticatedPeers.contains(peerDeviceId)} '
+      'role=${_peerSocketIsServer[peerDeviceId] == true ? "inbound" : _peerSocketIsServer.containsKey(peerDeviceId) ? "outbound" : "unknown"}',
+    );
     _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
     _peers[peerDeviceId]?.destroy();
     _peers.remove(peerDeviceId);
+    _peerSocketIsServer.remove(peerDeviceId);
     _peerCerts.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
     if (!_disconnectController.isClosed) {
       _disconnectController.add(peerDeviceId);
     }
+  }
+
+  void _disconnectIfCurrent(String peerDeviceId, SecureSocket socket) {
+    if (!identical(_peers[peerDeviceId], socket)) {
+      RiftLog.debug(
+        '[TLS] Ignoring disconnect from stale socket for peerDeviceId=$peerDeviceId '
+        'socket=${socket.remoteAddress.address}:${socket.remotePort}',
+      );
+      try {
+        socket.destroy();
+      } catch (_) {
+        // Best-effort cleanup for a stale socket that no longer owns the mapping.
+      }
+      return;
+    }
+
+    disconnect(peerDeviceId);
   }
 
   @override
@@ -264,4 +356,9 @@ class TransportImpl implements Transport {
 
   @override
   Uint8List? getPeerCert(String peerDeviceId) => _peerCerts[peerDeviceId];
+
+  bool _preferIncomingSocketForPeer(String peerDeviceId) {
+    final localDeviceId = _identityManager.deviceId;
+    return localDeviceId.compareTo(peerDeviceId) > 0;
+  }
 }
