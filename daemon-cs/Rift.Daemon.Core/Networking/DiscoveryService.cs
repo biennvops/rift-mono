@@ -416,7 +416,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 txtRecord.GetValueOrDefault("minV"),
                 txtRecord.GetValueOrDefault("maxV"),
                 txtRecord,
-                remoteEndPoint);
+                remoteEndPoint,
+                observedAddresses: [remoteEndPoint.Address.ToString()]);
 
             _logger.LogInformation(
                 "Discovered Rift peer via UDP fallback: {InstanceName} at {Host}:{Port}",
@@ -458,13 +459,20 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         }
 
         var txtProperties = ParseTxtProperties(txtRecord);
-        var host = records
+        var discoveredAddresses = records
             .OfType<AddressRecord>()
-            .FirstOrDefault(record => record.Name == srvRecord.Target)
-            ?.Address
-            .ToString()
-            ?? e.RemoteEndPoint?.Address.ToString()
-            ?? srvRecord.Target.ToString();
+            .Where(record => record.Name == srvRecord.Target)
+            .Select(record => record.Address.ToString())
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var remoteAddress = e.RemoteEndPoint?.Address.ToString();
+        if (!string.IsNullOrWhiteSpace(remoteAddress) && !discoveredAddresses.Contains(remoteAddress, StringComparer.Ordinal))
+        {
+            discoveredAddresses.Add(remoteAddress);
+        }
+
+        var host = discoveredAddresses.FirstOrDefault() ?? srvRecord.Target.ToString();
         var port = srvRecord.Port;
 
         var deviceIdHint = txtProperties.GetValueOrDefault("did");
@@ -482,7 +490,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             minVersion: txtProperties.GetValueOrDefault("minV"),
             maxVersion: txtProperties.GetValueOrDefault("maxV"),
             txtRecord: txtProperties,
-            remoteEndPoint: e.RemoteEndPoint);
+            remoteEndPoint: e.RemoteEndPoint,
+            observedAddresses: discoveredAddresses);
     }
 
     private static Dictionary<string, string> ParseTxtProperties(TXTRecord? txtRecord)

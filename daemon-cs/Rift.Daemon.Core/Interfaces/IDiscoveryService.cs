@@ -7,6 +7,7 @@ public sealed class PeerDiscoveredEventArgs : EventArgs
     public string? DeviceIdHint { get; }
     public string InstanceName { get; }
     public string Host { get; }
+    public IReadOnlyList<string> ObservedAddresses { get; }
     public int Port { get; }
     public string? MinVersion { get; }
     public string? MaxVersion { get; }
@@ -21,11 +22,13 @@ public sealed class PeerDiscoveredEventArgs : EventArgs
         string? minVersion,
         string? maxVersion,
         IReadOnlyDictionary<string, string> txtRecord,
-        IPEndPoint? remoteEndPoint)
+        IPEndPoint? remoteEndPoint,
+        IReadOnlyList<string>? observedAddresses = null)
     {
         DeviceIdHint = deviceIdHint;
         InstanceName = instanceName ?? throw new ArgumentNullException(nameof(instanceName));
         Host = host ?? throw new ArgumentNullException(nameof(host));
+        ObservedAddresses = (observedAddresses is { Count: > 0 } ? observedAddresses : [host]).ToArray();
         Port = port;
         MinVersion = minVersion;
         MaxVersion = maxVersion;
