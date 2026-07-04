@@ -14,6 +14,10 @@ class ClipboardTransport implements IpcTransport {
   dynamic listClipboardOffersResult = const {'Offers': <dynamic>[]};
   final Map<String, dynamic> fetchResultsByOfferId = <String, dynamic>{};
 
+  void triggerDisconnect() {
+    _daemonToApp?.close();
+  }
+
   void emitNotification(String method, Map<String, dynamic> params) {
     _daemonToApp?.add(jsonEncode({
       'jsonrpc': '2.0',
@@ -180,8 +184,84 @@ void main() {
 
       clipboardChanges.add(null);
       await Future<void>.delayed(Duration.zero);
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
 
       expect(clipboardWrites, ['hello']);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .isEmpty,
+        isTrue,
+      );
+
+      await manager.dispose();
+    });
+
+    test('suppresses overlapping echoes for sequential fetched clipboard writes',
+        () async {
+      transport.listClipboardOffersResult = {
+        'Offers': [
+          {
+            'OfferId': 'offer-1',
+            'SourceDeviceId': 'rift-peer-a',
+            'ContentType': 'text/plain',
+            'ByteSize': 5,
+            'Sha256':
+                '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+            'ExpiresAt': '2026-07-04T02:00:00Z',
+          },
+          {
+            'OfferId': 'offer-2',
+            'SourceDeviceId': 'rift-peer-b',
+            'ContentType': 'text/plain',
+            'ByteSize': 5,
+            'Sha256':
+                '486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7',
+            'ExpiresAt': '2026-07-04T02:01:00Z',
+          }
+        ]
+      };
+      transport.fetchResultsByOfferId['offer-1'] = {
+        'OfferId': 'offer-1',
+        'ContentBase64': 'aGVsbG8=',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'Verified': true,
+      };
+      transport.fetchResultsByOfferId['offer-2'] = {
+        'OfferId': 'offer-2',
+        'ContentBase64': 'd29ybGQ=',
+        'ByteSize': 5,
+        'Sha256':
+            '486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7',
+        'Verified': true,
+      };
+      await client.connect();
+
+      final manager = WindowsClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+
+      await manager.start();
+      await Future<void>.delayed(Duration.zero);
+
+      clipboardText = 'hello';
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+
+      clipboardText = 'world';
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(clipboardWrites, ['hello', 'world']);
       expect(
         transport.requests
             .where((request) => request['method'] == 'rift.notifyClipboardChange')
@@ -257,6 +337,76 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(manager.activeOffers.keys, isNot(contains('offer-expire')));
+
+      await manager.dispose();
+    });
+
+    test('resync removes handled offers that are no longer active', () async {
+      transport.fetchResultsByOfferId['offer-old'] = {
+        'OfferId': 'offer-old',
+        'ContentBase64': 'aGVsbG8=',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'Verified': true,
+      };
+      transport.fetchResultsByOfferId['offer-new'] = {
+        'OfferId': 'offer-new',
+        'ContentBase64': 'd29ybGQ=',
+        'ByteSize': 5,
+        'Sha256':
+            '486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7',
+        'Verified': true,
+      };
+      await client.connect();
+
+      final manager = WindowsClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-old',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      transport.listClipboardOffersResult = {
+        'Offers': [
+          {
+            'OfferId': 'offer-new',
+            'SourceDeviceId': 'rift-peer',
+            'ContentType': 'text/plain',
+            'ByteSize': 5,
+            'Sha256':
+                '486ea46224d1bb4fb680f34f7c9ad96a8f24ec88be73ea8e5a6c65260e9cb8a7',
+            'ExpiresAt': '2026-07-04T02:05:00Z',
+          }
+        ]
+      };
+      transport.triggerDisconnect();
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(manager.activeOffers.keys, isNot(contains('offer-old')));
+      expect(manager.activeOffers.keys, contains('offer-new'));
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .length,
+        2,
+      );
 
       await manager.dispose();
     });

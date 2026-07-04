@@ -173,9 +173,9 @@ public sealed class ClipboardService : IClipboardService
         };
     }
 
-    public Task<ListClipboardOffersResult> ListClipboardOffersAsync()
+    public async Task<ListClipboardOffersResult> ListClipboardOffersAsync()
     {
-        PruneExpiredRemoteOffers();
+        await PruneExpiredRemoteOffersAsync().ConfigureAwait(false);
 
         var now = DateTimeOffset.UtcNow;
         var offers = _remoteOffers.Values
@@ -183,10 +183,10 @@ public sealed class ClipboardService : IClipboardService
             .OrderBy(offer => offer.ExpiresAt, StringComparer.Ordinal)
             .ToArray();
 
-        return Task.FromResult(new ListClipboardOffersResult
+        return new ListClipboardOffersResult
         {
             Offers = offers
-        });
+        };
     }
 
     public async Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId, CancellationToken cancellationToken)
@@ -203,7 +203,7 @@ public sealed class ClipboardService : IClipboardService
             throw new ClipboardFailureException("OfferExpired", -32002, $"Offer '{offerId}' has expired.");
         }
 
-        PruneExpiredRemoteOffers();
+        await PruneExpiredRemoteOffersAsync().ConfigureAwait(false);
 
         EnsurePeerCanUseClipboard(offer.SourceDeviceId, RequiredCapability);
 
@@ -430,7 +430,7 @@ public sealed class ClipboardService : IClipboardService
         throw new ClipboardFailureException("Unauthorized", -32004, $"{messageType} payload identity did not match the authenticated peer identity.");
     }
 
-    private void PruneExpiredRemoteOffers()
+    private async Task PruneExpiredRemoteOffersAsync()
     {
         var now = DateTimeOffset.UtcNow;
         foreach (var entry in _remoteOffers)
@@ -443,7 +443,7 @@ public sealed class ClipboardService : IClipboardService
             if (_remoteOffers.TryRemove(entry.Key, out var removed))
             {
                 LogEvent(SecurityEventTypes.ClipboardExpired, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
-                _ = NotifyClipboardExpiredAsync(removed.OfferId);
+                await NotifyClipboardExpiredAsync(removed.OfferId).ConfigureAwait(false);
             }
         }
     }

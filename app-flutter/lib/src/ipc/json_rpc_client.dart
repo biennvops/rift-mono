@@ -246,6 +246,15 @@ class JsonRpcRiftClient {
     controller.add(payload);
   }
 
+  void _setConnectionState(bool isConnected) {
+    if (_isConnected == isConnected) {
+      return;
+    }
+
+    _isConnected = isConnected;
+    _connectionChangedController.add(isConnected);
+  }
+
   Future<void> connect() async {
     if (_isConnected) return;
 
@@ -362,13 +371,12 @@ class JsonRpcRiftClient {
         unawaited(_handleDisconnect());
       }));
 
-      _isConnected = true;
-      _connectionChangedController.add(true);
+      _setConnectionState(true);
       _reconnectAttempts = 0;
       _log.info('Connected to daemon successfully');
     } catch (e) {
       _log.severe('Failed to connect: $e');
-      _isConnected = false;
+      _setConnectionState(false);
       rethrow;
     }
   }
@@ -384,9 +392,8 @@ class JsonRpcRiftClient {
     if (_isReconnecting) return;
     _isReconnecting = true;
 
-    _isConnected = false;
+    _setConnectionState(false);
     _client = null;
-    _connectionChangedController.add(false);
 
     // Fire and forget closures to prevent hanging in async tests
     unawaited(_outController?.close());
@@ -420,7 +427,7 @@ class JsonRpcRiftClient {
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
     _reconnectAttempts = 0;
-    _isConnected = false;
+    _setConnectionState(false);
     _isReconnecting = false;
     await _client?.close();
     _client = null;
