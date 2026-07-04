@@ -189,6 +189,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   @override
   void onTrayIconMouseDown() {
+    unawaited(_clipboardManager?.setWindowVisible(true));
     windowManager.show();
     windowManager.focus();
   }
@@ -196,6 +197,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
     if (menuItem.key == 'show_window') {
+      unawaited(_clipboardManager?.setWindowVisible(true));
       windowManager.show();
       windowManager.focus();
     } else if (menuItem.key == 'exit_app') {
@@ -207,6 +209,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void onWindowClose() async {
     bool isPreventClose = await windowManager.isPreventClose();
     if (isPreventClose) {
+      await _clipboardManager?.setWindowVisible(false);
       windowManager.hide();
     }
   }

@@ -41,7 +41,7 @@ class ClipboardTransport implements IpcTransport {
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
 
-    _appToDaemon!.stream.listen((req) {
+    _appToDaemon!.stream.listen((req) async {
       final decoded = jsonDecode(req) as Map<String, dynamic>;
       requests.add(decoded);
       final id = decoded['id'];
@@ -52,7 +52,12 @@ class ClipboardTransport implements IpcTransport {
         case 'rift.fetchClipboardContent':
           final offerId =
               (decoded['params'] as Map<String, dynamic>)['offerId'] as String;
-          _sendResult(id, fetchResultsByOfferId[offerId] ?? const {});
+          final result = fetchResultsByOfferId[offerId] ?? const {};
+          if (result is Future) {
+            _sendResult(id, await result);
+          } else {
+            _sendResult(id, result);
+          }
           break;
         case 'rift.notifyClipboardChange':
           _sendResult(id, const {
@@ -290,6 +295,7 @@ void main() {
 
     test('ignores unsupported content types instead of auto-fetching', () async {
       await client.connect();
+      final statuses = <String>[];
 
       final manager = DesktopClipboardManager(
         client,
@@ -299,6 +305,7 @@ void main() {
           clipboardWrites.add(text);
         },
       );
+      final statusSub = manager.onStatusUpdate.listen(statuses.add);
       await manager.start();
 
       transport.emitNotification('rift.onClipboardOffer', {
@@ -319,6 +326,101 @@ void main() {
         isTrue,
       );
       expect(clipboardWrites, isEmpty);
+      expect(statuses, isEmpty);
+
+      await statusSub.cancel();
+      await manager.dispose();
+    });
+
+    test('does not emit status after dispose while fetch is still in flight',
+        () async {
+      await client.connect();
+      final fetchGate = Completer<void>();
+      final statuses = <String>[];
+
+      transport.fetchResultsByOfferId['offer-slow'] = Future<dynamic>(() async {
+        await fetchGate.future;
+        return {
+          'OfferId': 'offer-slow',
+          'ContentBase64': 'aGVsbG8=',
+          'ByteSize': 5,
+          'Sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'Verified': true,
+        };
+      });
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+      final statusSub = manager.onStatusUpdate.listen(statuses.add);
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-slow',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(statuses, contains('Fetching clipboard from peer...'));
+
+      await manager.dispose();
+      fetchGate.complete();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(clipboardWrites, isEmpty);
+      expect(
+        statuses.where((status) => status == 'Clipboard received from peer'),
+        isEmpty,
+      );
+
+      await statusSub.cancel();
+    });
+
+    test('pauses clipboard monitoring while window is hidden', () async {
+      await client.connect();
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+      await manager.start();
+      await manager.setWindowVisible(false);
+
+      clipboardText = 'hello';
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .isEmpty,
+        isTrue,
+      );
+
+      await manager.setWindowVisible(true);
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .length,
+        1,
+      );
 
       await manager.dispose();
     });
