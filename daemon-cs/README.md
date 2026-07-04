@@ -25,6 +25,8 @@ daemon-cs/
 │   ├── MacIpcListener.cs       # Unix Domain Socket + POSIX security
 │   └── Resources/              # launchd plist
 ├── Rift.Daemon.Tests/          # Cross-platform tests (net10.0)
+├── Tools/
+│   └── Rift.IpcProbe/          # Local IPC probe / debugging utility
 └── Rift.Daemon.sln
 ```
 

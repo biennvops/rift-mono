@@ -7,9 +7,9 @@ This repository contains the protocol specification, daemon implementations, Flu
 ## Repository Layout
 
 - `spec/` - language-independent Rift protocol specification and supporting materials.
-- `daemon-cs/` - Windows daemon implementation in C#/.NET.
+- `daemon-cs/` - multi-platform C#/.NET daemon core with Windows, macOS, and Linux hosts.
 - `daemon-dart/` - Android daemon implementation in Dart.
-- `app-flutter/` - Flutter app for Android and Windows.
+- `app-flutter/` - Flutter app and IPC client for Android and the active desktop targets in this repository.
 - `tests-conformance/` - tests for implementation conformance to the written protocol.
 - `tests-interop/` - cross-implementation interoperability tests.
 
@@ -23,4 +23,7 @@ Local reference documents may be placed in `spec/references/`; this directory is
 
 ## Status
 
-Initial workspace scaffold.
+Active monorepo under development. The protocol/specification remains the
+source of truth; implementations and docs may advance in stages, so milestone
+plans in older documents can lag behind newer platform work captured deeper in
+the repo.

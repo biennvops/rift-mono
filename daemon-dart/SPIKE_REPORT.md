@@ -10,9 +10,19 @@
 
 ```text
 daemon-dart/
+├── bin/
+│   └── daemon.dart                        # Standalone desktop/Linux IPC smoke-test entrypoint
 ├── lib/
 │   ├── daemon_dart.dart                    # Exporter
 │   └── src/
+│       ├── clipboard/
+│       │   ├── clipboard_engine.dart       # In-memory offer/fetch state, expiry, replay protection
+│       │   ├── clipboard_handler.dart      # Clipboard protocol message handlers
+│       │   └── clipboard_models.dart       # Clipboard offer/fetch model types
+│       ├── core/
+│       │   ├── rift_constants.dart         # Shared protocol/version/capability metadata
+│       │   ├── rift_exceptions.dart        # Typed Rift/JSON-RPC exceptions
+│       │   └── rpc_utils.dart              # Shared JSON-RPC parameter validation helpers
 │       ├── crypto/
 │       │   ├── base32_utils.dart           # RFC 4648 Base32 encoder with Web/JS float bit-clamping
 │       │   ├── cert_builder.dart           # Generates mTLS X.509 certificate with random 64-bit entropy serials
@@ -36,15 +46,22 @@ daemon-dart/
 │       │   └── trust_store_impl.dart       # SQLite ACID Trust Store with WAL mode and Exhaustive Edge Validation
 │       └── daemon.dart                     # IPC try/catch boundary and Isolate orchestrator for Flutter
 ├── test/
+│   ├── capability_presence_test.dart       # Capability negotiation and presence heartbeat tests
+│   ├── clipboard_engine_test.dart          # Clipboard offer/fetch engine tests
+│   ├── clipboard_handler_test.dart         # Clipboard protocol handler tests
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
+│   ├── discovered_peer_selection_test.dart # Multi-endpoint discovered-peer selection behavior
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
 │   ├── identity_test.dart                  # Unit test to verify valid Device ID, Base32, and key zeroing
 │   ├── discovery_integration_test.dart     # Pure Dart mDNS integration test exercising actual UDP network stack
+│   ├── discovery_peer_tracker_test.dart    # Discovery dedupe / eviction tracker tests
 │   ├── pairing_manager_test.dart           # Pairing test: Timeout, UI spoofing, Double-Approve Bypass
+│   ├── pop_interop_test.dart               # PoP interop / payload compatibility tests
 │   ├── pop_test.dart                       # PoP signature verification Test Vectors (107-byte canonical)
+│   ├── session_manager_integration_test.dart # Session flow integration tests
 │   ├── session_manager_test.dart           # Session bounds test: Client-side Auth Bypass prevention
-│   └── trust_store_test.dart               # SQLite database persistence and ACID transitions test
+│   └── trust_store_impl_test.dart          # SQLite database persistence and ACID transitions test
 ├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
 └── README.md                               # Guide for running tests, linter and overall architecture
 ```
