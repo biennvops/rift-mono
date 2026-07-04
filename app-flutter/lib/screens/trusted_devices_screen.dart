@@ -408,11 +408,105 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     return result ?? false;
   }
 
+  Widget _buildTrustBadge(String trustState, ThemeData theme) {
+    Color bgColor;
+    Color fgColor;
+    Color borderColor;
+    IconData icon;
+    String label = _trustStateLabel(trustState).toUpperCase();
+
+    if (trustState == 'trusted') {
+      bgColor = theme.colorScheme.secondaryContainer;
+      fgColor = theme.colorScheme.onSecondaryContainer;
+      borderColor = theme.colorScheme.secondary; // equivalent to secondary-fixed for border
+      icon = Icons.verified_user;
+    } else if (trustState == 'blocked' || trustState == 'revoked') {
+      bgColor = theme.colorScheme.errorContainer;
+      fgColor = theme.colorScheme.onErrorContainer;
+      borderColor = theme.colorScheme.error;
+      icon = Icons.block;
+    } else {
+      bgColor = theme.colorScheme.surfaceContainerHighest;
+      fgColor = theme.colorScheme.onSurfaceVariant;
+      borderColor = theme.colorScheme.outlineVariant;
+      icon = Icons.radar;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fgColor),
+          const SizedBox(width: 4),
+          Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fgColor)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPresenceIndicator(bool isOnline, ThemeData theme, String trustState) {
+    if (trustState == 'blocked' || trustState == 'revoked') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.errorContainer,
+              shape: BoxShape.circle,
+              border: Border.all(color: theme.colorScheme.error),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text('OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
+        ],
+      );
+    }
+    
+    if (isOnline) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.secondary,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text('ONLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary)),
+        ],
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8, height: 8,
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            shape: BoxShape.circle,
+            border: Border.all(color: theme.colorScheme.outline),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text('OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+      ],
+    );
+  }
+
   Widget _buildPeerCard(Map<String, dynamic> peer, bool isTrusted) {
     final isOnline = peer['presence'] == 'online';
     final trustState = peer['trustState']?.toString() ??
         (isTrusted ? 'trusted' : 'discovered');
-    final trustLabel = _trustStateLabel(trustState);
     final theme = Theme.of(context);
 
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
@@ -421,157 +515,114 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final String titleText = peer['displayName'] ??
         (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
 
-    return Card(
-      elevation: 0,
-      color: isTrusted
-          ? theme.colorScheme.surfaceContainerHighest
-          : theme.colorScheme.surfaceContainerLow,
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: isTrusted
-              ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.outlineVariant,
+    // Màn A Design uses surface-container-lowest for Trusted, surface-container-low for Discovered, and surface-container for Blocked
+    Color cardBg;
+    Color cardBorder = theme.colorScheme.outlineVariant;
+    double opacity = 1.0;
+    
+    if (trustState == 'trusted') {
+      cardBg = theme.colorScheme.surface;
+    } else if (trustState == 'blocked' || trustState == 'revoked') {
+      cardBg = theme.colorScheme.surfaceContainer;
+      cardBorder = theme.colorScheme.errorContainer;
+      opacity = 0.6;
+    } else {
+      cardBg = theme.colorScheme.surfaceContainerLow;
+    }
+
+    return Opacity(
+      opacity: opacity,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: cardBorder),
         ),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: CircleAvatar(
-          backgroundColor: isTrusted
-              ? theme.colorScheme.primary
-              : theme.colorScheme.surfaceContainerHighest,
-          foregroundColor: isTrusted
-              ? theme.colorScheme.onPrimary
-              : theme.colorScheme.onSurfaceVariant,
-          child: Icon(
-            isTrusted ? Icons.verified_user : Icons.device_unknown,
-          ),
-        ),
-        title: Text(
-          titleText,
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SizedBox(height: 8),
-            Text('ID: ${peer['deviceId']}', style: theme.textTheme.bodySmall),
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Chip(
-                  label: Text(trustLabel),
-                  visualDensity: VisualDensity.compact,
+                Row(
+                  children: [
+                    Icon(
+                      peer['platform'] == 'android' ? Icons.smartphone : Icons.desktop_windows, 
+                      color: theme.colorScheme.outline
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      titleText,
+                      style: theme.textTheme.headlineMedium?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        decoration: (trustState == 'blocked' || trustState == 'revoked') ? TextDecoration.lineThrough : null,
+                        decorationColor: theme.colorScheme.error,
+                      ),
+                    ),
+                  ],
                 ),
-                if (isTrusted)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isOnline ? Icons.circle : Icons.circle_outlined,
-                        size: 12,
-                        color: isOnline ? Colors.green : Colors.grey,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        isOnline ? 'Online' : 'Offline',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: isOnline ? Colors.green : Colors.grey,
-                        ),
-                      ),
-                    ],
-                  ),
+                _buildTrustBadge(trustState, theme),
               ],
             ),
             const SizedBox(height: 8),
-            if (isTrusted &&
-                peer['capabilities'] is List &&
-                (peer['capabilities'] as List).isNotEmpty)
-              _buildCapabilityBadges(peer['capabilities'] as List),
-            if (!isTrusted && peer['address'] != null)
-              Text('Address: ${peer['address']}:${peer['port']}',
-                  style: theme.textTheme.bodySmall),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _buildPresenceIndicator(isOnline, theme, trustState),
+                _buildActionBtn(trustState, isTrusted, peer, titleText, theme),
+              ],
+            ),
           ],
         ),
-        trailing: isTrusted
-            ? IconButton(
-                icon: Icon(_trustedActionIcon(trustState)),
-                tooltip: _trustedActionTooltip(trustState),
-                onPressed: () => _handlePeerAction(
-                  peer: peer,
-                  isTrusted: isTrusted,
-                  trustState: trustState,
-                  titleText: titleText,
-                ),
-              )
-            : ElevatedButton(
-                onPressed: () => _handlePeerAction(
-                  peer: peer,
-                  isTrusted: isTrusted,
-                  trustState: trustState,
-                  titleText: titleText,
-                ),
-                child: const Text('Pair'),
-              ),
       ),
     );
   }
 
-  Widget _buildCapabilityBadges(List<dynamic> capabilities) {
-    return Wrap(
-      spacing: 6,
-      runSpacing: 4,
-      children: capabilities.map((c) {
-        final cap = c.toString();
-        IconData icon = Icons.extension;
-        String label = cap;
-        if (cap.startsWith('clipboard.')) {
-          icon = Icons.content_copy;
-          label = 'Clipboard';
-        } else if (cap.startsWith('presence.')) {
-          icon = Icons.sensors;
-          label = 'Presence';
-        } else if (cap.startsWith('operation.')) {
-          icon = Icons.settings_remote;
-          label = 'Operations';
-        } else if (cap.startsWith('security.')) {
-          icon = Icons.security;
-          label = 'Security';
-        }
-
-        return Tooltip(
-          message: cap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHigh,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: Theme.of(context).colorScheme.outlineVariant,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon,
-                    size: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 4),
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 10,
-                      ),
-                ),
-              ],
-            ),
+  Widget _buildActionBtn(String trustState, bool isTrusted, Map<String, dynamic> peer, String titleText, ThemeData theme) {
+    if (trustState == 'blocked' || trustState == 'revoked') {
+      return const SizedBox.shrink();
+    }
+    
+    if (trustState == 'trusted') {
+      return InkWell(
+        onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.more_horiz, size: 18, color: theme.colorScheme.primary),
+              const SizedBox(width: 4),
+              Text('Manage', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+            ],
           ),
-        );
-      }).toList(),
+        ),
+      );
+    }
+    
+    // Discovered state -> Verify/Pair
+    return InkWell(
+      onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+      borderRadius: BorderRadius.circular(4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          border: Border.all(color: theme.colorScheme.primary),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.fingerprint, size: 16, color: theme.colorScheme.primary),
+            const SizedBox(width: 4),
+            Text('Verify', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+          ],
+        ),
+      ),
     );
   }
 
@@ -656,15 +707,55 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text(AppStrings.trustedDevicesTitle),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(56.0),
+        child: Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
           ),
-        ],
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.shield, color: theme.colorScheme.primary), // shield_with_heart proxy
+                      const SizedBox(width: 8),
+                      Text(
+                        'RIFT',
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      if (_isDiscovering)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 8.0),
+                          child: SizedBox(
+                            width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      IconButton(
+                        icon: Icon(Icons.refresh, color: theme.colorScheme.onSurfaceVariant),
+                        onPressed: _loadData,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
       body: _error != null && _trustedPeers.isEmpty && _discoveredPeers.isEmpty
           ? Center(
@@ -672,11 +763,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                   Icon(Icons.warning_amber_rounded,
-                      size: 48, color: Theme.of(context).colorScheme.error),
+                      size: 48, color: theme.colorScheme.error),
                   const SizedBox(height: 16),
                   Text('Error loading devices: $_error',
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)),
+                      style: TextStyle(color: theme.colorScheme.error)),
                   const SizedBox(height: 16),
                   ElevatedButton(
                       onPressed: _loadData, child: const Text('Retry'))
@@ -685,49 +775,35 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               onRefresh: _loadData,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(vertical: 16),
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(24, 24, 24, 8),
-                    child: Text(
-                      'Trusted Devices',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  if (_trustedPeers.isEmpty)
-                    const Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                      child: Text('No trusted devices found.'),
+                  if (_trustedPeers.isEmpty && _discoveredPeers.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        children: [
+                          Icon(Icons.devices, size: 64, color: theme.colorScheme.outlineVariant),
+                          const SizedBox(height: 16),
+                          Text('No devices found.', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                        ],
+                      ),
                     )
-                  else
-                    ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
-
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(24, 24, 24, 8),
-                    child: Text(
-                      'Discovered Devices',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  if (_discoveredPeers.isEmpty)
-                    const Padding(
-                      padding:
-                          EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                      child: Text('No new devices discovered in your network.'),
-                    )
-                  else
-                    ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
-
+                  else ...[
+                    if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
+                    if (_discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
+                  ],
                   const SizedBox(height: 80), // Fab spacing
                 ],
               ),
             ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _toggleDiscovery,
+        backgroundColor: theme.colorScheme.primaryContainer,
+        foregroundColor: theme.colorScheme.onPrimaryContainer,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         icon: Icon(_isDiscovering ? Icons.search_off : Icons.search),
-        label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices'),
+        label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
       ),
     );
   }

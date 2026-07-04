@@ -7,6 +7,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'constants.dart';
 import 'screens/event_log_screen.dart';
@@ -260,201 +261,127 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       scaffoldMessengerKey: _scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
-      theme: ThemeData(useMaterial3: true),
-      home: const HomeScreen(),
+      theme: _buildRiftTheme(),
+      home: const AppShell(),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+ThemeData _buildRiftTheme() {
+  const colorScheme = ColorScheme(
+    brightness: Brightness.light,
+    primary: Color(0xFF00328a),
+    onPrimary: Color(0xFFffffff),
+    primaryContainer: Color(0xFF0047bb),
+    onPrimaryContainer: Color(0xFFafc1ff),
+    secondary: Color(0xFF006e06),
+    onSecondary: Color(0xFFffffff),
+    secondaryContainer: Color(0xFF91f77e),
+    onSecondaryContainer: Color(0xFF007306),
+    tertiary: Color(0xFF701a00),
+    onTertiary: Color(0xFFffffff),
+    tertiaryContainer: Color(0xFF982700),
+    onTertiaryContainer: Color(0xFFffb09a),
+    error: Color(0xFFba1a1a),
+    onError: Color(0xFFffffff),
+    errorContainer: Color(0xFFffdad6),
+    onErrorContainer: Color(0xFF93000a),
+    surface: Color(0xFFfdf8f6),
+    onSurface: Color(0xFF1c1b1a),
+    surfaceContainerHighest: Color(0xFFe6e2df),
+    onSurfaceVariant: Color(0xFF434653),
+    outline: Color(0xFF737685),
+    outlineVariant: Color(0xFFc3c6d6),
+  );
 
-  @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  final inter = GoogleFonts.interTextTheme();
+  final jetBrains = GoogleFonts.jetbrainsMono();
+
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: colorScheme,
+    scaffoldBackgroundColor: colorScheme.surface,
+    textTheme: inter.copyWith(
+      headlineLarge: inter.headlineLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
+      headlineMedium: inter.headlineMedium?.copyWith(fontSize: 24, fontWeight: FontWeight.w600, height: 32/24),
+      headlineSmall: inter.headlineSmall?.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 28/20),
+      bodyLarge: inter.bodyLarge?.copyWith(fontSize: 16, fontWeight: FontWeight.w400, height: 24/16),
+      bodyMedium: inter.bodyMedium?.copyWith(fontSize: 14, fontWeight: FontWeight.w400, height: 20/14),
+      labelMedium: jetBrains.copyWith(fontSize: 13, fontWeight: FontWeight.w500, letterSpacing: 0.05, height: 16/13),
+      labelSmall: jetBrains.copyWith(fontSize: 11, fontWeight: FontWeight.w400, height: 14/11),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: colorScheme.surface,
+      indicatorColor: colorScheme.secondaryContainer,
+      labelTextStyle: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return jetBrains.copyWith(fontSize: 11, color: colorScheme.onSurface, fontWeight: FontWeight.w600);
+        }
+        return jetBrains.copyWith(fontSize: 11, color: colorScheme.onSurfaceVariant);
+      }),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return IconThemeData(color: colorScheme.onSecondaryContainer);
+        }
+        return IconThemeData(color: colorScheme.onSurfaceVariant);
+      }),
+    ),
+  );
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  Timer? _statusPollTimer;
-  bool _isConnected = false;
-  int _trustedCount = 0;
-  int _onlineTrustedCount = 0;
-  int _discoveredCount = 0;
-  bool _isDiscovering = false;
+class AppShell extends StatefulWidget {
+  const AppShell({super.key});
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncHomeStatus();
-      _statusPollTimer = Timer.periodic(
-        const Duration(seconds: 5),
-        (_) => _syncHomeStatus(),
-      );
-    });
-  }
+  State<AppShell> createState() => _AppShellState();
+}
 
-  @override
-  void dispose() {
-    _statusPollTimer?.cancel();
-    super.dispose();
-  }
+class _AppShellState extends State<AppShell> {
+  int _currentIndex = 0;
 
-  Future<void> _syncHomeStatus() async {
-    if (!mounted) return;
-    final client = context.read<JsonRpcRiftClient>();
-    final nextConnected = client.isConnected;
-
-    if (!nextConnected) {
-      if (_isConnected ||
-          _trustedCount != 0 ||
-          _onlineTrustedCount != 0 ||
-          _discoveredCount != 0 ||
-          _isDiscovering) {
-        setState(() {
-          _isConnected = false;
-          _trustedCount = 0;
-          _onlineTrustedCount = 0;
-          _discoveredCount = 0;
-          _isDiscovering = false;
-        });
-      }
-      return;
-    }
-
-    try {
-      final trustedResult = await client.listTrustedPeers() as Map;
-      final discoveredResult = await client.listDiscoveredPeers() as Map;
-      if (!mounted) return;
-
-      final trustedPeers = List<dynamic>.from(trustedResult['peers'] ?? const []);
-      final discoveredPeers = List<dynamic>.from(
-        discoveredResult['peers'] ?? const [],
-      );
-      final onlineTrusted = trustedPeers.where((peer) {
-        return peer is Map && peer['presence']?.toString() == 'online';
-      }).length;
-      final isDiscovering = discoveredResult['isDiscovering'] == true;
-
-      if (nextConnected == _isConnected &&
-          trustedPeers.length == _trustedCount &&
-          onlineTrusted == _onlineTrustedCount &&
-          discoveredPeers.length == _discoveredCount &&
-          isDiscovering == _isDiscovering) {
-        return;
-      }
-
-      setState(() {
-        _isConnected = nextConnected;
-        _trustedCount = trustedPeers.length;
-        _onlineTrustedCount = onlineTrusted;
-        _discoveredCount = discoveredPeers.length;
-        _isDiscovering = isDiscovering;
-      });
-    } catch (_) {
-      if (!_isConnected) return;
-      setState(() {
-        _isConnected = false;
-        _trustedCount = 0;
-        _onlineTrustedCount = 0;
-        _discoveredCount = 0;
-        _isDiscovering = false;
-      });
-    }
-  }
-
-  String _buildDaemonSubtitle() {
-    if (!_isConnected) {
-      return 'Waiting for the local daemon.';
-    }
-
-    final parts = <String>[
-      '$_trustedCount trusted',
-      '$_onlineTrustedCount online',
-      '$_discoveredCount discovered',
-      _isDiscovering ? 'discovery running' : 'discovery idle',
-    ];
-    return parts.join('  •  ');
-  }
+  final List<Widget> _screens = const [
+    TrustedDevicesScreen(),
+    ClipboardDebugScreen(),
+    EventLogScreen(),
+    SettingsScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text(AppStrings.appTitle)),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(AppStrings.homeSubtitle),
-            const SizedBox(height: 16),
-            Card(
-              elevation: 0,
-              color: _isConnected
-                  ? theme.colorScheme.primaryContainer
-                  : theme.colorScheme.surfaceContainerHighest,
-              child: ListTile(
-                leading: Icon(
-                  _isConnected ? Icons.link : Icons.link_off,
-                  color: _isConnected
-                      ? theme.colorScheme.onPrimaryContainer
-                      : theme.colorScheme.onSurfaceVariant,
-                ),
-                title: Text(
-                  _isConnected
-                      ? AppStrings.daemonConnected
-                      : AppStrings.daemonReconnecting,
-                ),
-                subtitle: Text(
-                  _isConnected
-                      ? _buildDaemonSubtitle()
-                      : 'Waiting for the local daemon.',
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const ClipboardDebugScreen(),
-                  ),
-                );
-              },
-              child: const Text('Open Clipboard Debug'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const TrustedDevicesScreen(),
-                  ),
-                );
-              },
-              child: const Text(AppStrings.openTrustedDevices),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const EventLogScreen(),
-                  ),
-                );
-              },
-              child: const Text(AppStrings.openEventLog),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const SettingsScreen(),
-                  ),
-                );
-              },
-              child: const Text(AppStrings.openSettings),
-            ),
-          ],
-        ),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _screens,
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.devices),
+            selectedIcon: Icon(Icons.devices),
+            label: 'Devices',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history),
+            selectedIcon: Icon(Icons.history),
+            label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.notifications_outlined),
+            selectedIcon: Icon(Icons.notifications_active),
+            label: 'Events',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.terminal),
+            selectedIcon: Icon(Icons.terminal),
+            label: 'Ops',
+          ),
+        ],
       ),
     );
   }
