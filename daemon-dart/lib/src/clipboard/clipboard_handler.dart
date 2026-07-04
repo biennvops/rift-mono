@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:uuid/uuid.dart';
 import '../core/rift_log.dart';
 import '../network/session_manager.dart';
 import 'clipboard_engine.dart';
@@ -114,6 +115,8 @@ class ClipboardProtocolHandler {
     final req = ClipboardFetchRequest(offerId: offerId, requestingDeviceId: _localDeviceId);
     final msg = {
       'rift': '0.1-draft',
+      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'clipboard.fetchRequest',
       'sourceDeviceId': _localDeviceId,
       'destinationDeviceId': peerDeviceId,
@@ -181,6 +184,8 @@ class ClipboardProtocolHandler {
 
     final msg = {
       'rift': '0.1-draft',
+      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'clipboard.fetchResponse',
       'sourceDeviceId': _localDeviceId,
       'destinationDeviceId': peerDeviceId,
@@ -257,6 +262,8 @@ class ClipboardProtocolHandler {
     final reject = ClipboardFetchReject(offerId: offerId, failureReason: failureReason, message: message);
     final msg = {
       'rift': '0.1-draft',
+      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'type': 'clipboard.fetchReject',
       'sourceDeviceId': _localDeviceId,
       'destinationDeviceId': peerDeviceId,
