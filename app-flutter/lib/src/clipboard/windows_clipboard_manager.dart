@@ -205,8 +205,8 @@ class WindowsClipboardManager {
 
       final bytes = base64Decode(contentBase64);
       final text = utf8.decode(bytes);
-      await _writeClipboardText(text);
       _enqueueSuppressedLocalHash(sha256);
+      await _writeClipboardText(text);
     } catch (error, stackTrace) {
       _handledOfferIds.remove(offerId);
       _log.warning('Failed to fetch/apply clipboard offer $offerId.', error, stackTrace);
