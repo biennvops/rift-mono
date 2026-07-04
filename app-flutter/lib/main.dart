@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
@@ -102,6 +101,13 @@ class _RiftAppState extends State<RiftApp> {
   void dispose() {
     _pairingRequestSub?.cancel();
     unawaited(widget.clipboardManager?.dispose());
+    if (Platform.isAndroid && _clipboardServiceStarted) {
+      unawaited(
+        _clipboardChannel.invokeMethod('stopService').catchError((Object error) {
+          debugPrint('Failed to stop clipboard service: $error');
+        }),
+      );
+    }
     super.dispose();
   }
 
