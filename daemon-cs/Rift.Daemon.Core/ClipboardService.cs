@@ -433,6 +433,7 @@ public sealed class ClipboardService : IClipboardService
     private async Task PruneExpiredRemoteOffersAsync()
     {
         var now = DateTimeOffset.UtcNow;
+        List<Task>? notificationTasks = null;
         foreach (var entry in _remoteOffers)
         {
             if (DateTimeOffset.Parse(entry.Value.ExpiresAt) > now)
@@ -443,8 +444,14 @@ public sealed class ClipboardService : IClipboardService
             if (_remoteOffers.TryRemove(entry.Key, out var removed))
             {
                 LogEvent(SecurityEventTypes.ClipboardExpired, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
-                await NotifyClipboardExpiredAsync(removed.OfferId).ConfigureAwait(false);
+                notificationTasks ??= [];
+                notificationTasks.Add(NotifyClipboardExpiredAsync(removed.OfferId));
             }
+        }
+
+        if (notificationTasks is not null)
+        {
+            await Task.WhenAll(notificationTasks).ConfigureAwait(false);
         }
     }
 

@@ -13,6 +13,7 @@ class ClipboardTransport implements IpcTransport {
   final List<Map<String, dynamic>> requests = [];
   dynamic listClipboardOffersResult = const {'Offers': <dynamic>[]};
   final Map<String, dynamic> fetchResultsByOfferId = <String, dynamic>{};
+  int connectionAttempts = 0;
 
   void triggerDisconnect() {
     _daemonToApp?.close();
@@ -36,6 +37,7 @@ class ClipboardTransport implements IpcTransport {
 
   @override
   Future<StreamChannel<String>> connect() async {
+    connectionAttempts++;
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
 
@@ -69,6 +71,20 @@ class ClipboardTransport implements IpcTransport {
   Future<void> disconnect() async {
     await _daemonToApp?.close();
     await _appToDaemon?.close();
+  }
+}
+
+Future<void> waitForCondition(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 1),
+  Duration pollInterval = const Duration(milliseconds: 10),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException('Condition was not met before timeout.');
+    }
+    await Future<void>.delayed(pollInterval);
   }
 }
 
@@ -396,8 +412,10 @@ void main() {
         ]
       };
       transport.triggerDisconnect();
-      await Future<void>.delayed(const Duration(seconds: 2));
-      await Future<void>.delayed(Duration.zero);
+      await waitForCondition(() => transport.connectionAttempts >= 2);
+      await waitForCondition(
+        () => manager.activeOffers.keys.contains('offer-new'),
+      );
 
       expect(manager.activeOffers.keys, isNot(contains('offer-old')));
       expect(manager.activeOffers.keys, contains('offer-new'));

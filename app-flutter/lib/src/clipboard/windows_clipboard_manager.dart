@@ -26,6 +26,7 @@ class WindowsClipboardManager {
   static const String _clipboardEventsChannelName =
       'rift/windows/clipboard_events';
   static const String _textPlainContentType = 'text/plain';
+  static const Duration _echoSuppressionWindow = Duration(seconds: 1);
 
   final JsonRpcRiftClient _client;
   final Stream<Object?> _clipboardChanges;
@@ -34,7 +35,8 @@ class WindowsClipboardManager {
   final Logger _log = Logger('WindowsClipboardManager');
   final Map<String, Map<String, dynamic>> _activeOffers = {};
   final Set<String> _handledOfferIds = <String>{};
-  final Map<String, int> _suppressedLocalSha256Counts = <String, int>{};
+  final Map<String, DateTime> _suppressedLocalSha256Deadlines =
+      <String, DateTime>{};
 
   StreamSubscription<Object?>? _clipboardChangeSub;
   StreamSubscription<Map<String, dynamic>>? _offerSub;
@@ -42,6 +44,7 @@ class WindowsClipboardManager {
   StreamSubscription<bool>? _connectionSub;
   bool _started = false;
   bool _resyncInFlight = false;
+  bool _resyncRequested = false;
 
   UnmodifiableMapView<String, Map<String, dynamic>> get activeOffers =>
       UnmodifiableMapView(_activeOffers);
@@ -75,7 +78,7 @@ class WindowsClipboardManager {
     await _connectionSub?.cancel();
     _activeOffers.clear();
     _handledOfferIds.clear();
-    _suppressedLocalSha256Counts.clear();
+    _suppressedLocalSha256Deadlines.clear();
   }
 
   Future<void> _handleLocalClipboardChanged() async {
@@ -103,11 +106,17 @@ class WindowsClipboardManager {
   }
 
   Future<void> _resyncOffers() async {
-    if (!_client.isConnected || _resyncInFlight) {
+    if (!_client.isConnected) {
+      return;
+    }
+
+    if (_resyncInFlight) {
+      _resyncRequested = true;
       return;
     }
 
     _resyncInFlight = true;
+    _resyncRequested = false;
     try {
       final result = await _client.listClipboardOffers() as Map<dynamic, dynamic>;
       final offers = List<Map<String, dynamic>>.from(
@@ -134,6 +143,9 @@ class WindowsClipboardManager {
       _log.warning('Clipboard offer resync failed.', error, stackTrace);
     } finally {
       _resyncInFlight = false;
+      if (_resyncRequested && _client.isConnected) {
+        unawaited(_resyncOffers());
+      }
     }
   }
 
@@ -193,8 +205,8 @@ class WindowsClipboardManager {
 
       final bytes = base64Decode(contentBase64);
       final text = utf8.decode(bytes);
-      _enqueueSuppressedLocalHash(sha256);
       await _writeClipboardText(text);
+      _enqueueSuppressedLocalHash(sha256);
     } catch (error, stackTrace) {
       _handledOfferIds.remove(offerId);
       _log.warning('Failed to fetch/apply clipboard offer $offerId.', error, stackTrace);
@@ -202,20 +214,20 @@ class WindowsClipboardManager {
   }
 
   void _enqueueSuppressedLocalHash(String sha256) {
-    _suppressedLocalSha256Counts.update(sha256, (count) => count + 2,
-        ifAbsent: () => 2);
+    _suppressedLocalSha256Deadlines[sha256] =
+        DateTime.now().add(_echoSuppressionWindow);
   }
 
   bool _consumeSuppressedLocalHash(String sha256) {
-    final count = _suppressedLocalSha256Counts[sha256];
-    if (count == null || count <= 0) {
+    final deadline = _suppressedLocalSha256Deadlines[sha256];
+    if (deadline == null) {
       return false;
     }
 
-    if (count == 1) {
-      _suppressedLocalSha256Counts.remove(sha256);
-    } else {
-      _suppressedLocalSha256Counts[sha256] = count - 1;
+    final now = DateTime.now();
+    if (deadline.isBefore(now)) {
+      _suppressedLocalSha256Deadlines.remove(sha256);
+      return false;
     }
 
     return true;
