@@ -40,17 +40,31 @@ lightweight harness around in-memory `SessionManager` instances from
 
 - validating message-shape assumptions around presence updates
 - exercising disconnect cleanup logic in a controlled environment
+- exercising clipboard offer/fetch flows, integrity checks, and boundary cases
 - keeping the Week 6 harness package alive in CI
+
+Current checked-in simulated coverage includes:
+
+- `presence_sync_test.dart` for Week 6 presence-state propagation
+- `clipboard_transfer_test.dart` for Week 7 clipboard offer/fetch behavior,
+  including:
+  - successful fetch flow
+  - SHA-256 / `byteSize` integrity preservation
+  - oversized payload rejection
+  - empty payload handling
+  - UTF-8 / special-character preservation
 
 They are **not** a substitute for real host-to-host or daemon-to-daemon interop
 evidence, and they do not by themselves satisfy the sign-off matrix below.
 
 ## Latest update
 
-- Date: 2026-06-24
-- Branch: `kim-week5`
-- Scope: Android <-> Linux pairing, trust transition, and IPC/app-state fixes;
-  prior Windows <-> Android IPC readiness evidence retained below
+- Date: 2026-07-04
+- Branch: current Week 7 clipboard batch
+- Scope:
+  - prior Android <-> Linux pairing / trust evidence retained below
+  - Week 7 simulated clipboard offer/fetch coverage added
+  - live Milestone M4 clipboard evidence still pending
 
 ## Platform-pair matrix
 
@@ -148,6 +162,11 @@ pairing work on real devices. Windows <-> Android has IPC readiness evidence.
 Linux <-> Android has partial real pairing evidence from hands-on debugging, but
 not yet a clean sign-off matrix. Linux <-> Windows remains code-ready but
 unevaluated in this directory.
+
+For Week 7 specifically, this directory now contains automated simulated
+clipboard coverage, but Milestone M4 still requires recorded live interop
+evidence before clipboard transfer can be treated as fully signed off for any
+platform pair.
 
 ## Follow-up engineering work
 
