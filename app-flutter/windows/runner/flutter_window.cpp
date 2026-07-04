@@ -1,5 +1,9 @@
 #include "flutter_window.h"
 
+#include <flutter/event_channel.h>
+#include <flutter/stream_handler_functions.h>
+#include <flutter/standard_method_codec.h>
+
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -25,6 +29,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  RegisterClipboardEventChannel();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +45,12 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (clipboard_listener_registered_ && GetHandle() != nullptr) {
+    RemoveClipboardFormatListener(GetHandle());
+    clipboard_listener_registered_ = false;
+  }
+  clipboard_event_sink_.reset();
+  clipboard_event_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -62,10 +73,44 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_CLIPBOARDUPDATE:
+      if (clipboard_event_sink_) {
+        clipboard_event_sink_->Success(flutter::EncodableValue(true));
+      }
+      return 0;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
+
+void FlutterWindow::RegisterClipboardEventChannel() {
+  auto messenger = flutter_controller_->engine()->messenger();
+  clipboard_event_channel_ =
+      std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(
+          messenger, "rift/windows/clipboard_events",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  auto handler =
+      std::make_unique<flutter::StreamHandlerFunctions<flutter::EncodableValue>>(
+          [this](
+              const flutter::EncodableValue*,
+              std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>&&
+                  events) -> std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> {
+            clipboard_event_sink_ = std::move(events);
+            if (!clipboard_listener_registered_ && GetHandle() != nullptr) {
+              clipboard_listener_registered_ =
+                  AddClipboardFormatListener(GetHandle()) == TRUE;
+            }
+            return nullptr;
+          },
+          [this](
+              const flutter::EncodableValue*) -> std::unique_ptr<flutter::StreamHandlerError<flutter::EncodableValue>> {
+            clipboard_event_sink_.reset();
+            return nullptr;
+          });
+
+  clipboard_event_channel_->SetStreamHandler(std::move(handler));
 }

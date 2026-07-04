@@ -35,7 +35,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore);
         _clipboardTransport = new FakeTransport();
         _pairingTransport = new FakeTransport();
-        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
+        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
         _pairingCoordinator = new PairingProtocolCoordinator(
             _pairingTransport,
             discoveryCoordinator,

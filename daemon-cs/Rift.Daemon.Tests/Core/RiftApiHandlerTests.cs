@@ -37,7 +37,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         _transport = new FakeTransport();
         var discoveryCoordinator = new DiscoveryCoordinator(_discoveryService, _trustStore);
         var daemonInfoService = new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, discoveryCoordinator, _presenceService);
-        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,

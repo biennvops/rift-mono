@@ -19,6 +19,7 @@ public sealed class ClipboardService : IClipboardService
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
     private readonly ISecurityEventLog _securityEventLog;
+    private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILogger<ClipboardService> _logger;
     private readonly TimeSpan _fetchResponseTimeout;
     private readonly ConcurrentDictionary<string, LocalClipboardOffer> _localOffers = new(StringComparer.Ordinal);
@@ -33,6 +34,7 @@ public sealed class ClipboardService : IClipboardService
         IPresenceService presenceService,
         IIdentityManager identityManager,
         ISecurityEventLog securityEventLog,
+        IIpcNotificationService? ipcNotificationService = null,
         ILogger<ClipboardService>? logger = null,
         TimeSpan? fetchResponseTimeout = null)
     {
@@ -41,6 +43,7 @@ public sealed class ClipboardService : IClipboardService
         _presenceService = presenceService;
         _identityManager = identityManager;
         _securityEventLog = securityEventLog;
+        _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<ClipboardService>.Instance;
         _fetchResponseTimeout = fetchResponseTimeout ?? DefaultFetchResponseTimeout;
     }
@@ -85,7 +88,7 @@ public sealed class ClipboardService : IClipboardService
         }
     }
 
-    public Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer)
+    public async Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer)
     {
         EnsurePayloadIdentityMatches(offer.DeviceId, offer.PayloadSourceDeviceId, "clipboard.offer");
         EnsurePeerCanUseClipboard(offer.DeviceId, offer.RequiredCapability);
@@ -108,7 +111,7 @@ public sealed class ClipboardService : IClipboardService
         if (!accepted)
         {
             LogEvent(SecurityEventTypes.ClipboardOfferReplay, offer.DeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, null);
-            return Task.CompletedTask;
+            return;
         }
 
         _remoteOffers[offer.OfferId] = new ClipboardOfferInfo
@@ -122,7 +125,7 @@ public sealed class ClipboardService : IClipboardService
         };
 
         LogEvent(SecurityEventTypes.ClipboardOffered, offer.DeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null);
-        return Task.CompletedTask;
+        await NotifyClipboardOfferAsync(offer).ConfigureAwait(false);
     }
 
     public async Task<byte[]> FetchContentAsync(string deviceId, string offerId)
@@ -170,9 +173,9 @@ public sealed class ClipboardService : IClipboardService
         };
     }
 
-    public Task<ListClipboardOffersResult> ListClipboardOffersAsync()
+    public async Task<ListClipboardOffersResult> ListClipboardOffersAsync()
     {
-        PruneExpiredRemoteOffers();
+        await PruneExpiredRemoteOffersAsync().ConfigureAwait(false);
 
         var now = DateTimeOffset.UtcNow;
         var offers = _remoteOffers.Values
@@ -180,10 +183,10 @@ public sealed class ClipboardService : IClipboardService
             .OrderBy(offer => offer.ExpiresAt, StringComparer.Ordinal)
             .ToArray();
 
-        return Task.FromResult(new ListClipboardOffersResult
+        return new ListClipboardOffersResult
         {
             Offers = offers
-        });
+        };
     }
 
     public async Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId, CancellationToken cancellationToken)
@@ -200,7 +203,7 @@ public sealed class ClipboardService : IClipboardService
             throw new ClipboardFailureException("OfferExpired", -32002, $"Offer '{offerId}' has expired.");
         }
 
-        PruneExpiredRemoteOffers();
+        await PruneExpiredRemoteOffersAsync().ConfigureAwait(false);
 
         EnsurePeerCanUseClipboard(offer.SourceDeviceId, RequiredCapability);
 
@@ -427,9 +430,10 @@ public sealed class ClipboardService : IClipboardService
         throw new ClipboardFailureException("Unauthorized", -32004, $"{messageType} payload identity did not match the authenticated peer identity.");
     }
 
-    private void PruneExpiredRemoteOffers()
+    private async Task PruneExpiredRemoteOffersAsync()
     {
         var now = DateTimeOffset.UtcNow;
+        List<Task>? notificationTasks = null;
         foreach (var entry in _remoteOffers)
         {
             if (DateTimeOffset.Parse(entry.Value.ExpiresAt) > now)
@@ -440,7 +444,63 @@ public sealed class ClipboardService : IClipboardService
             if (_remoteOffers.TryRemove(entry.Key, out var removed))
             {
                 LogEvent(SecurityEventTypes.ClipboardExpired, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired");
+                notificationTasks ??= [];
+                notificationTasks.Add(NotifyClipboardExpiredAsync(removed.OfferId));
             }
+        }
+
+        if (notificationTasks is not null)
+        {
+            await Task.WhenAll(notificationTasks).ConfigureAwait(false);
+        }
+    }
+
+    private async Task NotifyClipboardOfferAsync(ReceivedClipboardOffer offer)
+    {
+        if (_ipcNotificationService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _ipcNotificationService.NotifyAsync(
+                "rift.onClipboardOffer",
+                new
+                {
+                    offerId = offer.OfferId,
+                    sourceDeviceId = offer.DeviceId,
+                    contentType = offer.ContentType,
+                    byteSize = offer.ByteSize,
+                    sha256 = offer.Sha256,
+                    expiresInMs = offer.ExpiresInMs
+                }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify IPC clients about clipboard offer {OfferId}.", offer.OfferId);
+        }
+    }
+
+    private async Task NotifyClipboardExpiredAsync(string offerId)
+    {
+        if (_ipcNotificationService is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _ipcNotificationService.NotifyAsync(
+                "rift.onClipboardExpired",
+                new
+                {
+                    offerId
+                }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to notify IPC clients that clipboard offer {OfferId} expired.", offerId);
         }
     }
 

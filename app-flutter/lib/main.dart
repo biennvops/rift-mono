@@ -1,8 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 
@@ -15,26 +15,34 @@ import 'screens/settings_screen.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
+import 'src/clipboard/windows_clipboard_manager.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
 
   final client = JsonRpcRiftClient(TransportFactory.create());
+  final clipboardManager =
+      Platform.isWindows ? WindowsClipboardManager(client) : null;
   // Start the connection immediately in the background
   client.connect().catchError((Object error, StackTrace stackTrace) {
     debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
+  });
+  clipboardManager?.start().catchError((Object error, StackTrace stackTrace) {
+    debugPrint('Windows clipboard manager failed to start: $error');
   });
 
   runApp(
     Provider<JsonRpcRiftClient>.value(
       value: client,
-      child: const RiftApp(),
+      child: RiftApp(clipboardManager: clipboardManager),
     ),
   );
 }
 
 class RiftApp extends StatefulWidget {
-  const RiftApp({super.key});
+  const RiftApp({super.key, this.clipboardManager});
+
+  final WindowsClipboardManager? clipboardManager;
 
   @override
   State<RiftApp> createState() => _RiftAppState();
@@ -92,6 +100,7 @@ class _RiftAppState extends State<RiftApp> {
   @override
   void dispose() {
     _pairingRequestSub?.cancel();
+    unawaited(widget.clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
         _clipboardChannel.invokeMethod('stopService').catchError((Object error) {

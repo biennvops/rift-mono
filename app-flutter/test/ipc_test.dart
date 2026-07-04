@@ -21,6 +21,31 @@ class MockTransport implements IpcTransport {
     'PeerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     'ExpiresInMs': 120000,
   };
+  Map<String, dynamic> notifyClipboardChangeResult = {
+    'OfferId': 'offer-local',
+    'ExpiresInMs': 120000,
+    'BroadcastTo': ['rift-peer'],
+  };
+  Map<String, dynamic> listClipboardOffersResult = {
+    'Offers': [
+      {
+        'OfferId': 'offer-remote',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256': 'abc123',
+        'ExpiresAt': '2026-06-30T02:00:00Z',
+      }
+    ]
+  };
+  Map<String, dynamic> fetchClipboardContentResult = {
+    'OfferId': 'offer-remote',
+    'ContentBase64': 'aGVsbG8=',
+    'ByteSize': 5,
+    'Sha256':
+        '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    'Verified': true,
+  };
 
   void triggerDisconnect() {
     _daemonToApp?.close();
@@ -84,6 +109,15 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.rejectPairing':
           _sendResult(id, {'Rejected': true});
+          break;
+        case 'rift.notifyClipboardChange':
+          _sendResult(id, notifyClipboardChangeResult);
+          break;
+        case 'rift.listClipboardOffers':
+          _sendResult(id, listClipboardOffersResult);
+          break;
+        case 'rift.fetchClipboardContent':
+          _sendResult(id, fetchClipboardContentResult);
           break;
       }
     });
@@ -231,6 +265,96 @@ void main() {
         'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
         'expiresInMs': 120000,
       });
+    });
+
+    test('should deliver clipboard notifications with canonicalized fields', () async {
+      await client.connect();
+
+      final offerFuture = client.onClipboardOffer.first;
+      final expiredFuture = client.onClipboardExpired.first;
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-1',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256': 'abc123',
+        'ExpiresInMs': 120000,
+      });
+      transport.emitNotification('rift.onClipboardExpired', {
+        'OfferId': 'offer-1',
+      });
+
+      expect(await offerFuture, {
+        'offerId': 'offer-1',
+        'sourceDeviceId': 'rift-peer',
+        'contentType': 'text/plain',
+        'byteSize': 5,
+        'sha256': 'abc123',
+        'expiresInMs': 120000,
+      });
+      expect(await expiredFuture, {
+        'offerId': 'offer-1',
+      });
+    });
+
+    test('should expose clipboard RPC wrappers', () async {
+      await client.connect();
+
+      final notifyResult = await client.notifyClipboardChange(
+        contentType: 'text/plain',
+        byteSize: 5,
+        sha256:
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        contentBase64: 'aGVsbG8=',
+      );
+      final offersResult = await client.listClipboardOffers();
+      final fetchResult = await client.fetchClipboardContent('offer-remote');
+
+      expect(notifyResult, {
+        'offerId': 'offer-local',
+        'expiresInMs': 120000,
+        'broadcastTo': ['rift-peer'],
+      });
+      expect(offersResult, {
+        'offers': [
+          {
+            'offerId': 'offer-remote',
+            'sourceDeviceId': 'rift-peer',
+            'contentType': 'text/plain',
+            'byteSize': 5,
+            'sha256': 'abc123',
+            'expiresAt': '2026-06-30T02:00:00Z',
+          }
+        ]
+      });
+      expect(fetchResult, {
+        'offerId': 'offer-remote',
+        'contentBase64': 'aGVsbG8=',
+        'byteSize': 5,
+        'sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'verified': true,
+      });
+
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .single['params'],
+        {
+          'contentType': 'text/plain',
+          'byteSize': 5,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'contentBase64': 'aGVsbG8=',
+        },
+      );
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .single['params'],
+        {'offerId': 'offer-remote'},
+      );
     });
 
     test('Linux to Android style flow: approve sends correct IPC request and receives completion events',
