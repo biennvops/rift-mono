@@ -11,6 +11,7 @@ class JsonRpcRiftClient {
   json_rpc.Peer? _client;
   bool _isConnected = false;
   final Map<String, Future<dynamic>> _pendingStartPairings = {};
+  final Map<String, Future<dynamic>> _pendingEndpointPairings = {};
 
   JsonRpcRiftClient(this._transport);
 
@@ -58,6 +59,11 @@ class JsonRpcRiftClient {
   late final _connectionChangedController =
       StreamController<bool>.broadcast();
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
+
+  late final _operationTransitionController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onOperationTransition =>
+      _operationTransitionController.stream;
 
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
@@ -330,6 +336,15 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
+      _client!.registerMethod('rift.onOperationTransition',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onOperationTransition',
+          _asMap(params),
+          _operationTransitionController,
+          requiredStringKeys: const ['operationId', 'status'],
+        );
+      });
       _client!.registerMethod('rift.onSecurityEvent',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -443,6 +458,7 @@ class JsonRpcRiftClient {
     await _trustChangedController.close();
     await _pairingRequestController.close();
     await _pairingCompleteController.close();
+    await _operationTransitionController.close();
     await _securityEventController.close();
     await _clipboardOfferController.close();
     await _clipboardExpiredController.close();
@@ -470,6 +486,20 @@ class JsonRpcRiftClient {
       throw StateError('Not connected to daemon');
     }
     final r = await _client!.sendRequest('rift.listTrustedPeers');
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> listOperations({
+    int? limit,
+    int? offset,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final params = <String, dynamic>{};
+    if (limit != null) params['limit'] = limit;
+    if (offset != null) params['offset'] = offset;
+    final r = await _client!.sendRequest('rift.listOperations', params);
     return _canonicalizeResult(r);
   }
 
@@ -540,6 +570,32 @@ class JsonRpcRiftClient {
     } finally {
       if (identical(_pendingStartPairings[deviceId], future)) {
         _pendingStartPairings.remove(deviceId);
+      }
+    }
+  }
+
+  Future<dynamic> startPairingByEndpoint(String address, int port) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final key = '$address:$port';
+    final pending = _pendingEndpointPairings[key];
+    if (pending != null) {
+      _log.info('Joining in-flight startPairingByEndpoint request for $key');
+      return pending;
+    }
+
+    final future = _client!
+        .sendRequest('rift.startPairingByEndpoint', {
+          'address': address,
+          'port': port,
+        }).then(_canonicalizeResult);
+    _pendingEndpointPairings[key] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_pendingEndpointPairings[key], future)) {
+        _pendingEndpointPairings.remove(key);
       }
     }
   }

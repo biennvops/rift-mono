@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using System.Text.Json;
 using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Core.Data;
@@ -13,14 +14,15 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO Peers (DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence)
-            VALUES ($deviceId, $publicKey, $state, $fingerprint, $lastTransition, $revocationEvidence)
+            INSERT INTO Peers (DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson)
+            VALUES ($deviceId, $publicKey, $state, $fingerprint, $lastTransition, $revocationEvidence, $trustedEndpointsJson)
             ON CONFLICT(DeviceId) DO UPDATE SET
                 Ed25519PublicKey = excluded.Ed25519PublicKey,
                 State = excluded.State,
                 CertificateFingerprint = excluded.CertificateFingerprint,
                 LastTransition = excluded.LastTransition,
-                RevocationEvidence = excluded.RevocationEvidence;
+                RevocationEvidence = excluded.RevocationEvidence,
+                TrustedEndpointsJson = excluded.TrustedEndpointsJson;
             """;
         BindPeer(command, peer);
         command.ExecuteNonQuery();
@@ -32,7 +34,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence
+            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -53,7 +55,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence
+            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             ORDER BY DeviceId;
             """;
@@ -76,7 +78,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         select.Transaction = transaction;
         select.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence
+            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -114,7 +116,8 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
                 LastTransition = $lastTransition,
                 RevocationEvidence = $revocationEvidence,
                 CertificateFingerprint = $fingerprint,
-                Ed25519PublicKey = $publicKey
+                Ed25519PublicKey = $publicKey,
+                TrustedEndpointsJson = $trustedEndpointsJson
             WHERE DeviceId = $deviceId;
             """;
         BindPeer(update, peer);
@@ -132,7 +135,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         select.Transaction = transaction;
         select.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence
+            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -162,7 +165,8 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
                 LastTransition = $lastTransition,
                 RevocationEvidence = $revocationEvidence,
                 CertificateFingerprint = $fingerprint,
-                Ed25519PublicKey = $publicKey
+                Ed25519PublicKey = $publicKey,
+                TrustedEndpointsJson = $trustedEndpointsJson
             WHERE DeviceId = $deviceId;
             """;
         BindPeer(update, peer);
@@ -196,7 +200,8 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
             State = Enum.Parse<TrustState>((string)reader["State"]),
             EcdsaCertificateFingerprint = reader["CertificateFingerprint"] as string,
             LastStateTransitionAt = DateTimeOffset.Parse((string)reader["LastTransition"]),
-            RevocationEvidence = reader["RevocationEvidence"] as string
+            RevocationEvidence = reader["RevocationEvidence"] as string,
+            TrustedEndpoints = DeserializeTrustedEndpoints(reader["TrustedEndpointsJson"] as string)
         };
     }
 
@@ -208,5 +213,20 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         command.Parameters.AddWithValue("$fingerprint", (object?)peer.EcdsaCertificateFingerprint ?? DBNull.Value);
         command.Parameters.AddWithValue("$lastTransition", peer.LastStateTransitionAt.ToString("O"));
         command.Parameters.AddWithValue("$revocationEvidence", (object?)peer.RevocationEvidence ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "$trustedEndpointsJson",
+            peer.TrustedEndpoints.Count == 0
+                ? DBNull.Value
+                : JsonSerializer.Serialize(peer.TrustedEndpoints));
+    }
+
+    private static IReadOnlyList<TrustedPeerEndpoint> DeserializeTrustedEndpoints(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            return [];
+        }
+
+        return JsonSerializer.Deserialize<List<TrustedPeerEndpoint>>(rawJson) ?? [];
     }
 }

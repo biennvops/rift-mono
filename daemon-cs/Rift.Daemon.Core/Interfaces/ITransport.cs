@@ -74,6 +74,19 @@ public sealed class SessionStateChangedEventArgs : EventArgs
     }
 }
 
+public sealed class PeerSessionEndpoint
+{
+    public string Address { get; }
+
+    public int Port { get; }
+
+    public PeerSessionEndpoint(string address, int port)
+    {
+        Address = address ?? throw new ArgumentNullException(nameof(address));
+        Port = port;
+    }
+}
+
 /// <summary>
 /// Peer-transport abstraction for the Rift daemon.
 ///
@@ -135,10 +148,23 @@ public interface ITransport
     Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Initiates a mutual TLS connection to the specified peer endpoint and
+    /// returns the authenticated peer device ID derived from the TLS-bound
+    /// Ed25519 identity after session bootstrap completes.
+    /// </summary>
+    Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns <see langword="true"/> when an authenticated session already exists
     /// for the specified peer device ID and can be reused for protocol traffic.
     /// </summary>
     bool HasActiveSession(string peerDeviceId);
+
+    /// <summary>
+    /// Returns the current authenticated session's remote socket endpoint for the peer,
+    /// if one is presently registered.
+    /// </summary>
+    PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId);
 
     /// <summary>
     /// Writes a single framed message to the authenticated session identified by

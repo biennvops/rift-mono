@@ -25,6 +25,17 @@ public class PeerIdentity
     /// Evidence needed to reject the identity later if revoked.
     /// </summary>
     public string? RevocationEvidence { get; set; }
+
+    public IReadOnlyList<TrustedPeerEndpoint> TrustedEndpoints { get; set; } = [];
+}
+
+public sealed class TrustedPeerEndpoint
+{
+    public string Address { get; init; } = string.Empty;
+    public int Port { get; init; }
+    public string Source { get; init; } = string.Empty;
+    public string? AddressFamily { get; init; }
+    public DateTimeOffset LastSuccessAt { get; init; }
 }
 
 public interface ITrustStore

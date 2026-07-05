@@ -21,7 +21,12 @@ class FakeTransport implements Transport {
   Stream<String> get onPeerDisconnected => _disconnectController.stream;
 
   @override
-  Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
+  Future<String> connectTo(
+    String host,
+    int port, {
+    String? expectedDeviceId,
+    bool forceFreshSession = false,
+  }) async {
     return expectedDeviceId ?? 'default';
   }
 
@@ -32,6 +37,9 @@ class FakeTransport implements Transport {
 
   @override
   Uint8List? getPeerCert(String peerDeviceId) => Uint8List(32);
+
+  @override
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId) => null;
 
   @override
   Future<void> sendMessage(String deviceId, Uint8List message) async {
@@ -298,5 +306,79 @@ void main() {
     final hasPresenceUpdate = transport.sentMessages.any((m) => m['type'] == 'presence.update');
     expect(hasPresenceUpdate, isFalse);
     expect(ctx.heartbeatTimer, isNull);
+  });
+
+  test('trusted session ready emits once when trusted session first becomes online', () async {
+    final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
+    ctx.handshakeState = HandshakeState.established;
+    ctx.trustState = TrustState.trusted;
+    ctx.localAdvertisedCapabilities = [
+      Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'presence.basic', version: 1),
+      Capability(name: 'operation.lifecycle', version: 1),
+      Capability(name: 'security.event_log', version: 1),
+    ];
+    sessionManager.injectContextForTesting(ctx);
+
+    final readyEvents = <SessionContext>[];
+    final sub = sessionManager.onTrustedSessionReady.listen(readyEvents.add);
+
+    transport.simulateMessage('peer1', 'capability.advertise', {
+      'capabilities': [
+        {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'presence.basic', 'version': 1},
+        {'name': 'operation.lifecycle', 'version': 1},
+        {'name': 'security.event_log', 'version': 1},
+      ]
+    });
+
+    await Future.delayed(Duration.zero);
+
+    transport.simulateMessage('peer1', 'presence.update', {
+      'status': 'online',
+      'capabilities': [
+        'clipboard.offer_fetch',
+        'presence.basic',
+        'operation.lifecycle',
+        'security.event_log',
+      ]
+    });
+
+    await Future.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(readyEvents, hasLength(1));
+    expect(readyEvents.single.peerDeviceId, 'peer1');
+    expect(readyEvents.single.currentPresenceStatus, 'online');
+  });
+
+  test('trusted session ready does not emit for untrusted sessions', () async {
+    final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
+    ctx.handshakeState = HandshakeState.established;
+    ctx.trustState = TrustState.discovered;
+    ctx.localAdvertisedCapabilities = [
+      Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'presence.basic', version: 1),
+      Capability(name: 'operation.lifecycle', version: 1),
+      Capability(name: 'security.event_log', version: 1),
+    ];
+    sessionManager.injectContextForTesting(ctx);
+
+    final readyEvents = <SessionContext>[];
+    final sub = sessionManager.onTrustedSessionReady.listen(readyEvents.add);
+
+    transport.simulateMessage('peer1', 'capability.advertise', {
+      'capabilities': [
+        {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'presence.basic', 'version': 1},
+        {'name': 'operation.lifecycle', 'version': 1},
+        {'name': 'security.event_log', 'version': 1},
+      ]
+    });
+
+    await Future.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(readyEvents, isEmpty);
   });
 }

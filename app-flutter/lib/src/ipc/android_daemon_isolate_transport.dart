@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
 
@@ -293,6 +294,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     action().then((result) {
       _emitSyntheticResult(id, result);
     }).catchError((Object error, StackTrace stackTrace) {
+      debugPrint(
+        '[Android Discovery] Synthetic discovery RPC failed: $error\n$stackTrace',
+      );
       _emitSyntheticError(id, -32603, error.toString());
     });
   }

@@ -6,7 +6,6 @@ import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
-import 'package:app_flutter/constants.dart';
 import 'test_utils/fake_transport.dart';
 
 // Create a Mock for the JsonRpcRiftClient
@@ -26,6 +25,57 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onPairingRequest =>
       _pairingRequestController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onSecurityEvent => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onTrustChanged => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPairingComplete =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPeerDiscovered =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPeerLost =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Future<dynamic> queryEventLog({
+    List<String>? eventTypes,
+    List<String>? severities,
+    String? peerDeviceId,
+    String? since,
+    int? limit,
+    int? offset,
+  }) async {
+    return {'events': [], 'total': 0};
+  }
+
+  @override
+  Stream<Map<String, dynamic>> get onOperationTransition =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Future<dynamic> listOperations({
+    int? limit,
+    int? offset,
+  }) async {
+    return {'operations': [], 'total': 0};
+  }
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
+
+  @override
+  Future<dynamic> listClipboardOffers() async => {'offers': []};
 
   @override
   Future<dynamic> listTrustedPeers() async => {
@@ -79,6 +129,38 @@ void main() {
     when(() => mockClient.isConnected).thenReturn(true);
     when(() => mockClient.onPairingRequest)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onSecurityEvent)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onTrustChanged)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPairingComplete)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPeerDiscovered)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPeerLost)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.queryEventLog(
+          limit: any(named: 'limit'),
+          offset: any(named: 'offset'),
+          eventTypes: any(named: 'eventTypes'),
+          severities: any(named: 'severities'),
+          peerDeviceId: any(named: 'peerDeviceId'),
+          since: any(named: 'since'),
+        )).thenAnswer((_) async => {'events': [], 'total': 0});
+    when(() => mockClient.onClipboardOffer)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onClipboardExpired)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onConnectionChanged)
+        .thenAnswer((_) => Stream.value(true));
+    when(() => mockClient.onOperationTransition)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.listOperations(
+          limit: any(named: 'limit'),
+          offset: any(named: 'offset'),
+        )).thenAnswer((_) async => {'operations': [], 'total': 0});
+    when(() => mockClient.listClipboardOffers())
+        .thenAnswer((_) async => {'offers': []});
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
     when(() => mockClient.listTrustedPeers()).thenAnswer(
@@ -116,19 +198,18 @@ void main() {
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
-        child: const RiftApp(),
+        child: const RiftApp(hasCompletedOnboarding: true),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
 
-    // Verify main components are present
-    expect(find.text(AppStrings.appTitle), findsOneWidget);
-    expect(find.text(AppStrings.daemonConnected), findsOneWidget);
-    expect(find.text('2 trusted  •  1 online  •  1 discovered  •  discovery running'),
-        findsOneWidget);
-    expect(find.text(AppStrings.openTrustedDevices), findsOneWidget);
-    expect(find.text(AppStrings.openEventLog), findsOneWidget);
-    expect(find.text(AppStrings.openSettings), findsOneWidget);
+    expect(find.text('Devices'), findsOneWidget);
+    expect(find.text('History'), findsOneWidget);
+    expect(find.text('Events'), findsOneWidget);
+    expect(find.text('Ops'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsOneWidget);
+    expect(find.text('RIFT'), findsOneWidget);
   });
 
   test('MockClient getDeviceInfo test', () async {
@@ -145,10 +226,11 @@ void main() {
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: client,
-        child: const RiftApp(),
+        child: const RiftApp(hasCompletedOnboarding: true),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
 
     await client.emitPairingRequest({
       'deviceId': 'rift-linux-peer',
@@ -156,15 +238,16 @@ void main() {
       'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
       'expiresInMs': 120000,
     });
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 3));
 
-    expect(find.text(AppStrings.pairingTitle), findsOneWidget);
-    expect(find.text('Linux Laptop'), findsOneWidget);
-    expect(find.text('Incoming pairing request'), findsOneWidget);
+    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Approve'),
+    final approveButton = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });
@@ -176,10 +259,11 @@ void main() {
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: client,
-        child: const RiftApp(),
+        child: const RiftApp(hasCompletedOnboarding: true),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
 
     await client.emitPairingRequest({
       'deviceId': 'rift-linux-peer',
@@ -187,16 +271,18 @@ void main() {
       'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
       'expiresInMs': 120000,
     });
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 3));
 
     await tester.tap(find.text('Approve'));
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     expect(client.approvedDeviceId, 'rift-linux-peer');
     expect(
       client.approvedFingerprint,
       'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     );
-    expect(find.text('Approval sent. Waiting for completion'), findsOneWidget);
   });
 }

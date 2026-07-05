@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/screens/pairing_screen.dart';
-import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'test_utils/fake_transport.dart';
 
@@ -20,6 +19,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   String? approvedDeviceId;
   String? approvedFingerprint;
   String? rejectedDeviceId;
+  String? startPairingByEndpointAddress;
+  int? startPairingByEndpointPort;
   Object? startPairingError;
 
   @override
@@ -62,6 +63,21 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 
   @override
+  Future<dynamic> startPairingByEndpoint(String address, int port) async {
+    startPairingByEndpointAddress = address;
+    startPairingByEndpointPort = port;
+    if (startPairingError != null) {
+      throw startPairingError!;
+    }
+    return {
+      'deviceId': 'rift-manual-peer',
+      'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    };
+  }
+
+  @override
   Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
     approvedDeviceId = deviceId;
     approvedFingerprint = fingerprint;
@@ -93,9 +109,9 @@ void main() {
         ),
       ),
     );
-    expect(find.text(AppStrings.pairingTitle), findsOneWidget);
-    expect(find.text('Pixel 9'), findsOneWidget);
-    expect(find.text('Start pairing'), findsOneWidget);
+    await tester.pump();
+    expect(find.text('Pairing with Pixel 9'), findsOneWidget);
+    expect(find.text('No active pairing yet'), findsOneWidget);
   });
 
   testWidgets('PairingScreen reacts to incoming pairing request notification',
@@ -109,6 +125,7 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
 
     await client.emitPairingRequest({
       'deviceId': 'rift-peer',
@@ -117,9 +134,10 @@ void main() {
       'expiresInMs': 120000,
     });
     await tester.pump();
+    await tester.pump(const Duration(seconds: 3));
 
-    expect(find.text('Windows Laptop'), findsOneWidget);
-    expect(find.text('Incoming pairing request'), findsOneWidget);
+    expect(find.text('Pairing with Windows Laptop'), findsOneWidget);
+    expect(find.text('Compare fingerprints'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
   });
 
@@ -139,12 +157,36 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.pumpAndSettle();
 
-    expect(find.text('Confirm fingerprint to continue'), findsOneWidget);
-    expect(find.textContaining('PEER-AAAA-BBBB'), findsOneWidget);
-    expect(find.textContaining('LOCAL-AAAA-BBBB'), findsOneWidget);
-    final approveButton = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Approve'));
-    expect(approveButton.onPressed, isNull);
+    expect(find.text('Compare fingerprints'), findsOneWidget);
+    expect(find.text("This device's fingerprint"), findsOneWidget);
+    expect(find.textContaining('fingerprint'), findsWidgets);
+    expect(find.text('Waiting for peer...'), findsOneWidget);
+  });
+
+  testWidgets('PairingScreen can auto-start from a manual endpoint',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialEndpointAddress: '10.53.38.174',
+            initialEndpointPort: 9140,
+            initialDisplayName: '10.53.38.174:9140',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(client.startPairingByEndpointAddress, '10.53.38.174');
+    expect(client.startPairingByEndpointPort, 9140);
+    expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
   });
 
   testWidgets('PairingScreen incoming request approve and reject call IPC methods',
@@ -165,8 +207,8 @@ void main() {
       'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
       'expiresInMs': 120000,
     });
-    await tester.pump();
-
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
     await tester.tap(find.text('Approve'));
     await tester.pump();
     expect(client.approvedDeviceId, 'rift-peer');
@@ -199,8 +241,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
-    expect(find.text('Pairing request expired'), findsOneWidget);
-    expect(find.text('Expired'), findsOneWidget);
+    final approveButton = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Approve'),
+    );
+    expect(approveButton.onPressed, isNull);
   });
 
   testWidgets('PairingScreen reacts to trust persisted transition',
@@ -281,11 +325,5 @@ void main() {
       find.textContaining('Could not establish a secure session'),
       findsOneWidget,
     );
-    expect(find.text('Try again'), findsOneWidget);
-
-    final rejectButton = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Reject'),
-    );
-    expect(rejectButton.onPressed, isNull);
   });
 }

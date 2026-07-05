@@ -1,9 +1,6 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
-import '../constants.dart';
 import '../src/ipc/json_rpc_client.dart';
 
 class EventLogScreen extends StatefulWidget {
@@ -18,8 +15,17 @@ class _EventLogScreenState extends State<EventLogScreen> {
   List<dynamic> _events = [];
   bool _loading = true;
   String? _error;
-  String _severityFilter = 'all';
+  String _activeFilter = 'All';
   StreamSubscription<Map<String, dynamic>>? _securityEventSub;
+
+  final List<String> _filters = [
+    'All',
+    'Security',
+    'Pairing',
+    'Session',
+    'Clipboard',
+    'Errors',
+  ];
 
   @override
   void initState() {
@@ -50,17 +56,51 @@ class _EventLogScreenState extends State<EventLogScreen> {
                 existing['eventId']?.toString() != eventId,
           ),
         ];
-        _events = _applySeverityFilter(_allEvents);
+        _events = _applyFilter(_allEvents);
         _error = null;
       });
     });
   }
 
-  List<dynamic> _applySeverityFilter(List<dynamic> events) {
-    if (_severityFilter == 'all') return events;
+  bool _isSecurityEvent(Map event) {
+    final type = event['eventType']?.toString() ?? '';
+    final severity = event['severity']?.toString() ?? '';
+
+    return type.startsWith('pairing') ||
+        type.startsWith('trust') ||
+        type.startsWith('auth') ||
+        severity == 'critical' ||
+        severity == 'error';
+  }
+
+  bool _isErrorEvent(Map event) {
+    final severity = event['severity']?.toString() ?? '';
+    final outcome = event['outcome']?.toString() ?? '';
+    return severity == 'error' ||
+        outcome == 'failure' ||
+        outcome == 'denied';
+  }
+
+  List<dynamic> _applyFilter(List<dynamic> events) {
+    if (_activeFilter == 'All') return events;
     return events.where((event) {
       if (event is! Map) return false;
-      return event['severity']?.toString() == _severityFilter;
+      final type = event['eventType']?.toString() ?? '';
+
+      switch (_activeFilter) {
+        case 'Security':
+          return _isSecurityEvent(event);
+        case 'Pairing':
+          return type.startsWith('pairing');
+        case 'Session':
+          return type.startsWith('session');
+        case 'Clipboard':
+          return type.startsWith('clipboard');
+        case 'Errors':
+          return _isErrorEvent(event);
+        default:
+          return true;
+      }
     }).toList();
   }
 
@@ -84,96 +124,232 @@ class _EventLogScreenState extends State<EventLogScreen> {
     });
 
     try {
-      final result = await client.queryEventLog(
-        limit: 100,
-        severities: null,
-      );
+      final result = await client.queryEventLog(limit: 100);
       if (!mounted) return;
       setState(() {
         _allEvents = List<dynamic>.from(result['events'] ?? const []);
-        _events = _applySeverityFilter(_allEvents);
+        _events = _applyFilter(_allEvents);
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _allEvents = [];
-        _events = [];
         _loading = false;
         _error = JsonRpcRiftClient.formatDisplayError(e);
       });
     }
   }
 
-  Color _severityColor(BuildContext context, String severity) {
-    final scheme = Theme.of(context).colorScheme;
-    switch (severity) {
-      case 'critical':
-        return scheme.error;
-      case 'error':
-        return Colors.deepOrange;
-      case 'warning':
-        return Colors.amber.shade800;
-      default:
-        return scheme.primary;
-    }
-  }
-
-  String _formatTimestamp(String? raw) {
-    if (raw == null || raw.isEmpty) return 'Unknown time';
+  String _formatTimeOnly(String? raw) {
+    if (raw == null || raw.isEmpty) return '--:--';
     final parsed = DateTime.tryParse(raw)?.toLocal();
-    if (parsed == null) return raw;
-    final mm = parsed.month.toString().padLeft(2, '0');
-    final dd = parsed.day.toString().padLeft(2, '0');
+    if (parsed == null) return '--:--';
     final hh = parsed.hour.toString().padLeft(2, '0');
     final min = parsed.minute.toString().padLeft(2, '0');
     final ss = parsed.second.toString().padLeft(2, '0');
-    return '${parsed.year}-$mm-$dd $hh:$min:$ss';
+    return '$hh:$min:$ss';
   }
 
-  Widget _buildEventCard(Map<String, dynamic> event) {
-    final severity = event['severity']?.toString() ?? 'info';
-    final outcome = event['outcome']?.toString() ?? 'unknown';
-    final eventType = event['eventType']?.toString() ?? 'unknown';
-    final peerDeviceId = event['peerDeviceId']?.toString();
-    final failureReason = event['failureReason']?.toString();
-    final timestamp = _formatTimestamp(event['timestamp']?.toString());
-
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    eventType,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Chip(
-                  label: Text(severity),
-                  visualDensity: VisualDensity.compact,
-                  backgroundColor:
-                      _severityColor(context, severity).withValues(alpha: 0.12),
-                  side: BorderSide.none,
-                  labelStyle: TextStyle(
-                    color: _severityColor(context, severity),
-                  ),
-                ),
-              ],
+  Widget _buildFilterChip(String label, ThemeData theme) {
+    final isActive = _activeFilter == label;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            _activeFilter = label;
+            _events = _applyFilter(_allEvents);
+          });
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            color: isActive ? theme.colorScheme.primaryContainer : theme.colorScheme.surfaceContainerLow,
+            border: Border.all(
+              color: isActive ? theme.colorScheme.primary : theme.colorScheme.outline,
             ),
-            const SizedBox(height: 8),
-            Text('Outcome: $outcome'),
-            Text('Time: $timestamp'),
-            if (peerDeviceId != null && peerDeviceId.isNotEmpty)
-              Text('Peer: $peerDeviceId'),
-            if (failureReason != null && failureReason.isNotEmpty)
-              Text('Reason: $failureReason'),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: isActive ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEventCard(Map<String, dynamic> event, ThemeData theme) {
+    final eventType = event['eventType']?.toString() ?? 'unknown';
+    final outcome = event['outcome']?.toString() ?? 'unknown';
+    final timestamp = _formatTimeOnly(event['timestamp']?.toString());
+    final peer = event['peerDeviceId']?.toString();
+    final reason = event['failureReason']?.toString();
+
+    // Determine category, color, icon
+    String category = 'System';
+    Color color = theme.colorScheme.outline;
+    IconData icon = Icons.info;
+    String description = '';
+
+    if (_isErrorEvent(event)) {
+      category = 'Error';
+      color = theme.colorScheme.error;
+      icon = Icons.error;
+      description = reason ?? 'Operation failed';
+    } else if (_isSecurityEvent(event)) {
+      category = 'Security';
+      color = theme.colorScheme.error; // Match HTML for security
+      icon = Icons.security;
+      if (eventType.startsWith('auth')) {
+        description = reason ?? 'Authentication check failed';
+      } else if (reason != null && reason.isNotEmpty) {
+        description = reason;
+      } else if (eventType.startsWith('trust')) {
+        description = 'Trust state changed for ${peer ?? 'peer'}';
+      } else {
+        description = 'Trust established with ${peer ?? 'peer'}';
+        if (outcome != 'success') description = 'Pairing $outcome';
+      }
+    } else if (eventType.startsWith('clipboard')) {
+      category = 'Clipboard';
+      color = theme.colorScheme.primary;
+      icon = Icons.content_copy;
+      description = 'Offer from ${peer ?? 'peer'}';
+    } else if (eventType.startsWith('session')) {
+      category = 'Session';
+      color = theme.colorScheme.secondary;
+      icon = Icons.check_circle;
+      description = 'Secure channel opened with ${peer ?? 'peer'}';
+    } else {
+      category = 'General';
+      color = theme.colorScheme.primary;
+      icon = Icons.circle;
+      description = 'System event recorded';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLowest,
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Left color bar
+            Container(
+              width: 4,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(8),
+                  bottomLeft: Radius.circular(8),
+                ),
+              ),
+            ),
+            // Timeline line & dot
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Column(
+                children: [
+                  const SizedBox(height: 16),
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: color.withValues(alpha: 0.4),
+                          blurRadius: 8,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Container(
+                      width: 1,
+                      margin: const EdgeInsets.only(top: 8),
+                      color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Content
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '[$timestamp]',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(icon, size: 12, color: color),
+                              const SizedBox(width: 4),
+                              Text(
+                                category,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: color,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      eventType,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      description,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: category == 'Error' ? theme.colorScheme.error : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -182,87 +358,87 @@ class _EventLogScreenState extends State<EventLogScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    final displayEvents = _events;
+
     return Scaffold(
+      backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: const Text(AppStrings.eventLogTitle),
+        title: Row(
+          children: [
+            Icon(Icons.shield, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'Event Log',
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: theme.colorScheme.surface,
+        elevation: 0,
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadEvents,
+            icon: Icon(Icons.settings, color: theme.colorScheme.onSurfaceVariant),
+            onPressed: () {},
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5), height: 1),
+        ),
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: SegmentedButton<String>(
-              segments: const [
-                ButtonSegment<String>(value: 'all', label: Text('All')),
-                ButtonSegment<String>(value: 'warning', label: Text('Warnings')),
-                ButtonSegment<String>(value: 'error', label: Text('Errors')),
-              ],
-              selected: {_severityFilter},
-              onSelectionChanged: (selection) {
-                final next = selection.first;
-                if (next == _severityFilter) return;
-                setState(() {
-                  _severityFilter = next;
-                  _events = _applySeverityFilter(_allEvents);
-                });
-                _loadEvents();
-              },
+          // Filter Chips
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withValues(alpha: 0.9),
+              border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3))),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: _filters.map((f) => _buildFilterChip(f, theme)).toList(),
+              ),
             ),
           ),
+          // Event List
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _error != null
                     ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                'Error loading event log: $_error',
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 16),
-                              FilledButton(
-                                onPressed: _loadEvents,
-                                child: const Text('Retry'),
-                              ),
-                            ],
-                          ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text('Error loading event log: $_error', textAlign: TextAlign.center),
+                            const SizedBox(height: 16),
+                            FilledButton(onPressed: _loadEvents, child: const Text('Retry')),
+                          ],
                         ),
                       )
-                    : _events.isEmpty
-                        ? RefreshIndicator(
-                            onRefresh: _loadEvents,
-                            child: ListView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              children: const [
-                                SizedBox(height: 180),
-                                Center(
-                                  child: Text('No security events recorded yet.'),
-                                ),
-                              ],
+                    : displayEvents.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No events recorded.',
+                              style: theme.textTheme.bodyLarge?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
                             ),
                           )
                         : RefreshIndicator(
                             onRefresh: _loadEvents,
                             child: ListView.builder(
+                              padding: const EdgeInsets.all(16),
                               physics: const AlwaysScrollableScrollPhysics(),
-                              itemCount: _events.length,
+                              itemCount: displayEvents.length,
                               itemBuilder: (context, index) {
-                                final event = _events[index];
-                                if (event is! Map) {
-                                  return const SizedBox.shrink();
-                                }
-                                return _buildEventCard(
-                                  Map<String, dynamic>.from(event),
-                                );
+                                return _buildEventCard(Map<String, dynamic>.from(displayEvents[index] as Map), theme);
                               },
                             ),
                           ),

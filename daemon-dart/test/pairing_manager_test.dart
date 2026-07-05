@@ -28,6 +28,8 @@ class MockSessionManager implements SessionManager {
   Future<void> waitForSessionEstablished(String peerDeviceId, {Duration timeout = const Duration(seconds: 10)}) async {}
   @override
   Stream<SessionContext> get onPresenceUpdate => const Stream.empty();
+  @override
+  Stream<SessionContext> get onTrustedSessionReady => const Stream.empty();
 
   final _messageController = StreamController<ProtocolMessage>.broadcast();
   final _disconnectController = StreamController<String>.broadcast();
@@ -168,6 +170,31 @@ void main() {
       
       // Wait 120s timeout
       // Because FakeAsync is not used, skip real 120s wait test and only verify correct state transition.
+    });
+
+    test('Process pairing.start still notifies UI when peer is already pairingPending', () async {
+      await trustStore.upsertPeer(PeerRecord(
+        deviceId: 'rift-peer',
+        certDer: testCertDer,
+        state: TrustState.pairingPending,
+        updatedAt: DateTime.now().toUtc(),
+      ));
+
+      sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+        'type': 'pairing.start',
+        'payload': {
+          'expiresInMs': 120000,
+          'displayName': 'Peer Device',
+        }
+      });
+
+      await Future.delayed(Duration.zero);
+
+      final peer = await trustStore.getPeer('rift-peer');
+      expect(peer!.state, TrustState.pairingPending);
+      expect(ipcEvents.length, 1);
+      expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
+      expect(ipcEvents[0]['params']['displayName'], 'Peer Device');
     });
     
     test('Process rift.approvePairing sends protocol message and becomes trusted', () async {

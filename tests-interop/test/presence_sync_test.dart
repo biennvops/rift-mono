@@ -63,12 +63,14 @@ class FakeTransport implements Transport {
   @override
   Future<void> stopServer() async {}
   @override
-  Future<String> connectTo(String h, int p, {String? expectedDeviceId}) async =>
+  Future<String> connectTo(String h, int p, {String? expectedDeviceId, bool forceFreshSession = false}) async =>
       expectedDeviceId ?? 'rift-peer';
   @override
   void setPeerAuthenticated(String d) {}
   @override
   Uint8List? getPeerCert(String peerDeviceId) => _peerCerts[peerDeviceId];
+  @override
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId) => null;
 
   @override
   void disconnect(String d) {

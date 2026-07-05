@@ -387,7 +387,7 @@ void main() {
       await statusSub.cancel();
     });
 
-    test('pauses clipboard monitoring while window is hidden', () async {
+    test('keeps clipboard monitoring active while window is hidden', () async {
       await client.connect();
 
       final manager = DesktopClipboardManager(
@@ -408,18 +408,19 @@ void main() {
       expect(
         transport.requests
             .where((request) => request['method'] == 'rift.notifyClipboardChange')
-            .isEmpty,
-        isTrue,
+            .length,
+        1,
       );
 
       await manager.setWindowVisible(true);
+      clipboardText = 'world';
       clipboardChanges.add(null);
       await Future<void>.delayed(Duration.zero);
       expect(
         transport.requests
             .where((request) => request['method'] == 'rift.notifyClipboardChange')
             .length,
-        1,
+        2,
       );
 
       await manager.dispose();

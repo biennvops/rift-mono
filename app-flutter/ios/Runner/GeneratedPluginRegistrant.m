@@ -12,6 +12,12 @@
 @import nsd_ios;
 #endif
 
+#if __has_include(<shared_preferences_foundation/SharedPreferencesPlugin.h>)
+#import <shared_preferences_foundation/SharedPreferencesPlugin.h>
+#else
+@import shared_preferences_foundation;
+#endif
+
 #if __has_include(<sqlite3_flutter_libs/Sqlite3FlutterLibsPlugin.h>)
 #import <sqlite3_flutter_libs/Sqlite3FlutterLibsPlugin.h>
 #else
@@ -22,6 +28,7 @@
 
 + (void)registerWithRegistry:(NSObject<FlutterPluginRegistry>*)registry {
   [NsdIosPlugin registerWithRegistrar:[registry registrarForPlugin:@"NsdIosPlugin"]];
+  [SharedPreferencesPlugin registerWithRegistrar:[registry registrarForPlugin:@"SharedPreferencesPlugin"]];
   [Sqlite3FlutterLibsPlugin registerWithRegistrar:[registry registrarForPlugin:@"Sqlite3FlutterLibsPlugin"]];
 }
 
