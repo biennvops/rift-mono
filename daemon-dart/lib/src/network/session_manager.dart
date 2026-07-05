@@ -199,6 +199,11 @@ class SessionManager {
   Stream<SessionContext> get onPresenceUpdate =>
       _presenceUpdateController.stream;
 
+  final _trustedSessionReadyController =
+      StreamController<SessionContext>.broadcast();
+  Stream<SessionContext> get onTrustedSessionReady =>
+      _trustedSessionReadyController.stream;
+
   static final List<Capability> _defaultCapabilities = [
     Capability(name: 'clipboard.offer_fetch', version: 1),
     Capability(name: 'presence.basic', version: 1),
@@ -265,6 +270,7 @@ class SessionManager {
       ctx.dispose();
     }
     _sessions.clear();
+    await _trustedSessionReadyController.close();
     await _presenceUpdateController.close();
     await _messageController.close();
   }
@@ -274,6 +280,10 @@ class SessionManager {
     Map<String, dynamic> payload,
   ) async {
     final ctx = _sessions[peerDeviceId];
+    RiftLog.info(
+      '[Session] sendMessage type=${payload['type']} peerDeviceId=$peerDeviceId '
+      '${_describeContext(ctx)}',
+    );
     if (ctx == null ||
         ctx.handshakeState != HandshakeState.established ||
         !ctx.capabilityNegotiated) {
@@ -284,6 +294,9 @@ class SessionManager {
     await _transport.sendMessage(
       peerDeviceId,
       Uint8List.fromList(utf8.encode(json.encode(payload))),
+    );
+    RiftLog.info(
+      '[Session] sendMessage completed type=${payload['type']} peerDeviceId=$peerDeviceId',
     );
   }
 
@@ -1278,9 +1291,13 @@ class SessionManager {
       ctx.hasCapability,
     );
     if (ctx.trustState == TrustState.trusted && hasAllRequiredCaps) {
+      final wasOnline = ctx.currentPresenceStatus == 'online';
       ctx.currentPresenceStatus = 'online';
       ctx.lastHeartbeatReceived = DateTime.now();
       _presenceUpdateController.add(ctx);
+      if (!wasOnline) {
+        _trustedSessionReadyController.add(ctx);
+      }
 
       ctx.heartbeatTimer?.cancel();
       ctx.heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {

@@ -73,7 +73,8 @@ class TrustStoreImpl implements TrustStore {
         state        TEXT NOT NULL,
         paired_at    INTEGER,
         updated_at   INTEGER NOT NULL,
-        last_seen_at INTEGER
+        last_seen_at INTEGER,
+        trusted_endpoints_json TEXT
       );
     ''');
     
@@ -132,6 +133,21 @@ class TrustStoreImpl implements TrustStore {
         ON security_events (peer_device_id, timestamp DESC);
       ''');
       _db!.execute("UPDATE config SET value = '3' WHERE key = 'schema_version'");
+      currentVersion = 3;
+    }
+
+    if (currentVersion < 4) {
+      try {
+        _db!.execute(
+          "ALTER TABLE peers ADD COLUMN trusted_endpoints_json TEXT;",
+        );
+      } on SqliteException catch (e) {
+        final msg = e.message.toLowerCase();
+        if (!msg.contains('duplicate column') && !msg.contains('already exists')) {
+          rethrow;
+        }
+      }
+      _db!.execute("UPDATE config SET value = '4' WHERE key = 'schema_version'");
     }
   }
 
@@ -139,8 +155,17 @@ class TrustStoreImpl implements TrustStore {
   Future<void> upsertPeer(PeerRecord record) async {
     _ensureInitialized();
     final stmt = _db!.prepare('''
-      INSERT INTO peers (device_id, display_name, cert_der, state, paired_at, updated_at, last_seen_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO peers (
+        device_id,
+        display_name,
+        cert_der,
+        state,
+        paired_at,
+        updated_at,
+        last_seen_at,
+        trusted_endpoints_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
         display_name = excluded.display_name,
         cert_der = CASE
@@ -148,6 +173,10 @@ class TrustStoreImpl implements TrustStore {
           ELSE excluded.cert_der
         END,
         last_seen_at = COALESCE(excluded.last_seen_at, peers.last_seen_at),
+        trusted_endpoints_json = COALESCE(
+          excluded.trusted_endpoints_json,
+          peers.trusted_endpoints_json
+        ),
         updated_at = excluded.updated_at;
     ''');
     
@@ -163,6 +192,13 @@ class TrustStoreImpl implements TrustStore {
         record.pairedAt?.millisecondsSinceEpoch,
         record.updatedAt.millisecondsSinceEpoch,
         record.lastSeenAt?.toUtc().millisecondsSinceEpoch,
+        record.trustedEndpoints.isEmpty
+            ? null
+            : jsonEncode(
+                record.trustedEndpoints
+                    .map((endpoint) => endpoint.toJson())
+                    .toList(growable: false),
+              ),
       ]);
     } finally {
       stmt.dispose();
@@ -369,6 +405,7 @@ class TrustStoreImpl implements TrustStore {
   PeerRecord _rowToPeerRecord(Row row) {
     final pairedAtMs = row['paired_at'] as int?;
     final lastSeenAtMs = row['last_seen_at'] as int?;
+    final trustedEndpointsJson = row['trusted_endpoints_json'] as String?;
     return PeerRecord(
       deviceId: row['device_id'] as String,
       displayName: row['display_name'] as String?,
@@ -383,7 +420,34 @@ class TrustStoreImpl implements TrustStore {
       lastSeenAt: lastSeenAtMs != null 
           ? DateTime.fromMillisecondsSinceEpoch(lastSeenAtMs, isUtc: true)
           : null,
+      trustedEndpoints: _decodeTrustedEndpoints(trustedEndpointsJson),
     );
+  }
+
+  List<TrustedPeerEndpoint> _decodeTrustedEndpoints(String? rawJson) {
+    if (rawJson == null || rawJson.isEmpty) {
+      return const [];
+    }
+
+    final decoded = jsonDecode(rawJson);
+    if (decoded is! List) {
+      throw const FormatException(
+        'trusted_endpoints_json must decode to a JSON array',
+      );
+    }
+
+    return decoded
+        .map((entry) {
+          if (entry is! Map) {
+            throw const FormatException(
+              'trusted_endpoints_json entries must be JSON objects',
+            );
+          }
+          return TrustedPeerEndpoint.fromJson(
+            Map<String, dynamic>.from(entry),
+          );
+        })
+        .toList(growable: false);
   }
 
   SecurityEventRecord _rowToSecurityEventRecord(Row row) {

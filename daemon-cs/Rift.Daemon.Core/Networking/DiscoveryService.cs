@@ -271,6 +271,28 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 });
                 var bytes = Encoding.UTF8.GetBytes(payload);
                 await client.SendAsync(bytes, endpoint, cancellationToken);
+                
+                // Route to specific subnets to bypass strict hotspot routing
+                foreach (var netIf in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (netIf.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+
+                    foreach (var ip in netIf.GetIPProperties().UnicastAddresses)
+                    {
+                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            var addressBytes = ip.Address.GetAddressBytes();
+                            // Simple heuristic for /24 broadcast
+                            addressBytes[3] = 255;
+                            var subnetBroadcast = new IPEndPoint(new IPAddress(addressBytes), RiftNetworkDefaults.FallbackDiscoveryPort);
+                            try {
+                                await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
+                            } catch { /* Ignore individual subnet send errors */ }
+                        }
+                    }
+                }
+
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

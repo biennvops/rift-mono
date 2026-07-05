@@ -37,7 +37,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         _transport = new FakeTransport();
         var discoveryCoordinator = new DiscoveryCoordinator(_discoveryService, _trustStore);
         var daemonInfoService = new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, discoveryCoordinator, _presenceService);
-        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
@@ -120,9 +120,42 @@ public sealed class RiftApiHandlerTests : IDisposable
         var result = await _handler.StartPairingAsync(deviceId);
         var storedPeer = _trustStore.GetPeer(deviceId);
 
+        Assert.Equal(deviceId, result.DeviceId);
         Assert.Equal(_identityManager.GetFingerprint(), result.Fingerprint);
         Assert.Equal(IdentityManager.DeriveFingerprint(peerPublicKey), result.PeerFingerprint);
         Assert.Equal(TrustState.PairingPending, storedPeer!.State);
+    }
+
+    [Fact]
+    public async Task StartPairingByEndpointAsync_ReturnsResolvedPeerIdentity()
+    {
+        var peerPublicKey = Convert.FromHexString("d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3");
+        var deviceId = IdentityManager.DeriveDeviceId(peerPublicKey);
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            Ed25519PublicKey = peerPublicKey,
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var pairingCoordinator = new FakePairingProtocolCoordinator(deviceId);
+        var pairingService = new PairingService(
+            _trustStore,
+            _identityManager,
+            _securityEventLog,
+            pairingCoordinator,
+            logger: NullLogger<PairingService>.Instance);
+        var handler = new RiftApiHandler(
+            new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore), _presenceService),
+            new DiscoveryCoordinator(_discoveryService, _trustStore),
+            _clipboardService,
+            pairingService);
+
+        var result = await handler.StartPairingByEndpointAsync("10.53.38.174", 9140);
+
+        Assert.Equal(deviceId, result.DeviceId);
+        Assert.Equal(("10.53.38.174", 9140), pairingCoordinator.LastEndpoint);
     }
 
     [Fact]
@@ -409,6 +442,9 @@ public sealed class RiftApiHandlerTests : IDisposable
 
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+            Task.FromResult("rift-manual-peer");
+
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(frameBody);
@@ -416,13 +452,16 @@ public sealed class RiftApiHandlerTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasActiveSession(string peerDeviceId) => true;
+        public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class ThrowingPairingService : IPairingService
     {
         public Task<StartPairingResult> StartPairingAsync(string deviceId) => throw new InvalidOperationException("boom");
+
+        public Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port) => throw new InvalidOperationException("boom");
 
         public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) => throw new InvalidOperationException("boom");
 
@@ -433,5 +472,31 @@ public sealed class RiftApiHandlerTests : IDisposable
         public Task<UnblockPeerResult> UnblockPeerAsync(string deviceId) => throw new InvalidOperationException("boom");
 
         public Task<ResetRevokedPeerResult> ResetRevokedPeerAsync(string deviceId) => throw new InvalidOperationException("boom");
+    }
+
+    private sealed class FakePairingProtocolCoordinator : IPairingProtocolCoordinator
+    {
+        private readonly string _resolvedDeviceId;
+
+        public FakePairingProtocolCoordinator(string resolvedDeviceId)
+        {
+            _resolvedDeviceId = resolvedDeviceId;
+        }
+
+        public (string Host, int Port)? LastEndpoint { get; private set; }
+
+        public Task<string> ConnectToEndpointForPairingAsync(string host, int port, CancellationToken cancellationToken = default)
+        {
+            LastEndpoint = (host, port);
+            return Task.FromResult(_resolvedDeviceId);
+        }
+
+        public Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task NotifyLocalPairingApprovedAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyLocalPairingStartedAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

@@ -100,9 +100,16 @@ class TransportImpl implements Transport {
   }
 
   @override
-  Future<String> connectTo(String host, int port, {String? expectedDeviceId}) async {
+  Future<String> connectTo(
+    String host,
+    int port, {
+    String? expectedDeviceId,
+    bool forceFreshSession = false,
+  }) async {
     RiftLog.debug(
-      '[TLS] connectTo host=$host port=$port expectedDeviceId=${expectedDeviceId ?? "<none>"}',
+      '[TLS] connectTo host=$host port=$port '
+      'expectedDeviceId=${expectedDeviceId ?? "<none>"} '
+      'forceFreshSession=$forceFreshSession',
     );
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
@@ -152,10 +159,18 @@ class TransportImpl implements Transport {
       },
     );
 
-    return _handleConnection(socket, isServer: false);
+    return _handleConnection(
+      socket,
+      isServer: false,
+      forceFreshSession: forceFreshSession,
+    );
   }
 
-  Future<String> _handleConnection(SecureSocket socket, {required bool isServer}) async {
+  Future<String> _handleConnection(
+    SecureSocket socket, {
+    required bool isServer,
+    bool forceFreshSession = false,
+  }) async {
     final peerCert = socket.peerCertificate;
     if (peerCert == null) {
       socket.destroy();
@@ -177,18 +192,30 @@ class TransportImpl implements Transport {
           previousIsServer != null &&
           !identical(previousSocket, socket)) {
         if (_authenticatedPeers.contains(peerDeviceId)) {
+          if (forceFreshSession && !isServer) {
+            RiftLog.info(
+              '[TLS] Replacing existing authenticated session for '
+              'peerDeviceId=$peerDeviceId with a fresh outbound connection.',
+            );
+            try {
+              previousSocket.destroy();
+            } catch (_) {
+              // Best-effort cleanup while forcing a fresh manual pairing path.
+            }
+            _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
+            _peers.remove(peerDeviceId);
+            _peerSocketIsServer.remove(peerDeviceId);
+            _peerCerts.remove(peerDeviceId);
+            _authenticatedPeers.remove(peerDeviceId);
+          } else {
           RiftLog.debug(
             '[TLS] Closing duplicate socket for authenticated peerDeviceId=$peerDeviceId '
             'existingRole=${previousIsServer ? "inbound" : "outbound"} '
             'duplicateRole=${isServer ? "inbound" : "outbound"}',
           );
           socket.destroy();
-          if (isServer) {
-            return peerDeviceId;
+          return peerDeviceId;
           }
-          throw const RiftAuthenticationFailedException(
-            'Duplicate connection closed in favor of the existing authenticated session',
-          );
         }
 
         final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
@@ -325,6 +352,10 @@ class TransportImpl implements Transport {
     if (socket == null) {
       throw StateError('Peer $deviceId is not connected');
     }
+    RiftLog.info(
+      '[TLS] transport.sendMessage peerDeviceId=$deviceId '
+      'bytes=${message.length} remote=${socket.remoteAddress.address}:${socket.remotePort}',
+    );
 
     // Validate outbound payload once, then frame the original bytes without re-encoding.
     try {
@@ -345,6 +376,7 @@ class TransportImpl implements Transport {
     try {
       socket.add(frame);
       await socket.flush();
+      RiftLog.info('[TLS] transport.sendMessage flushed peerDeviceId=$deviceId');
     } on SocketException {
       disconnect(deviceId);
       rethrow;
@@ -356,6 +388,19 @@ class TransportImpl implements Transport {
 
   @override
   Uint8List? getPeerCert(String peerDeviceId) => _peerCerts[peerDeviceId];
+
+  @override
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId) {
+    final socket = _peers[peerDeviceId];
+    if (socket == null) {
+      return null;
+    }
+
+    return PeerSocketEndpoint(
+      address: socket.remoteAddress.address,
+      port: socket.remotePort,
+    );
+  }
 
   bool _preferIncomingSocketForPeer(String peerDeviceId) {
     final localDeviceId = _identityManager.deviceId;

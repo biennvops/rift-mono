@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../constants.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
+import 'device_detail_screen.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -17,6 +18,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   String? _localDeviceId;
   bool _isDiscovering = false;
+  bool _isTogglingDiscovery = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
   String? _error;
@@ -55,8 +57,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _peerLostSub?.cancel();
     _trustSub?.cancel();
     _pairingCompleteSub?.cancel();
+    _connectionSub?.cancel();
     super.dispose();
   }
+
+  StreamSubscription<bool>? _connectionSub;
 
   void _setupListeners() {
     final client = context.read<JsonRpcRiftClient>();
@@ -65,6 +70,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     _trustSub = client.onTrustChanged.listen(_handleTrustChanged);
     _pairingCompleteSub =
         client.onPairingComplete.listen(_handlePairingComplete);
+    _connectionSub = client.onConnectionChanged.listen((isConnected) {
+      if (isConnected && mounted) {
+        _loadData();
+      }
+    });
   }
 
   void _scheduleReload() {
@@ -313,9 +323,25 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   }
 
   Future<void> _toggleDiscovery() async {
+    if (_isTogglingDiscovery) return;
+    setState(() {
+      _isTogglingDiscovery = true;
+    });
+
     final client = context.read<JsonRpcRiftClient>();
-    if (!client.isConnected) return;
     try {
+      if (!client.isConnected) {
+        await client.connect();
+      }
+      if (!client.isConnected) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Daemon is still starting. Try discovery again in a moment.'),
+          ),
+        );
+        return;
+      }
       final nextDiscovering = !_isDiscovering;
       if (_isDiscovering) {
         await client.stopDiscovery();
@@ -337,7 +363,115 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTogglingDiscovery = false;
+        });
+      }
     }
+  }
+
+  Future<void> _showManualPairDialog() async {
+    final addressController = TextEditingController();
+    final portController = TextEditingController(text: '11112');
+    String? validationError;
+
+    final result = await showDialog<({String address, int port})>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void submit() {
+              final address = addressController.text.trim();
+              final portText = portController.text.trim();
+              final parsedPort = int.tryParse(portText);
+              final parsedAddress = InternetAddress.tryParse(address);
+              if (parsedAddress == null || parsedAddress.type != InternetAddressType.IPv4) {
+                setDialogState(() {
+                  validationError = 'Enter a valid IPv4 address.';
+                });
+                return;
+              }
+              if (parsedPort == null || parsedPort <= 0 || parsedPort > 65535) {
+                setDialogState(() {
+                  validationError = 'Enter a TCP port between 1 and 65535.';
+                });
+                return;
+              }
+              Navigator.of(dialogContext).pop((address: address, port: parsedPort));
+            }
+
+            return AlertDialog(
+              title: const Text('Pair by IP'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: addressController,
+                      decoration: const InputDecoration(
+                        labelText: 'IPv4 address',
+                        hintText: '10.53.38.174',
+                      ),
+                      keyboardType: TextInputType.number,
+                      autofocus: true,
+                      onSubmitted: (_) => submit(),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: portController,
+                      decoration: const InputDecoration(
+                        labelText: 'Port',
+                      ),
+                      keyboardType: TextInputType.number,
+                      onSubmitted: (_) => submit(),
+                    ),
+                    if (validationError != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        validationError!,
+                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  child: const Text('Pair'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (!mounted || result == null) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: PairingScreen(
+            initialEndpointAddress: result.address,
+            initialEndpointPort: result.port,
+            initialDisplayName: '${result.address}:${result.port}',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await _loadData();
   }
 
   String _trustStateLabel(String trustState) {
@@ -352,32 +486,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         return 'Trusted';
       default:
         return 'Discovered';
-    }
-  }
-
-  IconData _trustedActionIcon(String trustState) {
-    switch (trustState) {
-      case 'blocked':
-        return Icons.lock_open;
-      case 'revoked':
-        return Icons.restore;
-      case 'pairing_pending':
-        return Icons.close;
-      default:
-        return Icons.gpp_bad;
-    }
-  }
-
-  String _trustedActionTooltip(String trustState) {
-    switch (trustState) {
-      case 'blocked':
-        return 'Unblock device';
-      case 'revoked':
-        return 'Reset revoked peer';
-      case 'pairing_pending':
-        return 'Cancel pairing';
-      default:
-        return 'Revoke trust';
     }
   }
 
@@ -583,7 +691,25 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   Widget _buildActionBtn(String trustState, bool isTrusted, Map<String, dynamic> peer, String titleText, ThemeData theme) {
     if (trustState == 'blocked' || trustState == 'revoked') {
-      return const SizedBox.shrink();
+      final label = trustState == 'blocked' ? 'Unblock' : 'Reset';
+      final icon = trustState == 'blocked' ? Icons.lock_open : Icons.restore;
+      final color = theme.colorScheme.error;
+
+      return InkWell(
+        onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+        borderRadius: BorderRadius.circular(4),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 4),
+              Text(label, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+            ],
+          ),
+        ),
+      );
     }
     
     if (trustState == 'trusted') {
@@ -598,6 +724,38 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               Icon(Icons.more_horiz, size: 18, color: theme.colorScheme.primary),
               const SizedBox(width: 4),
               Text('Manage', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (trustState == 'pairing_pending') {
+      return InkWell(
+        onTap: () => _handlePeerAction(
+          peer: peer,
+          isTrusted: isTrusted,
+          trustState: trustState,
+          titleText: titleText,
+        ),
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: theme.colorScheme.error),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.close, size: 16, color: theme.colorScheme.error),
+              const SizedBox(width: 4),
+              Text(
+                'Cancel',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
             ],
           ),
         ),
@@ -641,16 +799,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
     try {
       if (!isTrusted) {
+        final client = context.read<JsonRpcRiftClient>();
         assert(
           !_isSelfDevice(deviceId),
           'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
         );
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => PairingScreen(
-              initialDeviceId: deviceId,
-              initialDisplayName: titleText,
-              autoStart: true,
+            builder: (_) => Provider<JsonRpcRiftClient>.value(
+              value: client,
+              child: PairingScreen(
+                initialDeviceId: deviceId,
+                initialDisplayName: titleText,
+                autoStart: true,
+              ),
             ),
           ),
         );
@@ -675,16 +837,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         );
         if (!confirmed) return;
         await client.resetRevokedPeer(deviceId);
-      } else if (trustState == 'trusted' || trustState == 'pairing_pending') {
+      } else if (trustState == 'trusted') {
+        final isOnline = peer['presence'] == 'online';
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => DeviceDetailScreen(
+              peer: peer,
+              isOnline: isOnline,
+            ),
+          ),
+        );
+        await _loadData();
+      } else if (trustState == 'pairing_pending') {
         final confirmed = await _confirmTrustAction(
-          title: trustState == 'pairing_pending'
-              ? 'Cancel pairing?'
-              : 'Revoke trust?',
-          message: trustState == 'pairing_pending'
-              ? 'This will drop the pending trust flow for $titleText.'
-              : 'This will revoke trust for $titleText and disconnect active sessions.',
-          confirmLabel:
-              trustState == 'pairing_pending' ? 'Cancel pairing' : 'Revoke',
+          title: 'Cancel pairing?',
+          message: 'This will drop the pending trust flow for $titleText.',
+          confirmLabel: 'Cancel pairing',
         );
         if (!confirmed) return;
         if (trustState == 'pairing_pending') {
@@ -705,58 +873,117 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }
   }
 
+  Widget _buildEmptyState(ThemeData theme) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 192,
+          height: 192,
+          margin: const EdgeInsets.only(bottom: 32),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: theme.colorScheme.surfaceContainerLowest,
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Center(
+            child: Icon(
+              Icons.devices,
+              size: 72,
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ),
+        Text(
+          'Chưa có thiết bị nào.',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.onSurface,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Mở Rift trên thiết bị khác cùng mạng LAN để bắt đầu.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 32),
+        ElevatedButton.icon(
+          onPressed: (_isDiscovering || _isTogglingDiscovery) ? null : _toggleDiscovery,
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(4),
+            ),
+            elevation: 1,
+            side: const BorderSide(color: Colors.transparent),
+          ).copyWith(
+            backgroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
+                return theme.colorScheme.surfaceContainerHighest;
+              }
+              return theme.colorScheme.primary;
+            }),
+            foregroundColor: WidgetStateProperty.resolveWith((states) {
+              if (states.contains(WidgetState.disabled)) {
+                return theme.colorScheme.onSurfaceVariant;
+              }
+              return theme.colorScheme.onPrimary;
+            }),
+          ),
+          icon: _isTogglingDiscovery 
+            ? SizedBox(
+                width: 18, height: 18, 
+                child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.onSurfaceVariant)
+              ) 
+            : const Icon(Icons.refresh, size: 18),
+          label: Text(
+            'Tìm Thiết Bị',
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: (_isDiscovering || _isTogglingDiscovery) ? theme.colorScheme.onSurfaceVariant : theme.colorScheme.onPrimary,
+            ),
+          ),
+        ),
+        const SizedBox(height: 32),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.secondary,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'mDNS Listening on port 5353',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: PreferredSize(
-        preferredSize: const Size.fromHeight(56.0),
-        child: Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surface,
-            border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-          ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.shield, color: theme.colorScheme.primary), // shield_with_heart proxy
-                      const SizedBox(width: 8),
-                      Text(
-                        'RIFT',
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Row(
-                    children: [
-                      if (_isDiscovering)
-                        const Padding(
-                          padding: EdgeInsets.only(right: 8.0),
-                          child: SizedBox(
-                            width: 16, height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                      IconButton(
-                        icon: Icon(Icons.refresh, color: theme.colorScheme.onSurfaceVariant),
-                        onPressed: _loadData,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
       body: _error != null && _trustedPeers.isEmpty && _discoveredPeers.isEmpty
           ? Center(
               child: Column(
@@ -773,37 +1000,67 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 ]))
           : RefreshIndicator(
               onRefresh: _loadData,
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                children: [
-                  if (_trustedPeers.isEmpty && _discoveredPeers.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Column(
-                        children: [
-                          Icon(Icons.devices, size: 64, color: theme.colorScheme.outlineVariant),
-                          const SizedBox(height: 16),
-                          Text('No devices found.', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                        ],
+              child: (_trustedPeers.isEmpty && _discoveredPeers.isEmpty)
+                  ? LayoutBuilder(
+                      builder: (context, constraints) => SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                              child: _buildEmptyState(theme),
+                            ),
+                          ),
+                        ),
                       ),
                     )
-                  else ...[
-                    if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
-                    if (_discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
-                  ],
-                  const SizedBox(height: 80), // Fab spacing
-                ],
+                  : ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      children: [
+                        if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
+                        if (_discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
+                        const SizedBox(height: 80), // Fab spacing
+                      ],
+                    ),
+            ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'pairByIpFab',
+            onPressed: _showManualPairDialog,
+            backgroundColor: theme.colorScheme.secondaryContainer,
+            foregroundColor: theme.colorScheme.onSecondaryContainer,
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: const Icon(Icons.router),
+            label: Text(
+              'Pair by IP',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSecondaryContainer,
               ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _toggleDiscovery,
-        backgroundColor: theme.colorScheme.primaryContainer,
-        foregroundColor: theme.colorScheme.onPrimaryContainer,
-        elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        icon: Icon(_isDiscovering ? Icons.search_off : Icons.search),
-        label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'discoverFab',
+            onPressed: _isTogglingDiscovery ? null : _toggleDiscovery,
+            backgroundColor: theme.colorScheme.primaryContainer,
+            foregroundColor: theme.colorScheme.onPrimaryContainer,
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: _isTogglingDiscovery 
+              ? SizedBox(
+                  width: 24, height: 24, 
+                  child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.onPrimaryContainer)
+                )
+              : Icon(_isDiscovering ? Icons.search_off : Icons.search),
+            label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
+          ),
+        ],
       ),
     );
   }

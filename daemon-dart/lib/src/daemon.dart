@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:meta/meta.dart';
 import 'package:daemon_dart/src/crypto/cert_decoder.dart';
 import 'package:daemon_dart/src/crypto/identity_manager_impl.dart';
 import 'package:daemon_dart/src/crypto/base32_utils.dart';
@@ -16,6 +17,7 @@ import 'package:daemon_dart/src/network/discovery_service_factory.dart'
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
+import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 import 'package:daemon_dart/src/pairing/pairing_manager.dart';
@@ -231,11 +233,93 @@ bool _isLikelyDuplicateBootstrapRace(Object error) {
   return message.contains('session already exists for ');
 }
 
+@visibleForTesting
+Future<String> reconnectTrustedPeerViaEndpoints({
+  required String peerDeviceId,
+  required List<TrustedPeerEndpoint> trustedEndpoints,
+  required Transport transport,
+  required SessionContext? Function(String peerDeviceId) getContext,
+  required Future<void> Function(String peerDeviceId) sendSessionHello,
+  required Future<void> Function(String peerDeviceId)
+  waitForSessionEstablished,
+  required Future<void> Function(String peerDeviceId, String source)
+  persistTrustedEndpoint,
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  if (trustedEndpoints.isEmpty) {
+    throw RiftException(
+      -32000,
+      'Trusted peer $peerDeviceId has no persisted local endpoint to reconnect.',
+    );
+  }
+
+  Object? lastError;
+  for (final endpoint in trustedEndpoints) {
+    RiftLog.info(
+      '[Reconnect] Trying trusted endpoint for peerDeviceId=$peerDeviceId '
+      'address=${endpoint.address}:${endpoint.port} source=${endpoint.source}',
+    );
+    try {
+      final connectedPeerDeviceId = await transport
+          .connectTo(
+            endpoint.address,
+            endpoint.port,
+            expectedDeviceId: peerDeviceId,
+          )
+          .timeout(timeout);
+
+      if (getContext(connectedPeerDeviceId) == null) {
+        await sendSessionHello(connectedPeerDeviceId);
+      }
+      await waitForSessionEstablished(connectedPeerDeviceId).timeout(timeout);
+      await persistTrustedEndpoint(connectedPeerDeviceId, 'trusted-reconnect');
+      return connectedPeerDeviceId;
+    } catch (error) {
+      lastError = error;
+      final classification = _classifyPairingConnectFailure(error);
+      RiftLog.warn(
+        '[Reconnect] Trusted endpoint failed for peerDeviceId=$peerDeviceId '
+        'address=${endpoint.address}:${endpoint.port} '
+        'classification=$classification detail=${_describePairingConnectFailure(error)}',
+      );
+    }
+  }
+
+  throw RiftException(
+    -32000,
+    'Failed to reconnect trusted peer $peerDeviceId using persisted endpoints. '
+    '${lastError == null ? "" : _describePairingConnectFailure(lastError)}',
+  );
+}
+
+@visibleForTesting
+Future<T> joinSingleFlightOperation<T>({
+  required String key,
+  required Map<String, Future<T>> pendingOperations,
+  required Future<T> Function() startOperation,
+}) async {
+  final pending = pendingOperations[key];
+  if (pending != null) {
+    return pending;
+  }
+
+  final future = startOperation();
+  pendingOperations[key] = future;
+  try {
+    return await future;
+  } finally {
+    if (identical(pendingOperations[key], future)) {
+      pendingOperations.remove(key);
+    }
+  }
+}
+
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
 /// hosted by an Android Foreground Service.
 class RiftDaemon {
+  static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
   IdentityManagerImpl? _identityManager;
   DiscoveryService? _discoveryService;
   TransportImpl? _transport;
@@ -247,6 +331,10 @@ class RiftDaemon {
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
+  final Map<String, Future<Map<String, dynamic>>> _pendingEndpointStartPairings =
+      {};
+  final Map<String, Future<String>> _pendingTrustedReconnects = {};
+  final Map<String, TrustedPeerEndpoint> _pendingTrustedEndpointHints = {};
   bool _isDiscovering = false;
 
   final String storagePath;
@@ -295,12 +383,27 @@ class RiftDaemon {
         },
       );
 
+      _sessionManager!.onTrustedSessionReady.listen((ctx) {
+        unawaited(
+          _persistTrustedEndpointIfAvailable(
+            ctx.peerDeviceId,
+            source: 'session-established',
+          ),
+        );
+      });
+
       _pairingManager = PairingManager(
         trustStore: _trustStore!,
         sessionManager: _sessionManager!,
         identityManager: _identityManager!,
         onIpcEvent: (event) {
           _forwardIpcEvent(event);
+        },
+        onPeerTrusted: (peerDeviceId) async {
+          await _persistTrustedEndpointIfAvailable(
+            peerDeviceId,
+            source: 'pairing-session',
+          );
         },
       );
 
@@ -626,6 +729,7 @@ class RiftDaemon {
         final broadcastTo = <String>[];
         for (final peer in trustedPeers) {
           try {
+            await _ensureTrustedSessionForPeer(peer.deviceId);
             await _sessionManager!.sendMessage(peer.deviceId, {
               'rift': '0.1-draft',
               'type': 'clipboard.offer',
@@ -646,8 +750,8 @@ class RiftDaemon {
 
       case 'rift.listClipboardOffers':
         _requireTransportServices();
-        // Spec: only return offers from peers, not our own local offers
-        final incomingOffers = _clipboardEngine!.getIncomingOffers().map((o) {
+        // Return both local and incoming offers to show unified history
+        final allOffers = _clipboardEngine!.getAllOffers().map((o) {
           final expiresAt = _clipboardEngine!.getOfferExpiresAt(o.offerId);
           return {
             'offerId': o.offerId,
@@ -658,7 +762,7 @@ class RiftDaemon {
             'expiresAt': expiresAt?.toIso8601String(),
           };
         }).toList();
-        return {'offers': incomingOffers};
+        return {'offers': allOffers};
 
       case 'rift.fetchClipboardContent':
         _requireTransportServices();
@@ -672,6 +776,7 @@ class RiftDaemon {
 
         final fetchWait = _awaitClipboardFetchResult(offerId);
         try {
+          await _ensureTrustedSessionForPeer(offer.sourceDeviceId);
           await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
         } catch (e) {
           await fetchWait.cancel();
@@ -730,6 +835,36 @@ class RiftDaemon {
         } finally {
           if (identical(_pendingStartPairings[requestedPeerId], future)) {
             _pendingStartPairings.remove(requestedPeerId);
+          }
+        }
+      case 'rift.startPairingByEndpoint':
+        _requireTransportServices();
+        final address = RpcUtils.requireStringParam(params, 'address');
+        final port = RpcUtils.requireIntParam(params, 'port');
+        if (port <= 0 || port > 65535) {
+          throw const RiftException(-32602, 'port must be between 1 and 65535');
+        }
+        final endpointKey = '$address:$port';
+        final pendingEndpointPairing =
+            _pendingEndpointStartPairings[endpointKey];
+        if (pendingEndpointPairing != null) {
+          RiftLog.debug(
+            '[Pairing] Joining pending startPairingByEndpoint for endpoint=$endpointKey',
+          );
+          return await pendingEndpointPairing;
+        }
+
+        final endpointFuture =
+            _startPairingByEndpointRpc(address, port, method, params);
+        _pendingEndpointStartPairings[endpointKey] = endpointFuture;
+        try {
+          return await endpointFuture;
+        } finally {
+          if (identical(
+            _pendingEndpointStartPairings[endpointKey],
+            endpointFuture,
+          )) {
+            _pendingEndpointStartPairings.remove(endpointKey);
           }
         }
       case 'rift.approvePairing':
@@ -1164,6 +1299,109 @@ class RiftDaemon {
     );
   }
 
+  Future<void> _persistTrustedEndpointIfAvailable(
+    String peerDeviceId, {
+    required String source,
+  }) async {
+    final trustStore = _trustStore;
+    final transport = _transport;
+    if (trustStore == null || transport == null) {
+      return;
+    }
+
+    final record = await trustStore.getPeer(peerDeviceId);
+    if (record == null || record.state != TrustState.trusted) {
+      return;
+    }
+
+    final now = DateTime.now().toUtc();
+    final nextEndpoint = _resolveTrustedEndpointForPersistence(
+      peerDeviceId: peerDeviceId,
+      record: record,
+      source: source,
+      persistedAt: now,
+    );
+    if (nextEndpoint == null) {
+      RiftLog.debug(
+        '[Endpoint] Skipping persistence for peerDeviceId=$peerDeviceId '
+        'because no stable listener port is known.',
+      );
+      return;
+    }
+
+    final mergedEndpoints = <TrustedPeerEndpoint>[
+      nextEndpoint,
+      ...record.trustedEndpoints.where(
+        (existing) =>
+            existing.address != nextEndpoint.address ||
+            existing.port != nextEndpoint.port,
+      ),
+    ];
+
+    await trustStore.upsertPeer(
+      PeerRecord(
+        deviceId: record.deviceId,
+        displayName: record.displayName,
+        certDer: record.certDer,
+        state: record.state,
+        pairedAt: record.pairedAt,
+        updatedAt: now,
+        lastSeenAt: record.lastSeenAt,
+        trustedEndpoints: mergedEndpoints.take(4).toList(growable: false),
+      ),
+    );
+
+    RiftLog.info(
+      '[Endpoint] Persisted trusted endpoint for peerDeviceId=$peerDeviceId '
+      'address=${nextEndpoint.address}:${nextEndpoint.port} source=$source',
+    );
+  }
+
+  TrustedPeerEndpoint? _resolveTrustedEndpointForPersistence({
+    required String peerDeviceId,
+    required PeerRecord record,
+    required String source,
+    required DateTime persistedAt,
+  }) {
+    final hintedEndpoint = _pendingTrustedEndpointHints.remove(peerDeviceId);
+    if (hintedEndpoint != null) {
+      return TrustedPeerEndpoint(
+        address: hintedEndpoint.address,
+        port: hintedEndpoint.port,
+        source: source,
+        addressFamily: hintedEndpoint.addressFamily,
+        lastSuccessAt: persistedAt,
+      );
+    }
+
+    final primaryPeer = _discoveredPeers[peerDeviceId]?.primaryPeer;
+    if (primaryPeer != null) {
+      return TrustedPeerEndpoint(
+        address: primaryPeer.address,
+        port: primaryPeer.port,
+        source: source,
+        addressFamily: InternetAddress.tryParse(primaryPeer.address)?.type.name,
+        lastSuccessAt: persistedAt,
+      );
+    }
+
+    final activeEndpoint = _transport?.getPeerSocketEndpoint(peerDeviceId);
+    if (activeEndpoint != null && record.trustedEndpoints.isNotEmpty) {
+      final existingEndpoint = record.trustedEndpoints.first;
+      return TrustedPeerEndpoint(
+        address: activeEndpoint.address,
+        port: existingEndpoint.port,
+        source: source,
+        addressFamily:
+            InternetAddress.tryParse(activeEndpoint.address)?.type.name ??
+            existingEndpoint.addressFamily,
+        lastSuccessAt: persistedAt,
+      );
+    }
+
+    return null;
+  }
+
   Future<String> _ensureSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager;
     final transport = _transport;
@@ -1204,92 +1442,249 @@ class RiftDaemon {
     }
   }
 
-  Future<String> _openSessionForPairing(String peerDeviceId) async {
+  Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
+    final trustStore = _trustStore;
+    final sessionManager = _sessionManager;
+    if (trustStore == null || sessionManager == null) {
+      throw const RiftIdentityNotInitializedException(
+        'Daemon services not initialized',
+      );
+    }
+
+    final record = await trustStore.getPeer(peerDeviceId);
+    if (record == null || record.state != TrustState.trusted) {
+      throw RiftException(
+        -32004,
+        'Peer $peerDeviceId is not trusted for protected reconnect',
+      );
+    }
+
+    final ctx = sessionManager.getContext(peerDeviceId);
+    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+      return peerDeviceId;
+    }
+    if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
+      await sessionManager.waitForSessionEstablished(peerDeviceId);
+      return peerDeviceId;
+    }
+
+    return joinSingleFlightOperation(
+      key: peerDeviceId,
+      pendingOperations: _pendingTrustedReconnects,
+      startOperation: () {
+        RiftLog.debug(
+          '[Reconnect] Starting trusted reconnect for peerDeviceId=$peerDeviceId',
+        );
+        return _reconnectTrustedPeer(peerDeviceId, record);
+      },
+    );
+  }
+
+  Future<String> _reconnectTrustedPeer(
+    String peerDeviceId,
+    PeerRecord record,
+  ) async {
     final sessionManager = _sessionManager!;
     final transport = _transport!;
-    final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
-    if (discoveredPeerRecord == null ||
-        discoveredPeerRecord.orderedPeers.isEmpty) {
-      throw const RiftNotFoundException('Peer not found in discovery cache');
+    Object? persistedEndpointFailure;
+    if (record.trustedEndpoints.isNotEmpty) {
+      try {
+        return await reconnectTrustedPeerViaEndpoints(
+          peerDeviceId: peerDeviceId,
+          trustedEndpoints: record.trustedEndpoints,
+          transport: transport,
+          getContext: sessionManager.getContext,
+          sendSessionHello: sessionManager.sendSessionHello,
+          waitForSessionEstablished: sessionManager.waitForSessionEstablished,
+          persistTrustedEndpoint: (resolvedPeerDeviceId, source) {
+            return _persistTrustedEndpointIfAvailable(
+              resolvedPeerDeviceId,
+              source: source,
+            );
+          },
+          timeout: _trustedReconnectTimeout,
+        );
+      } catch (error) {
+        persistedEndpointFailure = error;
+        RiftLog.warn(
+          '[Reconnect] Persisted endpoint reconnect failed for '
+          'peerDeviceId=$peerDeviceId. '
+          'Trying discovery fallback if available. error=$error',
+        );
+      }
     }
 
-    final failures = <({DiscoveredPeer peer, Object error})>[];
-    for (final discoveredPeer in discoveredPeerRecord.orderedPeers) {
-      Future<String> connectCurrentEndpoint() async {
-        final expectedDeviceId = discoveredPeer.deviceIdHint == peerDeviceId
-            ? peerDeviceId
-            : null;
-        final resolvedPeerDeviceId = await transport.connectTo(
-          discoveredPeer.address,
-          discoveredPeer.port,
-          expectedDeviceId: expectedDeviceId,
+    final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
+    if (discoveredPeerRecord != null && discoveredPeerRecord.orderedPeers.isNotEmpty) {
+      final resolvedPeerDeviceId = await _openSessionForPairing(peerDeviceId);
+      await _persistTrustedEndpointIfAvailable(
+        resolvedPeerDeviceId,
+        source: 'discovery-reconnect',
+      );
+      return resolvedPeerDeviceId;
+    }
+
+    if (persistedEndpointFailure != null) {
+      throw persistedEndpointFailure;
+    }
+
+    throw RiftException(
+      -32000,
+      'Trusted peer $peerDeviceId has no persisted endpoint for reconnect '
+      'and is not currently discoverable.',
+    );
+  }
+
+  Future<String> _openSessionForPairing(String peerDeviceId) async {
+    final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
+    final hasDiscovered = discoveredPeerRecord != null &&
+        discoveredPeerRecord.orderedPeers.isNotEmpty;
+
+    if (hasDiscovered) {
+      final failures = <({DiscoveredPeer peer, Object error})>[];
+      for (final discoveredPeer in discoveredPeerRecord.orderedPeers) {
+        RiftLog.debug(
+          '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
+          'using address=${discoveredPeer.address}:${discoveredPeer.port} '
+          'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
+          'instanceId=${discoveredPeer.instanceId}',
         );
 
-        if (sessionManager.getContext(resolvedPeerDeviceId) == null) {
-          await sessionManager.sendSessionHello(resolvedPeerDeviceId);
+        try {
+          return await _connectEndpointForPairing(
+            discoveredPeer.address,
+            discoveredPeer.port,
+            expectedPeerDeviceId: discoveredPeer.deviceIdHint == peerDeviceId
+                ? peerDeviceId
+                : null,
+            duplicateRacePeerDeviceId: peerDeviceId,
+            duplicateRaceLogContext:
+                'peerDeviceId=$peerDeviceId '
+                'address=${discoveredPeer.address}:${discoveredPeer.port} '
+                'instanceId=${discoveredPeer.instanceId}',
+          );
+        } catch (e) {
+          failures.add((peer: discoveredPeer, error: e));
+          final classification = _classifyPairingConnectFailure(e);
+          RiftLog.warn(
+            '[Pairing] Endpoint failed for peerDeviceId=$peerDeviceId '
+            'address=${discoveredPeer.address}:${discoveredPeer.port} '
+            'instanceId=${discoveredPeer.instanceId} '
+            'classification=$classification '
+            'detail=${_describePairingConnectFailure(e)} '
+            'error=$e',
+          );
         }
-        await sessionManager.waitForSessionEstablished(resolvedPeerDeviceId);
-        return resolvedPeerDeviceId;
       }
 
-      RiftLog.debug(
-        '[Pairing] Opening session for peerDeviceId=$peerDeviceId '
-        'using address=${discoveredPeer.address}:${discoveredPeer.port} '
-        'deviceIdHint=${discoveredPeer.deviceIdHint ?? "<none>"} '
-        'instanceId=${discoveredPeer.instanceId}',
+      final failureSummary = _summarizePairingFailures(failures);
+      RiftLog.warn(
+        '[Pairing] All discovered endpoints failed for peerDeviceId=$peerDeviceId. '
+        '$failureSummary',
       );
+    }
 
-      try {
-        return await connectCurrentEndpoint();
-      } catch (e) {
-        Object failure = e;
-        if (_isLikelyDuplicateBootstrapRace(e)) {
-          RiftLog.info(
-            '[Pairing] Duplicate bootstrap race detected for '
-            'peerDeviceId=$peerDeviceId '
-            'address=${discoveredPeer.address}:${discoveredPeer.port} '
-            'instanceId=${discoveredPeer.instanceId}. '
-            'Waiting briefly for an in-flight session before retrying.',
-          );
-
+    final trustStore = _trustStore;
+    var hasPersisted = false;
+    if (trustStore != null) {
+      final record = await trustStore.getPeer(peerDeviceId);
+      if (record != null && record.trustedEndpoints.isNotEmpty) {
+        hasPersisted = true;
+        RiftLog.debug(
+          '[Pairing] Falling back to persisted endpoints for peerDeviceId=$peerDeviceId',
+        );
+        for (final endpoint in record.trustedEndpoints) {
           try {
-            await sessionManager.waitForSessionEstablished(
-              peerDeviceId,
-              timeout: const Duration(milliseconds: 300),
+            return await _connectEndpointForPairing(
+              endpoint.address,
+              endpoint.port,
+              expectedPeerDeviceId: peerDeviceId,
+              duplicateRacePeerDeviceId: peerDeviceId,
+              duplicateRaceLogContext:
+                  'peerDeviceId=$peerDeviceId '
+                  'address=${endpoint.address}:${endpoint.port} '
+                  'source=persisted',
             );
-            return peerDeviceId;
-          } catch (_) {
-            try {
-              return await connectCurrentEndpoint();
-            } catch (retryError) {
-              failure = retryError;
-            }
+          } catch (e) {
+            RiftLog.warn(
+              '[Pairing] Persisted endpoint failed for peerDeviceId=$peerDeviceId '
+              'address=${endpoint.address}:${endpoint.port} '
+              'error=$e',
+            );
           }
         }
-
-        failures.add((peer: discoveredPeer, error: failure));
-        final classification = _classifyPairingConnectFailure(failure);
         RiftLog.warn(
-          '[Pairing] Endpoint failed for peerDeviceId=$peerDeviceId '
-          'address=${discoveredPeer.address}:${discoveredPeer.port} '
-          'instanceId=${discoveredPeer.instanceId} '
-          'classification=$classification '
-          'detail=${_describePairingConnectFailure(failure)} '
-          'error=$failure',
+          '[Pairing] All persisted endpoints failed for peerDeviceId=$peerDeviceId.',
         );
       }
     }
 
-    final failureSummary = _summarizePairingFailures(failures);
-    RiftLog.warn(
-      '[Pairing] All discovered endpoints failed for peerDeviceId=$peerDeviceId. '
-      '$failureSummary',
-    );
-    throw RiftException(
-      -32603,
-      'Failed to establish a secure session with $peerDeviceId across all discovered endpoints. '
-      '$failureSummary',
-    );
+    if (hasDiscovered || hasPersisted) {
+      throw RiftException(
+        -32603,
+        'Failed to establish a secure session with $peerDeviceId across all endpoints.',
+      );
+    } else {
+      throw const RiftNotFoundException('Peer not found in discovery cache or trusted endpoints');
+    }
+  }
+
+  Future<String> _connectEndpointForPairing(
+    String address,
+    int port, {
+    String? expectedPeerDeviceId,
+    String? duplicateRacePeerDeviceId,
+    required String duplicateRaceLogContext,
+  }) async {
+    final sessionManager = _sessionManager!;
+    final transport = _transport!;
+    var resolvedPeerDeviceId = expectedPeerDeviceId;
+
+    Future<String> connectCurrentEndpoint() async {
+      final connectedPeerDeviceId = await transport.connectTo(
+        address,
+        port,
+        expectedDeviceId: expectedPeerDeviceId,
+        forceFreshSession: expectedPeerDeviceId != null,
+      );
+      resolvedPeerDeviceId = connectedPeerDeviceId;
+
+      if (sessionManager.getContext(connectedPeerDeviceId) == null) {
+        await sessionManager.sendSessionHello(connectedPeerDeviceId);
+      }
+      await sessionManager.waitForSessionEstablished(connectedPeerDeviceId);
+      return connectedPeerDeviceId;
+    }
+
+    try {
+      return await connectCurrentEndpoint();
+    } catch (e) {
+      Object failure = e;
+      final peerToReuse = duplicateRacePeerDeviceId ?? resolvedPeerDeviceId;
+      if (_isLikelyDuplicateBootstrapRace(e) && peerToReuse != null) {
+        RiftLog.info(
+          '[Pairing] Duplicate bootstrap race detected for '
+          '$duplicateRaceLogContext. Waiting briefly for an in-flight '
+          'session before retrying.',
+        );
+
+        try {
+          await sessionManager.waitForSessionEstablished(
+            peerToReuse,
+            timeout: const Duration(milliseconds: 300),
+          );
+          return peerToReuse;
+        } catch (_) {
+          try {
+            return await connectCurrentEndpoint();
+          } catch (retryError) {
+            failure = retryError;
+          }
+        }
+      }
+
+      throw failure;
+    }
   }
 
   Future<Map<String, dynamic>> _startPairingRpc(
@@ -1308,12 +1703,83 @@ class RiftDaemon {
       throw const RiftNotFoundException('Peer not found in TrustStore');
     }
     return {
+      'deviceId': peerDeviceId,
       'fingerprint': _formatFingerprint(
         _identityManager!.getDeviceFingerprint(),
       ),
       'peerFingerprint': _deriveFingerprint(record.certDer),
       'expiresInMs':
           120000, // ipc.md §4.3: startPairing always returns 120 000 ms
+    };
+  }
+
+  Future<Map<String, dynamic>> _startPairingByEndpointRpc(
+    String address,
+    int port,
+    String method,
+    Map<String, dynamic> params,
+  ) async {
+    final transport = _transport;
+    final sessionManager = _sessionManager;
+    if (transport == null || sessionManager == null) {
+      throw const RiftIdentityNotInitializedException(
+        'Daemon services not initialized',
+      );
+    }
+
+    final resolvedPeerIdentity = await transport.connectTo(address, port);
+    RiftLog.info(
+      '[Pairing] Manual endpoint $address:$port resolved to '
+      'peerDeviceId=$resolvedPeerIdentity. Resetting any existing session '
+      'before starting pairing to avoid reusing a stale authenticated socket.',
+    );
+    sessionManager.disconnectPeer(resolvedPeerIdentity);
+
+    final resolvedPeerDeviceId = await _connectEndpointForPairing(
+      address,
+      port,
+      expectedPeerDeviceId: resolvedPeerIdentity,
+      duplicateRacePeerDeviceId: resolvedPeerIdentity,
+      duplicateRaceLogContext:
+          'manual endpoint=$address:$port peerDeviceId=$resolvedPeerIdentity',
+    );
+    RiftLog.info(
+      '[Pairing] Manual endpoint $address:$port established session with '
+      'peerDeviceId=$resolvedPeerDeviceId. Dispatching IPC pairing command.',
+    );
+    _pendingTrustedEndpointHints[resolvedPeerDeviceId] = TrustedPeerEndpoint(
+      address: address,
+      port: port,
+      source: 'manual-pairing',
+      addressFamily: InternetAddress.tryParse(address)?.type.name,
+      lastSuccessAt: DateTime.now().toUtc(),
+    );
+    await _ensurePeerRecordForPairing(resolvedPeerDeviceId);
+
+    await _pairingManager!.handleIpcCommand({
+      'method': method,
+      'params': {
+        ...params,
+        'deviceId': resolvedPeerDeviceId,
+      },
+    });
+    RiftLog.info(
+      '[Pairing] Manual endpoint $address:$port completed '
+      'handleIpcCommand for peerDeviceId=$resolvedPeerDeviceId.',
+    );
+
+    final record = await _trustStore?.getPeer(resolvedPeerDeviceId);
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+
+    return {
+      'deviceId': resolvedPeerDeviceId,
+      'fingerprint': _formatFingerprint(
+        _identityManager!.getDeviceFingerprint(),
+      ),
+      'peerFingerprint': _deriveFingerprint(record.certDer),
+      'expiresInMs': 120000,
     };
   }
 
