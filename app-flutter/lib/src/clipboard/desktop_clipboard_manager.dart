@@ -57,7 +57,12 @@ class DesktopClipboardManager {
     controller = StreamController<Object?>.broadcast(
       onListen: () async {
         try {
-          lastText = await reader();
+          final currentText = await reader();
+          if (lastText != null && currentText != lastText) {
+            lastText = currentText;
+            controller.add(null);
+          }
+          lastText ??= currentText;
         } on PlatformException catch (e) {
           debugPrint('Initial clipboard read failed: $e');
         } on MissingPluginException catch (e) {
@@ -135,7 +140,13 @@ class DesktopClipboardManager {
     if (!_started || _isDisposed) {
       return;
     }
-    await _setClipboardMonitoringEnabled(visible);
+
+    // Clipboard sync is expected to keep running while the desktop shell hides
+    // the window to tray. We still track visibility for future UX throttling,
+    // but monitoring itself stays active until the manager is disposed.
+    if (_clipboardChangeSub == null) {
+      await _setClipboardMonitoringEnabled(true);
+    }
   }
 
   Future<void> dispose() async {
@@ -176,6 +187,14 @@ class DesktopClipboardManager {
       return;
     }
 
+    await handleExternalClipboardText(text);
+  }
+
+  Future<void> handleExternalClipboardText(String text) async {
+    if (_isDisposed || !_client.isConnected) {
+      return;
+    }
+
     final payload = _encodeClipboardText(text);
     if (_consumeSuppressedLocalHash(payload.sha256)) {
       _log.fine('Suppressed clipboard echo for hash ${payload.sha256}.');
@@ -190,6 +209,7 @@ class DesktopClipboardManager {
     );
     _emitStatus('Clipboard sent to peers');
   }
+
 
   Future<void> _resyncOffers() async {
     if (!_client.isConnected) {

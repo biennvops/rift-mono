@@ -10,11 +10,14 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'constants.dart';
-import 'screens/event_log_screen.dart';
+import 'package:app_flutter/screens/security_dashboard_screen.dart';
+import 'package:app_flutter/screens/operations_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
-import 'screens/clipboard_debug_screen.dart';
+import 'screens/clipboard_transfer_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/onboarding_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
@@ -49,19 +52,23 @@ void main() async {
     debugPrint('Windows clipboard manager failed to start: $error');
   });
 
+  final prefs = await SharedPreferences.getInstance();
+  final hasCompletedOnboarding = prefs.getBool('has_completed_onboarding') ?? false;
+
   runApp(
     Provider<DesktopClipboardManager?>.value(
       value: clipboardManager,
       child: Provider<JsonRpcRiftClient>.value(
         value: client,
-        child: const RiftApp(),
+        child: RiftApp(hasCompletedOnboarding: hasCompletedOnboarding),
       ),
     ),
   );
 }
 
 class RiftApp extends StatefulWidget {
-  const RiftApp({super.key});
+  final bool hasCompletedOnboarding;
+  const RiftApp({super.key, this.hasCompletedOnboarding = false});
 
   @override
   State<RiftApp> createState() => _RiftAppState();
@@ -76,12 +83,18 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
 
+  bool get _enableDesktopShellIntegration =>
+      (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
+      !Platform.environment.containsKey('FLUTTER_TEST');
+
   @override
   void initState() {
     super.initState();
-    trayManager.addListener(this);
-    windowManager.addListener(this);
-    _initSystemTray();
+    if (_enableDesktopShellIntegration) {
+      trayManager.addListener(this);
+      windowManager.addListener(this);
+      _initSystemTray();
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
       _bindClipboardChannel();
@@ -118,33 +131,28 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (!Platform.isAndroid) return;
     final client = context.read<JsonRpcRiftClient>();
     final clipboardManager = _clipboardManager;
-    try {
-      await _clipboardChannel.invokeMethod('startService');
-      _clipboardServiceStarted = true;
-    } catch (e) {
-      debugPrint('Failed to start clipboard service: $e');
-    }
+    debugPrint('[Android Clipboard] Binding MethodChannel');
     _clipboardChannel.setMethodCallHandler((call) async {
       if (call.method == 'onClipboardChanged') {
         final text = call.arguments['text'] as String?;
+        debugPrint('[Android Clipboard] MethodChannel onClipboardChanged textLength=${text?.length ?? 0}');
         if (text != null) {
-          final bytes = utf8.encode(text);
-          final hash = sha256.convert(bytes).toString();
-          final contentBase64 = base64.encode(bytes);
           try {
-             await client.notifyClipboardChange(
-               contentType: 'text/plain',
-               byteSize: bytes.length,
-               sha256: hash,
-               contentBase64: contentBase64,
-             );
-             clipboardManager?.notifyStatus('Clipboard sent to peers');
+             debugPrint('[Android Clipboard] Calling handleExternalClipboardText textLength=${text.length}');
+             await clipboardManager?.handleExternalClipboardText(text);
           } catch (e) {
-             debugPrint('Failed to notify daemon: $e');
+             debugPrint('[Android Clipboard] Failed to handle clipboard text: $e');
           }
         }
       }
     });
+    try {
+      final started = await _clipboardChannel.invokeMethod('startService');
+      _clipboardServiceStarted = true;
+      debugPrint('[Android Clipboard] startService result=$started');
+    } catch (e) {
+      debugPrint('[Android Clipboard] Failed to start clipboard service: $e');
+    }
   }
 
   Future<void> _initSystemTray() async {
@@ -173,8 +181,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   @override
   void dispose() {
-    trayManager.removeListener(this);
-    windowManager.removeListener(this);
+    if (_enableDesktopShellIntegration) {
+      trayManager.removeListener(this);
+      windowManager.removeListener(this);
+    }
     _pairingRequestSub?.cancel();
     _clipboardStatusSub?.cancel();
     unawaited(_clipboardManager?.dispose());
@@ -190,6 +200,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   @override
   void onTrayIconMouseDown() {
+    if (!_enableDesktopShellIntegration) return;
     unawaited(_clipboardManager?.setWindowVisible(true));
     windowManager.show();
     windowManager.focus();
@@ -197,6 +208,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   @override
   void onTrayMenuItemClick(MenuItem menuItem) {
+    if (!_enableDesktopShellIntegration) return;
     if (menuItem.key == 'show_window') {
       unawaited(_clipboardManager?.setWindowVisible(true));
       windowManager.show();
@@ -208,6 +220,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   @override
   void onWindowClose() async {
+    if (!_enableDesktopShellIntegration) return;
     bool isPreventClose = await windowManager.isPreventClose();
     if (isPreventClose) {
       await _clipboardManager?.setWindowVisible(false);
@@ -262,7 +275,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
       theme: _buildRiftTheme(),
-      home: const AppShell(),
+      home: widget.hasCompletedOnboarding ? const AppShell() : const OnboardingScreen(),
     );
   }
 }
@@ -295,7 +308,7 @@ ThemeData _buildRiftTheme() {
   );
 
   final inter = GoogleFonts.interTextTheme();
-  final jetBrains = GoogleFonts.jetbrainsMono();
+  final jetBrainsStyle = GoogleFonts.jetBrainsMono();
 
   return ThemeData(
     useMaterial3: true,
@@ -307,17 +320,17 @@ ThemeData _buildRiftTheme() {
       headlineSmall: inter.headlineSmall?.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 28/20),
       bodyLarge: inter.bodyLarge?.copyWith(fontSize: 16, fontWeight: FontWeight.w400, height: 24/16),
       bodyMedium: inter.bodyMedium?.copyWith(fontSize: 14, fontWeight: FontWeight.w400, height: 20/14),
-      labelMedium: jetBrains.copyWith(fontSize: 13, fontWeight: FontWeight.w500, letterSpacing: 0.05, height: 16/13),
-      labelSmall: jetBrains.copyWith(fontSize: 11, fontWeight: FontWeight.w400, height: 14/11),
+      labelMedium: jetBrainsStyle.copyWith(fontSize: 13, fontWeight: FontWeight.w500, letterSpacing: 0.05, height: 16/13),
+      labelSmall: jetBrainsStyle.copyWith(fontSize: 11, fontWeight: FontWeight.w400, height: 14/11),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: colorScheme.surface,
       indicatorColor: colorScheme.secondaryContainer,
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return jetBrains.copyWith(fontSize: 11, color: colorScheme.onSurface, fontWeight: FontWeight.w600);
+          return jetBrainsStyle.copyWith(fontSize: 11, color: colorScheme.onSurface, fontWeight: FontWeight.w600);
         }
-        return jetBrains.copyWith(fontSize: 11, color: colorScheme.onSurfaceVariant);
+        return jetBrainsStyle.copyWith(fontSize: 11, color: colorScheme.onSurfaceVariant);
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
@@ -341,14 +354,36 @@ class _AppShellState extends State<AppShell> {
 
   final List<Widget> _screens = const [
     TrustedDevicesScreen(),
-    ClipboardDebugScreen(),
-    EventLogScreen(),
-    SettingsScreen(),
+    ClipboardTransferScreen(),
+    SecurityDashboardScreen(),
+    OperationsScreen(),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Icon(Icons.shield, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text('RIFT', style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       body: IndexedStack(
         index: _currentIndex,
         children: _screens,
@@ -372,12 +407,12 @@ class _AppShellState extends State<AppShell> {
             label: 'History',
           ),
           NavigationDestination(
-            icon: Icon(Icons.notifications_outlined),
-            selectedIcon: Icon(Icons.notifications_active),
+            icon: Icon(Icons.security),
+            selectedIcon: Icon(Icons.security),
             label: 'Events',
           ),
           NavigationDestination(
-            icon: Icon(Icons.terminal),
+            icon: Icon(Icons.terminal_outlined),
             selectedIcon: Icon(Icons.terminal),
             label: 'Ops',
           ),

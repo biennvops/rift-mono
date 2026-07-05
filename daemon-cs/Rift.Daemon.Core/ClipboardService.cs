@@ -12,10 +12,12 @@ public sealed class ClipboardService : IClipboardService
 {
     private const int DefaultOfferExpiryMs = 120000;
     private static readonly TimeSpan DefaultFetchResponseTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
     private const string RequiredCapability = "clipboard.offer_fetch";
 
     private readonly ITransport _transport;
     private readonly ITrustStore _trustStore;
+    private readonly IDiscoveryCoordinator _discoveryCoordinator;
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
     private readonly ISecurityEventLog _securityEventLog;
@@ -26,11 +28,13 @@ public sealed class ClipboardService : IClipboardService
     private readonly ConcurrentDictionary<string, ClipboardOfferInfo> _remoteOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _peerOfferHighWaterMarks = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, PendingClipboardFetch> _pendingFetches = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _pendingTrustedReconnects = new(StringComparer.Ordinal);
     private long _nextOfferSequence;
 
     public ClipboardService(
         ITransport transport,
         ITrustStore trustStore,
+        IDiscoveryCoordinator discoveryCoordinator,
         IPresenceService presenceService,
         IIdentityManager identityManager,
         ISecurityEventLog securityEventLog,
@@ -40,6 +44,7 @@ public sealed class ClipboardService : IClipboardService
     {
         _transport = transport;
         _trustStore = trustStore;
+        _discoveryCoordinator = discoveryCoordinator;
         _presenceService = presenceService;
         _identityManager = identityManager;
         _securityEventLog = securityEventLog;
@@ -79,7 +84,7 @@ public sealed class ClipboardService : IClipboardService
                 };
 
                 var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
-                await _transport.SendAsync(deviceId, bytes, CancellationToken.None);
+                await SendProtectedMessageAsync(deviceId, bytes, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -178,8 +183,22 @@ public sealed class ClipboardService : IClipboardService
         await PruneExpiredRemoteOffersAsync().ConfigureAwait(false);
 
         var now = DateTimeOffset.UtcNow;
-        var offers = _remoteOffers.Values
-            .Where(offer => DateTimeOffset.Parse(offer.ExpiresAt) > now)
+        var remote = _remoteOffers.Values
+            .Where(offer => DateTimeOffset.Parse(offer.ExpiresAt) > now);
+
+        var local = _localOffers.Values
+            .Where(offer => offer.ExpiresAt > now)
+            .Select(offer => new ClipboardOfferInfo
+            {
+                OfferId = offer.OfferId,
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                ContentType = offer.ContentType,
+                ByteSize = offer.ByteSize,
+                Sha256 = offer.Sha256,
+                ExpiresAt = offer.ExpiresAt.ToString("O")
+            });
+
+        var offers = remote.Concat(local)
             .OrderBy(offer => offer.ExpiresAt, StringComparer.Ordinal)
             .ToArray();
 
@@ -236,7 +255,7 @@ public sealed class ClipboardService : IClipboardService
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
             try
             {
-                await _transport.SendAsync(offer.SourceDeviceId, bytes, timeoutCts.Token);
+                await SendProtectedMessageAsync(offer.SourceDeviceId, bytes, timeoutCts.Token);
             }
             catch (InvalidOperationException ex) when (string.Equals(ex.Message, "PayloadTooLarge", StringComparison.Ordinal))
             {
@@ -516,6 +535,178 @@ public sealed class ClipboardService : IClipboardService
             "Timeout" => new ClipboardFailureException(failureReason, -32011, message ?? "Clipboard request timed out."),
             _ => new ClipboardFailureException(failureReason, -32001, message ?? failureReason)
         };
+    }
+
+    private async Task EnsureConnectedForTrustedPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        if (_transport.HasActiveSession(peerDeviceId))
+        {
+            return;
+        }
+
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        if (peer is null || peer.State != TrustState.Trusted)
+        {
+            throw new ClipboardFailureException("Unauthorized", -32004, $"Peer '{peerDeviceId}' is not trusted.");
+        }
+
+        if (peer.TrustedEndpoints.Count == 0)
+        {
+            try
+            {
+                await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ClipboardFailureException ex) when (ex.FailureReason == "PeerUnreachable")
+            {
+                _logger.LogDebug(
+                    ex,
+                    "Trusted peer {DeviceId} had no persisted/discoverable endpoint for clipboard reconnect.",
+                    peerDeviceId);
+            }
+            return;
+        }
+
+        var reconnectTask = _pendingTrustedReconnects.GetOrAdd(
+            peerDeviceId,
+            _ => ReconnectTrustedPeerCoreAsync(peerDeviceId, peer, cancellationToken));
+
+        try
+        {
+            await reconnectTask.ConfigureAwait(false);
+        }
+        catch (ClipboardFailureException ex) when (ex.FailureReason == "PeerUnreachable")
+        {
+            _logger.LogDebug(
+                ex,
+                "Trusted reconnect for peer {DeviceId} could not find a reachable endpoint before clipboard send.",
+                peerDeviceId);
+        }
+        finally
+        {
+            if (reconnectTask.IsCompleted)
+            {
+                _pendingTrustedReconnects.TryRemove(peerDeviceId, out _);
+            }
+        }
+    }
+
+    private async Task SendProtectedMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (InvalidOperationException ex) when (IsNoOpenSessionError(ex))
+        {
+            _logger.LogDebug(
+                ex,
+                "No active protected session was available for peer {DeviceId}. Attempting trusted reconnect before retrying clipboard message.",
+                peerDeviceId);
+        }
+
+        await EnsureConnectedForTrustedPeerAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+        await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool IsNoOpenSessionError(InvalidOperationException ex)
+    {
+        return ex.Message.Contains("No open session exists", StringComparison.Ordinal);
+    }
+
+    private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
+    {
+        Exception? lastError = null;
+        foreach (var endpoint in peer.TrustedEndpoints)
+        {
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TrustedReconnectTimeout);
+                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Reconnected trusted peer {DeviceId} using persisted endpoint {Address}:{Port} from {Source}.",
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    endpoint.Source);
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                lastError = ex;
+                _logger.LogWarning(
+                    ex,
+                    "Trusted reconnect attempt failed for peer {DeviceId} via {Address}:{Port} from {Source}.",
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    endpoint.Source);
+            }
+        }
+
+        if (_discoveryCoordinator.TryGetDiscoveredPeer(peerDeviceId, out var discoveredPeer) &&
+            discoveredPeer is not null)
+        {
+            _logger.LogInformation(
+                "Falling back to discovery reconnect for trusted peer {DeviceId} after persisted endpoints failed.",
+                peerDeviceId);
+            await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        throw new ClipboardFailureException(
+            "PeerUnreachable",
+            -32000,
+            $"Failed to reconnect trusted peer '{peerDeviceId}' using persisted endpoints. {lastError?.Message ?? "No endpoint succeeded."}");
+    }
+
+    private async Task ReconnectTrustedPeerViaDiscoveryAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        if (!_discoveryCoordinator.TryGetDiscoveredPeer(peerDeviceId, out var peer) ||
+            peer is null)
+        {
+            throw new ClipboardFailureException(
+                "PeerUnreachable",
+                -32000,
+                $"Trusted peer '{peerDeviceId}' is not currently discoverable.");
+        }
+
+        var endpoints = peer.ObservedEndpoints.Count > 0
+            ? peer.ObservedEndpoints
+            : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
+        Exception? lastError = null;
+
+        foreach (var endpoint in endpoints)
+        {
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TrustedReconnectTimeout);
+                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                _logger.LogInformation(
+                    "Reconnected trusted peer {DeviceId} using discovery endpoint {Address}:{Port}.",
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port);
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                lastError = ex;
+                _logger.LogWarning(
+                    ex,
+                    "Discovery reconnect attempt failed for trusted peer {DeviceId} via {Address}:{Port}.",
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port);
+            }
+        }
+
+        throw new ClipboardFailureException(
+            "PeerUnreachable",
+            -32000,
+            $"Failed to reconnect trusted peer '{peerDeviceId}' using discovery endpoints. {lastError?.Message ?? "No endpoint succeeded."}");
     }
 
     private void LogEvent(string eventType, string? peerDeviceId, SecurityEventSeverity severity, SecurityEventOutcome outcome, string? failureReason)
