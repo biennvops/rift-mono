@@ -24,6 +24,11 @@ public sealed class ClipboardService : IClipboardService
     private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILogger<ClipboardService> _logger;
     private readonly TimeSpan _fetchResponseTimeout;
+    private readonly TimeProvider _timeProvider = TimeProvider.System;
+
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, (byte[] Payload, DateTimeOffset ExpiresAt)>> _pendingStoreAndForward = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _storeAndForwardTasks = new(StringComparer.Ordinal);
+
     private readonly ConcurrentDictionary<string, LocalClipboardOffer> _localOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ClipboardOfferInfo> _remoteOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, long> _peerOfferHighWaterMarks = new(StringComparer.Ordinal);
@@ -53,42 +58,109 @@ public sealed class ClipboardService : IClipboardService
         _fetchResponseTimeout = fetchResponseTimeout ?? DefaultFetchResponseTimeout;
     }
 
-    public async Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence)
+    public async Task<string[]> BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence)
     {
         var trustedPeers = _trustStore.GetAllPeers()
             .Where(peer => peer.State == TrustState.Trusted && PeerHasCapability(peer.DeviceId, requiredCapability))
             .Select(peer => peer.DeviceId)
             .ToArray();
 
+        var successfulPeers = new List<string>();
         foreach (var deviceId in trustedPeers)
         {
+            var envelope = new
+            {
+                rift = "0.1-draft",
+                type = "clipboard.offer",
+                messageId = Guid.NewGuid().ToString("D"),
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                payload = new
+                {
+                    offerId,
+                    contentType,
+                    byteSize = size,
+                    sha256 = hash,
+                    expiresInMs,
+                    sourceDeviceId = _identityManager.GetDeviceId(),
+                    requiredCapability,
+                    offerSequence
+                }
+            };
+
             try
             {
-                var envelope = new
-                {
-                    rift = "0.1-draft",
-                    type = "clipboard.offer",
-                    messageId = Guid.NewGuid().ToString("D"),
-                    sourceDeviceId = _identityManager.GetDeviceId(),
-                    payload = new
-                    {
-                        offerId,
-                        contentType,
-                        byteSize = size,
-                        sha256 = hash,
-                        expiresInMs,
-                        sourceDeviceId = _identityManager.GetDeviceId(),
-                        requiredCapability,
-                        offerSequence
-                    }
-                };
 
                 var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
                 await SendProtectedMessageAsync(deviceId, bytes, CancellationToken.None);
+                successfulPeers.Add(deviceId);
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to broadcast clipboard offer {OfferId} to {DeviceId}.", offerId, deviceId);
+                _logger.LogDebug(ex, "Failed to broadcast clipboard offer {OfferId} to {DeviceId}. Starting store-and-forward.", offerId, deviceId);
+                ScheduleStoreAndForward(deviceId, offerId, envelope, expiresInMs);
+            }
+        }
+        
+        return successfulPeers.ToArray();
+    }
+
+    private void ScheduleStoreAndForward(string deviceId, string offerId, object envelope, long expiresInMs)
+    {
+        var expiresAt = _timeProvider.GetUtcNow().AddMilliseconds(expiresInMs);
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        var peerQueue = _pendingStoreAndForward.GetOrAdd(deviceId, _ => new ConcurrentDictionary<string, (byte[], DateTimeOffset)>(StringComparer.Ordinal));
+        peerQueue[offerId] = (bytes, expiresAt);
+
+        _storeAndForwardTasks.GetOrAdd(deviceId, id =>
+        {
+            return Task.Run(async () =>
+            {
+                try
+                {
+                    await StoreAndForwardLoopAsync(id);
+                }
+                finally
+                {
+                    _storeAndForwardTasks.TryRemove(id, out _);
+                }
+            });
+        });
+    }
+
+    private async Task StoreAndForwardLoopAsync(string deviceId)
+    {
+        while (_pendingStoreAndForward.TryGetValue(deviceId, out var peerQueue) && !peerQueue.IsEmpty)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            var now = _timeProvider.GetUtcNow();
+
+            foreach (var kvp in peerQueue)
+            {
+                if (now >= kvp.Value.ExpiresAt)
+                {
+                    peerQueue.TryRemove(kvp.Key, out _);
+                    _logger.LogWarning("Store-and-forward expired for offer {OfferId} to peer {DeviceId} before reachability was restored.", kvp.Key, deviceId);
+                }
+            }
+
+            if (peerQueue.IsEmpty)
+            {
+                _pendingStoreAndForward.TryRemove(deviceId, out _);
+                break;
+            }
+
+            try
+            {
+                foreach (var kvp in peerQueue)
+                {
+                    await SendProtectedMessageAsync(deviceId, kvp.Value.Payload, CancellationToken.None);
+                    peerQueue.TryRemove(kvp.Key, out _);
+                    _logger.LogInformation("Successfully late-delivered clipboard offer {OfferId} to {DeviceId} via store-and-forward.", kvp.Key, deviceId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Store-and-forward retry failed for {DeviceId}: {Message}", deviceId, ex.Message);
             }
         }
     }
@@ -161,12 +233,7 @@ public sealed class ClipboardService : IClipboardService
             OfferSequence = offerSequence
         };
 
-        var recipients = _trustStore.GetAllPeers()
-            .Where(peer => peer.State == TrustState.Trusted && PeerHasCapability(peer.DeviceId, RequiredCapability))
-            .Select(peer => peer.DeviceId)
-            .ToArray();
-
-        await BroadcastOfferAsync(offerId, contentType, byteSize, sha256, DefaultOfferExpiryMs, RequiredCapability, offerSequence);
+        var recipients = await BroadcastOfferAsync(offerId, contentType, byteSize, sha256, DefaultOfferExpiryMs, RequiredCapability, offerSequence);
 
         LogEvent(SecurityEventTypes.ClipboardOffered, null, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null);
 
@@ -289,6 +356,14 @@ public sealed class ClipboardService : IClipboardService
 
     public async Task HandleFetchRequestAsync(string deviceId, string offerId, string requestingDeviceId, CancellationToken cancellationToken)
     {
+        if (_pendingStoreAndForward.TryGetValue(deviceId, out var peerQueue))
+        {
+            if (peerQueue.TryRemove(offerId, out _))
+            {
+                _logger.LogDebug("Store-and-forward cancelled for offer {OfferId} to {DeviceId} because fetchRequest was received.", offerId, deviceId);
+            }
+        }
+
         try
         {
             EnsurePayloadIdentityMatches(deviceId, requestingDeviceId, "clipboard.fetchRequest");

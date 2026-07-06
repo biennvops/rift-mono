@@ -230,7 +230,7 @@ public class RiftApiHandler : IRiftApi
 
     private sealed class UnsupportedClipboardService : IClipboardService
     {
-        public Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
+        public Task<string[]> BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
 
         public Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer) => throw CreateNotConfiguredException();
 

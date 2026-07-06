@@ -119,6 +119,7 @@ Returns all peers currently visible via mDNS-SD discovery, including their trust
   "peers": [
     {
       "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "instanceId": "rift-instance-id-from-mdns",
       "address": "192.168.1.42",
       "port": 9735,
       "trustState": "discovered",
@@ -127,6 +128,8 @@ Returns all peers currently visible via mDNS-SD discovery, including their trust
   ]
 }
 ```
+
+**Note on Identity:** For discovered peers, `deviceId` is the canonical authenticated ID if available via DNS TXT records. If the peer obscures its identity for privacy (null-did), `deviceId` will be absent, and the UI should use `instanceId` (the mDNS service name) as a temporary handle to initiate pairing.
 
 #### `rift.startDiscovery`
 
@@ -516,8 +519,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 
 | Method                       | Payload                                                                                | Description                          |
 | ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
-| `rift.onPeerDiscovered`      | `{ "deviceId", "address", "port", "txtRecord" }`                                       | New peer found via mDNS-SD           |
-| `rift.onPeerLost`            | `{ "deviceId" }`                                                                       | Peer service record disappeared      |
+| `rift.onPeerDiscovered`      | `{ "deviceId?", "instanceId", "address", "port", "txtRecord" }`                        | New peer found via mDNS-SD           |
+| `rift.onPeerLost`            | `{ "deviceId?", "instanceId" }`                                                        | Peer service record disappeared      |
 | `rift.onPairingRequest`      | `{ "deviceId", "fingerprint", "displayName?", "expiresInMs" }`                         | Incoming pairing request from a peer |
 | `rift.onPairingComplete`     | `{ "deviceId", "fingerprint", "persistedAt" }`                                         | Pairing completed successfully       |
 | `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |

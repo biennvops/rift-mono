@@ -23,8 +23,10 @@ class ClipboardProtocolHandler {
   final _fetchRejectController = StreamController<ClipboardFetchReject>.broadcast();
   Stream<ClipboardFetchReject> get onFetchReject => _fetchRejectController.stream;
 
+  final void Function(String peerDeviceId, String offerId)? onFetchRequestReceived;
+
   ClipboardProtocolHandler(
-      this._sessionManager, this._engine, this._localContentFetcher, this._localDeviceId) {
+      this._sessionManager, this._engine, this._localContentFetcher, this._localDeviceId, {this.onFetchRequestReceived}) {
     _messageSub = _sessionManager.onMessage.listen(_handleMessage);
   }
 
@@ -127,6 +129,8 @@ class ClipboardProtocolHandler {
 
   Future<void> _handleFetchRequest(String peerDeviceId, Map<String, dynamic> payload) async {
     final req = ClipboardFetchRequest.fromJson(payload);
+    
+    onFetchRequestReceived?.call(peerDeviceId, req.offerId);
 
     if (req.requestingDeviceId != peerDeviceId) {
       await _sendFetchReject(peerDeviceId, req.offerId, 'Unauthorized', 'requestingDeviceId mismatch');
