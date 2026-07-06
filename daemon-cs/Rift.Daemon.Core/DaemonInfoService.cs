@@ -77,11 +77,11 @@ public sealed class DaemonInfoService(
             {
                 DeviceId = x.Peer.DeviceId,
                 InstanceId = x.Peer.DeviceId,
-                Address = x.Endpoint.Address,
-                Port = x.Endpoint.Port,
+                Address = x.Endpoint!.Address,
+                Port = x.Endpoint!.Port,
                 TrustState = "discovered",
                 TxtRecord = new Dictionary<string, string>(),
-                ObservedEndpoints = [new DiscoveredPeerEndpoint { Address = x.Endpoint.Address, Port = x.Endpoint.Port }]
+                ObservedEndpoints = [new DiscoveredPeerEndpoint { Address = x.Endpoint!.Address, Port = x.Endpoint!.Port }]
             })
             .Where(p => !activeDiscoveries.Peers.Any(d => string.Equals(d.DeviceId, p.DeviceId, StringComparison.Ordinal)))
             .ToArray();
