@@ -387,6 +387,30 @@ Deliverable:
 
 - recorded evidence that Rift works on a local network without internet
 
+## Phase 12: Reduce Discovery Privacy Tradeoff (`did`)
+
+Files:
+
+- `spec/doc/protocol.md`
+- `app-flutter/lib/src/ipc/android_root_discovery_bridge.dart`
+- `daemon-cs/Rift.Daemon.Core/Networking/DiscoveryService.cs`
+- `daemon-dart/lib/src/network/discovery_service_impl.dart`
+- `daemon-dart/lib/src/daemon.dart`
+
+Tasks:
+
+1. Acknowledge current tradeoff: Both C# and Dart daemons currently include `did` (device ID) in the mDNS TXT record by default. This violates the strict privacy intent of the protocol (`SHOULD NOT include this field by default`) but is temporarily necessary to maintain usability and interoperability.
+2. Without `did` in the broadcast, the UI would only see random instance UUIDs until a session is bootstrapped. While Android proactively prefetches sessions (and could resolve the real device ID), the C# Linux daemon does not currently support session prefetching.
+3. Future Implementation: 
+   - Remove `did` from default discovery broadcasts.
+   - Update the UI to temporarily display the `instanceId` and a fallback `fingerprint prefix` (if provided) for unauthenticated peers.
+   - Map the temporary identity to the real `deviceId` only *after* the initial session bootstrap (TLS handshake) is successfully completed.
+   - Do not implement this change until the Linux/C# daemon supports lightweight session prefetching or identity resolution, to avoid degrading the pairing UX.
+
+Deliverable:
+
+- `did` removed from mDNS TXT records by default, achieving the final privacy target without breaking cross-platform peer recognition.
+
 ## Recommended Implementation Order
 
 1. Documentation clarification
