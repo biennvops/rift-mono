@@ -4,8 +4,7 @@ import 'package:provider/provider.dart';
 import 'dart:async';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
-import 'dart:convert';
-import 'package:crypto/crypto.dart';
+
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -132,7 +131,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   Future<void> _bindClipboardChannel() async {
     // The native clipboard channel only exists on Android.
     if (!Platform.isAndroid) return;
-    final client = context.read<JsonRpcRiftClient>();
+
     final clipboardManager = _clipboardManager;
     debugPrint('[Android Clipboard] Binding MethodChannel');
     _clipboardChannel.setMethodCallHandler((call) async {

@@ -323,7 +323,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       
       if (_isSelfDevice(deviceId)) return false;
       
-      if (deviceId != null && deviceId.isNotEmpty && trustedDeviceIds.contains(deviceId)) return false;
+      if (trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
       if (trustState != null && hiddenTrustStates.contains(trustState)) {

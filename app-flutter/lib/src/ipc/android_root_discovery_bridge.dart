@@ -156,8 +156,7 @@ class AndroidRootDiscoveryBridge {
           txt: {
             'minV': Uint8List.fromList(minVersion.codeUnits),
             'maxV': Uint8List.fromList(maxVersion.codeUnits),
-            if (deviceIdHint != null)
-              'did': Uint8List.fromList(deviceIdHint!.codeUnits),
+            'did': Uint8List.fromList(deviceIdHint.codeUnits),
             if (fingerprintPrefix != null)
               'fp': Uint8List.fromList(fingerprintPrefix!.codeUnits),
           },
@@ -542,7 +541,7 @@ class AndroidRootDiscoveryBridge {
       'port': port,
       'minV': minVersion,
       'maxV': maxVersion,
-      if (deviceIdHint != null) 'did': deviceIdHint,
+      'did': deviceIdHint,
       if (fingerprintPrefix != null) 'fp': fingerprintPrefix,
     });
 

@@ -19,7 +19,7 @@ flutter run -d <device>  # on Android/emulator
 
 **Expected Runtime Behavior (Week 7 State):**
 - **UI:** The application successfully boots and displays all core navigation
-  screens (Pairing, Trusted Devices, Event Log, Settings), along with the
+  screens (Pairing, Trusted Devices, Event Log, Settings, Security Dashboard, Clipboard Transfer), along with the
   current Week 7 clipboard shell/debug flow. The UI components are decoupled
   from the transport layer.
 - **Linux/macOS (`UnixSocketTransport`):** The app connects to a Unix domain socket and expects a running Rift daemon endpoint. If the daemon is absent, the JSON-RPC client logs reconnect attempts with exponential backoff.
@@ -34,10 +34,10 @@ IPC framing and size limits are transport-specific; see `spec/doc/ipc.md` for th
 flutter test
 ```
 
-*Latest targeted local verification for the current clipboard/DesktopClipboardManager work: `flutter analyze` and `flutter test` passed locally.*
+*Latest targeted local verification for the current clipboard and network stabilization work: `flutter analyze` and `flutter test` passed locally.*
 
 The core tests cover:
-- UI rendering and screen-state checks (`widget_test.dart`, `pairing_screen_test.dart`, `trusted_devices_screen_test.dart`, `event_log_screen_test.dart`).
+- UI rendering and screen-state checks (`pairing_screen_test.dart`, `trusted_devices_screen_test.dart`, `event_log_screen_test.dart`).
 - IPC error handling in UI (`settings_screen_test.dart`).
 - Decoupled UI injection via Provider (`app_shell_test.dart`).
 - JSON-RPC connection lifecycle, exponential backoff, and timeouts using `fake_async` (`ipc_test.dart`).
@@ -54,9 +54,16 @@ app-flutter/
 │   ├── constants.dart                    # Centralized UI strings
 │   ├── main.dart                         # App entry point, DI Provider setup
 │   ├── screens/                          # Presentation Layer
+│   │   ├── background_sync_screen.dart
+│   │   ├── clipboard_debug_screen.dart   # Temporary clipboard evidence/debug panel
+│   │   ├── clipboard_history_screen.dart
+│   │   ├── clipboard_transfer_screen.dart
+│   │   ├── device_detail_screen.dart
 │   │   ├── event_log_screen.dart
+│   │   ├── onboarding_screen.dart
+│   │   ├── operations_screen.dart
 │   │   ├── pairing_screen.dart
-│   │   ├── clipboard_debug_screen.dart   # Temporary Week 7 evidence/debug panel
+│   │   ├── security_dashboard_screen.dart
 │   │   ├── settings_screen.dart          # Settings and device-info UI
 │   │   └── trusted_devices_screen.dart
 │   └── src/                              # Core Domain Logic
@@ -83,8 +90,8 @@ app-flutter/
 │   ├── settings_screen_test.dart         # Settings data, loading, and error-state tests
 │   ├── streamjsonrpc_framer_test.dart
 │   ├── test_utils/                       # Shared fakes/helpers for widget and IPC tests
-│   ├── trusted_devices_screen_test.dart
-│   └── widget_test.dart
+│   └── trusted_devices_screen_test.dart
+├── DESIGN.md                                 # Architecture and design decisions
 ├── android/, ios/, windows/, macos/, linux/  # Flutter generated directories
 ├── pubspec.yaml
 └── analysis_options.yaml
@@ -150,7 +157,7 @@ app-flutter/
 - **Week 6 Test Coverage:**
   - Extended widget tests to verify capability badges and presence status are accurately displayed on the trusted devices screen.
 
-### Week 7: Clipboard Bridge, Desktop Clipboard Manager, and Clipboard IPC Client
+### Week 7: Clipboard Bridge, IPC Client, & Network Stabilization
 - **Android Clipboard Bridge (`android/app/src/main/...`):**
   - Added `ClipboardForegroundService` with `foregroundServiceType="dataSync"` and the required Android foreground-service permissions so clipboard observation can remain alive while the app is backgrounded.
   - Added a dedicated Android `MethodChannel` (`com.biennvops.rift/clipboard`) to forward clipboard-change events into Flutter only on Android targets.
@@ -169,6 +176,11 @@ app-flutter/
   - The app now hashes copied Android text with SHA-256, base64-encodes the content, and forwards it to the daemon over JSON-RPC via `rift.notifyClipboardChange`.
   - Desktop clipboard changes are also forwarded through the same JSON-RPC method, keeping clipboard protocol logic inside the daemon while Flutter remains a transport/UI boundary.
   - The desktop shell now binds clipboard status updates so local users see short success/failure feedback for clipboard send/fetch flows.
+- **Discovery Stabilization (`android_root_discovery_bridge.dart`):**
+  - Enhanced the mDNS native bridge to properly inject the Device ID (`did`) and Fingerprint (`fp`) into the TXT record, resolving 'Unknown Device' artifacts during local network scanning.
+- **UI State Freshness (`trusted_devices_screen.dart`):**
+  - Bound the discovered peers view to the active `_isDiscovering` toggle state, ensuring stale network artifacts are purged when a new scan initiates.
+  - Implemented a proactive capability-based presence refresh loop to maintain accurate active/inactive UI badging over long-running sessions.
 - **Week 7 Test Coverage:**
   - Added `desktop_clipboard_manager_test.dart` to cover:
     - startup clipboard-offer resync
@@ -181,6 +193,8 @@ app-flutter/
     - hash/size integrity preservation
     - oversized and empty payload rejection
     - UTF-8 / special-character handling
+
+
 
 ## Completion Criteria
 

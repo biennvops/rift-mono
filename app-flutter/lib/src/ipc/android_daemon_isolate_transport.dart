@@ -213,7 +213,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         'method': 'rift.pingEndpoint',
         'params': {
           'address': peer.address,
-          'port': peer.port ?? 9140,
+          'port': peer.port,
         },
       });
     });

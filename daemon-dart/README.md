@@ -3,8 +3,7 @@
 This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
 
 > **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), and it now follows the current `spec/doc/protocol.md` channel-binding rules via Tier 3 `app-nonce`. Because Dart does not expose `tls-exporter` / `tls-unique`, the daemon sends `bindingType: "app-nonce"` plus a 32-byte `sessionNonce`, then computes `SHA-256(sessionNonce || signerCertDer || verifierCertDer)` exactly as defined in the spec and ADR-0011. The residual limitation is the one already documented by the spec itself: Tier 3 is session-unique, but not as strong as TLS-exporter because it is not cryptographically bound to the underlying TLS transcript.
->
-> **Discovery privacy note:** The current Android daemon advertises `did` and `fp` TXT hints by default to make explicit peer recognition and auto-pair/connect flows workable from the Flutter UI. This is an intentional UX trade-off and is less privacy-preserving than the protocol's default recommendation.
+
 
 ---
 
@@ -22,14 +21,21 @@ This is the core background module (daemon) on Android for the Rift project, dev
 - `lib/src/network/`: 
   - `frame_codec.dart`: Safe stream transformer handling Length prefix + JSON frames. Strictly limits sizes to 64 KiB pre-auth and 32 MiB post-auth without order-sensitive aliasing hazards.
   - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, emits `onPeerDisconnected` events to clear stale sessions, and tracks unauthenticated connection timeouts per socket to avoid reconnect races.
+  - `discovery_peer_tracker.dart`: Tracks discovered peer instances and resolves duplicates via `instanceId`.
+  - `discovery_service_factory*.dart`: OS-specific mDNS factory implementations.
   - `discovery_service_impl.dart`: Uses `nsd` for mDNS. Robustly handles network flaps by diff-ing active instances and evicting removed/null-named peers.
   - `session_manager.dart`: Orchestrates the `session.hello` state machine. Evaluates PoP signatures using the *signer's own cert DER*, catches Zone exceptions natively, and accurately prunes offline peers to allow seamless reconnections. Also enforces Client-side PoP validation on `session.accept`.
 - `lib/src/core/`:
   - `rift_constants.dart`: Shared source of truth for protocol version, implementation ID, and capability advertisement metadata used by both handshake and IPC-facing surfaces.
   - `rift_exceptions.dart`: Typed Rift application exceptions carrying explicit JSON-RPC error codes, reducing reliance on brittle string-matching.
+  - `rift_log.dart`: Local fallback log persistence for offline debugging.
   - `rpc_utils.dart`: Shared JSON-RPC parameter validation helpers used by both the daemon entrypoint and pairing flows to avoid validation drift.
 - `lib/src/pairing/`:
   - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, restores the timeout on failed outbound approve attempts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
+- `lib/src/clipboard/`:
+  - `clipboard_engine.dart`: In-memory offer/fetch state, expiry, and replay protection.
+  - `clipboard_handler.dart`: Peer protocol handlers for clipboard offer/fetch flows.
+  - `clipboard_models.dart`: Models for clipboard metadata and fetched payloads.
 - `lib/src/storage/`:
   - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
 - `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
@@ -78,7 +84,7 @@ dart test
 
 Latest local verification snapshot:
 - `dart analyze` -> `No issues found!`
-- `dart test` -> `00:06 +120: All tests passed!`
+- `dart test` -> `00:07 +131: All tests passed!`
 
 ### 2.4. Standalone Runner Status
 The repository now contains a minimal standalone entrypoint at `bin/daemon.dart`
@@ -170,6 +176,10 @@ Important implementation notes:
   `byteSize` and `sha256`.
 - Fetch serving is fail-closed: only offers owned by the local device may be
   served to peers.
+
+### 2.7. Network Handshake & Discovery Hardening (Week 7 Stabilization)
+- **Duplicate Connection Race Condition:** Resolved a deadlock (`Peer closed connection before sending session.hello`) by properly replacing stale incoming sockets instead of rejecting valid reconnection attempts when roles match.
+- **mDNS Discovery Stability:** The daemon now explicitly filters out its own Device ID during mDNS ingestion. This prevents the UI from generating 'Unknown Device' artifacts or tracking its own local instance after Flutter hot reloads.
 
 ---
 

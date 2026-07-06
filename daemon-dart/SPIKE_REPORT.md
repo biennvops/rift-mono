@@ -1,4 +1,4 @@
-# Dart Daemon Assessment & Analysis Report (Milestone M3)
+# Dart Daemon Assessment & Analysis Report (Milestone M4)
 
 **Reference Standards:** `spec/doc/protocol.md`, `spec/doc/ipc.md`, and the current `daemon-dart` implementation
 **Component:** Android Daemon (`daemon-dart`)
@@ -6,7 +6,7 @@
 
 ---
 
-## Directory Structure & Important Files (Milestone M3)
+## Directory Structure & Important Files (Milestone M4)
 
 ```text
 daemon-dart/
@@ -22,6 +22,7 @@ daemon-dart/
 │       ├── core/
 │       │   ├── rift_constants.dart         # Shared protocol/version/capability metadata
 │       │   ├── rift_exceptions.dart        # Typed Rift/JSON-RPC exceptions
+│       │   ├── rift_log.dart               # Local fallback log persistence for offline debugging
 │       │   └── rpc_utils.dart              # Shared JSON-RPC parameter validation helpers
 │       ├── crypto/
 │       │   ├── base32_utils.dart           # RFC 4648 Base32 encoder with Web/JS float bit-clamping
@@ -36,6 +37,8 @@ daemon-dart/
 │       │   ├── transport.dart              # Abstract Interface managing Network connection and disconnect streams
 │       │   └── trust_store.dart            # Abstract Interface managing trust list
 │       ├── network/
+│       │   ├── discovery_peer_tracker.dart # Tracks discovered peer instances and resolves duplicates
+│       │   ├── discovery_service_factory*.dart # OS-specific mDNS factory implementations
 │       │   ├── discovery_service_impl.dart # nsd mDNS Discovery robustly handling network flaps
 │       │   ├── frame_codec.dart            # Stream transformer locking chunks to 64 KiB / 32 MiB bounds
 │       │   ├── session_manager.dart        # Session Orchestrator & PoP validation with active Zone exception catching
@@ -50,6 +53,7 @@ daemon-dart/
 │   ├── clipboard_engine_test.dart          # Clipboard offer/fetch engine tests
 │   ├── clipboard_handler_test.dart         # Clipboard protocol handler tests
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
+│   ├── daemon_pairing_fallback_test.dart   # Tests the standalone daemon auto-pairing fallback
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
 │   ├── discovered_peer_selection_test.dart # Multi-endpoint discovered-peer selection behavior
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
@@ -61,7 +65,8 @@ daemon-dart/
 │   ├── pop_test.dart                       # PoP signature verification Test Vectors (107-byte canonical)
 │   ├── session_manager_integration_test.dart # Session flow integration tests
 │   ├── session_manager_test.dart           # Session bounds test: Client-side Auth Bypass prevention
-│   └── trust_store_impl_test.dart          # SQLite database persistence and ACID transitions test
+│   ├── trust_store_impl_test.dart          # SQLite database persistence and ACID transitions test
+│   └── trusted_reconnect_test.dart         # Tests automatic reconnection behavior for trusted peers
 ├── pubspec.yaml                            # Dart platform declaration (cryptography, nsd, uuid, etc.)
 └── README.md                               # Guide for running tests, linter and overall architecture
 ```
@@ -180,14 +185,15 @@ daemon-dart/
     - fetch-response hash validation
     - rejection of fetches against non-local offers
     - malformed and size-mismatched fetch responses
-  - Added Android client groundwork in `app-flutter`:
-    - `ClipboardForegroundService`
-    - Android `MethodChannel` bridge (`com.biennvops.rift/clipboard`)
-    - typed clipboard methods/streams in `JsonRpcRiftClient`
-  - **Verification update (2026-07-03):**
+
+  - **Verification update (2026-07-06):**
     - `dart analyze` -> `No issues found!`
-    - `dart test` -> `00:06 +120: All tests passed!`
+    - `dart test` -> `00:07 +131: All tests passed!`
   - **Assessment:** Week 7 clipboard groundwork is implementation-ready at the daemon/API layer and currently clean under local analyze/test verification. Remaining closure items are manual E2E evidence and a full Flutter clipboard-offer UI flow.
+
+- **`[daemon-dart] Network Handshake & Discovery Hardening` (Week 7 Stabilization):** Hardened connection deadlocks and eliminated ghost mDNS artifacts.
+  - Implemented socket replacement logic in `TransportImpl`: When duplicate inbound connections race with outbound connections and role preferences overlap, the new connection replaces the stale socket instead of being incorrectly rejected. This resolves the `Peer closed connection before sending session.hello` deadlock.
+  - Introduced explicit `IIdentityManager`-based Device ID filtering in `listDiscoveredPeers` to prevent the device from tracking itself and propagating ghost artifacts to the UI during hot reloads.
 
 ---
 
@@ -209,11 +215,11 @@ The implementation is clearly derived from the two core specifications, but it s
   - **Methods:** `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`
   - **Notifications:** `rift.onClipboardOffer`, `rift.onClipboardExpired`
 - **Implemented and largely aligned:** The current isolate bridge uses explicit Rift exception codes for key application failures. It still retains isolate-specific `SendPort` transport details, but the old ad-hoc command naming has been cleaned up into `rpcPort`.
-- **Net assessment:** The IPC implementation robustly fulfills the `ipc.md` contract for current app needs (M3), fully propagating presence events and trust transitions to the UI.
+- **Net assessment:** The IPC implementation robustly fulfills the `ipc.md` contract for current app needs (M4), fully propagating presence events and trust transitions to the UI.
 
 ---
 
-## 3. Risk Assessment & Blockers (Milestone M3)
+## 3. Risk Assessment & Blockers (Milestone M4)
 
 1. **TLS-Exporter Absence (Residual Spec-Level Limitation):**
    `dart:io` `SecureSocket` does not expose `tls-exporter` (RFC 9266) or `tls-unique` material. The implementation therefore uses the current spec-approved Tier 3 `app-nonce` binding, which provides per-session uniqueness but does not cryptographically bind the PoP to the TLS transcript itself. **Action:** Upgrade to Tier 1 automatically once the Dart SDK exposes TLS keying material export.
@@ -227,16 +233,14 @@ The implementation is clearly derived from the two core specifications, but it s
 4. **TLS Cert Extraction Race Condition (Technical Debt):**
    This was an earlier concern, but the current `SessionManager` already receives `peerCertDer` on each `TransportMessage` and validates PoP against that message-bound certificate context. This item should be considered resolved in the current code unless a new race is demonstrated elsewhere.
 
-5. **Discovery Privacy Trade-off (Current Behavior):**
-   The daemon now advertises `did` and `fp` TXT hints by default so that the Flutter UI can recognize peers pre-connect and the daemon can normalize discovered peers into working auto-connect/pairing flows. This improves usability, but it is intentionally less privacy-preserving than the protocol's "SHOULD NOT include by default" guidance. Keep this as an explicit product/security decision rather than silent behavior.
 
 ## 4. Reality Check Against the Repository
 
 - `dart analyze` currently reports `No issues found!`.
-- `dart test` currently passes with 92 tests.
+- `dart test` currently passes with 131 tests.
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
-  `dart test` -> `00:06 +120: All tests passed!`
+  `dart test` -> `00:07 +131: All tests passed!`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` now provides a minimal standalone Unix-socket runner for
   local Linux IPC smoke tests. It is useful for desktop verification, but it is
