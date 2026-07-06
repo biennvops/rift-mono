@@ -32,7 +32,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         _securityEventLog = new SqliteSecurityEventLog(_databaseContext);
         _identityManager = new IdentityManager(new SqliteLocalIdentityStore(_databaseContext));
         _presenceService = new PresenceService();
-        var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore);
+        var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore, _identityManager);
         _clipboardTransport = new FakeTransport();
         _pairingTransport = new FakeTransport();
         _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));

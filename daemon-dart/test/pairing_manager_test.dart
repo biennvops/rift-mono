@@ -61,6 +61,9 @@ class MockSessionManager implements SessionManager {
     await _disconnectController.close();
   }
   @override Future<void> sendSessionHello(String peerDeviceId) async {}
+  
+  @override
+  void updateTrustState(String peerDeviceId, TrustState newState) {}
 }
 
 class FakeIdentityManager implements IdentityManager {

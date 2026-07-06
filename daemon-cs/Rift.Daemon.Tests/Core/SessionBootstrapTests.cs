@@ -265,11 +265,24 @@ public class SessionBootstrapTests
     private sealed class TestSessionBootstrap : SessionBootstrap
     {
         private readonly byte[]? _channelBinding;
+        private readonly bool _forceTlsUnique;
 
-        public TestSessionBootstrap(IIdentityManager identityManager, byte[]? channelBinding)
+        public TestSessionBootstrap(IIdentityManager identityManager, byte[]? channelBinding, bool forceTlsUnique = true)
             : base(NullLogger<SessionBootstrap>.Instance, identityManager)
         {
             _channelBinding = channelBinding;
+            _forceTlsUnique = forceTlsUnique;
+        }
+
+        protected override (string bindingType, byte[] channelBinding, byte[]? sessionNonce) GetChannelBinding(
+            SslStream sslStream, X509Certificate2 localCert, byte[]? peerCertDer)
+        {
+            if (_forceTlsUnique)
+            {
+                if (TryGetTlsChannelBinding(sslStream, out var cb))
+                    return ("tls-unique", cb, null);
+            }
+            return base.GetChannelBinding(sslStream, localCert, peerCertDer);
         }
 
         protected override bool TryGetTlsChannelBinding(SslStream sslStream, out byte[] channelBinding)
