@@ -634,6 +634,26 @@ class SessionManager {
       RiftLog.debug(
         '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
       );
+    } else if (ctx.handshakeState == HandshakeState.established) {
+      final localDeviceId = _identityManager.deviceId;
+      if (localDeviceId.compareTo(peerDeviceId) > 0) {
+        RiftLog.info('[Session] Tie-break (we win): Rejecting inbound duplicate session.hello from $peerDeviceId.');
+        await _rejectSession(
+          peerDeviceId,
+          'ProtocolError',
+          'Duplicate session.hello rejected by tie-breaker',
+        );
+        throw SessionException(
+          'ProtocolError: Duplicate connection rejected by tie-breaker for $peerDeviceId',
+        );
+      } else {
+        RiftLog.info('[Session] Tie-break (peer wins): Dropping existing outbound connection and accepting inbound from $peerDeviceId.');
+        _transport.disconnect(peerDeviceId);
+        ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
+        final record = await _trustStore.getPeer(peerDeviceId);
+        ctx.trustState = record?.state ?? TrustState.discovered;
+        _sessions[peerDeviceId] = ctx;
+      }
     } else {
       await _rejectSession(
         peerDeviceId,
@@ -1323,6 +1343,25 @@ class SessionManager {
       ctx.currentPresenceStatus = 'offline';
       _presenceUpdateController.add(ctx);
     });
+  }
+
+  void updateTrustState(String peerDeviceId, TrustState newState) {
+    final ctx = _sessions[peerDeviceId];
+    if (ctx != null) {
+      final wasTrusted = ctx.trustState == TrustState.trusted;
+      ctx.trustState = newState;
+      if (!wasTrusted && newState == TrustState.trusted) {
+        // If capability negotiation has already completed, start the heartbeat.
+        // Otherwise, _startHeartbeatIfTrusted will be called at the end of negotiation.
+        if (ctx.capabilityNegotiated) {
+          _startHeartbeatIfTrusted(ctx);
+        }
+      } else if (wasTrusted && newState != TrustState.trusted) {
+        ctx.heartbeatTimer?.cancel();
+        ctx.currentPresenceStatus = 'offline';
+        _presenceUpdateController.add(ctx);
+      }
+    }
   }
 
   Future<void> _sendHeartbeat(SessionContext ctx) async {

@@ -211,6 +211,7 @@ class PairingManager {
       TrustState.trusted,
       pairedAt: now,
     );
+    sessionManager.updateTrustState(peerDeviceId, TrustState.trusted);
     await onPeerTrusted?.call(peerDeviceId);
 
     // Emit event to Flutter UI
@@ -482,6 +483,7 @@ class PairingManager {
             TrustState.trusted,
             pairedAt: now,
           );
+          sessionManager.updateTrustState(peerDeviceId, TrustState.trusted);
           await onPeerTrusted?.call(peerDeviceId);
           onIpcEvent({
             'jsonrpc': '2.0',

@@ -107,7 +107,7 @@ public class SessionBootstrap
         return _identityManager.VerifyEd25519(peerEd25519PubKey, expectedInput, signatureBytes);
     }
 
-    private (string bindingType, byte[] channelBinding, byte[]? sessionNonce) GetChannelBinding(
+    protected virtual (string bindingType, byte[] channelBinding, byte[]? sessionNonce) GetChannelBinding(
         SslStream sslStream, X509Certificate2 localCert, byte[]? peerCertDer)
     {
         if (peerCertDer is null)

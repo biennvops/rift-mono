@@ -246,9 +246,10 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Reusing existing authenticated session for peer {DeviceId}; disposing duplicate connection.", deviceId);
-            session.Dispose();
-            return SessionRegistrationResult.ReusedExisting;
+            _logger.LogInformation("Replacing existing authenticated session for peer {DeviceId} with a fresh connection (likely a stale reconnect).", deviceId);
+            existingSession.Dispose();
+            _sessions[deviceId] = session;
+            return SessionRegistrationResult.RegisteredNew;
         }
 
         session.Dispose();

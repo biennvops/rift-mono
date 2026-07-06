@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Cryptography;
@@ -32,6 +33,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<string, PairingSessionState> _pairingStates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, TrustedPeerEndpoint> _pendingTrustedEndpointHints = new(StringComparer.Ordinal);
+
+    private static readonly Regex CanonicalDeviceIdRegex = new(@"^rift-[a-z2-7]{32}$", RegexOptions.Compiled);
 
     public PairingProtocolCoordinator(
         ITransport transport,
@@ -88,7 +91,18 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         {
             try
             {
-                await ConnectToDiscoveredPeerAsync(deviceId, peer, cancellationToken);
+                var connectedDeviceId = await ConnectToDiscoveredPeerAsync(deviceId, peer, cancellationToken);
+                if (connectedDeviceId != deviceId)
+                {
+                    _logger.LogInformation("Mapped discovery instance ID {InstanceId} to authenticated device ID {DeviceId}.", deviceId, connectedDeviceId);
+                    
+                    // Migrate state to the real device ID
+                    if (_pairingStates.TryRemove(deviceId, out var existingState))
+                    {
+                        _pairingStates[connectedDeviceId] = existingState;
+                    }
+                    deviceId = connectedDeviceId;
+                }
                 connected = true;
             }
             catch (Exception ex)
@@ -120,7 +134,16 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             {
                 try
                 {
-                    await ConnectToTrustedEndpointsAsync(deviceId, trustRecord.TrustedEndpoints, cancellationToken);
+                    var connectedDeviceId = await ConnectToTrustedEndpointsAsync(deviceId, trustRecord.TrustedEndpoints, cancellationToken);
+                    if (connectedDeviceId != deviceId)
+                    {
+                        _logger.LogInformation("Mapped trusted endpoint device ID {OldDeviceId} to {NewDeviceId}.", deviceId, connectedDeviceId);
+                        if (_pairingStates.TryRemove(deviceId, out var existingState))
+                        {
+                            _pairingStates[connectedDeviceId] = existingState;
+                        }
+                        deviceId = connectedDeviceId;
+                    }
                     connected = true;
                 }
                 catch (Exception ex)
@@ -197,7 +220,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                     port,
                     deviceId);
 
-                if (await WaitForActiveSessionAsync(deviceId, DuplicateOutboundRetryDelay, cancellationToken))
+                if (IsCanonicalDeviceId(deviceId) && await WaitForActiveSessionAsync(deviceId, DuplicateOutboundRetryDelay, cancellationToken))
                 {
                     _pendingTrustedEndpointHints[deviceId] = new TrustedPeerEndpoint
                     {
@@ -235,7 +258,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }
     }
 
-    private async Task ConnectToDiscoveredPeerAsync(
+    private async Task<string> ConnectToDiscoveredPeerAsync(
         string deviceId,
         DiscoveredPeerInfo peer,
         CancellationToken cancellationToken)
@@ -249,8 +272,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         {
             try
             {
-                await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
-                _pendingTrustedEndpointHints[deviceId] = new TrustedPeerEndpoint
+                var connectedDeviceId = await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
+                _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
                 {
                     Address = endpoint.Address,
                     Port = endpoint.Port,
@@ -260,7 +283,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                         : null,
                     LastSuccessAt = _timeProvider.GetUtcNow()
                 };
-                return;
+                return connectedDeviceId;
             }
             catch (Exception ex)
             {
@@ -281,7 +304,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             lastFailure.Exception);
     }
 
-    private async Task ConnectToTrustedEndpointsAsync(
+    private async Task<string> ConnectToTrustedEndpointsAsync(
         string deviceId,
         IReadOnlyList<TrustedPeerEndpoint> endpoints,
         CancellationToken cancellationToken)
@@ -292,8 +315,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         {
             try
             {
-                await ConnectToEndpointWithRetryAsync(deviceId, new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port }, cancellationToken);
-                return;
+                return await ConnectToEndpointWithRetryAsync(deviceId, new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port }, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -307,14 +329,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             lastFailure.Exception);
     }
 
-    private async Task ConnectToEndpointWithRetryAsync(
+    private async Task<string> ConnectToEndpointWithRetryAsync(
         string deviceId,
         DiscoveredPeerEndpoint endpoint,
         CancellationToken cancellationToken)
     {
         try
         {
-            await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, cancellationToken);
+            return await _transport.ConnectToPeerWithIdentityAsync(endpoint.Address, endpoint.Port, cancellationToken);
         }
         catch (Exception ex) when (IsLikelyDuplicateOutboundRace(ex))
         {
@@ -325,12 +347,15 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 endpoint.Address,
                 endpoint.Port);
 
-            if (await WaitForActiveSessionAsync(deviceId, DuplicateOutboundRetryDelay, cancellationToken))
+            if (IsCanonicalDeviceId(deviceId) && 
+                await WaitForActiveSessionAsync(deviceId, DuplicateOutboundRetryDelay, cancellationToken))
             {
-                return;
+                // We only return the deviceId if it's a verified authenticated device ID (matches canonical regex)
+                // and we successfully found an active session for it. Temporary instance names fall through to retry.
+                return deviceId;
             }
 
-            await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, cancellationToken);
+            return await _transport.ConnectToPeerWithIdentityAsync(endpoint.Address, endpoint.Port, cancellationToken);
         }
     }
 
@@ -558,6 +583,11 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                invalidOperationException.Message.Contains(
                    "Peer closed connection before sending session.hello.",
                    StringComparison.Ordinal);
+    }
+
+    private static bool IsCanonicalDeviceId(string deviceId)
+    {
+        return !string.IsNullOrEmpty(deviceId) && CanonicalDeviceIdRegex.IsMatch(deviceId);
     }
 
     private static string ClassifyConnectFailure(Exception ex)
@@ -821,7 +851,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return new TrustedPeerEndpoint
             {
                 Address = activeEndpoint.Address,
-                Port = existingEndpoint.Port,
+                Port = activeEndpoint.Port,
                 Source = source,
                 AddressFamily = System.Net.IPAddress.TryParse(activeEndpoint.Address, out var activeIpAddress)
                     ? activeIpAddress.AddressFamily.ToString()

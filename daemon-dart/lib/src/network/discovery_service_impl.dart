@@ -230,7 +230,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     // Skip services without a name — using a fallback would collapse all
     // null-named peers into one dedup entry and suppress re-discovery.
     final port = service.port;
-    if (instanceId == null || port == null) {
+    if (instanceId == null || port == null || instanceId == _instanceId) {
       return const [];
     }
 

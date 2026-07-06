@@ -7,7 +7,8 @@ public sealed class DaemonInfoService(
     ISecurityEventLog securityEventLog,
     ITrustStore trustStore,
     IDiscoveryCoordinator discoveryCoordinator,
-    IPresenceService presenceService) : IDaemonInfoService
+    IPresenceService presenceService,
+    ITransport transport) : IDaemonInfoService
 {
     private static readonly CapabilityInfo[] Capabilities =
     [
@@ -64,7 +65,38 @@ public sealed class DaemonInfoService(
         };
     }
 
-    public ListDiscoveredPeersResult ListDiscoveredPeers() => discoveryCoordinator.ListDiscoveredPeers();
+    public ListDiscoveredPeersResult ListDiscoveredPeers()
+    {
+        var activeDiscoveries = discoveryCoordinator.ListDiscoveredPeers();
+        
+        var discoveredFromTrustStore = trustStore.GetAllPeers()
+            .Where(p => p.State == TrustState.Discovered)
+            .Select(p => new { Peer = p, Endpoint = transport.GetPeerSessionEndpoint(p.DeviceId) })
+            .Where(x => x.Endpoint != null)
+            .Select(x => new DiscoveredPeerInfo
+            {
+                DeviceId = x.Peer.DeviceId,
+                InstanceId = x.Peer.DeviceId,
+                Address = x.Endpoint.Address,
+                Port = x.Endpoint.Port,
+                TrustState = "discovered",
+                TxtRecord = new Dictionary<string, string>(),
+                ObservedEndpoints = [new DiscoveredPeerEndpoint { Address = x.Endpoint.Address, Port = x.Endpoint.Port }]
+            })
+            .Where(p => !activeDiscoveries.Peers.Any(d => string.Equals(d.DeviceId, p.DeviceId, StringComparison.Ordinal)))
+            .ToArray();
+
+        if (discoveredFromTrustStore.Length == 0)
+        {
+            return activeDiscoveries;
+        }
+
+        return new ListDiscoveredPeersResult
+        {
+            Peers = activeDiscoveries.Peers.Concat(discoveredFromTrustStore).ToArray(),
+            IsDiscovering = activeDiscoveries.IsDiscovering
+        };
+    }
 
     public GetPeerPresenceResult GetPeerPresence(string deviceId)
     {
