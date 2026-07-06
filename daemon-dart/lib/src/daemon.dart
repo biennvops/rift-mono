@@ -578,6 +578,10 @@ class RiftDaemon {
       final peer = entry.value.primaryPeer;
       if (peer == null) continue;
       final hintedDeviceId = entry.key;
+      
+      // Filter out our own device ID
+      if (_identityManager != null && hintedDeviceId == _identityManager!.deviceId) continue;
+
       final trustState = trustStore != null
           ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ??
                 'discovered'
@@ -867,6 +871,15 @@ class RiftDaemon {
             _pendingEndpointStartPairings.remove(endpointKey);
           }
         }
+      case 'rift.pingEndpoint':
+        _requireTransportServices();
+        final address = RpcUtils.requireStringParam(params, 'address');
+        final port = RpcUtils.requireIntParam(params, 'port');
+        if (port <= 0 || port > 65535) {
+          throw const RiftException(-32602, 'port must be between 1 and 65535');
+        }
+        unawaited(_pingEndpointRpc(address, port));
+        return {'pinged': true};
       case 'rift.approvePairing':
         _requireTransportServices();
         await _pairingManager!.handleIpcCommand({
@@ -953,6 +966,7 @@ class RiftDaemon {
 
   _ClipboardFetchWaiter _awaitClipboardFetchResult(String offerId) {
     final completer = Completer<ClipboardFetchResponse>();
+    completer.future.ignore(); // Prevent unhandled exception if cancelled before await
     late final StreamSubscription<ClipboardFetchResponse> responseSub;
     late final StreamSubscription<ClipboardFetchReject> rejectSub;
     Timer? timeoutTimer;
@@ -1781,6 +1795,23 @@ class RiftDaemon {
       'peerFingerprint': _deriveFingerprint(record.certDer),
       'expiresInMs': 120000,
     };
+  }
+
+  Future<void> _pingEndpointRpc(String address, int port) async {
+    try {
+      RiftLog.debug('[Discovery] Reverse pinging explicit endpoint $address:$port');
+      final transport = _transport;
+      final sessionManager = _sessionManager;
+      if (transport == null || sessionManager == null) return;
+      
+      // Establish a full session to force Linux to recognize us and persist us 
+      // in its TrustStore. Linux will drop us if we don't send session.hello.
+      final resolvedPeerIdentity = await transport.connectTo(address, port);
+      await sessionManager.sendSessionHello(resolvedPeerIdentity);
+      RiftLog.debug('[Discovery] Reverse ping session established successfully');
+    } catch (e) {
+      RiftLog.debug('[Discovery] Reverse ping to $address:$port failed: $e');
+    }
   }
 
   Future<void> prefetchSessionForDiscoveredPeer(String peerDeviceId) async {
