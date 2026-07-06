@@ -289,13 +289,13 @@ class JsonRpcRiftClient {
 
       _client!.registerMethod('rift.onPeerDiscovered',
           (json_rpc.Parameters params) {
-        // Spec: { deviceId, address, port, txtRecord }. We minimally require
-        // deviceId to protect UI from garbage notifications.
+        // Spec: { deviceId?, instanceId, address, port, txtRecord }. We require
+        // instanceId to track peers across discovery lifecycle.
         _emitIfValid(
           'rift.onPeerDiscovered',
           _asMap(params),
           _peerDiscoveredController,
-          requiredStringKeys: const ['deviceId'],
+          requiredStringKeys: const ['instanceId'],
         );
       });
       _client!.registerMethod('rift.onPeerLost', (json_rpc.Parameters params) {
@@ -303,7 +303,7 @@ class JsonRpcRiftClient {
           'rift.onPeerLost',
           _asMap(params),
           _peerLostController,
-          requiredStringKeys: const ['deviceId'],
+          requiredStringKeys: const ['instanceId'],
         );
       });
       _client!.registerMethod('rift.onTrustChanged',
@@ -420,23 +420,20 @@ class JsonRpcRiftClient {
       _log.warning('Error during disconnect: $e');
     }
 
-    // Exponential Backoff Reconnect
-    if (_reconnectAttempts < 5) {
-      final delay = Duration(seconds: 1 << _reconnectAttempts);
-      _log.info(
-          'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
-      _reconnectTimer = Timer(delay, () {
-        _reconnectAttempts++;
-        connect().catchError((e) {
-          _log.severe('Reconnect failed: $e');
-        }).whenComplete(() {
-          _isReconnecting = false;
-        });
+    // Exponential Backoff Reconnect (infinite retries, capped delay)
+    final delaySeconds = (1 << _reconnectAttempts).clamp(1, 5);
+    final delay = Duration(seconds: delaySeconds);
+    
+    _log.info(
+        'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
+    _reconnectTimer = Timer(delay, () {
+      _reconnectAttempts++;
+      connect().catchError((e) {
+        _log.severe('Reconnect failed: $e');
+      }).whenComplete(() {
+        _isReconnecting = false;
       });
-    } else {
-      _log.severe('Max reconnect attempts reached. Giving up.');
-      _isReconnecting = false;
-    }
+    });
   }
 
   Future<void> disconnect() async {

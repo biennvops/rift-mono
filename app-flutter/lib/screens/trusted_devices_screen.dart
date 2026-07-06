@@ -96,7 +96,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   }
 
   void _handlePeerDiscovered(Map<String, dynamic> event) {
-    final deviceId = event['deviceId']?.toString();
+    final instanceId = event['instanceId']?.toString();
+    final deviceId = event['deviceId']?.toString() ?? instanceId;
     if (deviceId == null || deviceId.isEmpty) return;
     if (!mounted) return;
     if (_isSelfDevice(deviceId)) return;
@@ -105,7 +106,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     setState(() {
       // Upsert into discovered list.
       final existing = _discoveredPeers
-          .indexWhere((p) => p is Map && p['deviceId']?.toString() == deviceId);
+          .indexWhere((p) => p is Map && (p['deviceId']?.toString() == deviceId || (instanceId != null && p['instanceId']?.toString() == instanceId)));
       if (existing >= 0) {
         final merged =
             Map<String, dynamic>.from(_discoveredPeers[existing] as Map);
@@ -122,12 +123,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
   void _handlePeerLost(Map<String, dynamic> event) {
     final deviceId = event['deviceId']?.toString();
-    if (deviceId == null || deviceId.isEmpty) return;
+    final instanceId = event['instanceId']?.toString();
+    if ((deviceId == null || deviceId.isEmpty) && (instanceId == null || instanceId.isEmpty)) return;
     if (!mounted) return;
 
     setState(() {
       _discoveredPeers = _discoveredPeers
-          .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
+          .where((p) {
+            if (p is! Map) return true;
+            final pDeviceId = p['deviceId']?.toString();
+            final pInstanceId = p['instanceId']?.toString();
+            if (deviceId != null && deviceId.isNotEmpty && pDeviceId == deviceId) return false;
+            if (instanceId != null && instanceId.isNotEmpty && pInstanceId == instanceId) return false;
+            return true;
+          })
           .toList(growable: false);
     });
 
@@ -311,8 +320,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (peer is! Map) return false;
       final deviceId = peer['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return false;
+      
       if (_isSelfDevice(deviceId)) return false;
-      if (trustedDeviceIds.contains(deviceId)) return false;
+      
+      if (deviceId != null && deviceId.isNotEmpty && trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
       if (trustState != null && hiddenTrustStates.contains(trustState)) {
@@ -655,23 +666,29 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Icon(
-                      peer['platform'] == 'android' ? Icons.smartphone : Icons.desktop_windows, 
-                      color: theme.colorScheme.outline
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      titleText,
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        decoration: (trustState == 'blocked' || trustState == 'revoked') ? TextDecoration.lineThrough : null,
-                        decorationColor: theme.colorScheme.error,
+                Expanded(
+                  child: Row(
+                    children: [
+                      Icon(
+                        peer['platform'] == 'android' ? Icons.smartphone : Icons.desktop_windows, 
+                        color: theme.colorScheme.outline
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          titleText,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                            decoration: (trustState == 'blocked' || trustState == 'revoked') ? TextDecoration.lineThrough : null,
+                            decorationColor: theme.colorScheme.error,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+                const SizedBox(width: 8),
                 _buildTrustBadge(trustState, theme),
               ],
             ),
@@ -792,24 +809,33 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   }) async {
     final client = context.read<JsonRpcRiftClient>();
     final deviceId = peer['deviceId']?.toString();
-    if (deviceId == null) return;
-    if (_isSelfDevice(deviceId)) {
+    final address = peer['address']?.toString();
+    final port = peer['port'] as int?;
+
+    if (deviceId != null && _isSelfDevice(deviceId)) {
       return;
     }
 
     try {
       if (!isTrusted) {
+        if (deviceId == null && (address == null || port == null)) {
+          return;
+        }
         final client = context.read<JsonRpcRiftClient>();
-        assert(
-          !_isSelfDevice(deviceId),
-          'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
-        );
+        if (deviceId != null) {
+          assert(
+            !_isSelfDevice(deviceId),
+            'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
+          );
+        }
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => Provider<JsonRpcRiftClient>.value(
               value: client,
               child: PairingScreen(
                 initialDeviceId: deviceId,
+                initialEndpointAddress: deviceId == null ? address : null,
+                initialEndpointPort: deviceId == null ? port : null,
                 initialDisplayName: titleText,
                 autoStart: true,
               ),
@@ -819,6 +845,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         await _loadData();
         return;
       }
+
+      if (deviceId == null) return;
 
       if (trustState == 'blocked') {
         final confirmed = await _confirmTrustAction(
@@ -1000,7 +1028,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 ]))
           : RefreshIndicator(
               onRefresh: _loadData,
-              child: (_trustedPeers.isEmpty && _discoveredPeers.isEmpty)
+              child: (_trustedPeers.isEmpty && (!_isDiscovering || _discoveredPeers.isEmpty))
                   ? LayoutBuilder(
                       builder: (context, constraints) => SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -1020,7 +1048,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       children: [
                         if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
-                        if (_discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
+                        if (_isDiscovering && _discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
                         const SizedBox(height: 80), // Fab spacing
                       ],
                     ),

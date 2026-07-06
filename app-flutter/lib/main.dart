@@ -53,7 +53,8 @@ void main() async {
   });
 
   final prefs = await SharedPreferences.getInstance();
-  final hasCompletedOnboarding = prefs.getBool('has_completed_onboarding') ?? false;
+  final hasCompletedOnboarding =
+      prefs.getBool('has_completed_onboarding') ?? false;
 
   runApp(
     Provider<DesktopClipboardManager?>.value(
@@ -76,7 +77,8 @@ class RiftApp extends StatefulWidget {
 
 class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
   StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
@@ -111,7 +113,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void _bindDesktopClipboardStatus() {
     final clipboardManager = _clipboardManager;
     if (clipboardManager == null) return;
-    
+
     _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
       if (!mounted) return;
       _scaffoldMessengerKey.currentState?.clearSnackBars();
@@ -124,7 +126,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
   }
 
-  static const _clipboardChannel = MethodChannel('com.biennvops.rift/clipboard');
+  static const _clipboardChannel =
+      MethodChannel('com.biennvops.rift/clipboard');
 
   Future<void> _bindClipboardChannel() async {
     // The native clipboard channel only exists on Android.
@@ -135,13 +138,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _clipboardChannel.setMethodCallHandler((call) async {
       if (call.method == 'onClipboardChanged') {
         final text = call.arguments['text'] as String?;
-        debugPrint('[Android Clipboard] MethodChannel onClipboardChanged textLength=${text?.length ?? 0}');
+        debugPrint(
+            '[Android Clipboard] MethodChannel onClipboardChanged textLength=${text?.length ?? 0}');
         if (text != null) {
           try {
-             debugPrint('[Android Clipboard] Calling handleExternalClipboardText textLength=${text.length}');
-             await clipboardManager?.handleExternalClipboardText(text);
+            debugPrint(
+                '[Android Clipboard] Calling handleExternalClipboardText textLength=${text.length}');
+            await clipboardManager?.handleExternalClipboardText(text);
           } catch (e) {
-             debugPrint('[Android Clipboard] Failed to handle clipboard text: $e');
+            debugPrint(
+                '[Android Clipboard] Failed to handle clipboard text: $e');
           }
         }
       }
@@ -190,7 +196,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
-        _clipboardChannel.invokeMethod('stopService').catchError((Object error) {
+        _clipboardChannel
+            .invokeMethod('stopService')
+            .catchError((Object error) {
           debugPrint('Failed to stop clipboard service: $error');
         }),
       );
@@ -243,22 +251,22 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       try {
         navigator
             .push(
-              MaterialPageRoute<void>(
-                builder: (_) => PairingScreen(
-                  initialDeviceId: deviceId,
-                  initialDisplayName: event['displayName']?.toString(),
-                  initialPeerFingerprint: event['fingerprint']?.toString(),
-                  initialExpiresInMs: (event['expiresInMs'] as num?)?.toInt(),
-                  initialCanApproveLocally: true,
-                  initialStatus: 'Incoming pairing request',
-                ),
-              ),
-            )
+          MaterialPageRoute<void>(
+            builder: (_) => PairingScreen(
+              initialDeviceId: deviceId,
+              initialDisplayName: event['displayName']?.toString(),
+              initialPeerFingerprint: event['fingerprint']?.toString(),
+              initialExpiresInMs: (event['expiresInMs'] as num?)?.toInt(),
+              initialCanApproveLocally: true,
+              initialStatus: 'Incoming pairing request',
+            ),
+          ),
+        )
             .whenComplete(() {
-              if (mounted && _activePairingDeviceId == deviceId) {
-                _activePairingDeviceId = null;
-              }
-            });
+          if (mounted && _activePairingDeviceId == deviceId) {
+            _activePairingDeviceId = null;
+          }
+        });
       } catch (_) {
         if (mounted && _activePairingDeviceId == deviceId) {
           _activePairingDeviceId = null;
@@ -275,7 +283,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
       theme: _buildRiftTheme(),
-      home: widget.hasCompletedOnboarding ? const AppShell() : const OnboardingScreen(),
+      home: widget.hasCompletedOnboarding
+          ? const AppShell()
+          : const OnboardingScreen(),
     );
   }
 }
@@ -315,22 +325,36 @@ ThemeData _buildRiftTheme() {
     colorScheme: colorScheme,
     scaffoldBackgroundColor: colorScheme.surface,
     textTheme: inter.copyWith(
-      headlineLarge: inter.headlineLarge?.copyWith(fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
-      headlineMedium: inter.headlineMedium?.copyWith(fontSize: 24, fontWeight: FontWeight.w600, height: 32/24),
-      headlineSmall: inter.headlineSmall?.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 28/20),
-      bodyLarge: inter.bodyLarge?.copyWith(fontSize: 16, fontWeight: FontWeight.w400, height: 24/16),
-      bodyMedium: inter.bodyMedium?.copyWith(fontSize: 14, fontWeight: FontWeight.w400, height: 20/14),
-      labelMedium: jetBrainsStyle.copyWith(fontSize: 13, fontWeight: FontWeight.w500, letterSpacing: 0.05, height: 16/13),
-      labelSmall: jetBrainsStyle.copyWith(fontSize: 11, fontWeight: FontWeight.w400, height: 14/11),
+      headlineLarge: inter.headlineLarge?.copyWith(
+          fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
+      headlineMedium: inter.headlineMedium?.copyWith(
+          fontSize: 24, fontWeight: FontWeight.w600, height: 32 / 24),
+      headlineSmall: inter.headlineSmall?.copyWith(
+          fontSize: 20, fontWeight: FontWeight.w600, height: 28 / 20),
+      bodyLarge: inter.bodyLarge?.copyWith(
+          fontSize: 16, fontWeight: FontWeight.w400, height: 24 / 16),
+      bodyMedium: inter.bodyMedium?.copyWith(
+          fontSize: 14, fontWeight: FontWeight.w400, height: 20 / 14),
+      labelMedium: jetBrainsStyle.copyWith(
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+          letterSpacing: 0.05,
+          height: 16 / 13),
+      labelSmall: jetBrainsStyle.copyWith(
+          fontSize: 11, fontWeight: FontWeight.w400, height: 14 / 11),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: colorScheme.surface,
       indicatorColor: colorScheme.secondaryContainer,
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return jetBrainsStyle.copyWith(fontSize: 11, color: colorScheme.onSurface, fontWeight: FontWeight.w600);
+          return jetBrainsStyle.copyWith(
+              fontSize: 11,
+              color: colorScheme.onSurface,
+              fontWeight: FontWeight.w600);
         }
-        return jetBrainsStyle.copyWith(fontSize: 11, color: colorScheme.onSurfaceVariant);
+        return jetBrainsStyle.copyWith(
+            fontSize: 11, color: colorScheme.onSurfaceVariant);
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
@@ -368,7 +392,10 @@ class _AppShellState extends State<AppShell> {
           children: [
             Icon(Icons.shield, color: theme.colorScheme.primary),
             const SizedBox(width: 8),
-            Text('RIFT', style: TextStyle(fontWeight: FontWeight.bold, color: theme.colorScheme.primary)),
+            Text('RIFT',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary)),
           ],
         ),
         actions: [
