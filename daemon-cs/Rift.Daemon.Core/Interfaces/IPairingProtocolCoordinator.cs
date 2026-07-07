@@ -4,6 +4,8 @@ public interface IPairingProtocolCoordinator
 {
     Task NotifyLocalPairingStartedAsync(string deviceId, CancellationToken cancellationToken = default);
 
+    Task<string> ConnectToEndpointForPairingAsync(string host, int port, CancellationToken cancellationToken = default);
+
     Task NotifyLocalPairingApprovedAsync(string deviceId, CancellationToken cancellationToken = default);
 
     Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default);

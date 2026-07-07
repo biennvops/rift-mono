@@ -119,6 +119,7 @@ Returns all peers currently visible via mDNS-SD discovery, including their trust
   "peers": [
     {
       "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "instanceId": "rift-instance-id-from-mdns",
       "address": "192.168.1.42",
       "port": 9735,
       "trustState": "discovered",
@@ -127,6 +128,8 @@ Returns all peers currently visible via mDNS-SD discovery, including their trust
   ]
 }
 ```
+
+**Note on Identity:** For discovered peers, `deviceId` is the canonical authenticated ID if available via DNS TXT records. If the peer obscures its identity for privacy (null-did), `deviceId` will be absent, and the UI should use `instanceId` (the mDNS service name) as a temporary handle to initiate pairing.
 
 #### `rift.startDiscovery`
 
@@ -160,6 +163,7 @@ Initiates the pairing flow with a discovered peer.
 
 ```json
 {
+  "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ",
   "peerFingerprint": "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567",
   "expiresInMs": 120000
@@ -167,6 +171,39 @@ Initiates the pairing flow with a discovered peer.
 ```
 
 **Errors:** `-32009` if peer not found, `-32004` if peer is blocked or revoked.
+
+#### `rift.startPairingByEndpoint`
+
+Initiates pairing by connecting directly to a peer's local TCP endpoint when
+discovery is unavailable or incomplete (for example, hotspot / LAN paths where
+mDNS or UDP broadcast is filtered).
+
+This method is an explicit user-initiated pairing action. It is not the same as
+the daemon's internal trusted-peer reconnect behavior. After a peer is already
+trusted, implementations MAY reuse persisted last-known-good local endpoints to
+re-establish an authenticated session for clipboard, presence, or other
+protected operations without calling `rift.startPairingByEndpoint` again.
+
+**Params:**
+
+| Field     | Type    | Required | Description                         |
+| --------- | ------- | -------- | ----------------------------------- |
+| `address` | string  | Yes      | Peer IPv4/IPv6 address on the LAN   |
+| `port`    | integer | Yes      | Peer TLS listener port              |
+
+**Result:**
+
+```json
+{
+  "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ",
+  "peerFingerprint": "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567",
+  "expiresInMs": 120000
+}
+```
+
+**Errors:** `-32000` if the endpoint is not reachable on the local network,
+`-32004` if the resolved peer is blocked or revoked.
 
 #### `rift.approvePairing`
 
@@ -267,7 +304,16 @@ Removes a block on a peer, returning them to `discovered` state.
 
 #### `rift.notifyClipboardChange`
 
-Called by the client to inform the daemon that the local clipboard has changed. The daemon broadcasts a metadata offer to trusted peers.
+Called by the client to inform the daemon that the local clipboard has changed.
+The daemon broadcasts a metadata offer to trusted peers.
+
+If a trusted peer is temporarily offline from discovery, implementations MAY
+attempt an internal reconnect using persisted trusted endpoints before giving up
+delivery. Such reconnect behavior is daemon-internal and does not change the
+client-facing JSON-RPC method contract. Implementations MAY also hold pending
+clipboard metadata locally for a short bounded period while waiting for trusted
+local reachability to recover, provided normal offer expiry semantics still
+apply.
 
 **Params:**
 
@@ -316,6 +362,10 @@ Returns active clipboard offers from peers.
 #### `rift.fetchClipboardContent`
 
 Requests the actual clipboard content from a peer for a given offer.
+
+If the source peer is trusted but not currently present in discovery,
+implementations MAY first attempt an internal trusted-peer reconnect using
+persisted last-known-good local endpoints before returning `PeerUnreachable`.
 
 **Params:**
 
@@ -469,8 +519,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 
 | Method                       | Payload                                                                                | Description                          |
 | ---------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
-| `rift.onPeerDiscovered`      | `{ "deviceId", "address", "port", "txtRecord" }`                                       | New peer found via mDNS-SD           |
-| `rift.onPeerLost`            | `{ "deviceId" }`                                                                       | Peer service record disappeared      |
+| `rift.onPeerDiscovered`      | `{ "deviceId?", "instanceId", "address", "port", "txtRecord" }`                        | New peer found via mDNS-SD           |
+| `rift.onPeerLost`            | `{ "deviceId?", "instanceId" }`                                                        | Peer service record disappeared      |
 | `rift.onPairingRequest`      | `{ "deviceId", "fingerprint", "displayName?", "expiresInMs" }`                         | Incoming pairing request from a peer |
 | `rift.onPairingComplete`     | `{ "deviceId", "fingerprint", "persistedAt" }`                                         | Pairing completed successfully       |
 | `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |

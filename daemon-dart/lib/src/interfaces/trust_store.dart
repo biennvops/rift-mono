@@ -29,6 +29,7 @@ class PeerRecord {
   final DateTime? pairedAt;
   final DateTime updatedAt;
   final DateTime? lastSeenAt;
+  final List<TrustedPeerEndpoint> trustedEndpoints;
 
   PeerRecord({
     required this.deviceId,
@@ -38,6 +39,7 @@ class PeerRecord {
     this.pairedAt,
     required this.updatedAt,
     this.lastSeenAt,
+    this.trustedEndpoints = const [],
   });
 
   /// Creates a defensive copy of this PeerRecord to prevent mutation of internal state,
@@ -51,6 +53,89 @@ class PeerRecord {
       pairedAt: pairedAt,
       updatedAt: updatedAt,
       lastSeenAt: lastSeenAt,
+      trustedEndpoints: trustedEndpoints
+          .map((endpoint) => endpoint.copy())
+          .toList(growable: false),
+    );
+  }
+}
+
+class TrustedPeerEndpoint {
+  final String address;
+  final int port;
+  final String source;
+  final String? addressFamily;
+  final DateTime lastSuccessAt;
+
+  const TrustedPeerEndpoint({
+    required this.address,
+    required this.port,
+    required this.source,
+    this.addressFamily,
+    required this.lastSuccessAt,
+  });
+
+  TrustedPeerEndpoint copy() {
+    return TrustedPeerEndpoint(
+      address: address,
+      port: port,
+      source: source,
+      addressFamily: addressFamily,
+      lastSuccessAt: lastSuccessAt,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'address': address,
+      'port': port,
+      'source': source,
+      if (addressFamily != null) 'addressFamily': addressFamily,
+      'lastSuccessAt': lastSuccessAt.toUtc().toIso8601String(),
+    };
+  }
+
+  factory TrustedPeerEndpoint.fromJson(Map<String, dynamic> json) {
+    final address = json['address'];
+    final port = json['port'];
+    final source = json['source'];
+    final lastSuccessAt = json['lastSuccessAt'];
+
+    if (address is! String || address.isEmpty) {
+      throw const FormatException('TrustedPeerEndpoint.address is required');
+    }
+    if (port is! int || port <= 0 || port > 65535) {
+      throw const FormatException('TrustedPeerEndpoint.port must be 1..65535');
+    }
+    if (source is! String || source.isEmpty) {
+      throw const FormatException('TrustedPeerEndpoint.source is required');
+    }
+    if (lastSuccessAt is! String) {
+      throw const FormatException(
+        'TrustedPeerEndpoint.lastSuccessAt is required',
+      );
+    }
+
+    final parsedLastSuccessAt = DateTime.tryParse(lastSuccessAt)?.toUtc();
+    if (parsedLastSuccessAt == null) {
+      throw const FormatException(
+        'TrustedPeerEndpoint.lastSuccessAt must be RFC3339',
+      );
+    }
+
+    final addressFamily = json['addressFamily'];
+    if (addressFamily != null && addressFamily is! String) {
+      throw const FormatException(
+        'TrustedPeerEndpoint.addressFamily must be a string',
+      );
+    }
+
+    return TrustedPeerEndpoint(
+      address: address,
+      port: port,
+      source: source,
+      addressFamily: addressFamily as String?,
+      lastSuccessAt: parsedLastSuccessAt,
     );
   }
 }

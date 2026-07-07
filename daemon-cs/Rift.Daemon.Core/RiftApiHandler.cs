@@ -103,6 +103,10 @@ public class RiftApiHandler : IRiftApi
     public Task<StartPairingResult> StartPairingAsync(string deviceId) =>
         ExecutePairingAsync(() => _pairingService.StartPairingAsync(deviceId));
 
+    [JsonRpcMethod("rift.startPairingByEndpoint")]
+    public Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port) =>
+        ExecutePairingAsync(() => _pairingService.StartPairingByEndpointAsync(address, port));
+
     [JsonRpcMethod("rift.approvePairing")]
     public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) =>
         ExecutePairingAsync(() => _pairingService.ApprovePairingAsync(deviceId, fingerprint));
@@ -226,7 +230,7 @@ public class RiftApiHandler : IRiftApi
 
     private sealed class UnsupportedClipboardService : IClipboardService
     {
-        public Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
+        public Task<string[]> BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence) => throw CreateNotConfiguredException();
 
         public Task HandleOfferReceivedAsync(ReceivedClipboardOffer offer) => throw CreateNotConfiguredException();
 
@@ -256,6 +260,8 @@ public class RiftApiHandler : IRiftApi
     private sealed class UnsupportedPairingService : IPairingService
     {
         public Task<StartPairingResult> StartPairingAsync(string deviceId) => throw CreateNotConfiguredException();
+
+        public Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port) => throw CreateNotConfiguredException();
 
         public Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint) => throw CreateNotConfiguredException();
 

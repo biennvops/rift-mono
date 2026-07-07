@@ -20,6 +20,7 @@ public sealed class ClipboardServiceTests : IDisposable
     private readonly IdentityManager _identityManager;
     private readonly PresenceService _presenceService;
     private readonly FakeTransport _transport;
+    private readonly FakeDiscoveryCoordinator _discoveryCoordinator;
     private readonly FakeIpcNotificationService _ipcNotificationService;
     private readonly ClipboardService _clipboardService;
     private static readonly TimeSpan FetchResponseTimeout = TimeSpan.FromMilliseconds(75);
@@ -34,8 +35,9 @@ public sealed class ClipboardServiceTests : IDisposable
         _identityManager = new IdentityManager(new SqliteLocalIdentityStore(_databaseContext));
         _presenceService = new PresenceService();
         _transport = new FakeTransport();
+        _discoveryCoordinator = new FakeDiscoveryCoordinator();
         _ipcNotificationService = new FakeIpcNotificationService();
-        _clipboardService = new ClipboardService(_transport, _trustStore, _presenceService, _identityManager, _securityEventLog, _ipcNotificationService, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _clipboardService = new ClipboardService(_transport, _trustStore, _discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _ipcNotificationService, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
     }
 
     [Fact]
@@ -480,6 +482,246 @@ public sealed class ClipboardServiceTests : IDisposable
         Assert.DoesNotContain(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-incapable" && message.Type == "clipboard.offer");
     }
 
+    [Fact]
+    public async Task NotifyClipboardChangeAsync_ReconnectsTrustedPeerUsingPersistedEndpoint()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-reconnect",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "10.53.38.174",
+                    Port = 9140,
+                    Source = "manual",
+                    AddressFamily = "InterNetwork",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-reconnect", "online", null, ["clipboard.offer_fetch"]);
+        _transport.AssumeConnectedByDefault = false;
+        _transport.ActiveSessions.Clear();
+        _transport.ConnectIdentityByEndpoint[("10.53.38.174", 9140)] = "rift-peer-reconnect";
+
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        var result = await _clipboardService.NotifyClipboardChangeAsync(
+            "text/plain",
+            5,
+            hash,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            CancellationToken.None);
+
+        Assert.Contains("rift-peer-reconnect", result.BroadcastTo);
+        Assert.Contains(_transport.ConnectAttempts, attempt => attempt.Host == "10.53.38.174" && attempt.Port == 9140);
+        Assert.Contains(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-reconnect" && message.Type == "clipboard.offer");
+    }
+
+    [Fact]
+    public async Task FetchClipboardContentAsync_ReconnectsTrustedPeerUsingPersistedEndpoint()
+    {
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-fetch-reconnect",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "10.53.38.175",
+                    Port = 9140,
+                    Source = "manual",
+                    AddressFamily = "InterNetwork",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-fetch-reconnect", "online", null, ["clipboard.offer_fetch"]);
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-fetch-reconnect",
+            PayloadSourceDeviceId = "rift-peer-fetch-reconnect",
+            OfferId = "offer-fetch-reconnect",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = hash,
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        _transport.AssumeConnectedByDefault = false;
+        _transport.ActiveSessions.Clear();
+        _transport.ConnectIdentityByEndpoint[("10.53.38.175", 9140)] = "rift-peer-fetch-reconnect";
+
+        var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-fetch-reconnect", CancellationToken.None);
+        await _clipboardService.HandleFetchResponseAsync(
+            "rift-peer-fetch-reconnect",
+            "offer-fetch-reconnect",
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            5,
+            hash,
+            CancellationToken.None);
+
+        var result = await fetchTask;
+
+        Assert.Equal("offer-fetch-reconnect", result.OfferId);
+        Assert.Contains(_transport.ConnectAttempts, attempt => attempt.Host == "10.53.38.175" && attempt.Port == 9140);
+        Assert.Contains(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-fetch-reconnect" && message.Type == "clipboard.fetchRequest");
+    }
+
+    [Fact]
+    public async Task NotifyClipboardChangeAsync_UsesSingleReconnectAttemptForConcurrentOffers()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-single-flight",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "10.53.38.176",
+                    Port = 9140,
+                    Source = "manual",
+                    AddressFamily = "InterNetwork",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-single-flight", "online", null, ["clipboard.offer_fetch"]);
+        _transport.AssumeConnectedByDefault = false;
+        _transport.ActiveSessions.Clear();
+        _transport.ConnectIdentityByEndpoint[("10.53.38.176", 9140)] = "rift-peer-single-flight";
+        _transport.ConnectGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var hashA = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello-a")));
+        var hashB = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello-b")));
+
+        var first = _clipboardService.NotifyClipboardChangeAsync(
+            "text/plain",
+            7,
+            hashA,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello-a")),
+            CancellationToken.None);
+        var second = _clipboardService.NotifyClipboardChangeAsync(
+            "text/plain",
+            7,
+            hashB,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello-b")),
+            CancellationToken.None);
+
+        await Task.Delay(50);
+        _transport.ConnectGate.TrySetResult(true);
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(1, _transport.ConnectAttempts.Count(attempt => attempt.Host == "10.53.38.176" && attempt.Port == 9140));
+        Assert.Equal(2, _transport.SentMessages.Count(message => message.PeerDeviceId == "rift-peer-single-flight" && message.Type == "clipboard.offer"));
+    }
+
+    [Fact]
+    public async Task NotifyClipboardChangeAsync_FallsBackToNextPersistedEndpointWhenFirstFails()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-fallback",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "10.53.38.177",
+                    Port = 9140,
+                    Source = "manual",
+                    AddressFamily = "InterNetwork",
+                    LastSuccessAt = DateTimeOffset.UtcNow.AddMinutes(-5)
+                },
+                new TrustedPeerEndpoint
+                {
+                    Address = "10.53.38.178",
+                    Port = 9140,
+                    Source = "fallback",
+                    AddressFamily = "InterNetwork",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-fallback", "online", null, ["clipboard.offer_fetch"]);
+        _transport.AssumeConnectedByDefault = false;
+        _transport.ActiveSessions.Clear();
+        _transport.FailingEndpoints.Add(("10.53.38.177", 9140));
+        _transport.ConnectIdentityByEndpoint[("10.53.38.178", 9140)] = "rift-peer-fallback";
+
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        var result = await _clipboardService.NotifyClipboardChangeAsync(
+            "text/plain",
+            5,
+            hash,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            CancellationToken.None);
+
+        Assert.Contains("rift-peer-fallback", result.BroadcastTo);
+        Assert.Equal(2, _transport.ConnectAttempts.Count);
+        Assert.Equal(("10.53.38.177", 9140), _transport.ConnectAttempts[0]);
+        Assert.Equal(("10.53.38.178", 9140), _transport.ConnectAttempts[1]);
+        Assert.Contains(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-fallback" && message.Type == "clipboard.offer");
+    }
+
+    [Fact]
+    public async Task NotifyClipboardChangeAsync_FallsBackToDiscoveryWhenPersistedEndpointsMissing()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-discovery-fallback",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-discovery-fallback", "online", null, ["clipboard.offer_fetch"]);
+        _transport.AssumeConnectedByDefault = false;
+        _transport.ActiveSessions.Clear();
+        _transport.ConnectIdentityByEndpoint[("192.168.1.55", 9140)] = "rift-peer-discovery-fallback";
+        _discoveryCoordinator.Peers["rift-peer-discovery-fallback"] = new DiscoveredPeerInfo
+        {
+            DeviceId = "rift-peer-discovery-fallback",
+            Address = "192.168.1.55",
+            Port = 9140,
+            TrustState = "trusted",
+            ObservedEndpoints =
+            [
+                new DiscoveredPeerEndpoint
+                {
+                    Address = "192.168.1.55",
+                    Port = 9140
+                }
+            ]
+        };
+
+        var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        var result = await _clipboardService.NotifyClipboardChangeAsync(
+            "text/plain",
+            5,
+            hash,
+            Convert.ToBase64String(Encoding.UTF8.GetBytes("hello")),
+            CancellationToken.None);
+
+        Assert.Contains("rift-peer-discovery-fallback", result.BroadcastTo);
+        Assert.Single(_transport.ConnectAttempts);
+        Assert.Equal(("192.168.1.55", 9140), _transport.ConnectAttempts[0]);
+        Assert.Contains(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-discovery-fallback" && message.Type == "clipboard.offer");
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -506,24 +748,98 @@ public sealed class ClipboardServiceTests : IDisposable
 
     private sealed class FakeTransport : ITransport
     {
+        private readonly object _gate = new();
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public List<(string Host, int Port)> ConnectAttempts { get; } = [];
+        public Dictionary<(string Host, int Port), string> ConnectIdentityByEndpoint { get; } = [];
+        public HashSet<(string Host, int Port)> FailingEndpoints { get; } = [];
+        public HashSet<string> ActiveSessions { get; } = [];
+        public bool AssumeConnectedByDefault { get; set; } = true;
+        public TaskCompletionSource<bool>? ConnectGate { get; set; }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
+        public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            lock (_gate)
+            {
+                ConnectAttempts.Add((host, port));
+            }
+            if (ConnectGate is not null)
+            {
+                await ConnectGate.Task.WaitAsync(cancellationToken);
+            }
+            if (FailingEndpoints.Contains((host, port)))
+            {
+                throw new InvalidOperationException($"Simulated connect failure for endpoint {host}:{port}");
+            }
+            if (ConnectIdentityByEndpoint.TryGetValue((host, port), out var peerDeviceId))
+            {
+                lock (_gate)
+                {
+                    ActiveSessions.Add(peerDeviceId);
+                }
+                return;
+            }
+
+            throw new InvalidOperationException($"No fake peer configured for endpoint {host}:{port}");
+        }
+
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+            Task.FromResult("rift-test-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
+            lock (_gate)
+            {
+                if (!AssumeConnectedByDefault && !ActiveSessions.Contains(peerDeviceId))
+                {
+                    throw new InvalidOperationException($"No open session exists for {peerDeviceId}.");
+                }
+            }
             using var document = JsonDocument.Parse(frameBody);
-            SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            lock (_gate)
+            {
+                SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            }
             return Task.CompletedTask;
         }
 
-        public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasActiveSession(string peerDeviceId)
+        {
+            lock (_gate)
+            {
+                return AssumeConnectedByDefault || ActiveSessions.Contains(peerDeviceId);
+            }
+        }
+        public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class FakeDiscoveryCoordinator : IDiscoveryCoordinator
+    {
+        public Dictionary<string, DiscoveredPeerInfo> Peers { get; } = new(StringComparer.Ordinal);
+
+        public DiscoveryToggleResult StartDiscovery() => new();
+
+        public DiscoveryToggleResult StopDiscovery() => new();
+
+        public ListDiscoveredPeersResult ListDiscoveredPeers() =>
+            new()
+            {
+                Peers = Peers.Values.ToArray(),
+                IsDiscovering = true
+            };
+
+        public bool TryGetDiscoveredPeer(string deviceId, out DiscoveredPeerInfo? peer)
+        {
+            var found = Peers.TryGetValue(deviceId, out var stored);
+            peer = stored;
+            return found;
+        }
     }
 
     private sealed class FakeIpcNotificationService : IIpcNotificationService

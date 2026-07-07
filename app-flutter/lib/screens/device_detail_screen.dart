@@ -1,0 +1,703 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../src/ipc/json_rpc_client.dart';
+import 'dart:async';
+
+class DeviceDetailScreen extends StatefulWidget {
+  final Map<String, dynamic> peer;
+  final bool isOnline;
+
+  const DeviceDetailScreen({super.key, required this.peer, required this.isOnline});
+
+  @override
+  State<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
+}
+
+class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
+  late Map<String, dynamic> peer;
+  late bool isOnline;
+
+  @override
+  void initState() {
+    super.initState();
+    peer = widget.peer;
+    isOnline = widget.isOnline;
+  }
+
+  String _formatFingerprintWithColons(String? fp) {
+    if (fp == null) return 'WAITING...';
+    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+    if (clean.isEmpty) return fp;
+    final chunks = <String>[];
+    for (int i = 0; i < clean.length; i += 2) {
+      chunks.add(clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2));
+    }
+    return chunks.join(':');
+  }
+
+  String _formatTimestamp(String? raw) {
+    if (raw == null || raw.isEmpty) return 'Unavailable';
+    final parsed = DateTime.tryParse(raw)?.toLocal();
+    if (parsed == null) return raw;
+    final yyyy = parsed.year.toString().padLeft(4, '0');
+    final mm = parsed.month.toString().padLeft(2, '0');
+    final dd = parsed.day.toString().padLeft(2, '0');
+    final hh = parsed.hour.toString().padLeft(2, '0');
+    final min = parsed.minute.toString().padLeft(2, '0');
+    final sec = parsed.second.toString().padLeft(2, '0');
+    return '$yyyy-$mm-$dd $hh:$min:$sec';
+  }
+
+  Future<bool> _showRevokeBottomSheet(String displayName, String fingerprint) async {
+    final theme = Theme.of(context);
+    final shortFingerprint = fingerprint.length > 16 
+        ? '${fingerprint.substring(0, 16)}...' 
+        : fingerprint;
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(ctx).padding.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag Handle
+              Container(
+                width: 48,
+                height: 6,
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+              // Warning Icon
+              Icon(
+                Icons.warning,
+                size: 48,
+                color: theme.colorScheme.error,
+              ),
+              const SizedBox(height: 16),
+              // Title
+              Text(
+                'Thu hồi trust từ $displayName?',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Warning Text
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  'Thiết bị sẽ bị ngắt kết nối ngay. Khóa Ed25519 đưa vào negative-trust store — không thể kết nối lại trừ khi pair lại từ đầu.',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Technical Detail Box
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.fingerprint, color: theme.colorScheme.outline),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'TARGET KEY',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        Text(
+                          shortFingerprint,
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Buttons
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.error,
+                    foregroundColor: theme.colorScheme.onError,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  icon: const Icon(Icons.delete_forever),
+                  label: const Text(
+                    'Thu hồi',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.onSurface,
+                    side: BorderSide(color: theme.colorScheme.outline),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Hủy',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    return result ?? false;
+  }
+
+  Future<bool> _showBlockBottomSheet(String displayName) async {
+    final theme = Theme.of(context);
+
+    final result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          padding: EdgeInsets.only(
+            left: 24,
+            right: 24,
+            top: 24,
+            bottom: MediaQuery.of(ctx).padding.bottom + 24,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Drag Handle
+              Container(
+                width: 48,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              // Block Icon
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.errorContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.block,
+                  color: theme.colorScheme.error,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Title
+              Text(
+                'Chặn $displayName?',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Content Text
+              Text(
+                'Thiết bị bị chặn vĩnh viễn. Mọi kết nối từ khóa Ed25519 này sẽ bị từ chối tự động.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 24),
+              // Buttons
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.error,
+                    foregroundColor: theme.colorScheme.onError,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                  child: const Text(
+                    'Chặn vĩnh viễn',
+                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primary,
+                    side: BorderSide(color: theme.colorScheme.outline),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                  ),
+                  child: const Text(
+                    'Hủy',
+                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    return result ?? false;
+  }
+
+  Future<void> _revokeTrust() async {
+    final deviceId = peer['deviceId']?.toString();
+    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final fingerprint = peer['fingerprint']?.toString() ?? 'Unknown';
+    if (deviceId == null) return;
+    
+    final client = context.read<JsonRpcRiftClient>();
+    final confirmed = await _showRevokeBottomSheet(displayName ?? 'Unknown', fingerprint);
+    if (!confirmed) return;
+    
+    try {
+      await client.revokeTrust(deviceId, 'User revoked from Device Detail');
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  Future<void> _blockPeer() async {
+    final deviceId = peer['deviceId']?.toString();
+    final displayName = peer['displayName']?.toString() ?? deviceId;
+    if (deviceId == null) return;
+    
+    final confirmed = await _showBlockBottomSheet(displayName ?? 'Unknown');
+    if (!confirmed) return;
+    
+    try {
+      // Block is not yet implemented in the JsonRpcRiftClient.
+      // await client.blockPeer(deviceId);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Block not implemented in daemon yet')));
+      // if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
+    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final fingerprint = peer['fingerprint']?.toString() ?? '';
+    final trustState = peer['trustState']?.toString() ?? 'trusted';
+    final implementationId =
+        peer['implementationId']?.toString() ?? 'Unavailable';
+    final protocolVersion =
+        peer['protocolVersion']?.toString() ?? 'Unavailable';
+    final ipAddress =
+        peer['lastAddress']?.toString() ?? peer['address']?.toString() ?? 'Unavailable';
+    final uptime = peer['sessionUptime']?.toString() ?? 'Unavailable';
+    final tlsCipher = peer['tlsCipher']?.toString() ?? 'Unavailable';
+    final latency =
+        peer['latencyMs'] != null ? '${peer['latencyMs']} ms' : 'Unavailable';
+    final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
+    final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
+    final capabilities = List<String>.from(
+      (peer['capabilities'] as List? ?? const <dynamic>[]).map((e) => e.toString()),
+    );
+    final recentEvents = List<Map<String, dynamic>>.from(
+      (peer['recentEvents'] as List? ?? const <dynamic>[]).map(
+        (e) => Map<String, dynamic>.from(e as Map),
+      ),
+    );
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          displayName,
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: theme.colorScheme.primary,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        backgroundColor: theme.colorScheme.surface,
+        foregroundColor: theme.colorScheme.onSurfaceVariant,
+        elevation: 0,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(color: theme.colorScheme.outlineVariant, height: 1),
+        ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Header Section
+          Center(
+            child: Column(
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Icon(Icons.laptop_mac, size: 32, color: theme.colorScheme.onSurface),
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.verified, size: 14, color: theme.colorScheme.onSecondaryContainer),
+                          const SizedBox(width: 4),
+                        Text(
+                          trustState.toUpperCase(),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSecondaryContainer,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: 8, height: 8,
+                          decoration: BoxDecoration(
+                            color: isOnline ? theme.colorScheme.secondary : theme.colorScheme.outline,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(isOnline ? 'ONLINE' : 'OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: isOnline ? theme.colorScheme.secondary : theme.colorScheme.outline)),
+                      ],
+                    )
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  trustState == 'trusted'
+                      ? 'Trusted since $pairedAt'
+                      : 'Last seen $lastSeenAt',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          
+          // Identity Bento
+          Text('IDENTITY', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Device ID', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                Text(deviceId, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface)),
+                const SizedBox(height: 12),
+                Text('Fingerprint', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(_formatFingerprintWithColons(fingerprint), style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface, letterSpacing: 1.0)),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Certificate', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                          Text(
+                            implementationId,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Protocol', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                          Text(
+                            protocolVersion,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          
+          // Session & Capabilities
+          Text('SESSION & CAPABILITIES', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Capabilities', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: capabilities.isEmpty
+                      ? [
+                          Text(
+                            'Unavailable',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ]
+                      : capabilities.map((capability) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: theme.colorScheme.outlineVariant),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              capability,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                ),
+                const SizedBox(height: 16),
+                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('IP Address', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                          Text(ipAddress, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Uptime', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                          Text(uptime, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Latency', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    Text(latency, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
+                    const SizedBox(height: 12),
+                    Text('TLS Cipher', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                    Text(tlsCipher, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          
+          // Recent Events
+          Text('RECENT EVENTS', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
+          const SizedBox(height: 4),
+          Container(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: recentEvents.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      'No device-specific events are exposed by the daemon yet.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (int i = 0; i < recentEvents.length; i++) ...[
+                        _buildEventRow(
+                          recentEvents[i]['timestamp']?.toString() ?? '--:--',
+                          recentEvents[i]['eventType']?.toString() ?? 'unknown',
+                          theme,
+                          recentEvents[i]['outcome']?.toString() == 'success',
+                        ),
+                        if (i != recentEvents.length - 1)
+                          Divider(height: 1, color: theme.colorScheme.outlineVariant),
+                      ],
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 32),
+          
+          // Actions
+          OutlinedButton(
+            onPressed: _revokeTrust,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: theme.colorScheme.error,
+              side: BorderSide(color: theme.colorScheme.error),
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Thu hồi trust', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          const SizedBox(height: 12),
+          ElevatedButton(
+            onPressed: _blockPeer,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: theme.colorScheme.error,
+              foregroundColor: theme.colorScheme.onError,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Chặn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Blocking from this view is pending full daemon support.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEventRow(String time, String event, ThemeData theme, bool highlight) {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(time, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          ),
+          Expanded(
+            child: Text(
+              event,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: highlight ? theme.colorScheme.secondary : theme.colorScheme.onSurface,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

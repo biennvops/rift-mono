@@ -123,7 +123,10 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
     }
 
-    public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
+    public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) =>
+        ConnectToPeerWithIdentityAsync(host, port, cancellationToken);
+
+    public async Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
@@ -164,9 +167,10 @@ public sealed class TlsTransport : ITransport, IDisposable
             }
             if (registration == SessionRegistrationResult.ReusedExisting)
             {
-                return;
+                return deviceId;
             }
             TrackBackgroundTask(RunSessionLifetimeAsync(session, _shutdownCts.Token), "outbound session loop");
+            return deviceId;
         }
         catch
         {
@@ -242,9 +246,10 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Reusing existing authenticated session for peer {DeviceId}; disposing duplicate connection.", deviceId);
-            session.Dispose();
-            return SessionRegistrationResult.ReusedExisting;
+            _logger.LogInformation("Replacing existing authenticated session for peer {DeviceId} with a fresh connection (likely a stale reconnect).", deviceId);
+            existingSession.Dispose();
+            _sessions[deviceId] = session;
+            return SessionRegistrationResult.RegisteredNew;
         }
 
         session.Dispose();
@@ -259,7 +264,9 @@ public sealed class TlsTransport : ITransport, IDisposable
         var firstPayload = await ReadFramePayloadAsync(session.Stream, RiftFrame.MaxPreAuthSize, cancellationToken);
         if (firstPayload is null)
         {
-            throw new InvalidOperationException("Peer closed connection before sending session.hello.");
+            var ex = new InvalidOperationException("Peer closed connection before sending session.hello.");
+            ex.Data["DeviceId"] = session.DeviceId;
+            throw ex;
         }
         var firstMessageType = GetMessageType(firstPayload);
         if (string.Equals(firstMessageType, "session.hello", StringComparison.Ordinal))
@@ -673,6 +680,21 @@ public sealed class TlsTransport : ITransport, IDisposable
     public bool HasActiveSession(string peerDeviceId)
     {
         return _sessions.TryGetValue(peerDeviceId, out var session) && session.IsAuthenticated;
+    }
+
+    public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId)
+    {
+        if (!_sessions.TryGetValue(peerDeviceId, out var session))
+        {
+            return null;
+        }
+
+        if (session.Client.Client.RemoteEndPoint is not IPEndPoint remoteEndPoint)
+        {
+            return null;
+        }
+
+        return new PeerSessionEndpoint(remoteEndPoint.Address.ToString(), remoteEndPoint.Port);
     }
 
     public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)

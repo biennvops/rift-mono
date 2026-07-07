@@ -32,10 +32,10 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         _securityEventLog = new SqliteSecurityEventLog(_databaseContext);
         _identityManager = new IdentityManager(new SqliteLocalIdentityStore(_databaseContext));
         _presenceService = new PresenceService();
-        var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore);
+        var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore, _identityManager);
         _clipboardTransport = new FakeTransport();
         _pairingTransport = new FakeTransport();
-        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
+        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
         _pairingCoordinator = new PairingProtocolCoordinator(
             _pairingTransport,
             discoveryCoordinator,
@@ -335,6 +335,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
 
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+            Task.FromResult("rift-test-peer");
+
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(frameBody);
@@ -342,7 +345,8 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasActiveSession(string peerDeviceId) => true;
+        public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

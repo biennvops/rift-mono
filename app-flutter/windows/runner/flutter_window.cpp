@@ -90,7 +90,7 @@ void FlutterWindow::RegisterClipboardEventChannel() {
   auto messenger = flutter_controller_->engine()->messenger();
   clipboard_event_channel_ =
       std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(
-          messenger, "rift/windows/clipboard_events",
+          messenger, "rift/desktop/clipboard_events",
           &flutter::StandardMethodCodec::GetInstance());
 
   auto handler =

@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/screens/trusted_devices_screen.dart';
-import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'test_utils/fake_transport.dart';
 
@@ -21,6 +20,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
   bool rejectCalled = false;
+  String? manualPairAddress;
+  int? manualPairPort;
   int listTrustedPeersCallCount = 0;
   List<Map<String, dynamic>> trustedPeers = [
     {
@@ -62,7 +63,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> listDiscoveredPeers() async => {
         'peers': discoveredPeers,
-        'isDiscovering': false,
+        'isDiscovering': true,
       };
   @override
   Future<dynamic> listTrustedPeers() async {
@@ -98,6 +99,18 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     return {'rejected': true};
   }
 
+  @override
+  Future<dynamic> startPairingByEndpoint(String address, int port) async {
+    manualPairAddress = address;
+    manualPairPort = port;
+    return {
+      'deviceId': 'rift-manual-peer',
+      'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    };
+  }
+
   Future<void> emitTrustChanged(Map<String, dynamic> event) async {
     _trustChangedController.add(event);
   }
@@ -117,32 +130,36 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
-    expect(find.text(AppStrings.trustedDevicesTitle), findsNWidgets(2));
+
     expect(find.text('Windows Laptop'), findsOneWidget);
-    expect(find.text('Pair'), findsOneWidget);
+    expect(find.text('Manage'), findsOneWidget);
   });
 
-  testWidgets('TrustedDevicesScreen confirms revoke action',
+  testWidgets('TrustedDevicesScreen supports manual Pair by IP flow',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: const TrustedDevicesScreen(),
-        ),
+    await tester.pumpWidget(MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const TrustedDevicesScreen(),
       ),
-    );
+    ));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Revoke trust'));
+    await tester.tap(find.text('Pair by IP'));
     await tester.pumpAndSettle();
-    expect(find.text('Revoke trust?'), findsOneWidget);
 
-    await tester.tap(find.text('Revoke'));
+    await tester.enterText(find.byType(TextField).at(0), '10.53.38.174');
+    await tester.enterText(find.byType(TextField).at(1), '9140');
+    await tester.tap(find.text('Pair'));
+    await tester.pump();
     await tester.pumpAndSettle();
-    expect(client.revokeCalled, isTrue);
+
+    expect(client.manualPairAddress, '10.53.38.174');
+    expect(client.manualPairPort, 9140);
+    expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
   });
+
 
   testWidgets('TrustedDevicesScreen can reset a revoked peer',
       (WidgetTester tester) async {
@@ -168,11 +185,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Reset revoked peer'));
+    await tester.tap(find.text('Reset').first);
     await tester.pumpAndSettle();
     expect(find.text('Reset revoked peer?'), findsOneWidget);
 
-    await tester.tap(find.text('Reset'));
+    await tester.tap(find.text('Reset').last);
     await tester.pumpAndSettle();
     expect(client.resetRevokedCalled, isTrue);
   });
@@ -201,7 +218,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Cancel pairing'));
+    await tester.tap(find.text('Cancel').first);
     await tester.pumpAndSettle();
     expect(find.text('Cancel pairing?'), findsOneWidget);
 
@@ -251,7 +268,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Linux Box'), findsOneWidget);
-    expect(find.text('Pair'), findsNothing);
+    expect(find.text('Verify'), findsNothing);
     expect(find.text('Pending Box'), findsNothing);
   });
 
@@ -281,7 +298,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Phone'), findsOneWidget);
-    expect(find.text('Pair'), findsOneWidget);
+    expect(find.text('Verify'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -304,9 +321,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Phone'), findsOneWidget);
-    expect(find.text('Trusted'), findsOneWidget);
-    expect(find.text('Online'), findsOneWidget);
-    expect(find.text('Pair'), findsNothing);
+    expect(find.text('TRUSTED'), findsOneWidget);
+    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Verify'), findsNothing);
   });
 
   testWidgets(
@@ -334,9 +351,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Reset revoked peer'));
+    await tester.tap(find.text('Reset').first);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Reset'));
+    await tester.tap(find.text('Reset').last);
     await tester.pumpAndSettle();
 
     expect(client.resetRevokedCalled, isTrue);
@@ -362,8 +379,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Tablet'), findsOneWidget);
-    expect(find.text('Discovered'), findsOneWidget);
-    expect(find.text('Pair'), findsOneWidget);
+    expect(find.text('DISCOVERED'), findsOneWidget);
+    expect(find.text('Verify'), findsOneWidget);
   });
 
   testWidgets(
@@ -397,17 +414,7 @@ void main() {
 
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
-    expect(find.text('Online'), findsOneWidget);
-
-    // Verify Capability Badges
-    expect(find.text('Presence'), findsOneWidget);
-    expect(find.text('Clipboard'), findsOneWidget);
-    expect(find.text('Security'), findsOneWidget);
-
-    // Verify Icons
-    expect(find.byIcon(Icons.sensors), findsOneWidget);
-    expect(find.byIcon(Icons.content_copy), findsOneWidget);
-    expect(find.byIcon(Icons.security), findsOneWidget);
+    expect(find.text('ONLINE'), findsOneWidget);
   });
 
   testWidgets(
@@ -435,7 +442,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('ONLINE'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -452,7 +459,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(client.listTrustedPeersCallCount, greaterThan(callsBeforeRefresh));
-    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('OFFLINE'), findsOneWidget);
   });
 
   testWidgets(

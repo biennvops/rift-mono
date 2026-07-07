@@ -84,7 +84,7 @@ void main() {
     expect(find.text(AppStrings.eventLogTitle), findsOneWidget);
     expect(find.text('pairing.completed'), findsOneWidget);
     expect(find.text('auth.failed'), findsOneWidget);
-    expect(find.text('Reason: AuthenticationFailed'), findsOneWidget);
+    expect(find.text('AuthenticationFailed'), findsOneWidget);
   });
 
   testWidgets('EventLogScreen filters by severity', (WidgetTester tester) async {
@@ -133,6 +133,6 @@ void main() {
     await tester.pump();
 
     expect(find.text('trust.revoked'), findsOneWidget);
-    expect(find.text('Reason: User revoked trust'), findsOneWidget);
+    expect(find.text('User revoked trust'), findsOneWidget);
   });
 }

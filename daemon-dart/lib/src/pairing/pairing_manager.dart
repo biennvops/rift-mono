@@ -27,12 +27,14 @@ class PairingManager {
 
   /// Callback to send IPC events back to Flutter UI (via SendPort/Stream)
   final void Function(Map<String, dynamic>) onIpcEvent;
+  final Future<void> Function(String peerDeviceId)? onPeerTrusted;
 
   PairingManager({
     required this.trustStore,
     required this.sessionManager,
     required this.identityManager,
     required this.onIpcEvent,
+    this.onPeerTrusted,
   }) {
     _messageSubscription = sessionManager.onMessage.listen(_handleNetworkMessage);
     _disconnectSubscription = sessionManager.onPeerDisconnected.listen(_handlePeerDisconnected);
@@ -109,6 +111,10 @@ class PairingManager {
     _outboundPairings.add(peerDeviceId);
 
     try {
+      RiftLog.info(
+        '[Pairing] About to send pairing.start to $peerDeviceId '
+        'state=${record.state.toJson()} outbound=${_outboundPairings.contains(peerDeviceId)}',
+      );
       // Send pairing.start packet via SessionManager
       await sessionManager.sendMessage(peerDeviceId, {
         'rift': '0.1-draft',
@@ -121,13 +127,27 @@ class PairingManager {
           'displayName': 'Rift Device', // TODO: Retrieve from system settings later
         }
       });
+      RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
       _cancelTimeoutTimer(peerDeviceId);
       await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
+      RiftLog.warn('[Pairing] pairing.start failed with StateError for $peerDeviceId');
       rethrow;
     } on SocketException {
       _cancelTimeoutTimer(peerDeviceId);
       await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
+      RiftLog.warn('[Pairing] pairing.start failed with SocketException for $peerDeviceId');
+      rethrow;
+    } on SessionException {
+      _cancelTimeoutTimer(peerDeviceId);
+      await trustStore.transitionState(
+        peerDeviceId,
+        TrustState.pairingPending,
+        record.state,
+      );
+      RiftLog.warn(
+        '[Pairing] pairing.start failed with SessionException for $peerDeviceId',
+      );
       rethrow;
     }
   }
@@ -191,6 +211,8 @@ class PairingManager {
       TrustState.trusted,
       pairedAt: now,
     );
+    sessionManager.updateTrustState(peerDeviceId, TrustState.trusted);
+    await onPeerTrusted?.call(peerDeviceId);
 
     // Emit event to Flutter UI
     onIpcEvent({
@@ -343,12 +365,21 @@ class PairingManager {
           return;
         }
 
-        if (record.state != TrustState.discovered) {
+        if (record.state != TrustState.discovered &&
+            record.state != TrustState.pairingPending) {
           return;
         }
 
-        // According to State Machine, must transition from discovered to pairingPending
-        await trustStore.transitionState(peerDeviceId, TrustState.discovered, TrustState.pairingPending);
+        // Pairing requests may arrive while we are already in pairingPending
+        // due to simultaneous/manual pairing attempts. In that case we still
+        // need to surface the incoming request to UI so the user can approve.
+        if (record.state == TrustState.discovered) {
+          await trustStore.transitionState(
+            peerDeviceId,
+            TrustState.discovered,
+            TrustState.pairingPending,
+          );
+        }
         
         _startTimeoutTimer(peerDeviceId);
         
@@ -452,6 +483,8 @@ class PairingManager {
             TrustState.trusted,
             pairedAt: now,
           );
+          sessionManager.updateTrustState(peerDeviceId, TrustState.trusted);
+          await onPeerTrusted?.call(peerDeviceId);
           onIpcEvent({
             'jsonrpc': '2.0',
             'method': 'rift.onPairingComplete',

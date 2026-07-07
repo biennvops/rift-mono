@@ -8,7 +8,9 @@ public sealed class DiscoveredPeerEndpoint
 
 public sealed class DiscoveredPeerInfo
 {
-    public string DeviceId { get; init; } = string.Empty;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? DeviceId { get; init; }
+    public string InstanceId { get; init; } = string.Empty;
     public string Address { get; init; } = string.Empty;
     public int Port { get; init; }
     public string TrustState { get; init; } = string.Empty;

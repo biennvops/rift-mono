@@ -58,7 +58,7 @@ public interface IClipboardService
     /// <summary>
     /// Broadcasts a newly copied clipboard item offer metadata to trusted peers.
     /// </summary>
-    Task BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence);
+    Task<string[]> BroadcastOfferAsync(string offerId, string contentType, long size, string hash, long expiresInMs, string requiredCapability, long offerSequence);
 
     /// <summary>
     /// Handles a received clipboard offer from a trusted peer.

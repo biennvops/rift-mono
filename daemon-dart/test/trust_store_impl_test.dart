@@ -47,6 +47,49 @@ void main() {
       store.dispose();
     });
 
+    test('Should persist and reload trustedEndpoints for trusted peers', () async {
+      final store = TrustStoreImpl(dbPath);
+      await store.initialize();
+
+      final now = DateTime.utc(2026, 7, 5, 9, 30, 0);
+      await store.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer-endpoints',
+          certDer: Uint8List.fromList(List<int>.filled(32, 5)),
+          state: TrustState.trusted,
+          updatedAt: now,
+          trustedEndpoints: [
+            TrustedPeerEndpoint(
+              address: '10.53.38.174',
+              port: 9140,
+              source: 'manual',
+              addressFamily: 'IPv4',
+              lastSuccessAt: now,
+            ),
+            TrustedPeerEndpoint(
+              address: '10.53.38.175',
+              port: 9140,
+              source: 'fallback',
+              addressFamily: 'IPv4',
+              lastSuccessAt: now.add(const Duration(seconds: 5)),
+            ),
+          ],
+        ),
+      );
+
+      final reloaded = await store.getPeer('rift-peer-endpoints');
+      expect(reloaded, isNotNull);
+      expect(reloaded!.trustedEndpoints, hasLength(2));
+      expect(reloaded.trustedEndpoints.first.address, '10.53.38.174');
+      expect(reloaded.trustedEndpoints.first.port, 9140);
+      expect(reloaded.trustedEndpoints.first.source, 'manual');
+      expect(
+        reloaded.trustedEndpoints.last.lastSuccessAt.toUtc().toIso8601String(),
+        now.add(const Duration(seconds: 5)).toIso8601String(),
+      );
+      store.dispose();
+    });
+
     test('Should update lastSeenAt without changing trust state', () async {
       final store = TrustStoreImpl(dbPath);
       await store.initialize();
@@ -214,6 +257,70 @@ void main() {
       );
       expect(events, hasLength(1));
       expect(events.single.eventId, 'evt-migrate');
+      migratedStore.dispose();
+    });
+
+    test('Should migrate v3 databases to include trusted_endpoints_json column', () async {
+      final db = sqlite3.open(dbPath);
+      db.execute('''
+        CREATE TABLE config (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      ''');
+      db.execute('''
+        CREATE TABLE peers (
+          device_id    TEXT PRIMARY KEY,
+          display_name TEXT,
+          cert_der     BLOB NOT NULL,
+          state        TEXT NOT NULL,
+          paired_at    INTEGER,
+          updated_at   INTEGER NOT NULL,
+          last_seen_at INTEGER
+        );
+      ''');
+      db.execute('''
+        CREATE TABLE security_events (
+          event_id       TEXT PRIMARY KEY,
+          event_type     TEXT NOT NULL,
+          severity       TEXT NOT NULL,
+          local_device_id TEXT NOT NULL,
+          peer_device_id TEXT,
+          timestamp      TEXT NOT NULL,
+          outcome        TEXT NOT NULL,
+          failure_reason TEXT,
+          details_json   TEXT
+        );
+      ''');
+      db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '3')");
+      db.dispose();
+
+      final migratedStore = TrustStoreImpl(dbPath);
+      await migratedStore.initialize();
+      final now = DateTime.utc(2026, 7, 5, 10, 0, 0);
+      await migratedStore.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer-migrated-endpoints',
+          certDer: Uint8List.fromList(List<int>.filled(32, 8)),
+          state: TrustState.trusted,
+          updatedAt: now,
+          trustedEndpoints: [
+            TrustedPeerEndpoint(
+              address: '10.53.38.200',
+              port: 11112,
+              source: 'pairing-session',
+              addressFamily: 'IPv4',
+              lastSuccessAt: now,
+            ),
+          ],
+        ),
+      );
+
+      final reloaded = await migratedStore.getPeer('rift-peer-migrated-endpoints');
+      expect(reloaded, isNotNull);
+      expect(reloaded!.trustedEndpoints, hasLength(1));
+      expect(reloaded.trustedEndpoints.single.address, '10.53.38.200');
+      expect(reloaded.trustedEndpoints.single.port, 11112);
       migratedStore.dispose();
     });
 

@@ -16,6 +16,7 @@ public interface IRiftApi
     Task<ListClipboardOffersResult> ListClipboardOffersAsync();
     Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId);
     Task<StartPairingResult> StartPairingAsync(string deviceId);
+    Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port);
     Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);
     Task<RejectPairingResult> RejectPairingAsync(string deviceId);
     Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason);

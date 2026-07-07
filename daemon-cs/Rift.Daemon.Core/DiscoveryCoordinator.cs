@@ -19,6 +19,7 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
     private readonly IDiscoveryService _discoveryService;
     private readonly ITrustStore _trustStore;
+    private readonly IIdentityManager _identityManager;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _peerTtl;
     private readonly ConcurrentDictionary<string, CachedDiscoveredPeer> _discoveredPeers = new(StringComparer.Ordinal);
@@ -27,11 +28,13 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
     public DiscoveryCoordinator(
         IDiscoveryService discoveryService,
         ITrustStore trustStore,
+        IIdentityManager identityManager,
         TimeProvider? timeProvider = null,
         TimeSpan? peerTtl = null)
     {
         _discoveryService = discoveryService;
         _trustStore = trustStore;
+        _identityManager = identityManager;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _peerTtl = peerTtl ?? DefaultDiscoveryPeerTtl;
         _discoveryService.PeerDiscovered += OnPeerDiscovered;
@@ -82,25 +85,27 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(e.DeviceIdHint))
+        var peerKey = !string.IsNullOrWhiteSpace(e.DeviceIdHint) ? e.DeviceIdHint : e.InstanceName;
+
+        if (string.IsNullOrWhiteSpace(peerKey) || string.Equals(peerKey, _identityManager.GetDeviceId(), StringComparison.Ordinal))
         {
             return;
         }
 
-        var trustState = _trustStore.GetPeer(e.DeviceIdHint)?.State.ToString().ToLowerInvariant() ?? "discovered";
+        var trustState = _trustStore.GetPeer(peerKey)?.State.ToString().ToLowerInvariant() ?? "discovered";
         var candidateAddress = SelectPreferredAddress(e.Host, e.RemoteEndPoint?.Address);
         var observedAt = _timeProvider.GetUtcNow();
         var candidateEndpoint = new ObservedEndpoint(candidateAddress, e.Port, observedAt);
 
         _discoveredPeers.AddOrUpdate(
-            e.DeviceIdHint,
+            peerKey,
             _ => new CachedDiscoveredPeer(
-                e.DeviceIdHint,
+                peerKey,
                 trustState,
                 new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal),
                 [candidateEndpoint]),
             (_, existing) => new CachedDiscoveredPeer(
-                e.DeviceIdHint,
+                peerKey,
                 trustState,
                 new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal),
                 MergeEndpoints(existing.Endpoints, candidateEndpoint, observedAt, _peerTtl)));
@@ -186,7 +191,8 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
         var primary = orderedEndpoints[0];
         return new DiscoveredPeerInfo
         {
-            DeviceId = peer.DeviceId,
+            DeviceId = peer.TxtRecord.TryGetValue("did", out var did) && !string.IsNullOrWhiteSpace(did) ? did : null,
+            InstanceId = peer.DeviceId, // peer.DeviceId is actually the fallback instance handle
             Address = primary.Address,
             Port = primary.Port,
             TrustState = peer.TrustState,

@@ -29,6 +29,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         var coordinator = new DiscoveryCoordinator(
             _discoveryService,
             _trustStore,
+            new FakeIdentityManager(),
             timeProvider: _timeProvider,
             peerTtl: TimeSpan.FromSeconds(30));
 
@@ -60,6 +61,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         var coordinator = new DiscoveryCoordinator(
             _discoveryService,
             _trustStore,
+            new FakeIdentityManager(),
             timeProvider: _timeProvider,
             peerTtl: TimeSpan.FromSeconds(10));
 
@@ -84,7 +86,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
     [Fact]
     public void StopDiscovery_ClearsDiscoveredCache()
     {
-        var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, timeProvider: _timeProvider);
+        var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, new FakeIdentityManager(), timeProvider: _timeProvider);
 
         coordinator.StartDiscovery();
         _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
@@ -105,7 +107,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
     [Fact]
     public void ListDiscoveredPeers_PreservesMultipleObservedEndpointsForOnePeer()
     {
-        var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, timeProvider: _timeProvider);
+        var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, new FakeIdentityManager(), timeProvider: _timeProvider);
 
         coordinator.StartDiscovery();
         _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
@@ -166,5 +168,16 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         public override DateTimeOffset GetUtcNow() => _utcNow;
 
         public void Advance(TimeSpan delta) => _utcNow = _utcNow.Add(delta);
+    }
+
+    private sealed class FakeIdentityManager : IIdentityManager
+    {
+        public void EnsureIdentityInitialized() { }
+        public string GetDeviceId() => "rift-local-device";
+        public byte[] GetEd25519PublicKey() => throw new NotImplementedException();
+        public System.Security.Cryptography.X509Certificates.X509Certificate2 GetTlsCertificate() => throw new NotImplementedException();
+        public byte[] SignEd25519(byte[] data) => throw new NotImplementedException();
+        public string GetFingerprint() => "local-fingerprint";
+        public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature) => throw new NotImplementedException();
     }
 }

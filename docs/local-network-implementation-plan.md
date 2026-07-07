@@ -215,20 +215,118 @@ Tasks:
    - local peer unreachable
    - mDNS discovery unavailable
    - secure session bootstrap rejected
+5. Provide a manual endpoint fallback for cases where hotspot / AP mode blocks
+   both mDNS and UDP broadcast discovery, but a direct peer IP:port is known.
 
 Deliverable:
 
 - UI that matches the local-first contract
 
-## Phase 7: Automated Test Coverage
+## Phase 7: Trusted Endpoint Persistence and Reconnect
+
+Files:
+
+- `spec/doc/ipc.md`
+- `docs/capstone-register.md`
+- `daemon-cs/Rift.Daemon.Core/ClipboardService.cs`
+- `daemon-cs/Rift.Daemon.Core/PairingProtocolCoordinator.cs`
+- `daemon-cs/Rift.Daemon.Core/PresenceService.cs`
+- `daemon-dart/lib/src/daemon.dart`
+- `daemon-dart/lib/src/network/session_manager.dart`
+- `daemon-dart/lib/src/clipboard/clipboard_handler.dart`
+
+Tasks:
+
+1. Persist one or more last-known-good direct endpoints for each `trusted`
+   peer after successful authenticated transport establishment.
+2. Record enough metadata to rank reconnect attempts deterministically:
+   endpoint address, port, address family, source (`mdns`, `fallback`,
+   `manual`), and last-success timestamp.
+3. Define a trusted-peer reconnect path that can use persisted endpoints when
+   discovery is missing, stale, or filtered on hotspot / LAN-only networks.
+4. Keep this reconnect behavior scoped to already-authenticated / already-trusted
+   peers; pairing by endpoint remains a separate explicit user action.
+5. Ensure endpoint persistence updates only after identity verification and
+   capability negotiation succeed, so unauthenticated discovery hints are not
+   promoted into trusted reconnect state.
+
+Deliverable:
+
+- trusted peers can be reached again after discovery degradation by reusing a
+  persisted local endpoint
+
+## Phase 8: Fast-Fail and Single-Flight Reconnect
+
+Files:
+
+- `daemon-cs/Rift.Daemon.Core/Interfaces/ITransport.cs`
+- `daemon-cs/Rift.Daemon.Core/ClipboardService.cs`
+- `daemon-cs/Rift.Daemon.Core/PresenceService.cs`
+- `daemon-dart/lib/src/network/transport_impl.dart`
+- `daemon-dart/lib/src/network/session_manager.dart`
+- `daemon-dart/lib/src/daemon.dart`
+
+Tasks:
+
+1. Apply a short per-endpoint reconnect timeout for trusted direct-connect
+   attempts so stale hotspot / DHCP addresses fail quickly instead of stalling
+   clipboard UX behind long OS TCP timeouts.
+2. Try trusted endpoints in a deterministic order rather than racing all of
+   them at once.
+3. Enforce a single in-flight reconnect operation per peer device ID so
+   multiple clipboard events cannot stampede the same peer with duplicate
+   outbound connections.
+4. Ensure callers that need the same peer connection await the existing
+   reconnect attempt instead of creating a second one.
+5. Surface reconnect-failure reasons in logs and IPC in terms of local
+   reachability, stale endpoint, timeout, or bootstrap rejection.
+
+Deliverable:
+
+- bounded, deterministic reconnect behavior for trusted peers on unstable local
+  networks
+
+## Phase 9: Clipboard Delivery on Local-Only Networks
+
+Files:
+
+- `spec/doc/protocol.md`
+- `spec/doc/ipc.md`
+- `daemon-cs/Rift.Daemon.Core/ClipboardService.cs`
+- `daemon-dart/lib/src/clipboard/clipboard_engine.dart`
+- `daemon-dart/lib/src/clipboard/clipboard_handler.dart`
+- `app-flutter/lib/src/clipboard/desktop_clipboard_manager.dart`
+
+Tasks:
+
+1. Route `clipboard.offer` and `clipboard.fetchRequest` through the trusted-peer
+   reconnect path instead of assuming the peer is already online in discovery.
+2. Preserve pending clipboard metadata locally for a short bounded period when a
+   trusted peer is temporarily unreachable on the local network.
+3. Retry delivery when a trusted session becomes available again, without
+   replaying already-acknowledged or expired offers.
+4. Keep expiry semantics deterministic and local-clock tolerant; reconnect
+   should not extend the protocol TTL indefinitely.
+5. Document that this is a local store-and-forward layer for trusted peers on
+   the same reachable network segment, not a relay or cloud queue.
+
+Deliverable:
+
+- clipboard offer/fetch remains usable for trusted peers across hotspot and
+  local-network discovery gaps
+
+## Phase 10: Automated Test Coverage
 
 Files:
 
 - `daemon-cs/Rift.Daemon.Tests/Core/PairingProtocolCoordinatorTests.cs`
+- `daemon-cs/Rift.Daemon.Tests/Core/ClipboardServiceTests.cs`
 - `daemon-dart/test/session_manager_test.dart`
 - `daemon-dart/test/session_manager_integration_test.dart`
+- `daemon-dart/test/clipboard_handler_test.dart`
 - `app-flutter/test/trusted_devices_screen_test.dart`
 - `tests-interop/test/presence_sync_test.dart`
+- `tests-interop/test/clipboard_transfer_test.dart`
 - `.github/workflows/flutter-ci.yml`
 
 Tasks:
@@ -238,15 +336,21 @@ Tasks:
 2. Add tests for duplicate outbound/inbound connection races.
 3. Add tests for disconnect during pairing.
 4. Add tests for offline/online transitions after local network flap.
-5. Keep simulated harness tests clearly labeled as simulation, not real LAN
+5. Add tests for trusted-peer reconnect using persisted endpoints when
+   discovery is unavailable or stale.
+6. Add tests that multiple clipboard events share one reconnect attempt per
+   peer rather than creating a connection stampede.
+7. Add tests for pending clipboard delivery, expiry, and non-replay behavior
+   after reconnect.
+8. Keep simulated harness tests clearly labeled as simulation, not real LAN
    validation.
-6. Keep CI running app and harness tests.
+9. Keep CI running app and harness tests.
 
 Deliverable:
 
 - regression coverage for the local-only contract
 
-## Phase 8: Manual Validation Matrix
+## Phase 11: Manual Validation Matrix
 
 File:
 
@@ -268,15 +372,44 @@ Required manual scenarios:
    - verify discovery/connect failure is expected and clearly surfaced
 4. Multicast blocked, direct IP still reachable:
    - discovery fails or is partial
-   - existing trusted peers remain offline/unreachable until a direct connect
-     path exists
+   - manual pairing by endpoint works
+   - existing trusted peers reconnect through a persisted direct endpoint path
+   - clipboard offer/fetch still works for trusted peers after reconnect
 5. Local network flap:
    - peers go offline
    - peers rediscover/reconnect after recovery
+6. Hotspot / DHCP address churn:
+   - old persisted endpoint fails fast
+   - new endpoint is learned and replaces the stale winner
+   - clipboard resumes without re-pairing
 
 Deliverable:
 
 - recorded evidence that Rift works on a local network without internet
+
+## Phase 12: Reduce Discovery Privacy Tradeoff (`did`)
+
+Files:
+
+- `spec/doc/protocol.md`
+- `app-flutter/lib/src/ipc/android_root_discovery_bridge.dart`
+- `daemon-cs/Rift.Daemon.Core/Networking/DiscoveryService.cs`
+- `daemon-dart/lib/src/network/discovery_service_impl.dart`
+- `daemon-dart/lib/src/daemon.dart`
+
+Tasks:
+
+1. Acknowledge current tradeoff: Both C# and Dart daemons currently include `did` (device ID) in the mDNS TXT record by default. This violates the strict privacy intent of the protocol (`SHOULD NOT include this field by default`) but is temporarily necessary to maintain usability and interoperability.
+2. Without `did` in the broadcast, the UI would only see random instance UUIDs until a session is bootstrapped. While Android proactively prefetches sessions (and could resolve the real device ID), the C# Linux daemon does not currently support session prefetching.
+3. Future Implementation: 
+   - Remove `did` from default discovery broadcasts.
+   - Update the UI to temporarily display the `instanceId` and a fallback `fingerprint prefix` (if provided) for unauthenticated peers.
+   - Map the temporary identity to the real `deviceId` only *after* the initial session bootstrap (TLS handshake) is successfully completed.
+   - Do not implement this change until the Linux/C# daemon supports lightweight session prefetching or identity resolution, to avoid degrading the pairing UX.
+
+Deliverable:
+
+- `did` removed from mDNS TXT records by default, achieving the final privacy target without breaking cross-platform peer recognition.
 
 ## Recommended Implementation Order
 
@@ -285,9 +418,12 @@ Deliverable:
 3. Transport hardening
 4. Pairing bidirectional stability
 5. Presence/offline recovery
-6. UI/IPC wording
-7. Automated tests
-8. Manual matrix sign-off
+6. Trusted endpoint persistence
+7. Fast-fail single-flight reconnect
+8. Clipboard delivery over trusted reconnect
+9. UI/IPC wording
+10. Automated tests
+11. Manual matrix sign-off
 
 ## Definition of Done
 
@@ -298,7 +434,11 @@ The work is complete when:
 3. Pairing works in both directions.
 4. Trusted peers transition offline/online correctly on local reachability
    changes.
-5. UI states and errors reflect local-first behavior accurately.
-6. CI stays green.
-7. `tests-interop/README.md` contains recorded manual evidence for the
+5. Trusted peers can reconnect using persisted local endpoints when discovery
+   is degraded or filtered.
+6. Clipboard offer/fetch remains usable for trusted peers on hotspot /
+   multicast-limited local networks without requiring re-pairing.
+7. UI states and errors reflect local-first behavior accurately.
+8. CI stays green.
+9. `tests-interop/README.md` contains recorded manual evidence for the
    LAN-without-internet cases.

@@ -14,6 +14,9 @@ class FakeSessionManager implements SessionManager {
   @override
   Stream<ProtocolMessage> get onMessage => _onMessageController.stream;
 
+  @override
+  Stream<SessionContext> get onTrustedSessionReady => const Stream.empty();
+
   final List<Map<String, dynamic>> sentMessages = [];
 
   @override

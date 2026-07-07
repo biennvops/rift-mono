@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:app_flutter/src/clipboard/windows_clipboard_manager.dart';
+import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,7 +41,7 @@ class ClipboardTransport implements IpcTransport {
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
 
-    _appToDaemon!.stream.listen((req) {
+    _appToDaemon!.stream.listen((req) async {
       final decoded = jsonDecode(req) as Map<String, dynamic>;
       requests.add(decoded);
       final id = decoded['id'];
@@ -52,7 +52,12 @@ class ClipboardTransport implements IpcTransport {
         case 'rift.fetchClipboardContent':
           final offerId =
               (decoded['params'] as Map<String, dynamic>)['offerId'] as String;
-          _sendResult(id, fetchResultsByOfferId[offerId] ?? const {});
+          final result = fetchResultsByOfferId[offerId] ?? const {};
+          if (result is Future) {
+            _sendResult(id, await result);
+          } else {
+            _sendResult(id, result);
+          }
           break;
         case 'rift.notifyClipboardChange':
           _sendResult(id, const {
@@ -89,7 +94,7 @@ Future<void> waitForCondition(
 }
 
 void main() {
-  group('WindowsClipboardManager', () {
+  group('DesktopClipboardManager', () {
     late ClipboardTransport transport;
     late JsonRpcRiftClient client;
     late StreamController<Object?> clipboardChanges;
@@ -134,7 +139,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -176,7 +181,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -256,7 +261,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -290,8 +295,9 @@ void main() {
 
     test('ignores unsupported content types instead of auto-fetching', () async {
       await client.connect();
+      final statuses = <String>[];
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -299,6 +305,7 @@ void main() {
           clipboardWrites.add(text);
         },
       );
+      final statusSub = manager.onStatusUpdate.listen(statuses.add);
       await manager.start();
 
       transport.emitNotification('rift.onClipboardOffer', {
@@ -319,6 +326,102 @@ void main() {
         isTrue,
       );
       expect(clipboardWrites, isEmpty);
+      expect(statuses, isEmpty);
+
+      await statusSub.cancel();
+      await manager.dispose();
+    });
+
+    test('does not emit status after dispose while fetch is still in flight',
+        () async {
+      await client.connect();
+      final fetchGate = Completer<void>();
+      final statuses = <String>[];
+
+      transport.fetchResultsByOfferId['offer-slow'] = Future<dynamic>(() async {
+        await fetchGate.future;
+        return {
+          'OfferId': 'offer-slow',
+          'ContentBase64': 'aGVsbG8=',
+          'ByteSize': 5,
+          'Sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'Verified': true,
+        };
+      });
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+      final statusSub = manager.onStatusUpdate.listen(statuses.add);
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-slow',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(statuses, contains('Fetching clipboard from peer...'));
+
+      await manager.dispose();
+      fetchGate.complete();
+      await Future<void>.delayed(Duration.zero);
+
+      expect(clipboardWrites, isEmpty);
+      expect(
+        statuses.where((status) => status == 'Clipboard received from peer'),
+        isEmpty,
+      );
+
+      await statusSub.cancel();
+    });
+
+    test('keeps clipboard monitoring active while window is hidden', () async {
+      await client.connect();
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+      await manager.start();
+      await manager.setWindowVisible(false);
+
+      clipboardText = 'hello';
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .length,
+        1,
+      );
+
+      await manager.setWindowVisible(true);
+      clipboardText = 'world';
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .length,
+        2,
+      );
 
       await manager.dispose();
     });
@@ -326,7 +429,7 @@ void main() {
     test('removes stale offers when expiry notification arrives', () async {
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -376,7 +479,7 @@ void main() {
       };
       await client.connect();
 
-      final manager = WindowsClipboardManager(
+      final manager = DesktopClipboardManager(
         client,
         clipboardChanges: clipboardChanges.stream,
         readClipboardText: () async => clipboardText,
@@ -412,9 +515,11 @@ void main() {
         ]
       };
       transport.triggerDisconnect();
-      await waitForCondition(() => transport.connectionAttempts >= 2);
+      await waitForCondition(() => transport.connectionAttempts >= 2,
+          timeout: const Duration(seconds: 3));
       await waitForCondition(
         () => manager.activeOffers.keys.contains('offer-new'),
+        timeout: const Duration(seconds: 3),
       );
 
       expect(manager.activeOffers.keys, isNot(contains('offer-old')));
@@ -427,6 +532,39 @@ void main() {
       );
 
       await manager.dispose();
+    });
+    test('polling fallback correctly tracks clipboard changes and ignores initial state', () async {
+      String? mockClipboardState = 'initial_content';
+      Future<String?> mockReader() async => mockClipboardState;
+
+      final pollingStream = DesktopClipboardManager.pollClipboardForTesting(mockReader);
+      final emittedEvents = <Object?>[];
+      final sub = pollingStream.listen(emittedEvents.add);
+
+      // Give it time to do the initial read
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(emittedEvents, isEmpty, reason: 'Should not emit on initial load');
+
+      // First tick with no change
+      await Future<void>.delayed(const Duration(seconds: 1));
+      expect(emittedEvents, isEmpty, reason: 'Should not emit when content is unchanged');
+
+      // Change content
+      mockClipboardState = 'new_content';
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 1, reason: 'Should emit once when content changes');
+
+      // Change to null
+      mockClipboardState = null;
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 1, reason: 'Should not emit when content becomes null');
+
+      // Change again
+      mockClipboardState = 'another_content';
+      await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
+      expect(emittedEvents.length, 2, reason: 'Should emit when content changes again');
+
+      await sub.cancel();
     });
   });
 }

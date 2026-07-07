@@ -57,7 +57,8 @@ public sealed class DatabaseContext
                 State TEXT NOT NULL,
                 CertificateFingerprint TEXT NULL,
                 LastTransition TEXT NOT NULL,
-                RevocationEvidence TEXT NULL
+                RevocationEvidence TEXT NULL,
+                TrustedEndpointsJson TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS SecurityEvents (
@@ -88,6 +89,7 @@ public sealed class DatabaseContext
         command.ExecuteNonQuery();
 
         EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
+        EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
     }
 
     public SqliteConnection CreateOpenConnection()

@@ -75,10 +75,41 @@ public sealed class PairingService : IPairingService
 
         return new StartPairingResult
         {
+            DeviceId = deviceId,
             Fingerprint = _identityManager.GetFingerprint(),
             PeerFingerprint = IdentityManager.DeriveFingerprint(peer.Ed25519PublicKey!),
             ExpiresInMs = PairingExpiryMs
         };
+    }
+
+    public async Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            throw CreateRpcException(-32602, "Peer address is required.");
+        }
+
+        if (port is <= 0 or > 65535)
+        {
+            throw CreateRpcException(-32602, "Peer port must be between 1 and 65535.");
+        }
+
+        if (_pairingProtocolCoordinator is null)
+        {
+            throw CreateRpcException(-32603, "Manual endpoint pairing is not available on this daemon host.");
+        }
+
+        string resolvedDeviceId;
+        try
+        {
+            resolvedDeviceId = await _pairingProtocolCoordinator.ConnectToEndpointForPairingAsync(address, port);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw CreateRpcException(-32000, ex.Message);
+        }
+
+        return await StartPairingAsync(resolvedDeviceId);
     }
 
     public async Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint)

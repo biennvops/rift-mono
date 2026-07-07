@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:nsd/nsd.dart' as nsd;
+import '../core/rift_log.dart';
 import '../interfaces/discovery_service.dart';
 import 'discovery_peer_tracker.dart';
 
@@ -18,6 +20,12 @@ class DiscoveryServiceImpl implements DiscoveryService {
   final _peerStreamController = StreamController<DiscoveredPeer>.broadcast();
   final _peerLostController = StreamController<DiscoveredPeer>.broadcast();
   final DiscoveryPeerTracker _tracker = DiscoveryPeerTracker();
+
+  RawDatagramSocket? _fallbackAdvertiserSocket;
+  Timer? _fallbackAdvertiserTimer;
+  RawDatagramSocket? _fallbackListener;
+  Timer? _fallbackCleanupTimer;
+  final _fallbackPeers = <String, ({DiscoveredPeer peer, DateTime lastSeen})>{};
 
   DiscoveryServiceImpl({
     required this.port,
@@ -47,6 +55,69 @@ class DiscoveryServiceImpl implements DiscoveryService {
       ),
     );
     _registration = registration;
+
+    if (_fallbackAdvertiserSocket == null) {
+      await _startFallbackAdvertiser();
+    }
+  }
+
+  Future<void> _startFallbackAdvertiser() async {
+    try {
+      _fallbackAdvertiserSocket = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        0,
+      );
+      _fallbackAdvertiserSocket!.broadcastEnabled = true;
+
+      final payload = jsonEncode({
+        'rift': '0.1-draft',
+        'kind': 'fallback-discovery',
+        'instanceId': _instanceId,
+        'port': port,
+        'minV': minVersion,
+        'maxV': maxVersion,
+        'did': deviceIdHint,
+        if (fingerprintPrefix != null) 'fp': fingerprintPrefix,
+      });
+      final bytes = utf8.encode(payload);
+
+      _fallbackAdvertiserTimer = Timer.periodic(const Duration(seconds: 2), (
+        _,
+      ) async {
+        try {
+          // 1. Send to global broadcast (might route to mobile data on hotspot)
+          _fallbackAdvertiserSocket?.send(
+            bytes,
+            InternetAddress('255.255.255.255'),
+            9141,
+          );
+
+          // 2. Iterate network interfaces and send to /24 subnet broadcasts
+          // This ensures the packet goes out the WiFi hotspot interface.
+          final interfaces = await NetworkInterface.list(
+            type: InternetAddressType.IPv4,
+          );
+          for (final interface in interfaces) {
+            for (final addr in interface.addresses) {
+              final parts = addr.address.split('.');
+              if (parts.length == 4) {
+                parts[3] = '255';
+                final bcast = parts.join('.');
+                _fallbackAdvertiserSocket?.send(
+                  bytes,
+                  InternetAddress(bcast),
+                  9141,
+                );
+              }
+            }
+          }
+        } catch (e) {
+          RiftLog.debug('[Discovery] UDP Fallback broadcast failed: $e');
+        }
+      });
+    } catch (e) {
+      RiftLog.warn('[Discovery] Failed to bind UDP Fallback Advertiser: $e');
+    }
   }
 
   @override
@@ -55,6 +126,10 @@ class DiscoveryServiceImpl implements DiscoveryService {
       await nsd.unregister(_registration!);
       _registration = null;
     }
+    _fallbackAdvertiserTimer?.cancel();
+    _fallbackAdvertiserTimer = null;
+    _fallbackAdvertiserSocket?.close();
+    _fallbackAdvertiserSocket = null;
   }
 
   @override
@@ -65,17 +140,89 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
   @override
   Future<void> startDiscovery() async {
-    if (_discovery != null) return;
+    if (_discovery == null) {
+      _discovery = await nsd.startDiscovery('_rift._tcp');
+      _discovery!.addListener(() {
+        final snapshot = <DiscoveredPeer>[];
+        for (final service in _discovery!.services) {
+          snapshot.addAll(_peersFromNsdService(service));
+        }
+        _ingestSnapshot(snapshot);
+      });
+    }
 
-    _discovery = await nsd.startDiscovery('_rift._tcp');
+    if (_fallbackListener == null) {
+      await _startFallbackListener();
+    }
+  }
 
-    _discovery!.addListener(() {
-      final snapshot = <DiscoveredPeer>[];
-      for (final service in _discovery!.services) {
-        snapshot.addAll(_peersFromNsdService(service));
+  Future<void> _startFallbackListener() async {
+    try {
+      _fallbackListener = await RawDatagramSocket.bind(
+        InternetAddress.anyIPv4,
+        9141,
+        reuseAddress: true,
+        reusePort: true,
+      );
+      _fallbackListener!.listen((RawSocketEvent e) {
+        if (e == RawSocketEvent.read) {
+          final d = _fallbackListener!.receive();
+          if (d == null) return;
+          _handleFallbackPacket(d);
+        }
+      });
+
+      _fallbackCleanupTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        final now = DateTime.now();
+        final expired = <String>[];
+        for (final entry in _fallbackPeers.entries) {
+          if (now.difference(entry.value.lastSeen) >
+              const Duration(seconds: 15)) {
+            expired.add(entry.key);
+            _peerLostController.add(entry.value.peer);
+          }
+        }
+        for (final id in expired) {
+          _fallbackPeers.remove(id);
+        }
+      });
+    } catch (e) {
+      RiftLog.warn('[Discovery] Failed to bind UDP Fallback Listener: $e');
+    }
+  }
+
+  void _handleFallbackPacket(Datagram d) {
+    try {
+      final payload = utf8.decode(d.data);
+      final json = jsonDecode(payload) as Map<String, dynamic>;
+      if (json['kind'] != 'fallback-discovery') return;
+
+      final instanceId = json['instanceId'];
+      if (instanceId == _instanceId || instanceId == null) {
+        return;
       }
-      _ingestSnapshot(snapshot);
-    });
+
+      final peer = DiscoveredPeer(
+        instanceId: instanceId,
+        address: d.address.address,
+        port: json['port'] ?? 9140,
+        minVersion: json['minV'] ?? '0.1-draft',
+        maxVersion: json['maxV'] ?? '0.1-draft',
+        deviceIdHint: json['did'],
+        fingerprintPrefix: json['fp'],
+      );
+
+      final existing = _fallbackPeers[instanceId];
+      _fallbackPeers[instanceId] = (peer: peer, lastSeen: DateTime.now());
+
+      if (existing == null ||
+          existing.peer.address != peer.address ||
+          existing.peer.port != peer.port) {
+        _peerStreamController.add(peer);
+      }
+    } catch (e) {
+      RiftLog.debug('[Discovery] Failed to parse fallback UDP packet: $e');
+    }
   }
 
   List<DiscoveredPeer> _peersFromNsdService(nsd.Service service) {
@@ -83,7 +230,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     // Skip services without a name — using a fallback would collapse all
     // null-named peers into one dedup entry and suppress re-discovery.
     final port = service.port;
-    if (instanceId == null || port == null) {
+    if (instanceId == null || port == null || instanceId == _instanceId) {
       return const [];
     }
 
@@ -164,6 +311,11 @@ class DiscoveryServiceImpl implements DiscoveryService {
       _discovery = null;
       _tracker.clear(); // Reset tracking when discovery stops
     }
+    _fallbackCleanupTimer?.cancel();
+    _fallbackCleanupTimer = null;
+    _fallbackListener?.close();
+    _fallbackListener = null;
+    _fallbackPeers.clear();
   }
 
   @override

@@ -2,6 +2,7 @@ namespace Rift.Daemon.Core.Interfaces;
 
 public sealed class StartPairingResult
 {
+    public string DeviceId { get; init; } = string.Empty;
     public string Fingerprint { get; init; } = string.Empty;
     public string PeerFingerprint { get; init; } = string.Empty;
     public int ExpiresInMs { get; init; }
@@ -37,6 +38,8 @@ public sealed class ResetRevokedPeerResult
 public interface IPairingService
 {
     Task<StartPairingResult> StartPairingAsync(string deviceId);
+
+    Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port);
 
     Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);
 

@@ -1,5 +1,17 @@
 import 'dart:typed_data';
 
+class PeerSocketEndpoint {
+  final String address;
+  final int port;
+  final bool isServer;
+
+  const PeerSocketEndpoint({
+    required this.address,
+    required this.port,
+    this.isServer = false,
+  });
+}
+
 class TransportMessage {
   final String peerDeviceId;
   final Uint8List payload;
@@ -17,7 +29,12 @@ class TransportMessage {
 abstract class Transport {
   Future<void> startServer();
   Future<void> stopServer();
-  Future<String> connectTo(String host, int port, {String? expectedDeviceId});
+  Future<String> connectTo(
+    String host,
+    int port, {
+    String? expectedDeviceId,
+    bool forceFreshSession = false,
+  });
   void disconnect(String peerDeviceId);
   void setPeerAuthenticated(String peerDeviceId);
   Stream<TransportMessage> get onMessageReceived;
@@ -25,4 +42,5 @@ abstract class Transport {
   Stream<String> get onPeerDisconnected;
   Future<void> sendMessage(String deviceId, Uint8List message);
   Uint8List? getPeerCert(String peerDeviceId);
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId);
 }

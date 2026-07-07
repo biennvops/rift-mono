@@ -28,7 +28,8 @@ class AndroidDiscoveredPeer {
 
   Map<String, dynamic> toIpcMap() {
     return {
-      'deviceId': deviceIdHint,
+      if (deviceIdHint != null) 'deviceId': deviceIdHint,
+      'instanceId': instanceId,
       'address': address,
       'port': port,
       'trustState': 'discovered',
@@ -97,6 +98,8 @@ class AndroidRootDiscoveryBridge {
       StreamController<AndroidDiscoveredPeer>.broadcast();
   final _peerLostController =
       StreamController<AndroidDiscoveredPeer>.broadcast();
+  final _reverseTcpPingController =
+      StreamController<AndroidDiscoveredPeer>.broadcast();
   final AndroidDiscoveryPeerTracker tracker = AndroidDiscoveryPeerTracker();
 
   nsd.Registration? _registration;
@@ -108,6 +111,7 @@ class AndroidRootDiscoveryBridge {
   final Map<String, ({AndroidDiscoveredPeer peer, DateTime lastSeen})>
       _fallbackPeersByInstanceId = {};
   final String _instanceId;
+  final Set<String> _recentlyTcpPinged = {};
 
   AndroidRootDiscoveryBridge({
     required this.port,
@@ -120,12 +124,13 @@ class AndroidRootDiscoveryBridge {
   Stream<AndroidDiscoveredPeer> get onPeerDiscovered =>
       _peerDiscoveredController.stream;
   Stream<AndroidDiscoveredPeer> get onPeerLost => _peerLostController.stream;
+  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested => 
+      _reverseTcpPingController.stream;
 
   bool get isDiscovering => _discovery != null;
 
   List<Map<String, dynamic>> listPeersForIpc() {
     return tracker.currentPeers
-        .where((peer) => peer.deviceIdHint != null)
         .map((peer) => peer.toIpcMap())
         .toList(growable: false);
   }
@@ -289,7 +294,10 @@ class AndroidRootDiscoveryBridge {
       observedEndpoints.add((address: host, port: port ?? 0));
     }
 
-    if (instanceId == null || port == null || observedEndpoints.isEmpty) {
+    if (instanceId == null ||
+        port == null ||
+        observedEndpoints.isEmpty ||
+        instanceId == _instanceId) {
       return null;
     }
 
@@ -397,7 +405,7 @@ class AndroidRootDiscoveryBridge {
       }
 
       final did = decoded['did'] as String?;
-      if (did == null || did == deviceIdHint) {
+      if (did == deviceIdHint) {
         return;
       }
 
@@ -422,6 +430,7 @@ class AndroidRootDiscoveryBridge {
         '[mDNS Debug] Parsed fallback peer: ${peer.instanceId} at ${peer.address}:${peer.port}',
       );
       _ingestMergedSnapshot();
+      _sendDirectPingPong(peer);
     } catch (e) {
       debugPrint('[mDNS Debug] Ignoring malformed UDP fallback packet: $e');
     }
@@ -477,6 +486,48 @@ class AndroidRootDiscoveryBridge {
     _ingestMergedSnapshot();
   }
 
+  void _sendDirectPingPong(AndroidDiscoveredPeer targetPeer) {
+    final targetAddress = targetPeer.address;
+    final socket = _fallbackAdvertiserSocket ?? _fallbackDiscoverySocket;
+    if (socket == null) return;
+
+    final payload = jsonEncode({
+      'rift': '0.1-draft',
+      'kind': 'fallback-discovery',
+      'instanceId': _instanceId,
+      'port': port,
+      'minV': minVersion,
+      'maxV': maxVersion,
+      'did': deviceIdHint,
+      if (fingerprintPrefix != null) 'fp': fingerprintPrefix,
+    });
+
+    final bytes = Uint8List.fromList(utf8.encode(payload));
+
+    try {
+      final b1 = socket.send(bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
+      debugPrint('[mDNS Debug] Ping-pong unicast to $targetAddress sent $b1 bytes.');
+
+      final parts = targetAddress.split('.');
+      if (parts.length == 4) {
+        final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+        final b2 = socket.send(bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
+        debugPrint('[mDNS Debug] Ping-pong subnet to $subnetBroadcast sent $b2 bytes.');
+      }
+      
+      // TCP Reverse-Connect Hack for Android Hotspot Asymmetry
+      final endpointKey = '${targetPeer.address}:${targetPeer.port}';
+      if (_recentlyTcpPinged.add(endpointKey)) {
+        debugPrint('[mDNS Debug] Reverse TCP Pinging new endpoint $endpointKey');
+        _reverseTcpPingController.add(targetPeer);
+        // Clear after a while so we can ping again if it gets lost
+        Timer(const Duration(seconds: 15), () => _recentlyTcpPinged.remove(endpointKey));
+      }
+    } catch (e) {
+      debugPrint('[mDNS Debug] Failed immediate ping-pong to $targetAddress: $e');
+    }
+  }
+
   void _sendFallbackBeacon() {
     final socket = _fallbackAdvertiserSocket;
     if (socket == null) {
@@ -494,11 +545,63 @@ class AndroidRootDiscoveryBridge {
       if (fingerprintPrefix != null) 'fp': fingerprintPrefix,
     });
 
-    socket.send(
-      Uint8List.fromList(utf8.encode(payload)),
-      InternetAddress('255.255.255.255'),
-      _fallbackDiscoveryPort,
-    );
+    final bytes = Uint8List.fromList(utf8.encode(payload));
+
+    try {
+      socket.send(
+        bytes,
+        InternetAddress('255.255.255.255'),
+        _fallbackDiscoveryPort,
+      );
+    } catch (_) {}
+
+    // Send to specific subnets to bypass strict hotspot routing rules on Android
+    NetworkInterface.list(type: InternetAddressType.IPv4).then((interfaces) {
+      for (final interface in interfaces) {
+        for (final addr in interface.addresses) {
+          final ip = addr.address;
+          if (ip.startsWith('127.')) continue;
+
+          final parts = ip.split('.');
+          if (parts.length == 4) {
+            final directedBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+            try {
+              socket.send(
+                bytes,
+                InternetAddress(directedBroadcast),
+                _fallbackDiscoveryPort,
+              );
+            } catch (_) {}
+          }
+        }
+      }
+    }).catchError((_) {});
+
+    // Ping-pong: explicitly unicast to all known peers
+    for (final entry in _fallbackPeersByInstanceId.values) {
+      for (final endpoint in entry.peer.observedEndpoints) {
+        try {
+          socket.send(
+            bytes,
+            InternetAddress(endpoint.address),
+            _fallbackDiscoveryPort,
+          );
+          
+          final parts = endpoint.address.split('.');
+          if (parts.length == 4) {
+            final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+            socket.send(
+              bytes,
+              InternetAddress(subnetBroadcast),
+              _fallbackDiscoveryPort,
+            );
+          }
+        } catch (e) {
+          debugPrint(
+              '[mDNS Debug] Failed to send unicast ping-pong to ${endpoint.address}: $e');
+        }
+      }
+    }
   }
 }
 

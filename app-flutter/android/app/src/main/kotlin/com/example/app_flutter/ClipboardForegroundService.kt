@@ -9,25 +9,34 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 
 class ClipboardForegroundService : Service() {
+    private val tag = "RiftClipboardSvc"
     private var clipboardManager: ClipboardManager? = null
+    private var lastBroadcastText: String? = null
 
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
         val clip = clipboardManager?.primaryClip
+        Log.i(tag, "Primary clip changed. itemCount=${clip?.itemCount ?: 0}")
         if (clip != null && clip.itemCount > 0) {
-            val text = clip.getItemAt(0).text?.toString()
-            if (text != null) {
+            val text = clip.getItemAt(0).coerceToText(this)?.toString()
+            if (!text.isNullOrEmpty() && text != lastBroadcastText) {
+                lastBroadcastText = text
+                Log.i(tag, "Broadcasting clipboard text length=${text.length}")
                 val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
                 intent.setPackage(packageName)
                 intent.putExtra("text", text)
                 sendBroadcast(intent)
+            } else {
+                Log.i(tag, "Clipboard text ignored. empty=${text.isNullOrEmpty()} duplicate=${text == lastBroadcastText}")
             }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(tag, "ClipboardForegroundService created")
         createNotificationChannel()
         
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -47,14 +56,17 @@ class ClipboardForegroundService : Service() {
 
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboardManager?.addPrimaryClipChangedListener(clipboardListener)
+        Log.i(tag, "Clipboard listener registered")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_NOT_STICKY
+        Log.i(tag, "ClipboardForegroundService onStartCommand")
+        return START_STICKY
     }
 
     override fun onDestroy() {
         clipboardManager?.removePrimaryClipChangedListener(clipboardListener)
+        Log.i(tag, "ClipboardForegroundService destroyed")
         super.onDestroy()
     }
 

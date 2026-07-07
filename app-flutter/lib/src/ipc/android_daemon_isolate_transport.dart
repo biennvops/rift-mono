@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:isolate';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
 
@@ -27,8 +28,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
   AndroidRootDiscoveryBridge? _discoveryBridge;
-  StreamSubscription? _discoveryAddedSub;
-  StreamSubscription? _discoveryLostSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
   int _nextSyntheticId = 1000000;
   String? _daemonDeviceId;
   int? _daemonAdvertisedPort;
@@ -179,6 +181,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     await _discoveryAddedSub?.cancel();
     await _discoveryLostSub?.cancel();
+    await _reverseTcpPingSub?.cancel();
 
     _discoveryAddedSub = bridge.onPeerDiscovered.listen((peer) {
       _incoming?.add(jsonEncode({
@@ -189,14 +192,30 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       _syncDiscoverySnapshotToDaemon();
     });
     _discoveryLostSub = bridge.onPeerLost.listen((peer) {
-      if (peer.deviceIdHint != null) {
-        _incoming?.add(jsonEncode({
-          'jsonrpc': '2.0',
-          'method': 'rift.onPeerLost',
-          'params': {'deviceId': peer.deviceIdHint},
-        }));
-      }
+      _incoming?.add(jsonEncode({
+        'jsonrpc': '2.0',
+        'method': 'rift.onPeerLost',
+        'params': {
+          if (peer.deviceIdHint != null) 'deviceId': peer.deviceIdHint,
+          'instanceId': peer.instanceId,
+        },
+      }));
       _syncDiscoverySnapshotToDaemon();
+    });
+    
+    _reverseTcpPingSub = bridge.onReverseTcpPingRequested.listen((peer) {
+      final port = _rpcPort;
+      if (port == null) return;
+      // Send a ping command to the daemon isolate to establish a TCP connection 
+      // with the Linux machine. This completely bypasses the Hotspot UDP block!
+      port.send({
+        'jsonrpc': '2.0',
+        'method': 'rift.pingEndpoint',
+        'params': {
+          'address': peer.address,
+          'port': peer.port,
+        },
+      });
     });
 
     _syncDiscoverySnapshotToDaemon();
@@ -293,6 +312,9 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     action().then((result) {
       _emitSyntheticResult(id, result);
     }).catchError((Object error, StackTrace stackTrace) {
+      debugPrint(
+        '[Android Discovery] Synthetic discovery RPC failed: $error\n$stackTrace',
+      );
       _emitSyntheticError(id, -32603, error.toString());
     });
   }

@@ -4,7 +4,6 @@ import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/constants.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 
@@ -13,9 +12,8 @@ void main() {
 
   final mockDeviceInfo = {
     'deviceId': 'rift-test-device-id',
+    'displayName': 'Test Device',
     'fingerprint': 'TEST-FINGERPRINT',
-    'implementationId': 'riftd-test/0.1.0',
-    'protocolVersion': '0.1-test',
   };
 
   setUp(() {
@@ -24,7 +22,7 @@ void main() {
         .thenAnswer((_) async => mockDeviceInfo);
   });
 
-  testWidgets('SettingsScreen shows title and device info', (WidgetTester tester) async {
+  testWidgets('SettingsScreen shows UI elements and device info', (WidgetTester tester) async {
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
@@ -32,32 +30,24 @@ void main() {
       ),
     );
 
-    // Wait for the post frame callback and FutureBuilder to complete
     await tester.pumpAndSettle();
 
-    // Title should be visible
-    expect(find.text(AppStrings.settingsTitle), findsOneWidget);
-
+    // Sections should be visible
+    expect(find.text('GENERAL'), findsOneWidget);
+    expect(find.text('IDENTITY'), findsOneWidget);
+    expect(find.text('PERMISSIONS'), findsOneWidget);
     // Info from mock should be visible
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
-    expect(find.text('riftd-test/0.1.0'), findsOneWidget);
-    expect(find.text('0.1-test'), findsOneWidget);
-  });
-
-  testWidgets('SettingsScreen handles unavailable platform feature errors', (WidgetTester tester) async {
-    when(() => mockClient.getDeviceInfo()).thenAnswer((_) => Future.error(UnimplementedError('Stub')));
-
-    await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: mockClient,
-        child: const MaterialApp(home: SettingsScreen()),
-      ),
-    );
-
-    await tester.pumpAndSettle();
-
-    expect(find.text('Feature not available on this platform'), findsOneWidget);
+    
+    await tester.scrollUntilVisible(find.text('SYSTEM CHECKS'), 300);
+    expect(find.text('SYSTEM CHECKS'), findsOneWidget);
+    
+    // Actions / sections
+    await tester.scrollUntilVisible(find.text('MANAGE TRUST STORE'), 300);
+    expect(find.text('MANAGE TRUST STORE'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('ABOUT APPLICATION'), 300);
+    expect(find.text('ABOUT APPLICATION'), findsOneWidget);
   });
 
   testWidgets('SettingsScreen shows error message for generic error', (WidgetTester tester) async {
@@ -72,12 +62,15 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Error fetching device info:'), findsOneWidget);
+    // The error should be formatted by JsonRpcRiftClient.formatDisplayError
+    // Usually it starts with "Exception: " or something. We'll just look for "Generic failure"
     expect(find.textContaining('Generic failure'), findsOneWidget);
+    
+    // UI should still be rendered (fallback values)
+    expect(find.text('Unknown Device'), findsOneWidget);
   });
 
   testWidgets('SettingsScreen shows loading spinner while waiting', (WidgetTester tester) async {
-    // Create a delayed future to keep it in the waiting state
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) => Future.delayed(const Duration(seconds: 1), () => mockDeviceInfo));
 
@@ -88,14 +81,14 @@ void main() {
       ),
     );
 
-    await tester.pump(); // Pump once to trigger FutureBuilder, but don't settle yet
+    await tester.pump();
 
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     
-    await tester.pumpAndSettle(); // Finish the future to clean up
+    await tester.pumpAndSettle();
   });
 
-  testWidgets('SettingsScreen shows No data available when data is null', (WidgetTester tester) async {
+  testWidgets('SettingsScreen handles null device info with fallbacks', (WidgetTester tester) async {
     when(() => mockClient.getDeviceInfo()).thenAnswer((_) async => null);
 
     await tester.pumpWidget(
@@ -107,6 +100,7 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    expect(find.text('No data available.'), findsOneWidget);
+    expect(find.text('Unknown Device'), findsOneWidget);
+    expect(find.text('Unknown'), findsNWidgets(2)); // Device ID and Fingerprint
   });
 }

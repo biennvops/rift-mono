@@ -29,6 +29,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private Task? _fallbackAdvertiserTask;
     private UdpClient? _fallbackDiscoveryListener;
     private Task? _fallbackDiscoveryTask;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<IPAddress, DateTimeOffset> _fallbackPingPongTargets = new();
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -61,6 +62,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _profile.AddProperty("minV", minVersion);
             _profile.AddProperty("maxV", maxVersion);
             _profile.AddProperty("did", deviceId);
+            // Optionally add fp if available; here we just use deviceId for recognition
             _advertisedDeviceId = deviceId;
 
             _serviceDiscovery.Advertise(_profile);
@@ -237,6 +239,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
         }
 
+        if (!name.Contains("_rift._tcp", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var peerInfo = CreatePeerDiscoveredEventArgs(e);
         _logger.LogInformation(
             "Discovered Rift peer instance: {InstanceName} at {Host}:{Port}",
@@ -267,10 +274,46 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                     ["port"] = RiftNetworkDefaults.DefaultPort,
                     ["minV"] = minVersion,
                     ["maxV"] = maxVersion,
-                    ["did"] = deviceId,
+                    ["did"] = deviceId
                 });
                 var bytes = Encoding.UTF8.GetBytes(payload);
                 await client.SendAsync(bytes, endpoint, cancellationToken);
+                
+                // Route to specific subnets to bypass strict hotspot routing
+                foreach (var netIf in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (netIf.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
+                        continue;
+
+                    foreach (var ip in netIf.GetIPProperties().UnicastAddresses)
+                    {
+                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            var addressBytes = ip.Address.GetAddressBytes();
+                            // Simple heuristic for /24 broadcast
+                            addressBytes[3] = 255;
+                            var subnetBroadcast = new IPEndPoint(new IPAddress(addressBytes), RiftNetworkDefaults.FallbackDiscoveryPort);
+                            try {
+                                await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
+                            } catch { /* Ignore individual subnet send errors */ }
+                        }
+                    }
+                }
+                
+                // Ping-pong: explicitly unicast to all known peers that sent us a beacon recently
+                var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
+                foreach (var kvp in _fallbackPingPongTargets)
+                {
+                    if (kvp.Value < cutoff)
+                    {
+                        _fallbackPingPongTargets.TryRemove(kvp.Key, out _);
+                        continue;
+                    }
+                    try {
+                        await client.SendAsync(bytes, new IPEndPoint(kvp.Key, RiftNetworkDefaults.FallbackDiscoveryPort), cancellationToken);
+                    } catch { /* Ignore individual ping-pong send errors */ }
+                }
+
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -328,10 +371,15 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             var instanceName = root.TryGetProperty("instanceId", out var instanceElement)
                 ? instanceElement.GetString()
                 : null;
-            var deviceIdHint = root.TryGetProperty("did", out var didElement)
+            var deviceIdHint = root.TryGetProperty("did", out var didElement) && didElement.ValueKind == JsonValueKind.String
                 ? didElement.GetString()
-                : null;
+                : instanceName;
             if (string.IsNullOrWhiteSpace(instanceName) || string.IsNullOrWhiteSpace(deviceIdHint))
+            {
+                return;
+            }
+
+            if (_profile != null && string.Equals(instanceName, _profile.InstanceName.ToString(), StringComparison.Ordinal))
             {
                 return;
             }
@@ -375,6 +423,9 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 peerInfo.InstanceName,
                 peerInfo.Host,
                 peerInfo.Port);
+            
+            _fallbackPingPongTargets[remoteEndPoint.Address] = DateTimeOffset.UtcNow;
+            
             PeerDiscovered?.Invoke(this, peerInfo);
         }
         catch (Exception ex)
