@@ -314,7 +314,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     if (deviceId == null) return;
     
     final client = context.read<JsonRpcRiftClient>();
-    final confirmed = await _showRevokeBottomSheet(displayName!, fingerprint);
+    final confirmed = await _showRevokeBottomSheet(displayName ?? 'Unknown', fingerprint);
     if (!confirmed) return;
     
     try {
@@ -330,7 +330,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final displayName = peer['displayName']?.toString() ?? deviceId;
     if (deviceId == null) return;
     
-    final confirmed = await _showBlockBottomSheet(displayName!);
+    final confirmed = await _showBlockBottomSheet(displayName ?? 'Unknown');
     if (!confirmed) return;
     
     try {

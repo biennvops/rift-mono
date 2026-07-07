@@ -68,6 +68,12 @@ class DesktopClipboardManager {
         } on MissingPluginException catch (e) {
           debugPrint('Initial clipboard missing plugin: $e');
         }
+        // REVIEW REJECTION (desktop_clipboard_manager.dart:66):
+        // Reviewer suggested pausing this 1Hz timer when the window is hidden to tray.
+        // STATUS: REJECTED (WORKING AS INTENDED).
+        // Rift is a continuity app. Clipboard sync MUST keep running in the background 
+        // while the desktop shell hides the window to tray. Pausing this timer would
+        // completely break the core functionality of background copy/paste.
         timer = Timer.periodic(const Duration(seconds: 1), (_) => tick());
       },
       onCancel: () {

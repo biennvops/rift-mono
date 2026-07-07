@@ -3,10 +3,12 @@ import 'dart:typed_data';
 class PeerSocketEndpoint {
   final String address;
   final int port;
+  final bool isServer;
 
   const PeerSocketEndpoint({
     required this.address,
     required this.port,
+    this.isServer = false,
   });
 }
 

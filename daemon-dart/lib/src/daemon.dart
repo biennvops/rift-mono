@@ -1402,9 +1402,10 @@ class RiftDaemon {
     final activeEndpoint = _transport?.getPeerSocketEndpoint(peerDeviceId);
     if (activeEndpoint != null && record.trustedEndpoints.isNotEmpty) {
       final existingEndpoint = record.trustedEndpoints.first;
+      final portToUse = activeEndpoint.isServer ? existingEndpoint.port : activeEndpoint.port;
       return TrustedPeerEndpoint(
         address: activeEndpoint.address,
-        port: existingEndpoint.port,
+        port: portToUse,
         source: source,
         addressFamily:
             InternetAddress.tryParse(activeEndpoint.address)?.type.name ??

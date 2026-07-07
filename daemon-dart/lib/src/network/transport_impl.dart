@@ -378,6 +378,7 @@ class TransportImpl implements Transport {
     return PeerSocketEndpoint(
       address: socket.remoteAddress.address,
       port: socket.remotePort,
+      isServer: _peerSocketIsServer[peerDeviceId] ?? false,
     );
   }
 

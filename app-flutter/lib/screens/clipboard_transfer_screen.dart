@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
+import 'pairing_screen.dart';
 
 class ClipboardTransferScreen extends StatefulWidget {
   final String? deviceId;
@@ -158,9 +159,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> with 
     }
   }
 
-  Future<void> _fetchOffer(String offerId) async {
+  Future<void> _fetchOffer(Map<String, dynamic> offer) async {
     final client = context.read<JsonRpcRiftClient>();
     final messenger = ScaffoldMessenger.of(context);
+    final offerId = offer['offerId']?.toString();
+    if (offerId == null) return;
+    
     try {
       await client.fetchClipboardContent(offerId);
       if (!mounted) return;
@@ -170,7 +174,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> with 
       await _refreshOffers();
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+      
+      final errorStr = e.toString();
+      if (errorStr.contains('-32004') || errorStr.contains('not trusted for protected reconnect')) {
+        final sourceDeviceId = offer['sourceDeviceId']?.toString() ?? 'unknown';
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => PairingScreen(
+              initialDeviceId: sourceDeviceId,
+              initialDisplayName: 'Rift Device', // Fallback, full name is fetched inside
+              autoStart: true,
+            ),
+          ),
+        );
+      } else {
+        messenger.showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     }
   }
 
@@ -334,7 +353,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> with 
                         children: [
                           Expanded(
                             child: ElevatedButton(
-                              onPressed: () => _fetchOffer(offerId),
+                              onPressed: () => _fetchOffer(offer),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: theme.colorScheme.primary,
                                 foregroundColor: theme.colorScheme.onPrimary,

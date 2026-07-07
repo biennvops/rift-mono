@@ -111,20 +111,23 @@ public sealed class ClipboardService : IClipboardService
         var peerQueue = _pendingStoreAndForward.GetOrAdd(deviceId, _ => new ConcurrentDictionary<string, (byte[], DateTimeOffset)>(StringComparer.Ordinal));
         peerQueue[offerId] = (bytes, expiresAt);
 
-        _storeAndForwardTasks.GetOrAdd(deviceId, id =>
+        Task StartStoreAndForwardTask(string id) => Task.Run(async () =>
         {
-            return Task.Run(async () =>
+            try
             {
-                try
-                {
-                    await StoreAndForwardLoopAsync(id);
-                }
-                finally
-                {
-                    _storeAndForwardTasks.TryRemove(id, out _);
-                }
-            });
+                await StoreAndForwardLoopAsync(id);
+            }
+            finally
+            {
+                _storeAndForwardTasks.TryRemove(id, out _);
+            }
         });
+
+        _storeAndForwardTasks.AddOrUpdate(deviceId,
+            addValueFactory: id => StartStoreAndForwardTask(id),
+            updateValueFactory: (id, existingTask) =>
+                existingTask.IsCompleted ? StartStoreAndForwardTask(id) : existingTask
+        );
     }
 
     private async Task StoreAndForwardLoopAsync(string deviceId)
