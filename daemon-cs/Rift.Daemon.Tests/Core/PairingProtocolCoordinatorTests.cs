@@ -553,8 +553,8 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         var peer = _trustStore.GetPeer("rift-peer-linux-initiator");
         Assert.Equal(TrustState.Trusted, peer!.State);
         var sentComplete = Assert.Single(
-            _transport.SentMessages.Where(sent =>
-                sent.PeerDeviceId == "rift-peer-linux-initiator" && sent.Type == "pairing.complete"));
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer-linux-initiator" && sent.Type == "pairing.complete");
         Assert.Equal(_identityManager.GetDeviceId(), sentComplete.Payload.GetProperty("trustedDeviceId").GetString());
     }
 
@@ -1144,7 +1144,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
     private sealed class FakeTransport : ITransport
     {
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
         public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string Host, int Port)> ConnectionAttempts { get; } = [];

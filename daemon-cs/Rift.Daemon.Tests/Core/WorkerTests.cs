@@ -236,7 +236,11 @@ public sealed class WorkerTests
 
     private sealed class FakeDiscoveryService : IDiscoveryService
     {
-        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
+        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered
+        {
+            add { }
+            remove { }
+        }
 
         public bool StartAdvertisingCalled { get; private set; }
 
@@ -312,8 +316,16 @@ public sealed class WorkerTests
 
     private sealed class CompletingTransport : ITransport
     {
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 

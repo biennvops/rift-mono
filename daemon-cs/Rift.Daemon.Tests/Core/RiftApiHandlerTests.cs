@@ -152,6 +152,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager), _presenceService, _transport),
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
+            _operationService,
             pairingService);
 
         var result = await handler.StartPairingByEndpointAsync("10.53.38.174", 9140);
@@ -502,8 +503,16 @@ public sealed class RiftApiHandlerTests : IDisposable
 
     private sealed class FakeTransport : ITransport
     {
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
 

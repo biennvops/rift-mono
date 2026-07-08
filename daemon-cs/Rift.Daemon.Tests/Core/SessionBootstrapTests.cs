@@ -28,8 +28,8 @@ public class SessionBootstrapTests
         var peerCertDer = cert.GetRawCertData();
         using var stream = new SslStream(new MemoryStream());
 
-        var bootstrapA = new TestSessionBootstrap(identityManager, CreateBinding(0x11));
-        var bootstrapB = new TestSessionBootstrap(identityManager, CreateBinding(0x22));
+        var bootstrapA = new TestSessionBootstrap(identityManager, CreateBinding(0x11), forceTlsUnique: false);
+        var bootstrapB = new TestSessionBootstrap(identityManager, CreateBinding(0x22), forceTlsUnique: false);
 
         var (typeA, proofA, nonceA) = bootstrapA.GenerateIdentityProof(stream, pubKey, cert, peerCertDer);
         var (typeB, proofB, nonceB) = bootstrapB.GenerateIdentityProof(stream, pubKey, cert, peerCertDer);
@@ -57,8 +57,8 @@ public class SessionBootstrapTests
         wrongPeerIdentity.EnsureIdentityInitialized();
         using var stream = new SslStream(new MemoryStream());
 
-        var signingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x33));
-        var verifyingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x44));
+        var signingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x33), forceTlsUnique: false);
+        var verifyingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x44), forceTlsUnique: false);
 
         var (_, proof, sessionNonce) = signingBootstrap.GenerateIdentityProof(
             stream,

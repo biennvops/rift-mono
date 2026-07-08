@@ -65,11 +65,6 @@ class JsonRpcRiftClient {
       StreamController<bool>.broadcast();
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
 
-  late final _operationTransitionController =
-      StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onOperationTransition =>
-      _operationTransitionController.stream;
-
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
     return _canonicalizeMap(Map<String, dynamic>.from(params.value as Map));
@@ -373,15 +368,6 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['deviceId', 'fingerprint'],
         );
       });
-      _client!.registerMethod('rift.onOperationTransition',
-          (json_rpc.Parameters params) {
-        _emitIfValid(
-          'rift.onOperationTransition',
-          _asMap(params),
-          _operationTransitionController,
-          requiredStringKeys: const ['operationId', 'status'],
-        );
-      });
       _client!.registerMethod('rift.onSecurityEvent',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -510,7 +496,6 @@ class JsonRpcRiftClient {
     await _securityEventController.close();
     await _clipboardOfferController.close();
     await _clipboardExpiredController.close();
-    await _operationTransitionController.close();
     await _connectionChangedController.close();
   }
 
@@ -732,17 +717,6 @@ class JsonRpcRiftClient {
       'rift.fetchClipboardContent',
       {'offerId': offerId},
     );
-    return _canonicalizeResult(r);
-  }
-
-  Future<dynamic> listOperations({int limit = 50, int offset = 0}) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listOperations', {
-      'limit': limit,
-      'offset': offset,
-    });
     return _canonicalizeResult(r);
   }
 

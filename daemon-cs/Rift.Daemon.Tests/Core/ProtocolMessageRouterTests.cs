@@ -315,7 +315,11 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
     private sealed class FakeDiscoveryService : IDiscoveryService
     {
-        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
+        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered
+        {
+            add { }
+            remove { }
+        }
 
         public void StartAdvertising(string deviceId, string minVersion, string maxVersion) { }
 
@@ -328,8 +332,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
     private sealed class FakeTransport : ITransport
     {
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
 

@@ -757,8 +757,16 @@ public sealed class ClipboardServiceTests : IDisposable
     private sealed class FakeTransport : ITransport
     {
         private readonly object _gate = new();
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
         public List<(string Host, int Port)> ConnectAttempts { get; } = [];
