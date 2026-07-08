@@ -24,18 +24,21 @@ import 'package:daemon_dart/src/pairing/pairing_manager.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
+import 'package:daemon_dart/src/operation/operation_manager.dart';
+import 'package:daemon_dart/src/operation/operation_models.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 const int _clipboardFetchTimeoutSeconds = 15;
 
-class _ClipboardFetchWaiter {
+class _OperationFetchWaiter {
   final Future<ClipboardFetchResponse> future;
-  final Future<void> Function() cancel;
+  final Future<void> Function(String failureReason, int errorCode, String message)
+      fail;
 
-  const _ClipboardFetchWaiter({
+  const _OperationFetchWaiter({
     required this.future,
-    required this.cancel,
+    required this.fail,
   });
 }
 
@@ -328,6 +331,7 @@ class RiftDaemon {
   PairingManager? _pairingManager;
   ClipboardEngine? _clipboardEngine;
   ClipboardProtocolHandler? _clipboardHandler;
+  OperationManager? _operationManager;
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
@@ -415,6 +419,7 @@ class RiftDaemon {
         (offerId) async => _clipboardEngine!.getLocalContent(offerId),
         _identityManager!.deviceId,
       );
+      _operationManager = OperationManager();
 
       _clipboardEngine!.onOfferAdded.listen((offer) {
         onIpcEvent?.call({
@@ -430,6 +435,28 @@ class RiftDaemon {
           'method': 'rift.onClipboardExpired',
           'params': {'offerId': offerId},
         });
+      });
+
+      _operationManager!.onTransition.listen((event) {
+        final operation = _operationManager!.getOperation(event.operationId);
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onOperationTransition',
+          'params': event.toJson(),
+        });
+        unawaited(
+          _recordSecurityEvent(
+            eventType: 'operation.transitioned',
+            severity: 'info',
+            peerDeviceId: operation.destinationDeviceId,
+            outcome: event.nextState == OperationState.failed ||
+                    event.nextState == OperationState.expired
+                ? 'failure'
+                : 'success',
+            failureReason: event.failureReason,
+            details: event.toJson(),
+          ),
+        );
       });
     }
 
@@ -482,6 +509,7 @@ class RiftDaemon {
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
+    _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
@@ -653,6 +681,30 @@ class RiftDaemon {
     };
   }
 
+  Map<String, dynamic> listOperations({int limit = 50, int offset = 0}) {
+    final operationManager = _operationManager;
+    if (operationManager == null) {
+      return {'operations': const <Map<String, dynamic>>[], 'total': 0};
+    }
+
+    return {
+      'operations': operationManager
+          .listOperations(limit: limit, offset: offset)
+          .map((operation) => operation.toListJson())
+          .toList(growable: false),
+      'total': operationManager.totalCount,
+    };
+  }
+
+  Map<String, dynamic> getOperation(String operationId) {
+    final operationManager = _operationManager;
+    if (operationManager == null) {
+      throw const RiftNotFoundException('Operation not found');
+    }
+
+    return operationManager.getOperation(operationId).toDetailJson();
+  }
+
   Future<Map<String, dynamic>> handleJsonRpcRequest(
     Map<String, dynamic> request,
   ) async {
@@ -778,12 +830,30 @@ class RiftDaemon {
           throw const RiftException(-32002, 'Offer expired or not found');
         }
 
-        final fetchWait = _awaitClipboardFetchResult(offerId);
+        final operationId = const Uuid().v4();
+        _operationManager!.createOperation(
+          operationId: operationId,
+          operationType: 'clipboard.fetch',
+          sourceDeviceId: _identityManager!.deviceId,
+          destinationDeviceId: offer.sourceDeviceId,
+        );
+        _operationManager!.transitionOperation(operationId, OperationState.pending);
+
+        final fetchWait = _awaitClipboardFetchResult(offerId, operationId);
         try {
           await _ensureTrustedSessionForPeer(offer.sourceDeviceId);
           await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
+          _operationManager!.transitionOperation(
+            operationId,
+            OperationState.dispatched,
+          );
         } catch (e) {
-          await fetchWait.cancel();
+          final failureReason = _classifyClipboardFetchFailureReason(e);
+          await fetchWait.fail(
+            failureReason,
+            _errorCodeForFailureReason(failureReason),
+            e.toString(),
+          );
           rethrow;
         }
 
@@ -810,6 +880,13 @@ class RiftDaemon {
           limit: (params['limit'] as int?) ?? 100,
           offset: (params['offset'] as int?) ?? 0,
         );
+      case 'rift.listOperations':
+        return listOperations(
+          limit: (params['limit'] as int?) ?? 50,
+          offset: (params['offset'] as int?) ?? 0,
+        );
+      case 'rift.getOperation':
+        return getOperation(RpcUtils.requireStringParam(params, 'operationId'));
       case 'rift.startDiscovery':
         _requireDiscoveryServices();
         await _discoveryService!.startDiscovery();
@@ -955,16 +1032,26 @@ class RiftDaemon {
         return RiftException(-32002, 'Fetch rejected: ${reject.failureReason}');
       case 'HashMismatch':
         return RiftException(-32006, 'Fetch rejected: ${reject.failureReason}');
+      case 'CapabilityUnavailable':
+        return RiftException(-32003, 'Fetch rejected: ${reject.failureReason}');
+      case 'Unauthorized':
+        return RiftException(-32004, 'Fetch rejected: ${reject.failureReason}');
+      case 'PayloadTooLarge':
+        return RiftException(-32007, 'Fetch rejected: ${reject.failureReason}');
+      case 'Timeout':
+        return RiftException(-32011, 'Fetch rejected: ${reject.failureReason}');
       case 'PeerUnreachable':
       case 'ConnectionLost':
-      case 'Timeout':
         return RiftException(-32000, 'Fetch rejected: ${reject.failureReason}');
       default:
         return RiftException(-32603, 'Fetch rejected: ${reject.failureReason}');
     }
   }
 
-  _ClipboardFetchWaiter _awaitClipboardFetchResult(String offerId) {
+  _OperationFetchWaiter _awaitClipboardFetchResult(
+    String offerId,
+    String operationId,
+  ) {
     final completer = Completer<ClipboardFetchResponse>();
     completer.future.ignore(); // Prevent unhandled exception if cancelled before await
     late final StreamSubscription<ClipboardFetchResponse> responseSub;
@@ -972,9 +1059,28 @@ class RiftDaemon {
     Timer? timeoutTimer;
     var isSettled = false;
 
+    void completeResponse(ClipboardFetchResponse response) {
+      completer.complete(response);
+    }
+
+    void completeFailure(
+      RiftException error, {
+      String? failureReason,
+      required bool expired,
+    }) {
+      _operationManager!.transitionOperation(
+        operationId,
+        expired ? OperationState.expired : OperationState.failed,
+        failureReason: failureReason,
+      );
+      completer.completeError(error);
+    }
+
     Future<void> settle({
       ClipboardFetchResponse? response,
       RiftException? error,
+      String? failureReason,
+      required bool expired,
     }) async {
       if (isSettled) return;
       isSettled = true;
@@ -982,37 +1088,121 @@ class RiftDaemon {
       await responseSub.cancel();
       await rejectSub.cancel();
       if (error != null) {
-        completer.completeError(error);
-      } else if (response != null) {
-        completer.complete(response);
+        completeFailure(
+          error,
+          failureReason: failureReason,
+          expired: expired,
+        );
+        return;
+      }
+
+      if (response != null) {
+        completeResponse(response);
       }
     }
 
     responseSub = _clipboardHandler!.onFetchResponse.listen((response) {
       if (response.offerId != offerId) return;
-      unawaited(settle(response: response));
+      try {
+        _operationManager!.transitionOperation(operationId, OperationState.active);
+      } on RiftInvalidTransitionException {
+        // Duplicate network delivery should not crash the daemon.
+      }
+      _operationManager!.transitionOperation(operationId, OperationState.done);
+      unawaited(settle(response: response, expired: false));
     });
 
     rejectSub = _clipboardHandler!.onFetchReject.listen((reject) {
       if (reject.offerId != offerId) return;
-      unawaited(settle(error: _mapClipboardFetchReject(reject)));
+      try {
+        _operationManager!.transitionOperation(operationId, OperationState.active);
+      } on RiftInvalidTransitionException {
+        // Duplicate network delivery should not crash the daemon.
+      }
+      unawaited(
+        settle(
+          error: _mapClipboardFetchReject(reject),
+          failureReason: reject.failureReason,
+          expired: reject.failureReason == 'Timeout',
+        ),
+      );
     });
 
     timeoutTimer = Timer(
       const Duration(seconds: _clipboardFetchTimeoutSeconds),
       () => unawaited(
         settle(
-          error: const RiftException(-32000, 'Source peer unreachable'),
+          error: const RiftException(-32011, 'Clipboard fetch timed out'),
+          failureReason: 'Timeout',
+          expired: true,
         ),
       ),
     );
 
-    return _ClipboardFetchWaiter(
+    return _OperationFetchWaiter(
       future: completer.future,
-      cancel: () => settle(
-        error: const RiftException(-32000, 'Source peer unreachable'),
+      fail: (failureReason, errorCode, message) => settle(
+        error: RiftException(errorCode, message),
+        failureReason: failureReason,
+        expired: false,
       ),
     );
+  }
+
+  String _classifyClipboardFetchFailureReason(Object error) {
+    if (error is RiftException) {
+      switch (error.code) {
+        case -32002:
+          return 'OfferExpired';
+        case -32003:
+          return 'CapabilityUnavailable';
+        case -32004:
+          return 'Unauthorized';
+        case -32006:
+          return 'HashMismatch';
+        case -32007:
+          return 'PayloadTooLarge';
+        case -32011:
+          return 'Timeout';
+        case -32000:
+          return 'PeerUnreachable';
+      }
+    }
+
+    final message = error.toString().toLowerCase();
+    if (message.contains('capabilityunavailable')) {
+      return 'CapabilityUnavailable';
+    }
+    if (message.contains('unauthorized')) {
+      return 'Unauthorized';
+    }
+    if (message.contains('timeout')) {
+      return 'Timeout';
+    }
+
+    return 'PeerUnreachable';
+  }
+
+  int _errorCodeForFailureReason(String failureReason) {
+    switch (failureReason) {
+      case 'OfferExpired':
+        return -32002;
+      case 'CapabilityUnavailable':
+        return -32003;
+      case 'Unauthorized':
+        return -32004;
+      case 'HashMismatch':
+        return -32006;
+      case 'PayloadTooLarge':
+        return -32007;
+      case 'Timeout':
+        return -32011;
+      case 'PeerUnreachable':
+      case 'ConnectionLost':
+        return -32000;
+      default:
+        return -32603;
+    }
   }
 
   void _requireTransportServices() {

@@ -9,10 +9,11 @@ public class RiftApiHandler : IRiftApi
     private readonly IDaemonInfoService _daemonInfoService;
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
     private readonly IClipboardService _clipboardService;
+    private readonly IOperationService _operationService;
     private readonly IPairingService _pairingService;
 
     public RiftApiHandler()
-        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedPairingService())
+        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedOperationService(), new UnsupportedPairingService())
     {
     }
 
@@ -20,11 +21,13 @@ public class RiftApiHandler : IRiftApi
         IDaemonInfoService daemonInfoService,
         IDiscoveryCoordinator discoveryCoordinator,
         IClipboardService clipboardService,
+        IOperationService operationService,
         IPairingService pairingService)
     {
         _daemonInfoService = daemonInfoService;
         _discoveryCoordinator = discoveryCoordinator;
         _clipboardService = clipboardService;
+        _operationService = operationService;
         _pairingService = pairingService;
     }
 
@@ -165,6 +168,23 @@ public class RiftApiHandler : IRiftApi
         });
     }
 
+    [JsonRpcMethod("rift.listOperations")]
+    public Task<ListOperationsResult> ListOperationsAsync(int limit = 50, int offset = 0) =>
+        Task.FromResult(_operationService.ListOperations(limit, offset));
+
+    [JsonRpcMethod("rift.getOperation")]
+    public Task<OperationRecord> GetOperationAsync(string operationId)
+    {
+        try
+        {
+            return Task.FromResult(_operationService.GetOperation(operationId));
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = -32009 };
+        }
+    }
+
     private static async Task<TResult> ExecutePairingAsync<TResult>(Func<Task<TResult>> action)
     {
         try
@@ -276,6 +296,25 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("Pairing services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedOperationService : IOperationService
+    {
+        public OperationRecord CreateOperation(string operationId, string operationType, string sourceDeviceId, string destinationDeviceId) => throw CreateNotConfiguredException();
+
+        public OperationRecord TransitionOperation(string operationId, OperationState nextState, string? failureReason = null, IReadOnlyDictionary<string, object?>? details = null) => throw CreateNotConfiguredException();
+
+        public ListOperationsResult ListOperations(int limit = 50, int offset = 0) => throw CreateNotConfiguredException();
+
+        public OperationRecord GetOperation(string operationId) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Operation services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };

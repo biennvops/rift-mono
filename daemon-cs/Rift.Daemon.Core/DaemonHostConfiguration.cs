@@ -27,6 +27,7 @@ public static class DaemonHostConfiguration
         services.AddSingleton<IDaemonInfoService, DaemonInfoService>();
         services.AddSingleton<IIpcNotificationService, IpcNotificationHub>();
         services.AddSingleton<IPresenceService, PresenceService>();
+        services.AddSingleton<IOperationService, OperationService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
         services.AddSingleton<IPairingProtocolCoordinator, PairingProtocolCoordinator>();
         services.AddSingleton<IProtocolMessageRouter, ProtocolMessageRouter>();
