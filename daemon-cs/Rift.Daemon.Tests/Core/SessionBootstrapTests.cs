@@ -19,41 +19,59 @@ namespace Rift.Daemon.Tests.Core;
 public class SessionBootstrapTests
 {
     [Fact]
-    public void GenerateIdentityProof_TlsUnique_ChangesWhenChannelBindingChanges()
+    public void GenerateIdentityProof_AppNonce_UsesNonceBasedBinding()
     {
         var identityManager = new IdentityManager();
         identityManager.EnsureIdentityInitialized();
         var cert = identityManager.GetTlsCertificate();
         var pubKey = identityManager.GetEd25519PublicKey();
+        var peerCertDer = cert.GetRawCertData();
         using var stream = new SslStream(new MemoryStream());
 
         var bootstrapA = new TestSessionBootstrap(identityManager, CreateBinding(0x11));
         var bootstrapB = new TestSessionBootstrap(identityManager, CreateBinding(0x22));
 
-        var (typeA, proofA, nonceA) = bootstrapA.GenerateIdentityProof(stream, pubKey, cert);
-        var (typeB, proofB, nonceB) = bootstrapB.GenerateIdentityProof(stream, pubKey, cert);
+        var (typeA, proofA, nonceA) = bootstrapA.GenerateIdentityProof(stream, pubKey, cert, peerCertDer);
+        var (typeB, proofB, nonceB) = bootstrapB.GenerateIdentityProof(stream, pubKey, cert, peerCertDer);
 
-        Assert.Equal("tls-unique", typeA);
-        Assert.Equal("tls-unique", typeB);
-        Assert.Null(nonceA);
-        Assert.Null(nonceB);
+        Assert.Equal("app-nonce", typeA);
+        Assert.Equal("app-nonce", typeB);
+        Assert.NotNull(nonceA);
+        Assert.NotNull(nonceB);
+        Assert.Equal(32, nonceA!.Length);
+        Assert.Equal(32, nonceB!.Length);
+        Assert.NotEqual(nonceA, nonceB);
         Assert.NotEqual(proofA, proofB);
     }
 
     [Fact]
-    public void VerifyIdentityProof_TlsUnique_FailsWhenChannelBindingDoesNotMatch()
+    public void VerifyIdentityProof_AppNonce_FailsWhenPeerCertificateDoesNotMatch()
     {
         var identityManager = new IdentityManager();
         identityManager.EnsureIdentityInitialized();
         var cert = identityManager.GetTlsCertificate();
         var pubKey = identityManager.GetEd25519PublicKey();
+        var peerIdentity = new IdentityManager();
+        peerIdentity.EnsureIdentityInitialized();
+        var wrongPeerIdentity = new IdentityManager();
+        wrongPeerIdentity.EnsureIdentityInitialized();
         using var stream = new SslStream(new MemoryStream());
 
         var signingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x33));
         var verifyingBootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x44));
 
-        var (_, proof, _) = signingBootstrap.GenerateIdentityProof(stream, pubKey, cert);
-        var isValid = verifyingBootstrap.VerifyIdentityProof(stream, pubKey, cert, proof, "tls-unique");
+        var (_, proof, sessionNonce) = signingBootstrap.GenerateIdentityProof(
+            stream,
+            pubKey,
+            cert,
+            peerIdentity.GetTlsCertificate().GetRawCertData());
+        var isValid = verifyingBootstrap.VerifyIdentityProof(
+            stream,
+            pubKey,
+            wrongPeerIdentity.GetTlsCertificate(),
+            proof,
+            "app-nonce",
+            sessionNonce);
 
         Assert.False(isValid);
     }
@@ -65,11 +83,12 @@ public class SessionBootstrapTests
         identityManager.EnsureIdentityInitialized();
         var cert = identityManager.GetTlsCertificate();
         var pubKey = identityManager.GetEd25519PublicKey();
+        var peerCertDer = cert.GetRawCertData();
         using var stream = new SslStream(new MemoryStream());
 
         var bootstrap = new TestSessionBootstrap(identityManager, CreateBinding(0x55));
 
-        var (bindingType, proof, sessionNonce) = bootstrap.GenerateIdentityProof(stream, pubKey, cert);
+        var (bindingType, proof, sessionNonce) = bootstrap.GenerateIdentityProof(stream, pubKey, cert, peerCertDer);
         var isValid = bootstrap.VerifyIdentityProof(stream, pubKey, cert, proof, bindingType, sessionNonce);
 
         Assert.True(isValid);

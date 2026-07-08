@@ -22,6 +22,7 @@ public sealed class ClipboardServiceTests : IDisposable
     private readonly FakeTransport _transport;
     private readonly FakeDiscoveryCoordinator _discoveryCoordinator;
     private readonly FakeIpcNotificationService _ipcNotificationService;
+    private readonly OperationService _operationService;
     private readonly ClipboardService _clipboardService;
     private static readonly TimeSpan FetchResponseTimeout = TimeSpan.FromMilliseconds(75);
 
@@ -37,7 +38,8 @@ public sealed class ClipboardServiceTests : IDisposable
         _transport = new FakeTransport();
         _discoveryCoordinator = new FakeDiscoveryCoordinator();
         _ipcNotificationService = new FakeIpcNotificationService();
-        _clipboardService = new ClipboardService(_transport, _trustStore, _discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _ipcNotificationService, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _operationService = new OperationService(_ipcNotificationService, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
+        _clipboardService = new ClipboardService(_transport, _trustStore, _discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, _ipcNotificationService, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
     }
 
     [Fact]
@@ -157,6 +159,9 @@ public sealed class ClipboardServiceTests : IDisposable
 
         Assert.Equal("offer-2", result.OfferId);
         Assert.True(result.Verified);
+        Assert.Contains(_ipcNotificationService.Notifications, notification =>
+            notification.Method == "rift.onOperationTransition" &&
+            notification.Parameters["nextState"]?.ToString() == "Done");
     }
 
     [Fact]
@@ -236,6 +241,9 @@ public sealed class ClipboardServiceTests : IDisposable
 
         Assert.Equal("Timeout", ex.FailureReason);
         Assert.Contains(authFailures, evt => evt.FailureReason == "Unauthorized");
+        Assert.Contains(_ipcNotificationService.Notifications, notification =>
+            notification.Method == "rift.onOperationTransition" &&
+            notification.Parameters["nextState"]?.ToString() == "Expired");
     }
 
     [Fact]

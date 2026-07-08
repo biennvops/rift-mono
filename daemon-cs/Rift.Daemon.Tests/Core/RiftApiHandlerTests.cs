@@ -21,6 +21,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly FakeDiscoveryService _discoveryService;
     private readonly PresenceService _presenceService;
     private readonly FakeTransport _transport;
+    private readonly OperationService _operationService;
     private readonly ClipboardService _clipboardService;
     private readonly RiftApiHandler _handler;
 
@@ -37,14 +38,15 @@ public sealed class RiftApiHandlerTests : IDisposable
         _transport = new FakeTransport();
         var discoveryCoordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager);
         var daemonInfoService = new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, discoveryCoordinator, _presenceService, _transport);
-        _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _operationService = new OperationService(null, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
+        _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, pairingService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _operationService, pairingService);
     }
 
     [Fact]
@@ -286,6 +288,72 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task ListAndGetOperationAsync_ReturnOperationHistory()
+    {
+        _operationService.CreateOperation("operation-1", "clipboard.fetch", "rift-local", "rift-peer");
+        _operationService.TransitionOperation("operation-1", OperationState.Pending);
+        _operationService.TransitionOperation("operation-1", OperationState.Dispatched);
+        _operationService.TransitionOperation("operation-1", OperationState.Active);
+        _operationService.TransitionOperation("operation-1", OperationState.Done);
+
+        var listed = await _handler.ListOperationsAsync();
+        var detailed = await _handler.GetOperationAsync("operation-1");
+
+        Assert.Contains(listed.Operations, operation => operation.OperationId == "operation-1" && operation.State == "Done");
+        Assert.Equal("clipboard.fetch", detailed.OperationType);
+        Assert.Equal(4, detailed.Transitions.Count);
+    }
+
+    [Fact]
+    public async Task ListOperationsAsync_PaginatesNewestFirst()
+    {
+        _operationService.CreateOperation("operation-a", "clipboard.fetch", "rift-local", "rift-peer-a");
+        _operationService.CreateOperation("operation-b", "clipboard.fetch", "rift-local", "rift-peer-b");
+        _operationService.CreateOperation("operation-c", "clipboard.fetch", "rift-local", "rift-peer-c");
+
+        var listed = await _handler.ListOperationsAsync(limit: 1, offset: 1);
+
+        Assert.Equal(3, listed.Total);
+        Assert.Single(listed.Operations);
+        Assert.Equal("operation-b", listed.Operations[0].OperationId);
+    }
+
+    [Fact]
+    public async Task FetchClipboardContentAsync_SilentPeer_RecordsExpiredOperation()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-timeout-operation",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-timeout-operation", "online", null, ["clipboard.offer_fetch"]);
+
+        await _clipboardService.HandleOfferReceivedAsync(new ReceivedClipboardOffer
+        {
+            DeviceId = "rift-peer-timeout-operation",
+            PayloadSourceDeviceId = "rift-peer-timeout-operation",
+            OfferId = "offer-timeout-operation",
+            ContentType = "text/plain",
+            ByteSize = 5,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ExpiresInMs = 120000,
+            RequiredCapability = "clipboard.offer_fetch",
+            OfferSequence = 1
+        });
+
+        await Assert.ThrowsAsync<LocalRpcException>(() => _handler.FetchClipboardContentAsync("offer-timeout-operation"));
+
+        var listed = await _handler.ListOperationsAsync(limit: 1, offset: 0);
+        var latest = Assert.Single(listed.Operations);
+
+        Assert.Equal("clipboard.fetch", latest.OperationType);
+        Assert.Equal("Expired", latest.State);
+        Assert.Equal("Timeout", latest.FailureReason);
+    }
+
+    [Fact]
     public async Task ApprovePairingAsync_WithWrongFingerprint_ReturnsAuthenticationFailed()
     {
         var peerPublicKey = new byte[32];
@@ -384,6 +452,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager), _presenceService, _transport),
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
+            _operationService,
             new ThrowingPairingService());
 
         var ex = await Assert.ThrowsAsync<LocalRpcException>(() => handler.StartPairingAsync("rift-peer-failure"));

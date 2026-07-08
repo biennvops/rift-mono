@@ -46,6 +46,36 @@ class MockTransport implements IpcTransport {
         '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     'Verified': true,
   };
+  Map<String, dynamic> listOperationsResult = {
+    'Operations': [
+      {
+        'OperationId': 'operation-1',
+        'OperationType': 'clipboard.fetch',
+        'State': 'Done',
+        'SourceDeviceId': 'rift-local',
+        'DestinationDeviceId': 'rift-peer',
+        'CreatedAt': '2026-06-30T02:00:00Z',
+        'UpdatedAt': '2026-06-30T02:00:01Z',
+      }
+    ],
+    'Total': 1,
+  };
+  Map<String, dynamic> getOperationResult = {
+    'OperationId': 'operation-1',
+    'OperationType': 'clipboard.fetch',
+    'State': 'Done',
+    'SourceDeviceId': 'rift-local',
+    'DestinationDeviceId': 'rift-peer',
+    'CreatedAt': '2026-06-30T02:00:00Z',
+    'UpdatedAt': '2026-06-30T02:00:01Z',
+    'Transitions': [
+      {'From': 'Created', 'To': 'Pending', 'At': '2026-06-30T02:00:00Z'},
+      {'From': 'Pending', 'To': 'Dispatched', 'At': '2026-06-30T02:00:00Z'},
+      {'From': 'Dispatched', 'To': 'Active', 'At': '2026-06-30T02:00:01Z'},
+      {'From': 'Active', 'To': 'Done', 'At': '2026-06-30T02:00:01Z'},
+    ],
+  };
+  Map<String, dynamic>? getOperationError;
 
   void triggerDisconnect() {
     _daemonToApp?.close();
@@ -63,6 +93,14 @@ class MockTransport implements IpcTransport {
     _daemonToApp?.add(jsonEncode({
       'jsonrpc': '2.0',
       'result': result,
+      'id': id,
+    }));
+  }
+
+  void _sendError(dynamic id, Map<String, dynamic> error) {
+    _daemonToApp?.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'error': error,
       'id': id,
     }));
   }
@@ -118,6 +156,16 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.fetchClipboardContent':
           _sendResult(id, fetchClipboardContentResult);
+          break;
+        case 'rift.listOperations':
+          _sendResult(id, listOperationsResult);
+          break;
+        case 'rift.getOperation':
+          if (getOperationError != null) {
+            _sendError(id, getOperationError!);
+          } else {
+            _sendResult(id, getOperationResult);
+          }
           break;
       }
     });
@@ -355,6 +403,100 @@ void main() {
             .single['params'],
         {'offerId': 'offer-remote'},
       );
+    });
+
+    test('should expose operation RPC wrappers', () async {
+      await client.connect();
+
+      final listed = await client.listOperations();
+      final detailed = await client.getOperation('operation-1');
+
+      expect(listed, {
+        'operations': [
+          {
+            'operationId': 'operation-1',
+            'operationType': 'clipboard.fetch',
+            'state': 'Done',
+            'sourceDeviceId': 'rift-local',
+            'destinationDeviceId': 'rift-peer',
+            'createdAt': '2026-06-30T02:00:00Z',
+            'updatedAt': '2026-06-30T02:00:01Z',
+          }
+        ],
+        'total': 1,
+      });
+      expect(detailed['operationId'], 'operation-1');
+      expect((detailed['transitions'] as List).length, 4);
+      expect(
+        transport.requests
+            .where((request) => request['method'] == 'rift.getOperation')
+            .single['params'],
+        {'operationId': 'operation-1'},
+      );
+    });
+
+    test('should surface getOperation not found JSON-RPC errors', () async {
+      transport.getOperationError = {
+        'code': -32009,
+        'message': 'Operation not found',
+      };
+      await client.connect();
+
+      await expectLater(
+        client.getOperation('missing-operation'),
+        throwsA(
+          predicate(
+            (error) =>
+                error.toString().contains('JSON-RPC error -32009') &&
+                error.toString().contains('Operation not found'),
+          ),
+        ),
+      );
+    });
+
+    test('should preserve spec casing for operation transition notifications',
+        () async {
+      await client.connect();
+
+      final transitionFuture = client.onOperationTransition.first;
+      transport.emitNotification('rift.onOperationTransition', {
+        'OperationId': 'operation-1',
+        'OperationType': 'clipboard.fetch',
+        'PreviousState': 'Pending',
+        'NextState': 'Done',
+      });
+
+      final transition = await transitionFuture;
+      expect(transition, {
+        'operationId': 'operation-1',
+        'operationType': 'clipboard.fetch',
+        'previousState': 'Pending',
+        'nextState': 'Done',
+      });
+    });
+
+    test(
+        'should preserve failureReason on operation transition notifications',
+        () async {
+      await client.connect();
+
+      final transitionFuture = client.onOperationTransition.first;
+      transport.emitNotification('rift.onOperationTransition', {
+        'OperationId': 'operation-2',
+        'OperationType': 'clipboard.fetch',
+        'PreviousState': 'Active',
+        'NextState': 'Failed',
+        'FailureReason': 'PeerUnreachable',
+      });
+
+      final transition = await transitionFuture;
+      expect(transition, {
+        'operationId': 'operation-2',
+        'operationType': 'clipboard.fetch',
+        'previousState': 'Active',
+        'nextState': 'Failed',
+        'failureReason': 'PeerUnreachable',
+      });
     });
 
     test('Linux to Android style flow: approve sends correct IPC request and receives completion events',
