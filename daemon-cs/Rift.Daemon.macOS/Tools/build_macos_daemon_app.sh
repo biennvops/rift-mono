@@ -22,7 +22,7 @@ publish_dir="$out_root/publish-$runtime"
 app_dir="$out_root/Rift Daemon.app"
 
 echo "Publishing $project ($runtime) -> $publish_dir"
-dotnet publish "$project" -c Release -r "$runtime" --self-contained false -o "$publish_dir"
+dotnet publish "$project" -c Release -r "$runtime" --self-contained true -o "$publish_dir"
 
 echo "Assembling app bundle -> $app_dir"
 rm -rf "$app_dir"
@@ -31,23 +31,17 @@ mkdir -p "$app_dir/Contents/MacOS"
 cp "$repo_root/daemon-cs/Rift.Daemon.macOS/Resources/RiftDaemon.Info.plist" \
   "$app_dir/Contents/Info.plist"
 
-# Copy the full publish output next to the launcher, then run via `dotnet <dll>`.
-# This avoids apphost renaming pitfalls (apphost expects a specific dll name).
-if [[ ! -f "$publish_dir/Rift.Daemon.macOS.dll" ]]; then
-  echo "ERROR: publish output did not contain Rift.Daemon.macOS.dll" >&2
-  exit 1
-fi
-
+# Copy the full publish output and provide a stable launcher name.
+# Self-contained publish produces a native executable we can run without `dotnet`.
 cp -R "$publish_dir/"* "$app_dir/Contents/MacOS/"
 
-cat >"$app_dir/Contents/MacOS/rift-daemon" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec dotnet "$here/Rift.Daemon.macOS.dll"
-EOF
-
-chmod +x "$app_dir/Contents/MacOS/rift-daemon"
+if [[ -f "$app_dir/Contents/MacOS/Rift.Daemon.macOS" ]]; then
+  mv "$app_dir/Contents/MacOS/Rift.Daemon.macOS" "$app_dir/Contents/MacOS/rift-daemon"
+  chmod +x "$app_dir/Contents/MacOS/rift-daemon"
+else
+  echo "ERROR: self-contained publish did not produce Rift.Daemon.macOS executable." >&2
+  exit 1
+fi
 
 echo "Done."
 echo "Next:"

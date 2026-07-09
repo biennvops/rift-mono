@@ -20,8 +20,8 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>Library/Logs/rift-daemon/stdout.log</string>
+    <string>@HOME@/Library/Logs/rift-daemon/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>Library/Logs/rift-daemon/stderr.log</string>
+    <string>@HOME@/Library/Logs/rift-daemon/stderr.log</string>
 </dict>
 </plist>
