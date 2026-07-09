@@ -92,11 +92,12 @@ public class IdentityManagerTests
     }
 
     [Theory]
-    [InlineData(true, X509KeyStorageFlags.Exportable)]
-    [InlineData(false, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet)]
-    public void GetPkcs12LoadFlags_UsesPlatformCompatibleStorageFlags(bool isMacOs, X509KeyStorageFlags expectedFlags)
+    [InlineData(true, false, X509KeyStorageFlags.Exportable)]
+    [InlineData(false, true, X509KeyStorageFlags.Exportable)]
+    [InlineData(false, false, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet)]
+    public void GetPkcs12LoadFlags_UsesPlatformCompatibleStorageFlags(bool isWindows, bool isMacOs, X509KeyStorageFlags expectedFlags)
     {
-        var actualFlags = IdentityManager.GetPkcs12LoadFlags(isMacOs);
+        var actualFlags = IdentityManager.GetPkcs12LoadFlags(isWindows, isMacOs);
 
         Assert.Equal(expectedFlags, actualFlags);
     }
