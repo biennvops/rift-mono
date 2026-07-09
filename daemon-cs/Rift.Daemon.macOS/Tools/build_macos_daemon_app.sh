@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# This script lives at: daemon-cs/Rift.Daemon.macOS/Tools/*.sh
+# We want repo root: <repo>/ (not <repo>/daemon-cs).
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 project="$repo_root/daemon-cs/Rift.Daemon.macOS/Rift.Daemon.macOS.csproj"
 
 runtime="${1:-}"
@@ -52,4 +54,3 @@ echo "Done."
 echo "Next:"
 echo "  1) Copy '$app_dir' to '$HOME/Applications/' (or keep in-place for dev)"
 echo "  2) Install LaunchAgent via: daemon-cs/Rift.Daemon.macOS/Tools/install_launchagent.sh"
-
