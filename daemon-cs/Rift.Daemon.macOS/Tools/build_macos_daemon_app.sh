@@ -31,24 +31,23 @@ mkdir -p "$app_dir/Contents/MacOS"
 cp "$repo_root/daemon-cs/Rift.Daemon.macOS/Resources/RiftDaemon.Info.plist" \
   "$app_dir/Contents/Info.plist"
 
-# Prefer apphost (native launcher) if present; otherwise fall back to dll.
-if [[ -f "$publish_dir/Rift.Daemon.macOS" ]]; then
-  cp "$publish_dir/Rift.Daemon.macOS" "$app_dir/Contents/MacOS/rift-daemon"
-elif [[ -f "$publish_dir/Rift.Daemon.macOS.dll" ]]; then
-  cp "$publish_dir/Rift.Daemon.macOS.dll" "$app_dir/Contents/MacOS/Rift.Daemon.macOS.dll"
-  cat >"$app_dir/Contents/MacOS/rift-daemon" <<'EOF'
+# Copy the full publish output next to the launcher, then run via `dotnet <dll>`.
+# This avoids apphost renaming pitfalls (apphost expects a specific dll name).
+if [[ ! -f "$publish_dir/Rift.Daemon.macOS.dll" ]]; then
+  echo "ERROR: publish output did not contain Rift.Daemon.macOS.dll" >&2
+  exit 1
+fi
+
+cp -R "$publish_dir/"* "$app_dir/Contents/MacOS/"
+
+cat >"$app_dir/Contents/MacOS/rift-daemon" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 exec dotnet "$here/Rift.Daemon.macOS.dll"
 EOF
-  chmod +x "$app_dir/Contents/MacOS/rift-daemon"
-else
-  echo "ERROR: publish output did not contain Rift.Daemon.macOS or Rift.Daemon.macOS.dll" >&2
-  exit 1
-fi
 
-chmod +x "$app_dir/Contents/MacOS/rift-daemon" || true
+chmod +x "$app_dir/Contents/MacOS/rift-daemon"
 
 echo "Done."
 echo "Next:"
