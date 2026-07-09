@@ -21,6 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
+import 'src/platform/macos_notifications.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +80,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
+  StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
   StreamSubscription<String>? _clipboardStatusSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
@@ -98,6 +102,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindPairingRequests();
+      _bindNotifications();
       _bindClipboardChannel();
       _bindDesktopClipboardStatus();
     });
@@ -191,6 +196,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       windowManager.removeListener(this);
     }
     _pairingRequestSub?.cancel();
+    _trustChangedSub?.cancel();
+    _clipboardOfferSub?.cancel();
+    _clipboardExpiredSub?.cancel();
     _clipboardStatusSub?.cancel();
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
@@ -225,6 +233,30 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
+  Future<bool> _isWindowForeground() async {
+    if (!_enableDesktopShellIntegration) return true;
+    try {
+      final visible = await windowManager.isVisible();
+      final focused = await windowManager.isFocused();
+      return visible && focused;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _maybeNotify(String title, String body) {
+    if (!Platform.isMacOS) return;
+    unawaited(() async {
+      final foreground = await _isWindowForeground();
+      if (foreground) return;
+      try {
+        await MacOSNotifications.show(title: title, body: body);
+      } catch (_) {
+        // Best-effort: depends on user permission and runner support.
+      }
+    }());
+  }
+
   @override
   void onWindowClose() async {
     if (!_enableDesktopShellIntegration) return;
@@ -243,6 +275,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
       final deviceId = event['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return;
+
+      final displayName = event['displayName']?.toString();
+      _maybeNotify(
+        'Pairing request',
+        displayName == null || displayName.isEmpty
+            ? 'Incoming pairing request.'
+            : 'Incoming pairing request from $displayName.',
+      );
       // Guard against notification bursts stacking multiple pairing screens.
       if (_activePairingDeviceId != null) return;
 
@@ -253,7 +293,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           MaterialPageRoute<void>(
             builder: (_) => PairingScreen(
               initialDeviceId: deviceId,
-              initialDisplayName: event['displayName']?.toString(),
+              initialDisplayName: displayName,
               initialPeerFingerprint: event['fingerprint']?.toString(),
               initialExpiresInMs: (event['expiresInMs'] as num?)?.toInt(),
               initialCanApproveLocally: true,
@@ -271,6 +311,27 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           _activePairingDeviceId = null;
         }
       }
+    });
+  }
+
+  void _bindNotifications() {
+    final client = context.read<JsonRpcRiftClient>();
+
+    _trustChangedSub = client.onTrustChanged.listen((event) {
+      final deviceId = event['deviceId']?.toString() ?? 'unknown device';
+      final newState = event['newState']?.toString();
+      if (newState == null || newState.isEmpty) return;
+      _maybeNotify('Trust updated', '$deviceId is now $newState.');
+    });
+
+    _clipboardOfferSub = client.onClipboardOffer.listen((event) {
+      final source = event['sourceDeviceId']?.toString() ?? 'a device';
+      final contentType = event['contentType']?.toString() ?? 'clipboard';
+      _maybeNotify('Clipboard offer', '$source offered $contentType.');
+    });
+
+    _clipboardExpiredSub = client.onClipboardExpired.listen((event) {
+      _maybeNotify('Clipboard offer expired', 'A clipboard offer expired.');
     });
   }
 

@@ -10,6 +10,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    PermissionsBridge.register(with: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
