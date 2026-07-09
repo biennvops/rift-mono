@@ -93,9 +93,16 @@ dotnet run --project Rift.Daemon.Windows/
 ### Install as macOS LaunchAgent
 
 ```bash
-cp Rift.Daemon.macOS/Resources/com.rift.daemon.plist ~/Library/LaunchAgents/
-# Edit the plist to set the correct binary path
-launchctl load ~/Library/LaunchAgents/com.rift.daemon.plist
+# 1) Build the background app bundle (dev output under dist/macos/)
+./Rift.Daemon.macOS/Tools/build_macos_daemon_app.sh
+
+# 2) Install it into your user Applications folder
+mkdir -p ~/Applications
+rm -rf ~/Applications/'Rift Daemon.app'
+cp -R dist/macos/'Rift Daemon.app' ~/Applications/
+
+# 3) Install + load the LaunchAgent (generates plist with your $HOME expanded)
+./Rift.Daemon.macOS/Tools/install_launchagent.sh
 ```
 
 ### Install as Windows Service

@@ -6,7 +6,7 @@
     <string>com.rift.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/rift-daemon</string>
+        <string>@HOME@/Applications/Rift Daemon.app/Contents/MacOS/rift-daemon</string>
     </array>
     <key>KeepAlive</key>
     <dict>
