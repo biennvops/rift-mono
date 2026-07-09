@@ -45,7 +45,7 @@ public sealed class DatabaseContext
 
             CREATE TABLE IF NOT EXISTS LocalIdentity (
                 Id INTEGER NOT NULL PRIMARY KEY CHECK (Id = 1),
-                Ed25519PrivateKey BLOB NOT NULL,
+                Ed25519PrivateKey BLOB NULL,
                 Ed25519PublicKey BLOB NOT NULL,
                 TlsCertificatePfx BLOB NULL,
                 CreatedAt TEXT NOT NULL
@@ -89,6 +89,7 @@ public sealed class DatabaseContext
         command.ExecuteNonQuery();
 
         EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
+        EnsureLocalIdentitySecretColumnsNullable(connection);
         EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
     }
 
@@ -130,6 +131,56 @@ public sealed class DatabaseContext
         using var alterCommand = connection.CreateCommand();
         alterCommand.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition};";
         alterCommand.ExecuteNonQuery();
+    }
+
+    private static void EnsureLocalIdentitySecretColumnsNullable(SqliteConnection connection)
+    {
+        var notNullMap = new Dictionary<string, bool>(StringComparer.Ordinal);
+
+        using (var pragmaCommand = connection.CreateCommand())
+        {
+            pragmaCommand.CommandText = "PRAGMA table_info(LocalIdentity);";
+            using var reader = pragmaCommand.ExecuteReader();
+            while (reader.Read())
+            {
+                var name = reader["name"] as string;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                notNullMap[name] = Convert.ToInt32(reader["notnull"]) != 0;
+            }
+        }
+
+        if (!notNullMap.TryGetValue("Ed25519PrivateKey", out var privateKeyNotNull) || !privateKeyNotNull)
+        {
+            return;
+        }
+
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            ALTER TABLE LocalIdentity RENAME TO LocalIdentity__old;
+
+            CREATE TABLE LocalIdentity (
+                Id INTEGER NOT NULL PRIMARY KEY CHECK (Id = 1),
+                Ed25519PrivateKey BLOB NULL,
+                Ed25519PublicKey BLOB NOT NULL,
+                TlsCertificatePfx BLOB NULL,
+                CreatedAt TEXT NOT NULL
+            );
+
+            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt)
+            SELECT Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt
+            FROM LocalIdentity__old;
+
+            DROP TABLE LocalIdentity__old;
+            """;
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     private static void EnsureSafeSqlIdentifier(string identifier, string parameterName)

@@ -54,8 +54,13 @@ daemon-cs/
 - macOS stores daemon state under `~/Library/Application Support/Rift/riftd.sqlite3`.
 
 Sensitive identity material is protected at rest with Windows DPAPI on
-Windows, and with a daemon-local AES key file (`.rift-secrets.key`, mode
-`0600`) on Unix hosts.
+Windows, with the user Keychain on macOS, and with a daemon-local AES key
+file (`.rift-secrets.key`, mode `0600`) on Linux.
+
+On macOS, the daemon keeps only public identity metadata in
+`~/Library/Application Support/Rift/riftd.sqlite3`; the Ed25519 private key
+and TLS PKCS#12 identity are stored as Keychain items under
+`com.rift.daemon.identity`.
 
 ## Development
 

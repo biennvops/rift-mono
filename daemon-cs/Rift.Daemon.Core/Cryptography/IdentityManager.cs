@@ -95,12 +95,12 @@ public class IdentityManager : IIdentityManager
         });
     }
 
-    private static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
+    internal static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
     {
         return certificate.Export(X509ContentType.Pkcs12, string.Empty);
     }
 
-    private static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
+    internal static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
     {
         try
         {
@@ -138,7 +138,7 @@ public class IdentityManager : IIdentityManager
             GetPkcs12LoadFlags(RuntimeInformation.IsOSPlatform(OSPlatform.OSX)));
     }
 
-    private static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
+    internal static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
     {
         var bcParser = new Org.BouncyCastle.X509.X509CertificateParser();
         var bcCert = bcParser.ReadCertificate(certificate.RawData);

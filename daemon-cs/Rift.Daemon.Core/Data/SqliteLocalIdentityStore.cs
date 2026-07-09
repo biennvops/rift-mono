@@ -35,6 +35,16 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
 
         var privateKeyLegacy = false;
         var tlsPfxLegacy = false;
+        if (reader["Ed25519PrivateKey"] is DBNull)
+        {
+            throw new InvalidOperationException("Persisted local identity did not include an Ed25519 private key.");
+        }
+
+        if (reader["Ed25519PublicKey"] is DBNull)
+        {
+            throw new InvalidOperationException("Persisted local identity did not include an Ed25519 public key.");
+        }
+
         var record = new LocalIdentityRecord
         {
             Ed25519PrivateKey = UnprotectBlob(

@@ -35,6 +35,27 @@ public sealed class DatabaseContextTests : IDisposable
     }
 
     [Fact]
+    public void Initialize_AllowsLocalIdentitySecretsToBeNullable()
+    {
+        _databaseContext.Initialize();
+
+        using var connection = _databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(LocalIdentity);";
+
+        using var reader = command.ExecuteReader();
+        var notNullMap = new Dictionary<string, bool>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            notNullMap[(string)reader["name"]] = Convert.ToInt32(reader["notnull"]) != 0;
+        }
+
+        Assert.False(notNullMap["Ed25519PrivateKey"]);
+        Assert.False(notNullMap["TlsCertificatePfx"]);
+        Assert.True(notNullMap["Ed25519PublicKey"]);
+    }
+
+    [Fact]
     public void EnsureColumnExists_RejectsUnsafeSqlTokens()
     {
         _databaseContext.Initialize();
