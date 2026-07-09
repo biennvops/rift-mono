@@ -138,8 +138,17 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             return;
         }
 
-        _mdns.Start();
-        _isMdnsRunning = true;
+        try
+        {
+            _mdns.Start();
+            _isMdnsRunning = true;
+        }
+        catch (Exception ex) when (LocalNetworkPolicy.IsAccessDenied(ex))
+        {
+            throw new LocalNetworkAccessDeniedException(
+                "Local network access is denied by macOS privacy settings.",
+                ex);
+        }
     }
 
     private void StopMdnsIfIdle()
@@ -171,6 +180,12 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _fallbackAdvertiserTask = Task.Run(
                 () => RunFallbackAdvertiserAsync(client, deviceId, instanceId, minVersion, maxVersion, _shutdownCts.Token),
                 _shutdownCts.Token);
+        }
+        catch (Exception ex) when (LocalNetworkPolicy.IsAccessDenied(ex))
+        {
+            throw new LocalNetworkAccessDeniedException(
+                "Local network access is denied by macOS privacy settings.",
+                ex);
         }
         catch (Exception ex)
         {
@@ -207,6 +222,12 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _fallbackDiscoveryTask = Task.Run(
                 () => RunFallbackDiscoveryAsync(client, _shutdownCts.Token),
                 _shutdownCts.Token);
+        }
+        catch (Exception ex) when (LocalNetworkPolicy.IsAccessDenied(ex))
+        {
+            throw new LocalNetworkAccessDeniedException(
+                "Local network access is denied by macOS privacy settings.",
+                ex);
         }
         catch (Exception ex)
         {
