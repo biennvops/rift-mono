@@ -191,6 +191,15 @@ app-flutter/
     - hash/size integrity preservation
     - oversized and empty payload rejection
     - UTF-8 / special-character handling
+### Week 8: Build Fixes & TLS Stability
+
+- **Flutter Windows Build Fix (`windows/runner/flutter_window.cpp`):**
+  - Resolved a breaking Windows build regression caused by a header rename in the Flutter 3.44.1 Windows C++ embedder: `flutter/stream_handler_functions.h` was renamed to `flutter/event_stream_handler_functions.h`. Updated the include in `flutter_window.cpp` to use the new name. The `StreamHandlerFunctions` class itself is unchanged.
+
+- **C# Daemon TLS Authentication Fix (`daemon-cs/Rift.Daemon.Core/Cryptography/IdentityManager.cs`):**
+  - Fixed a critical runtime error: `AuthenticationException: Authentication failed because the platform does not support ephemeral keys` (Win32 error `0x8009030E: No credentials are available in the security package`).
+  - **Root cause:** `LoadPersistedTlsCertificate` was unconditionally using `X509KeyStorageFlags.EphemeralKeySet`, which keeps the ECDSA private key purely in-memory. Windows Schannel — the TLS provider behind `SslStream` — requires the private key to be registered in the CNG key store to perform TLS handshakes; it cannot access in-memory-only ephemeral keys.
+  - **Fix:** Applied the same platform guard already present in `GenerateTlsCertificate`: `EphemeralKeySet` is now only set on non-Windows and non-macOS platforms (i.e. Linux), so persisted identities load correctly into the Windows/macOS CNG store while Linux retains the ephemeral-only behaviour.
 
 
 

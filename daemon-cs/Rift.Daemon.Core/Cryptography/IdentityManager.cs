@@ -119,10 +119,10 @@ public class IdentityManager : IIdentityManager
         }
     }
 
-    internal static X509KeyStorageFlags GetPkcs12LoadFlags(bool isMacOS)
+    internal static X509KeyStorageFlags GetPkcs12LoadFlags(bool isWindows, bool isMacOS)
     {
         var flags = X509KeyStorageFlags.Exportable;
-        if (!isMacOS)
+        if (!isWindows && !isMacOS)
         {
             flags |= X509KeyStorageFlags.EphemeralKeySet;
         }
@@ -135,7 +135,9 @@ public class IdentityManager : IIdentityManager
         return X509CertificateLoader.LoadPkcs12(
             pkcs12Bytes,
             string.Empty,
-            GetPkcs12LoadFlags(RuntimeInformation.IsOSPlatform(OSPlatform.OSX)));
+            GetPkcs12LoadFlags(
+                RuntimeInformation.IsOSPlatform(OSPlatform.Windows),
+                RuntimeInformation.IsOSPlatform(OSPlatform.OSX)));
     }
 
     internal static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
