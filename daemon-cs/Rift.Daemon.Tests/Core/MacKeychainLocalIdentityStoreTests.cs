@@ -92,6 +92,35 @@ public sealed class MacKeychainLocalIdentityStoreTests : IDisposable
     }
 
     [Fact]
+    public void GetIdentity_WhenTlsCertificateIsMissing_ReturnsIdentityWithoutCertificateForRegeneration()
+    {
+        var identity = CreateIdentityRecord();
+        var keychain = new FakeMacKeychain();
+        keychain.SetSecret(MacKeychainLocalIdentityStore.ServiceName, MacKeychainLocalIdentityStore.PrivateKeyAccount, identity.Ed25519PrivateKey);
+
+        using var connection = _databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt)
+            VALUES (1, NULL, $publicKey, NULL, $createdAt);
+            """;
+        command.Parameters.AddWithValue("$publicKey", identity.Ed25519PublicKey);
+        command.Parameters.AddWithValue("$createdAt", identity.CreatedAt.ToString("O"));
+        command.ExecuteNonQuery();
+
+        var store = new MacKeychainLocalIdentityStore(_databaseContext, keychain);
+
+        var restored = store.GetIdentity();
+
+        Assert.NotNull(restored);
+        Assert.Equal(identity.Ed25519PrivateKey, restored!.Ed25519PrivateKey);
+        Assert.Equal(identity.Ed25519PublicKey, restored.Ed25519PublicKey);
+        Assert.Null(restored.TlsCertificatePfx);
+        Assert.Equal(identity.CreatedAt, restored.CreatedAt);
+    }
+
+    [Fact]
     public void GetIdentity_WhenMetadataPublicKeyDoesNotMatchKeychain_FailsClosed()
     {
         var firstIdentity = CreateIdentityRecord();

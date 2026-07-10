@@ -60,7 +60,7 @@ public sealed class MacKeychainLocalIdentityStore : ILocalIdentityStore
             throw new InvalidOperationException("macOS identity metadata existed in SQLite, but Keychain secrets were missing.");
         }
 
-        if (privateKey is null || tlsCertificate is null)
+        if (privateKey is null)
         {
             throw new InvalidOperationException("macOS Keychain local identity was incomplete.");
         }
@@ -71,14 +71,17 @@ public sealed class MacKeychainLocalIdentityStore : ILocalIdentityStore
         }
 
         var derivedPublicKey = new Ed25519PrivateKeyParameters(privateKey, 0).GeneratePublicKey().GetEncoded();
-        var certificate = IdentityManager.LoadPersistedTlsCertificate(
-            tlsCertificate,
-            new Ed25519PublicKeyParameters(derivedPublicKey, 0));
-
-        var embeddedPublicKey = IdentityManager.ExtractEmbeddedEd25519PublicKey(certificate);
-        if (!embeddedPublicKey.AsSpan().SequenceEqual(derivedPublicKey))
+        if (tlsCertificate is not null)
         {
-            throw new InvalidOperationException("macOS Keychain TLS certificate did not match the Ed25519 private key.");
+            var certificate = IdentityManager.LoadPersistedTlsCertificate(
+                tlsCertificate,
+                new Ed25519PublicKeyParameters(derivedPublicKey, 0));
+
+            var embeddedPublicKey = IdentityManager.ExtractEmbeddedEd25519PublicKey(certificate);
+            if (!embeddedPublicKey.AsSpan().SequenceEqual(derivedPublicKey))
+            {
+                throw new InvalidOperationException("macOS Keychain TLS certificate did not match the Ed25519 private key.");
+            }
         }
 
         if (metadata is null)

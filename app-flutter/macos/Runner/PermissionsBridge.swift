@@ -33,7 +33,7 @@ final class PermissionsBridge {
         status = "notDetermined"
       case .denied:
         status = "denied"
-      case .authorized, .provisional, .ephemeral:
+      case .authorized, .provisional:
         status = "authorized"
       @unknown default:
         status = "unknown"
