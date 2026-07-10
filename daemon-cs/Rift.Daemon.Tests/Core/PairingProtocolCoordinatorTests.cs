@@ -267,7 +267,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         _transport.ConnectExceptionFactory = () =>
         {
             var currentHost = _transport.ConnectionAttempts[^1].Host;
-            return currentHost == "192.168.1.91"
+            return currentHost == "192.168.1.90"
                 ? new SocketException((int)SocketError.ConnectionRefused)
                 : null;
         };
@@ -275,8 +275,47 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         await _coordinator.NotifyLocalPairingStartedAsync("rift-peerabcdefghijklmnopqrstuvwxyz27");
 
         Assert.Equal(2, _transport.ConnectionAttempts.Count);
-        Assert.Equal("192.168.1.91", _transport.ConnectionAttempts[0].Host);
-        Assert.Equal("192.168.1.90", _transport.ConnectionAttempts[1].Host);
+        Assert.Equal("192.168.1.90", _transport.ConnectionAttempts[0].Host);
+        Assert.Equal("192.168.1.91", _transport.ConnectionAttempts[1].Host);
+        Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
+    }
+
+    [Fact]
+    public async Task NotifyLocalPairingStarted_FallsBackToSecondaryAddressFromSingleDiscoveryEvent()
+    {
+        _discoveryCoordinator.StartDiscovery();
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-multi-address-single-event",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-peer-multi-address-single-event",
+            instanceName: "inst-multi-address-single-event",
+            host: "10.252.166.1",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-peer-multi-address-single-event" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("10.252.166.1"), 5353),
+            observedAddresses: ["10.252.166.1", "192.168.1.77"]));
+
+        _transport.ConnectExceptionFactory = () =>
+        {
+            var currentHost = _transport.ConnectionAttempts[^1].Host;
+            return currentHost == "10.252.166.1"
+                ? new SocketException((int)SocketError.TimedOut)
+                : null;
+        };
+
+        await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-multi-address-single-event");
+
+        Assert.Equal(2, _transport.ConnectionAttempts.Count);
+        Assert.Equal("10.252.166.1", _transport.ConnectionAttempts[0].Host);
+        Assert.Equal("192.168.1.77", _transport.ConnectionAttempts[1].Host);
         Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
     }
 

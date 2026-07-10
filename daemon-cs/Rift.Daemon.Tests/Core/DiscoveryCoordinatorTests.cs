@@ -138,6 +138,72 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         Assert.Equal("192.168.1.77", peer.ObservedEndpoints[0].Address);
     }
 
+    [Fact]
+    public void ListDiscoveredPeers_PreservesMultipleObservedAddressesFromSingleDiscoveryEvent()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-single-event-multi-address",
+            instanceName: "inst-multi-address",
+            host: "10.252.166.1",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-single-event-multi-address" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("10.252.166.1"), 5353),
+            observedAddresses: ["10.252.166.1", "192.168.1.77"]));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal(2, peer.ObservedEndpoints.Count);
+        Assert.Contains(peer.ObservedEndpoints, endpoint => endpoint.Address == "10.252.166.1");
+        Assert.Contains(peer.ObservedEndpoints, endpoint => endpoint.Address == "192.168.1.77");
+    }
+
+    [Fact]
+    public void ListDiscoveredPeers_KeepsExistingPrimaryForEqualScoreEndpoints()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-stable-primary",
+            instanceName: "inst-stable-primary-1",
+            host: "192.168.1.77",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-stable-primary" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("192.168.1.77"), 5353)));
+
+        _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-stable-primary",
+            instanceName: "inst-stable-primary-2",
+            host: "10.11.1.67",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-stable-primary" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("10.11.1.67"), 5353)));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal("192.168.1.77", peer.Address);
+        Assert.Equal("192.168.1.77", peer.ObservedEndpoints[0].Address);
+        Assert.Equal("10.11.1.67", peer.ObservedEndpoints[1].Address);
+    }
+
     public void Dispose()
     {
         if (File.Exists(_databasePath))

@@ -92,10 +92,19 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
             return;
         }
 
-        var trustState = _trustStore.GetPeer(peerKey)?.State.ToString().ToLowerInvariant() ?? "discovered";
-        var candidateAddress = SelectPreferredAddress(e.Host, e.RemoteEndPoint?.Address);
         var observedAt = _timeProvider.GetUtcNow();
-        var candidateEndpoint = new ObservedEndpoint(candidateAddress, e.Port, observedAt);
+        var trustState = _trustStore.GetPeer(peerKey)?.State.ToString().ToLowerInvariant() ?? "discovered";
+        var candidateEndpoints = e.ObservedAddresses
+            .Select(address => SelectPreferredAddress(address, e.RemoteEndPoint?.Address))
+            .Where(address => !string.IsNullOrWhiteSpace(address))
+            .Distinct(StringComparer.Ordinal)
+            .Select(address => new ObservedEndpoint(address, e.Port, observedAt))
+            .ToArray();
+
+        if (candidateEndpoints.Length == 0)
+        {
+            candidateEndpoints = [new ObservedEndpoint(SelectPreferredAddress(e.Host, e.RemoteEndPoint?.Address), e.Port, observedAt)];
+        }
 
         _discoveredPeers.AddOrUpdate(
             peerKey,
@@ -103,12 +112,12 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
                 peerKey,
                 trustState,
                 new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal),
-                [candidateEndpoint]),
+                candidateEndpoints),
             (_, existing) => new CachedDiscoveredPeer(
                 peerKey,
                 trustState,
                 new Dictionary<string, string>(e.TxtRecord, StringComparer.Ordinal),
-                MergeEndpoints(existing.Endpoints, candidateEndpoint, observedAt, _peerTtl)));
+                MergeEndpoints(existing.Endpoints, candidateEndpoints, observedAt, _peerTtl)));
     }
 
     private void PruneExpiredPeers()
@@ -140,13 +149,14 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
     private static IReadOnlyList<ObservedEndpoint> MergeEndpoints(
         IReadOnlyList<ObservedEndpoint> existingEndpoints,
-        ObservedEndpoint candidateEndpoint,
+        IReadOnlyList<ObservedEndpoint> candidateEndpoints,
         DateTimeOffset observedAt,
         TimeSpan peerTtl)
     {
         var expiresBefore = observedAt - peerTtl;
-        var merged = new List<ObservedEndpoint>(existingEndpoints.Count + 1);
-        var replaced = false;
+        var merged = new List<ObservedEndpoint>(existingEndpoints.Count + candidateEndpoints.Count);
+        var remainingCandidates = new HashSet<(string Address, int Port)>(
+            candidateEndpoints.Select(endpoint => (endpoint.Address, endpoint.Port)));
 
         foreach (var endpoint in existingEndpoints)
         {
@@ -155,27 +165,27 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
                 continue;
             }
 
-            if (string.Equals(endpoint.Address, candidateEndpoint.Address, StringComparison.Ordinal) &&
-                endpoint.Port == candidateEndpoint.Port)
+            if (remainingCandidates.Remove((endpoint.Address, endpoint.Port)))
             {
-                merged.Add(candidateEndpoint);
-                replaced = true;
+                merged.Add(candidateEndpoints.First(candidate =>
+                    string.Equals(candidate.Address, endpoint.Address, StringComparison.Ordinal) &&
+                    candidate.Port == endpoint.Port));
                 continue;
             }
 
             merged.Add(endpoint);
         }
 
-        if (!replaced)
+        foreach (var candidateEndpoint in candidateEndpoints)
         {
-            merged.Add(candidateEndpoint);
+            if (remainingCandidates.Remove((candidateEndpoint.Address, candidateEndpoint.Port)))
+            {
+                merged.Add(candidateEndpoint);
+            }
         }
 
         return merged
             .OrderByDescending(endpoint => GetEndpointScore(endpoint.Address))
-            .ThenByDescending(endpoint => endpoint.LastSeenAt)
-            .ThenBy(endpoint => endpoint.Address, StringComparer.Ordinal)
-            .ThenBy(endpoint => endpoint.Port)
             .ToArray();
     }
 
@@ -183,9 +193,6 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
     {
         var orderedEndpoints = peer.Endpoints
             .OrderByDescending(endpoint => GetEndpointScore(endpoint.Address))
-            .ThenByDescending(endpoint => endpoint.LastSeenAt)
-            .ThenBy(endpoint => endpoint.Address, StringComparer.Ordinal)
-            .ThenBy(endpoint => endpoint.Port)
             .ToArray();
 
         var primary = orderedEndpoints[0];

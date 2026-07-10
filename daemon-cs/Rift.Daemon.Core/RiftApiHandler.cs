@@ -1,5 +1,6 @@
 using System.Globalization;
 using Rift.Daemon.Core.Interfaces;
+using Rift.Daemon.Core.Networking;
 using StreamJsonRpc;
 
 namespace Rift.Daemon.Core;
@@ -44,8 +45,25 @@ public class RiftApiHandler : IRiftApi
         Task.FromResult(_daemonInfoService.ListDiscoveredPeers());
 
     [JsonRpcMethod("rift.startDiscovery")]
-    public Task<DiscoveryToggleResult> StartDiscoveryAsync() =>
-        Task.FromResult(_discoveryCoordinator.StartDiscovery());
+    public Task<DiscoveryToggleResult> StartDiscoveryAsync()
+    {
+        try
+        {
+            return Task.FromResult(_discoveryCoordinator.StartDiscovery());
+        }
+        catch (LocalNetworkAccessDeniedException ex)
+        {
+            throw new LocalRpcException(ex.Message)
+            {
+                ErrorCode = -32010,
+                ErrorData = new Dictionary<string, object?>
+                {
+                    ["policy"] = "local_network",
+                    ["action"] = "startDiscovery"
+                }
+            };
+        }
+    }
 
     [JsonRpcMethod("rift.stopDiscovery")]
     public Task<DiscoveryToggleResult> StopDiscoveryAsync() =>

@@ -6,7 +6,7 @@
     <string>com.rift.daemon</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/rift-daemon</string>
+        <string>@HOME@/Applications/Rift Daemon.app/Contents/MacOS/rift-daemon</string>
     </array>
     <key>KeepAlive</key>
     <dict>
@@ -20,8 +20,8 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>Library/Logs/rift-daemon/stdout.log</string>
+    <string>@HOME@/Library/Logs/rift-daemon/stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>Library/Logs/rift-daemon/stderr.log</string>
+    <string>@HOME@/Library/Logs/rift-daemon/stderr.log</string>
 </dict>
 </plist>

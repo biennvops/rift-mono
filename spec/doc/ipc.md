@@ -139,6 +139,8 @@ Begins mDNS-SD browsing for `_rift._tcp` services.
 
 **Result:** `{ "started": true }`
 
+**Errors:** `-32010` (`PolicyDenied`) if the OS denies local network access (for example, macOS Local Network privacy settings). In this case, the error `data` object includes `{ "policy": "local_network", "action": "startDiscovery" }`.
+
 #### `rift.stopDiscovery`
 
 Stops mDNS-SD browsing.
