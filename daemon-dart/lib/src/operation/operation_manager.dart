@@ -42,7 +42,7 @@ class OperationManager {
     );
     _operationsById[operationId] = record;
     _operationOrder.add(operationId);
-    _pruneIfNeeded();
+    _pruneIfNeeded(protectOperationId: operationId);
     return record;
   }
 
@@ -121,6 +121,12 @@ class OperationManager {
       // Late timers or shutdown can race with disposal; preserve the committed
       // state transition even if no listeners can be notified anymore.
     }
+
+    // Retention is best-effort. Do not prune in-flight operations; otherwise
+    // response/timeout paths can transition an operation ID that no longer exists.
+    // Also avoid pruning the operation we just transitioned to keep terminal
+    // transitions idempotent for late timers.
+    _pruneIfNeeded(protectOperationId: record.operationId);
     return record;
   }
 
@@ -147,9 +153,26 @@ class OperationManager {
     }
   }
 
-  void _pruneIfNeeded() {
+  void _pruneIfNeeded({String? protectOperationId}) {
     while (_operationOrder.length > retentionLimit) {
-      final removedId = _operationOrder.removeAt(0);
+      int? removableIndex;
+      for (var i = 0; i < _operationOrder.length; i++) {
+        final id = _operationOrder[i];
+        if (protectOperationId != null && id == protectOperationId) {
+          continue;
+        }
+        final op = _operationsById[id];
+        if (op != null && op.state.isTerminal) {
+          removableIndex = i;
+          break;
+        }
+      }
+
+      if (removableIndex == null) {
+        break;
+      }
+
+      final removedId = _operationOrder.removeAt(removableIndex);
       _operationsById.remove(removedId);
     }
   }

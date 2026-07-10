@@ -133,6 +133,11 @@ void main() {
         sourceDeviceId: 'rift-local',
         destinationDeviceId: 'rift-peer-a',
       );
+      pruningManager.transitionOperation(
+        'op-oldest',
+        OperationState.failed,
+        failureReason: 'PeerUnreachable',
+      );
       pruningManager.createOperation(
         operationId: 'op-middle',
         operationType: 'clipboard.fetch',
@@ -157,6 +162,37 @@ void main() {
         'op-newest',
         'op-middle',
       ]);
+      expect(pruningManager.getOperation('op-middle').operationId, 'op-middle');
+      expect(pruningManager.getOperation('op-newest').operationId, 'op-newest');
+    });
+
+    test('does not prune in-flight operations when retention limit is exceeded',
+        () {
+      final pruningManager = OperationManager(retentionLimit: 2);
+      addTearDown(pruningManager.dispose);
+
+      pruningManager.createOperation(
+        operationId: 'op-oldest',
+        operationType: 'clipboard.fetch',
+        sourceDeviceId: 'rift-local',
+        destinationDeviceId: 'rift-peer-a',
+      );
+      pruningManager.transitionOperation('op-oldest', OperationState.pending);
+      pruningManager.createOperation(
+        operationId: 'op-middle',
+        operationType: 'clipboard.fetch',
+        sourceDeviceId: 'rift-local',
+        destinationDeviceId: 'rift-peer-b',
+      );
+      pruningManager.createOperation(
+        operationId: 'op-newest',
+        operationType: 'clipboard.fetch',
+        sourceDeviceId: 'rift-local',
+        destinationDeviceId: 'rift-peer-c',
+      );
+
+      expect(pruningManager.totalCount, 3);
+      expect(pruningManager.getOperation('op-oldest').operationId, 'op-oldest');
       expect(pruningManager.getOperation('op-middle').operationId, 'op-middle');
       expect(pruningManager.getOperation('op-newest').operationId, 'op-newest');
     });

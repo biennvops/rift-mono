@@ -55,7 +55,7 @@ public sealed class OperationService : IOperationService
             };
             _operationsById[operationId] = created;
             _operationOrder.Add(operationId);
-            PruneIfNeeded();
+            PruneIfNeeded(protectOperationId: operationId);
             return created.ToOperationRecord();
         }
     }
@@ -111,6 +111,12 @@ public sealed class OperationService : IOperationService
             });
 
             snapshot = operation.ToOperationRecord();
+
+            // Retention is best-effort. Never prune non-terminal operations, otherwise
+            // in-flight transitions (timeouts/responses) can race and fail the RPC flow.
+            // Also avoid pruning the operation we just transitioned, to preserve terminal
+            // idempotency for late timers.
+            PruneIfNeeded(protectOperationId: operationId);
         }
 
         NotifyTransition(snapshot, previousState, nextState, failureReason);
@@ -234,12 +240,35 @@ public sealed class OperationService : IOperationService
         _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
     };
 
-    private void PruneIfNeeded()
+    private void PruneIfNeeded(string? protectOperationId = null)
     {
         while (_operationOrder.Count > _retentionLimit)
         {
-            var removed = _operationOrder[0];
-            _operationOrder.RemoveAt(0);
+            // Find the oldest terminal operation (excluding the protected one) and
+            // prune that. If everything over the limit is still in-flight, keep it.
+            var index = -1;
+            for (var i = 0; i < _operationOrder.Count; i++)
+            {
+                var id = _operationOrder[i];
+                if (protectOperationId is not null && StringComparer.Ordinal.Equals(id, protectOperationId))
+                {
+                    continue;
+                }
+
+                if (_operationsById.TryGetValue(id, out var op) && IsTerminal(op.State))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index < 0)
+            {
+                break;
+            }
+
+            var removed = _operationOrder[index];
+            _operationOrder.RemoveAt(index);
             _operationsById.Remove(removed);
         }
     }

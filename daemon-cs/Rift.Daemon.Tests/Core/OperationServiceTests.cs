@@ -116,6 +116,7 @@ public sealed class OperationServiceTests
             retentionLimit: 2);
 
         service.CreateOperation("op-oldest", "clipboard.fetch", "rift-local", "rift-peer-a");
+        service.TransitionOperation("op-oldest", OperationState.Failed, "PeerUnreachable");
         service.CreateOperation("op-middle", "clipboard.fetch", "rift-local", "rift-peer-b");
         service.CreateOperation("op-newest", "clipboard.fetch", "rift-local", "rift-peer-c");
 
@@ -124,6 +125,24 @@ public sealed class OperationServiceTests
         Assert.Equal(2, listed.Total);
         Assert.Equal(["op-newest", "op-middle"], listed.Operations.Select(operation => operation.OperationId).ToArray());
         Assert.Throws<InvalidOperationException>(() => service.GetOperation("op-oldest"));
+        Assert.Equal("op-middle", service.GetOperation("op-middle").OperationId);
+        Assert.Equal("op-newest", service.GetOperation("op-newest").OperationId);
+    }
+
+    [Fact]
+    public void CreateOperation_DoesNotPruneInFlightOperationsWhenRetentionLimitIsExceeded()
+    {
+        var service = new OperationService(
+            logger: NullLogger<OperationService>.Instance,
+            retentionLimit: 2);
+
+        service.CreateOperation("op-oldest", "clipboard.fetch", "rift-local", "rift-peer-a");
+        service.TransitionOperation("op-oldest", OperationState.Pending);
+        service.CreateOperation("op-middle", "clipboard.fetch", "rift-local", "rift-peer-b");
+        service.CreateOperation("op-newest", "clipboard.fetch", "rift-local", "rift-peer-c");
+
+        Assert.Equal(3, service.ListOperations(limit: 10, offset: 0).Total);
+        Assert.Equal("op-oldest", service.GetOperation("op-oldest").OperationId);
         Assert.Equal("op-middle", service.GetOperation("op-middle").OperationId);
         Assert.Equal("op-newest", service.GetOperation("op-newest").OperationId);
     }
