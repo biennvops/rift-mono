@@ -90,4 +90,14 @@ public class IdentityManagerTests
         var isValid = verifier.VerifySignature(signature);
         Assert.True(isValid);
     }
+
+    [Theory]
+    [InlineData(true, X509KeyStorageFlags.Exportable)]
+    [InlineData(false, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet)]
+    public void GetPkcs12LoadFlags_UsesPlatformCompatibleStorageFlags(bool isMacOs, X509KeyStorageFlags expectedFlags)
+    {
+        var actualFlags = IdentityManager.GetPkcs12LoadFlags(isMacOs);
+
+        Assert.Equal(expectedFlags, actualFlags);
+    }
 }

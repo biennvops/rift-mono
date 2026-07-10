@@ -95,19 +95,16 @@ public class IdentityManager : IIdentityManager
         });
     }
 
-    private static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
+    internal static byte[] ExportPersistedTlsCertificate(X509Certificate2 certificate)
     {
         return certificate.Export(X509ContentType.Pkcs12, string.Empty);
     }
 
-    private static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
+    internal static X509Certificate2 LoadPersistedTlsCertificate(byte[] pkcs12Bytes, Ed25519PublicKeyParameters expectedEd25519PublicKey)
     {
         try
         {
-            var certificate = X509CertificateLoader.LoadPkcs12(
-                pkcs12Bytes,
-                string.Empty,
-                X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+            var certificate = LoadPkcs12Certificate(pkcs12Bytes);
             var embeddedKey = ExtractEmbeddedEd25519PublicKey(certificate);
             if (!embeddedKey.SequenceEqual(expectedEd25519PublicKey.GetEncoded()))
             {
@@ -122,7 +119,26 @@ public class IdentityManager : IIdentityManager
         }
     }
 
-    private static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
+    internal static X509KeyStorageFlags GetPkcs12LoadFlags(bool isMacOS)
+    {
+        var flags = X509KeyStorageFlags.Exportable;
+        if (!isMacOS)
+        {
+            flags |= X509KeyStorageFlags.EphemeralKeySet;
+        }
+
+        return flags;
+    }
+
+    private static X509Certificate2 LoadPkcs12Certificate(byte[] pkcs12Bytes)
+    {
+        return X509CertificateLoader.LoadPkcs12(
+            pkcs12Bytes,
+            string.Empty,
+            GetPkcs12LoadFlags(RuntimeInformation.IsOSPlatform(OSPlatform.OSX)));
+    }
+
+    internal static byte[] ExtractEmbeddedEd25519PublicKey(X509Certificate2 certificate)
     {
         var bcParser = new Org.BouncyCastle.X509.X509CertificateParser();
         var bcCert = bcParser.ReadCertificate(certificate.RawData);
@@ -244,13 +260,6 @@ public class IdentityManager : IIdentityManager
         using var ms = new MemoryStream();
         store.Save(ms, Array.Empty<char>(), random);
 
-        // TODO: implement ephemeral key writing to macOS Keychain.
-        var flags = X509KeyStorageFlags.Exportable;
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            flags |= X509KeyStorageFlags.EphemeralKeySet;
-        }
-
-        return X509CertificateLoader.LoadPkcs12(ms.ToArray(), string.Empty, flags);
+        return LoadPkcs12Certificate(ms.ToArray());
     }
 }
