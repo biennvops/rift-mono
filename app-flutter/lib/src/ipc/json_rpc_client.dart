@@ -56,18 +56,34 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired =>
       _clipboardExpiredController.stream;
 
-  late final _connectionChangedController =
-      StreamController<bool>.broadcast();
-  Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
-
   late final _operationTransitionController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onOperationTransition =>
       _operationTransitionController.stream;
 
+  late final _connectionChangedController =
+      StreamController<bool>.broadcast();
+  Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
+
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
     if (params.value is! Map) return null;
     return _canonicalizeMap(Map<String, dynamic>.from(params.value as Map));
+  }
+
+  Map<String, dynamic>? _asTrustChangeMap(json_rpc.Parameters params) {
+    final payload = _asMap(params);
+    if (payload == null) {
+      return null;
+    }
+
+    final normalized = Map<String, dynamic>.from(payload);
+    for (final key in const ['previousState', 'newState']) {
+      final value = normalized[key];
+      if (value is String) {
+        normalized[key] = _canonicalizeTrustState(value);
+      }
+    }
+    return normalized;
   }
 
   bool _hasString(Map<String, dynamic> m, String key) =>
@@ -101,6 +117,7 @@ class JsonRpcRiftClient {
     'Fp': 'fp',
     'PreviousState': 'previousState',
     'NewState': 'newState',
+    'NextState': 'nextState',
     'Reason': 'reason',
     'Status': 'status',
     'Presence': 'presence',
@@ -126,7 +143,17 @@ class JsonRpcRiftClient {
     'FailureReason': 'failureReason',
     'Details': 'details',
     'OfferId': 'offerId',
+    'OperationType': 'operationType',
+    'State': 'state',
     'SourceDeviceId': 'sourceDeviceId',
+    'DestinationDeviceId': 'destinationDeviceId',
+    'CreatedAt': 'createdAt',
+    'UpdatedAt': 'updatedAt',
+    'Transitions': 'transitions',
+    'From': 'from',
+    'To': 'to',
+    'At': 'at',
+    'Operations': 'operations',
     'ContentType': 'contentType',
     'ByteSize': 'byteSize',
     'Sha256': 'sha256',
@@ -172,9 +199,14 @@ class JsonRpcRiftClient {
 
     switch (key) {
       case 'trustState':
+        return _canonicalizeTrustState(value);
+      case 'state':
+      case 'from':
+      case 'to':
       case 'previousState':
       case 'newState':
-        return _canonicalizeTrustState(value);
+      case 'nextState':
+        return value;
       case 'severity':
       case 'outcome':
         return value.toLowerCase();
@@ -311,7 +343,7 @@ class JsonRpcRiftClient {
         // Spec: { deviceId, previousState, newState, reason? }
         _emitIfValid(
           'rift.onTrustChanged',
-          _asMap(params),
+          _asTrustChangeMap(params),
           _trustChangedController,
           requiredStringKeys: const ['deviceId', 'newState'],
         );
@@ -334,15 +366,6 @@ class JsonRpcRiftClient {
           _asMap(params),
           _pairingCompleteController,
           requiredStringKeys: const ['deviceId', 'fingerprint'],
-        );
-      });
-      _client!.registerMethod('rift.onOperationTransition',
-          (json_rpc.Parameters params) {
-        _emitIfValid(
-          'rift.onOperationTransition',
-          _asMap(params),
-          _operationTransitionController,
-          requiredStringKeys: const ['operationId', 'status'],
         );
       });
       _client!.registerMethod('rift.onSecurityEvent',
@@ -375,6 +398,20 @@ class JsonRpcRiftClient {
           _asMap(params),
           _clipboardExpiredController,
           requiredStringKeys: const ['offerId'],
+        );
+      });
+      _client!.registerMethod('rift.onOperationTransition',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onOperationTransition',
+          _asMap(params),
+          _operationTransitionController,
+          requiredStringKeys: const [
+            'operationId',
+            'operationType',
+            'previousState',
+            'nextState',
+          ],
         );
       });
       // Start listening to the RPC channel
@@ -680,6 +717,16 @@ class JsonRpcRiftClient {
       'rift.fetchClipboardContent',
       {'offerId': offerId},
     );
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> getOperation(String operationId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.getOperation', {
+      'operationId': operationId,
+    });
     return _canonicalizeResult(r);
   }
 

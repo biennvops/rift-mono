@@ -1,4 +1,4 @@
-# Dart Daemon Assessment & Analysis Report (Milestone M4)
+# Dart Daemon Assessment & Analysis Report (Through Week 8)
 
 **Reference Standards:** `spec/doc/protocol.md`, `spec/doc/ipc.md`, and the current `daemon-dart` implementation
 **Component:** Android Daemon (`daemon-dart`)
@@ -6,7 +6,7 @@
 
 ---
 
-## Directory Structure & Important Files (Milestone M4)
+## Directory Structure & Important Files (Current Snapshot)
 
 ```text
 daemon-dart/
@@ -45,17 +45,21 @@ daemon-dart/
 │       │   └── transport_impl.dart         # mTLS SecureServerSocket with socket flush and peer disconnect tracking
 │       ├── pairing/
 │       │   └── pairing_manager.dart        # Pairing State Machine, timeouts, and Double-Approve prevention
+│       ├── operation/
+│       │   ├── operation_manager.dart      # Operation lifecycle manager with transition validation and retention
+│       │   └── operation_models.dart       # Operation records, transitions, and lifecycle enums
 │       ├── storage/
 │       │   └── trust_store_impl.dart       # SQLite ACID Trust Store with WAL mode and Exhaustive Edge Validation
 │       └── daemon.dart                     # IPC try/catch boundary and Isolate orchestrator for Flutter
 ├── test/
 │   ├── capability_presence_test.dart       # Capability negotiation and presence heartbeat tests
-│   ├── clipboard_engine_test.dart          # Clipboard offer/fetch engine tests
-│   ├── clipboard_handler_test.dart         # Clipboard protocol handler tests
+│   ├── clipboard_engine_test.dart          # Clipboard offer/fetch lifecycle and integrity checks
+│   ├── clipboard_handler_test.dart         # Clipboard protocol/IPC handling coverage
 │   ├── crypto_test.dart                    # Cryptography security unit test for cert_builder
 │   ├── daemon_pairing_fallback_test.dart   # Tests the standalone daemon auto-pairing fallback
 │   ├── decoder_test.dart                   # Unit test to verify the Fail-Closed mechanism of cert_decoder
 │   ├── discovered_peer_selection_test.dart # Multi-endpoint discovered-peer selection behavior
+│   ├── operation_manager_test.dart         # Operation lifecycle state machine, retention, and listener behavior
 │   ├── frame_codec_test.dart               # Unit test to check the 64KiB/32MiB bounds (pre/post auth)
 │   ├── identity_test.dart                  # Unit test to verify valid Device ID, Base32, and key zeroing
 │   ├── discovery_integration_test.dart     # Pure Dart mDNS integration test exercising actual UDP network stack
@@ -195,6 +199,28 @@ daemon-dart/
   - Implemented socket replacement logic in `TransportImpl`: When duplicate inbound connections race with outbound connections and role preferences overlap, the new connection replaces the stale socket instead of being incorrectly rejected. This resolves the `Peer closed connection before sending session.hello` deadlock.
   - Introduced explicit `IIdentityManager`-based Device ID filtering in `listDiscoveredPeers` to prevent the device from tracking itself and propagating ghost artifacts to the UI during hot reloads.
 
+- **`[daemon-dart] Operation Lifecycle & Error Handling` (Week 8 / M5):** Added a dedicated operation subsystem and moved clipboard fetch lifecycle tracking onto it.
+  - Implemented `lib/src/operation/operation_manager.dart` and `operation_models.dart` so cross-device actions are tracked as explicit operations instead of implicit clipboard-only flow state.
+  - Added spec-aligned lifecycle states and validation:
+    - forward-only valid transitions
+    - terminal-state idempotency for duplicate same-state reports
+    - `InvalidTransition` rejection for out-of-order or conflicting terminal updates
+    - in-memory retention with oldest-first pruning
+  - Extended daemon IPC with:
+    - `rift.listOperations`
+    - `rift.getOperation`
+    - `rift.onOperationTransition`
+  - Migrated `clipboard.fetch` tracking onto the operation layer while preserving existing clipboard security semantics (`byteSize`, `sha256`, authorization, replay protection).
+  - Closed the remaining Week 8 Dart-side test gaps:
+    - `Created -> Failed` shortcut transition
+    - retention/pruning behavior
+    - listener failure and post-dispose transition safety
+  - **Verification update (2026-07-08):**
+    - `dart test test/operation_manager_test.dart` -> pass
+    - `dart test test/clipboard_handler_test.dart` -> pass
+    - `dart test test/clipboard_engine_test.dart` -> pass
+  - **Assessment:** Week 8 scope is implemented and locally verified on the Dart daemon side. Remaining work is no longer about operation lifecycle correctness, but about future UI surfaces, interop evidence, and later milestones.
+
 ---
 
 ## 2. System Specification Alignment (Protocol & IPC)
@@ -214,8 +240,12 @@ The implementation is clearly derived from the two core specifications, but it s
 - **Validated IPC Contracts (Clipboard):**
   - **Methods:** `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`
   - **Notifications:** `rift.onClipboardOffer`, `rift.onClipboardExpired`
+- **Validated IPC Contracts (Operation Lifecycle):**
+  - **Methods:** `rift.listOperations`, `rift.getOperation`
+  - **Notifications:** `rift.onOperationTransition`
 - **Implemented and largely aligned:** The current isolate bridge uses explicit Rift exception codes for key application failures. It still retains isolate-specific `SendPort` transport details, but the old ad-hoc command naming has been cleaned up into `rpcPort`.
 - **Net assessment:** The IPC implementation robustly fulfills the `ipc.md` contract for current app needs (M4), fully propagating presence events and trust transitions to the UI.
+- **Net assessment:** The IPC implementation now covers pairing/trust, clipboard, and operation lifecycle needs for the current app/daemon integration layer, while continuing to propagate presence and trust transitions cleanly to the UI.
 
 ---
 
@@ -234,6 +264,9 @@ The implementation is clearly derived from the two core specifications, but it s
    This was an earlier concern, but the current `SessionManager` already receives `peerCertDer` on each `TransportMessage` and validates PoP against that message-bound certificate context. This item should be considered resolved in the current code unless a new race is demonstrated elsewhere.
 
 
+6. **Operation Retention Persistence (Future Follow-up):**
+   Current Week 8 retention is intentionally in-memory only. This is enough for current IPC querying and lifecycle semantics, but if the project later needs durable operation history across daemon restarts, the operation store will need a persistence layer.
+
 ## 4. Reality Check Against the Repository
 
 - `dart analyze` currently reports `No issues found!`.
@@ -241,6 +274,10 @@ The implementation is clearly derived from the two core specifications, but it s
 - Latest local verification snapshot:
   `dart analyze` -> `No issues found!`
   `dart test` -> `00:07 +131: All tests passed!`
+- Focused Week 8 verification also passed locally:
+  - `dart test test/operation_manager_test.dart`
+  - `dart test test/clipboard_handler_test.dart`
+  - `dart test test/clipboard_engine_test.dart`
 - `README.md` previously referenced `demo_cert.dart`, but that file does not exist in the current package.
 - `bin/daemon.dart` now provides a minimal standalone Unix-socket runner for
   local Linux IPC smoke tests. It is useful for desktop verification, but it is

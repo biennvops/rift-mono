@@ -28,4 +28,6 @@ public interface IRiftApi
         string? since = null,
         int limit = 100,
         int offset = 0);
+    Task<ListOperationsResult> ListOperationsAsync(int limit = 50, int offset = 0);
+    Task<OperationRecord> GetOperationAsync(string operationId);
 }

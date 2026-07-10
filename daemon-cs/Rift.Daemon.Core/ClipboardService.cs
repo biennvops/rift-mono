@@ -21,6 +21,7 @@ public sealed class ClipboardService : IClipboardService
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
     private readonly ISecurityEventLog _securityEventLog;
+    private readonly IOperationService _operationService;
     private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILogger<ClipboardService> _logger;
     private readonly TimeSpan _fetchResponseTimeout;
@@ -43,6 +44,7 @@ public sealed class ClipboardService : IClipboardService
         IPresenceService presenceService,
         IIdentityManager identityManager,
         ISecurityEventLog securityEventLog,
+        IOperationService operationService,
         IIpcNotificationService? ipcNotificationService = null,
         ILogger<ClipboardService>? logger = null,
         TimeSpan? fetchResponseTimeout = null)
@@ -53,6 +55,7 @@ public sealed class ClipboardService : IClipboardService
         _presenceService = presenceService;
         _identityManager = identityManager;
         _securityEventLog = securityEventLog;
+        _operationService = operationService;
         _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<ClipboardService>.Instance;
         _fetchResponseTimeout = fetchResponseTimeout ?? DefaultFetchResponseTimeout;
@@ -296,11 +299,21 @@ public sealed class ClipboardService : IClipboardService
 
         EnsurePeerCanUseClipboard(offer.SourceDeviceId, RequiredCapability);
 
+        var operationId = Guid.NewGuid().ToString("D");
+        _operationService.CreateOperation(
+            operationId,
+            "clipboard.fetch",
+            _identityManager.GetDeviceId(),
+            offer.SourceDeviceId);
+        _operationService.TransitionOperation(operationId, OperationState.Pending);
+
         var pendingFetch = new PendingClipboardFetch(
             offer.SourceDeviceId,
+            operationId,
             new TaskCompletionSource<FetchClipboardContentResult>(TaskCreationOptions.RunContinuationsAsynchronously));
         if (!_pendingFetches.TryAdd(offerId, pendingFetch))
         {
+            _operationService.TransitionOperation(operationId, OperationState.Failed, "PolicyDenied");
             throw new ClipboardFailureException("PolicyDenied", -32010, $"A fetch for offer '{offerId}' is already in progress.");
         }
 
@@ -326,17 +339,21 @@ public sealed class ClipboardService : IClipboardService
             try
             {
                 await SendProtectedMessageAsync(offer.SourceDeviceId, bytes, timeoutCts.Token);
+                _operationService.TransitionOperation(operationId, OperationState.Dispatched);
             }
             catch (InvalidOperationException ex) when (string.Equals(ex.Message, "PayloadTooLarge", StringComparison.Ordinal))
             {
+                _operationService.TransitionOperation(operationId, OperationState.Failed, "PayloadTooLarge");
                 throw new ClipboardFailureException("PayloadTooLarge", -32007, "Clipboard request exceeded the transport frame limit.");
             }
             catch (InvalidOperationException ex)
             {
+                _operationService.TransitionOperation(operationId, OperationState.Failed, "PeerUnreachable");
                 throw new ClipboardFailureException("PeerUnreachable", -32000, ex.Message);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
                 LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
                 throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
             }
@@ -347,6 +364,7 @@ public sealed class ClipboardService : IClipboardService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
+                _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
                 LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
                 throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
             }
@@ -417,14 +435,17 @@ public sealed class ClipboardService : IClipboardService
 
         if (pendingFetch is not null)
         {
+            TransitionActiveIfPossible(pendingFetch.OperationId);
             var verified = VerifyClipboardPayload(contentBase64, byteSize, sha256);
             if (!verified)
             {
+                _operationService.TransitionOperation(pendingFetch.OperationId, OperationState.Failed, "HashMismatch");
                 LogEvent(SecurityEventTypes.ClipboardFetched, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "HashMismatch");
                 pendingFetch.CompletionSource.TrySetException(new ClipboardFailureException("HashMismatch", -32006, "Clipboard content failed size or SHA-256 verification."));
                 return Task.CompletedTask;
             }
 
+            _operationService.TransitionOperation(pendingFetch.OperationId, OperationState.Done);
             pendingFetch.CompletionSource.TrySetResult(new FetchClipboardContentResult
             {
                 OfferId = offerId,
@@ -449,6 +470,11 @@ public sealed class ClipboardService : IClipboardService
 
         if (pendingFetch is not null)
         {
+            TransitionActiveIfPossible(pendingFetch.OperationId);
+            _operationService.TransitionOperation(
+                pendingFetch.OperationId,
+                failureReason == "Timeout" ? OperationState.Expired : OperationState.Failed,
+                failureReason);
             pendingFetch.CompletionSource.TrySetException(CreateFailureException(failureReason, message));
         }
 
@@ -787,6 +813,18 @@ public sealed class ClipboardService : IClipboardService
             $"Failed to reconnect trusted peer '{peerDeviceId}' using discovery endpoints. {lastError?.Message ?? "No endpoint succeeded."}");
     }
 
+    private void TransitionActiveIfPossible(string operationId)
+    {
+        try
+        {
+            _operationService.TransitionOperation(operationId, OperationState.Active);
+        }
+        catch (OperationTransitionException)
+        {
+            // Duplicate or conflicting deliveries should not crash clipboard flow.
+        }
+    }
+
     private void LogEvent(string eventType, string? peerDeviceId, SecurityEventSeverity severity, SecurityEventOutcome outcome, string? failureReason)
     {
         _ = _securityEventLog.LogEventAsync(new SecurityEventRecord
@@ -823,5 +861,6 @@ public sealed class ClipboardService : IClipboardService
 
     private sealed record PendingClipboardFetch(
         string ExpectedSourceDeviceId,
+        string OperationId,
         TaskCompletionSource<FetchClipboardContentResult> CompletionSource);
 }

@@ -61,7 +61,9 @@ public class LinuxIpcListenerTests : IDisposable
     {
         if (!IsUnix) return;
 
-        var xdgDir = Path.Combine(_testDir, "xdg-runtime");
+        // macOS temp paths can be long enough to exceed Linux sun_path limits.
+        // Use a short path so this test actually exercises the XDG branch.
+        var xdgDir = Path.Combine("/tmp", $"rift-test-xdg-{Guid.NewGuid():N}");
         Directory.CreateDirectory(xdgDir);
         File.SetUnixFileMode(xdgDir,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -77,6 +79,14 @@ public class LinuxIpcListenerTests : IDisposable
         finally
         {
             Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", prev);
+            try
+            {
+                Directory.Delete(xdgDir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup; ignore races/permissions in CI.
+            }
         }
     }
 

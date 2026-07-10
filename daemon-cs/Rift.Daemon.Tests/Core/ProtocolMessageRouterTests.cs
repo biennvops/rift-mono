@@ -19,6 +19,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly PresenceService _presenceService;
     private readonly PairingProtocolCoordinator _pairingCoordinator;
     private readonly ClipboardService _clipboardService;
+    private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
     private readonly FakeTransport _pairingTransport;
     private readonly ProtocolMessageRouter _router;
@@ -35,7 +36,8 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         var discoveryCoordinator = new DiscoveryCoordinator(new FakeDiscoveryService(), _trustStore, _identityManager);
         _clipboardTransport = new FakeTransport();
         _pairingTransport = new FakeTransport();
-        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
+        _operationService = new OperationService(null, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
+        _clipboardService = new ClipboardService(_clipboardTransport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, TimeSpan.FromMilliseconds(250));
         _pairingCoordinator = new PairingProtocolCoordinator(
             _pairingTransport,
             discoveryCoordinator,
@@ -313,7 +315,11 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
     private sealed class FakeDiscoveryService : IDiscoveryService
     {
-        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
+        public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered
+        {
+            add { }
+            remove { }
+        }
 
         public void StartAdvertising(string deviceId, string minVersion, string maxVersion) { }
 
@@ -326,8 +332,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
     private sealed class FakeTransport : ITransport
     {
-        public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+        public event EventHandler<MessageReceivedEventArgs>? MessageReceived
+        {
+            add { }
+            remove { }
+        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
+        {
+            add { }
+            remove { }
+        }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
 

@@ -4,6 +4,13 @@ A .NET 10 daemon that implements the Rift protocol. Multi-platform: Windows
 (named pipes, Windows Service), macOS (Unix domain sockets, launchd
 LaunchAgent), and Linux (Unix domain sockets, systemd-style host).
 
+## Current Status
+
+The C# daemon is no longer just a transport/service skeleton. The shared core
+now covers identity, trust, transport/session bootstrap, pairing, clipboard
+offer/fetch handling, security event logging, and the Week 8 operation
+lifecycle surface used by the Flutter client.
+
 ## Project Structure
 
 ```
@@ -11,6 +18,9 @@ daemon-cs/
 ├── Rift.Daemon.Core/           # Shared library (net10.0)
 │   ├── Interfaces/             # Platform-agnostic contracts
 │   ├── Worker.cs               # Background service
+│   ├── Networking/             # TLS transport, session bootstrap, heartbeat/presence
+│   ├── ClipboardService.cs     # Clipboard offer/fetch lifecycle handling
+│   ├── OperationService.cs     # Operation lifecycle manager and retention
 │   ├── IRiftApi.cs             # JSON-RPC API interface
 │   └── RiftApiHandler.cs      # JSON-RPC API implementation
 ├── Rift.Daemon.Windows/        # Windows entry point (net10.0-windows)
@@ -29,6 +39,23 @@ daemon-cs/
 │   └── Rift.IpcProbe/          # Local IPC probe / debugging utility
 └── Rift.Daemon.sln
 ```
+
+## Implemented Surfaces
+
+- **Pairing & trust:** trusted / blocked / revoked lifecycle, pairing requests,
+  approvals, rejections, and trust-state IPC notifications.
+- **Transport & session:** mTLS transport, session bootstrap, channel-binding
+  verification, presence/session-state propagation, and capability-aware worker
+  handling.
+- **Clipboard:** `clipboard.offer`, `clipboard.fetchRequest`,
+  `clipboard.fetchResponse`, `clipboard.fetchReject`, plus local IPC wrappers.
+- **Operation lifecycle (Week 8):**
+  - `OperationService` tracks cross-device actions with spec-aligned states
+  - `clipboard.fetch` is wrapped in operation lifecycle tracking
+  - IPC now exposes `rift.listOperations`, `rift.getOperation`, and
+    `rift.onOperationTransition`
+  - terminal-state idempotency, invalid/conflicting transition rejection, and
+    newest-first retained history are covered by tests
 
 ## Libraries & Rationale
 
@@ -79,6 +106,21 @@ dotnet build Rift.Daemon.Linux/
 # Tests
 dotnet test Rift.Daemon.Tests/
 ```
+
+Focused verification used during the current Week 8 close-out:
+
+```bash
+dotnet test Rift.Daemon.Tests/ --filter "FullyQualifiedName~OperationServiceTests"
+dotnet test Rift.Daemon.Tests/ --filter "FullyQualifiedName~RiftApiHandlerTests"
+dotnet test Rift.Daemon.Tests/ --filter "FullyQualifiedName~ClipboardServiceTests"
+dotnet test Rift.Daemon.Tests/ --filter "FullyQualifiedName~ProtocolMessageRouterTests"
+dotnet test Rift.Daemon.Tests/ --filter "FullyQualifiedName~SessionBootstrapTests"
+```
+
+These focused suites passed locally during the latest review/fix cycle. The
+`SessionBootstrapTests` failures that previously appeared in the broader suite
+were caused by outdated test expectations around `tls-unique`; they have been
+updated to the current `app-nonce` bootstrap semantics and now pass.
 
 ### Run (Console)
 

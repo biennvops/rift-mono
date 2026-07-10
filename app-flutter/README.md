@@ -17,11 +17,8 @@ flutter run -d linux     # on Linux
 flutter run -d <device>  # on Android/emulator
 ```
 
-**Expected Runtime Behavior (Week 7 State):**
-- **UI:** The application successfully boots and displays all core navigation
-  screens (Pairing, Trusted Devices, Event Log, Settings, Security Dashboard, Clipboard Transfer), along with the
-  current Week 7 clipboard shell/debug flow. The UI components are decoupled
-  from the transport layer.
+**Expected Runtime Behavior (Current State):**
+- **UI:** The application successfully boots and displays the current core navigation surfaces (Pairing, Trusted Devices, Event Log, Settings, Security Dashboard, Clipboard Transfer, and Operations), along with the active clipboard shell/debug flow. The UI components are decoupled from the transport layer.
 - **Linux/macOS (`UnixSocketTransport`):** The app connects to a Unix domain socket and expects a running Rift daemon endpoint. If the daemon is absent, the JSON-RPC client logs reconnect attempts with exponential backoff.
 - **Windows (`NamedPipeTransport`):** The app connects to `\\.\pipe\rift-daemon-v0.1` and speaks StreamJsonRpc-compatible `Content-Length` framing to `daemon-cs`.
 - **Android (`AndroidDaemonIsolateTransport`):** The app spawns the Dart daemon in a background isolate and waits for `rift.daemonReady` before issuing JSON-RPC requests. In debug builds, discovery is intentionally disabled in the isolate to avoid plugin assertions.
@@ -34,7 +31,8 @@ IPC framing and size limits are transport-specific; see `spec/doc/ipc.md` for th
 flutter test
 ```
 
-*Latest targeted local verification for the current clipboard and network stabilization work: `flutter analyze` and `flutter test` passed locally.*
+*Latest focused IPC verification (2026-07-08): `flutter test test/ipc_test.dart` passed locally.*
+*Latest broader local verification for the current app shell, clipboard, and network stabilization work: `flutter analyze` and `flutter test` passed locally.*
 
 The core tests cover:
 - UI rendering and screen-state checks (`pairing_screen_test.dart`, `trusted_devices_screen_test.dart`, `event_log_screen_test.dart`).
@@ -196,6 +194,16 @@ app-flutter/
 
 
 
+### Week 8: Operation Lifecycle IPC Alignment
+- **Operation IPC client (`json_rpc_client.dart`):**
+  - Added client support for `rift.listOperations` and `rift.getOperation`.
+  - Added notification stream handling for `rift.onOperationTransition`.
+  - Preserved spec casing for operation states (`Created`, `Pending`, `Dispatched`, `Active`, `Done`, `Failed`, `Expired`) instead of lowercasing them during canonicalization.
+- **IPC regression coverage (`ipc_test.dart`):**
+  - Added focused coverage for operation listing and detail retrieval.
+  - Locked notification handling for `rift.onOperationTransition`, including optional `failureReason` pass-through.
+  - Added a Flutter-side error-path test for `rift.getOperation` not found (`-32009`) to confirm JSON-RPC errors surface correctly to the client.
+
 ## Completion Criteria
 
 To treat the Flutter client work as fully complete, the project needs both of
@@ -221,3 +229,4 @@ While critical crashes and UI bugs have been resolved, the following areas requi
 6. **[Testing] Transport-Level Hardening:** Widget and client-layer coverage are in good shape, but deeper transport-specific tests for Windows named pipes and Android isolate lifecycle would further harden IPC against platform regressions.
 7. **[UX] Clipboard Offer UI Still Partial:** The client now has clipboard status plumbing, auto-fetch handling, and protocol-facing clipboard wiring, but a richer end-user clipboard-offer/fetch workflow remains a follow-up beyond the current milestone-oriented shell behavior.
 8. **[Platform] macOS/Linux Clipboard Fallback Is Polling-Based:** Desktop clipboard monitoring now works on macOS/Linux through a Dart polling fallback, but those platforms do not yet have native runner clipboard event channels equivalent to the Windows implementation.
+9. **[UX] Operation History UI Still Pending:** The Flutter client now consumes operation lifecycle IPC, but it does not yet expose a dedicated operation history / diagnostics screen for end users.

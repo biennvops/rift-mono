@@ -39,7 +39,8 @@ This is the core background module (daemon) on Android for the Rift project, dev
 - `lib/src/storage/`:
   - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
 - `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
-- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, storage, discovery integration, and newer clipboard/protocol hardening work. See the verification snapshot below for the latest local pass count rather than treating this section as a frozen number.
+- `lib/src/operation/`: Operation lifecycle models and `OperationManager` used to track cross-device actions with spec-aligned transitions and retention behavior.
+- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, storage, discovery integration, clipboard flows, operation lifecycle handling, and newer protocol hardening work. See the verification snapshot below for the latest local pass count rather than treating this section as a frozen number.
 
 ---
 
@@ -177,7 +178,28 @@ Important implementation notes:
 - Fetch serving is fail-closed: only offers owned by the local device may be
   served to peers.
 
-### 2.7. Network Handshake & Discovery Hardening (Week 7 Stabilization)
+### 2.7. Operation Lifecycle & Error Handling (Week 8 / M5)
+The daemon now wraps cross-device clipboard fetch work in an operation
+lifecycle layer aligned with `spec/doc/protocol.md` and `spec/doc/ipc.md`.
+
+Current Week 8 implementation highlights:
+- `clipboard.fetch` now runs through an `OperationManager` rather than keeping
+  lifecycle state implicitly inside clipboard flow state alone.
+- The Dart daemon exposes the operation IPC surface needed by the Flutter app:
+  `rift.listOperations`, `rift.getOperation`, and `rift.onOperationTransition`.
+- Transition validation is centralized and fail-closed:
+  - valid forward transitions are accepted
+  - terminal states are idempotent for duplicate same-state reports
+  - conflicting or out-of-order transitions raise `InvalidTransition`
+- Recent operations are retained in memory with oldest-first pruning once the
+  retention limit is exceeded.
+
+Focused Week 8 verification completed locally:
+- `dart test test/operation_manager_test.dart`
+- `dart test test/clipboard_handler_test.dart`
+- `dart test test/clipboard_engine_test.dart`
+
+### 2.8. Network Handshake & Discovery Hardening (Week 7 Stabilization)
 - **Duplicate Connection Race Condition:** Resolved a deadlock (`Peer closed connection before sending session.hello`) by properly replacing stale incoming sockets instead of rejecting valid reconnection attempts when roles match.
 - **mDNS Discovery Stability:** The daemon now explicitly filters out its own Device ID during mDNS ingestion. This prevents the UI from generating 'Unknown Device' artifacts or tracking its own local instance after Flutter hot reloads.
 
@@ -191,3 +213,4 @@ Important implementation notes:
 - **With `ipc.md`:** 
   - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, plus the Week 7 clipboard surface `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`, `rift.onClipboardOffer`, and `rift.onClipboardExpired`.
   - Clipboard IPC validation is now stricter at the daemon boundary: malformed base64, mismatched `byteSize`, mismatched `sha256`, and oversized clipboard payloads are rejected before the daemon advertises an offer to peers.
+  - Week 8 extends the IPC surface with `rift.listOperations`, `rift.getOperation`, and `rift.onOperationTransition`, allowing the local client to inspect operation state/history and react to lifecycle changes.
