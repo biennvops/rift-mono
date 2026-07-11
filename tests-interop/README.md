@@ -53,6 +53,12 @@ Current checked-in simulated coverage includes:
   - oversized payload rejection
   - empty payload handling
   - UTF-8 / special-character preservation
+- `file_transfer_test.dart` for simulated daemon-to-daemon file transfer
+  behavior, including:
+  - negotiated `file.transfer` capability usage
+  - `file.offer` to `file.accept` happy path
+  - chunk delivery and whole-file SHA-256 preservation
+  - verified destination-file finalization
 
 They are **not** a substitute for real host-to-host or daemon-to-daemon interop
 evidence, and they do not by themselves satisfy the sign-off matrix below.
@@ -65,6 +71,13 @@ evidence, and they do not by themselves satisfy the sign-off matrix below.
   - prior Android <-> Linux pairing / trust evidence retained below
   - Week 7 simulated clipboard offer/fetch coverage added
   - live Milestone M4 clipboard evidence still pending
+
+- Date: 2026-07-11
+- Branch: current file-transfer extension work
+- Scope:
+  - simulated daemon-to-daemon file transfer coverage added in
+    `test/file_transfer_test.dart`
+  - real Windows <-> Android file-transfer evidence still pending
 
 ## Platform-pair matrix
 
@@ -167,6 +180,11 @@ For Week 7 specifically, this directory now contains automated simulated
 clipboard coverage, but Milestone M4 still requires recorded live interop
 evidence before clipboard transfer can be treated as fully signed off for any
 platform pair.
+
+For the file-transfer extension specifically, the same rule applies:
+simulated daemon-to-daemon coverage is useful to validate the protocol flow,
+but it does not by itself count as recorded Windows <-> Android runtime
+evidence.
 
 ## Follow-up engineering work
 
