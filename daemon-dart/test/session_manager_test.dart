@@ -228,6 +228,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -260,6 +261,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -510,6 +512,7 @@ void main() {
           'identityVerified': true,
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},

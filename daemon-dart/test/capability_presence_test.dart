@@ -169,6 +169,7 @@ void main() {
     ctx.trustState = TrustState.trusted;
     ctx.localAdvertisedCapabilities = [
       Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'file.transfer', version: 1),
       Capability(name: 'presence.basic', version: 1),
       Capability(name: 'operation.lifecycle', version: 1),
       Capability(name: 'security.event_log', version: 1),
@@ -178,6 +179,7 @@ void main() {
     transport.simulateMessage('peer1', 'capability.advertise', {
       'capabilities': [
         {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'file.transfer', 'version': 1},
         {'name': 'presence.basic', 'version': 1},
         {'name': 'operation.lifecycle', 'version': 1},
         {'name': 'security.event_log', 'version': 1},
@@ -192,7 +194,7 @@ void main() {
     expect(selectedReply, isNotEmpty);
     
     // presence.update is also sent immediately after capability.selected if trusted
-    expect(ctx.negotiatedCapabilities.length, equals(4));
+    expect(ctx.negotiatedCapabilities.length, equals(5));
     expect(ctx.currentPresenceStatus, equals('online'));
   });
 
@@ -314,6 +316,7 @@ void main() {
     ctx.trustState = TrustState.trusted;
     ctx.localAdvertisedCapabilities = [
       Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'file.transfer', version: 1),
       Capability(name: 'presence.basic', version: 1),
       Capability(name: 'operation.lifecycle', version: 1),
       Capability(name: 'security.event_log', version: 1),
@@ -326,6 +329,7 @@ void main() {
     transport.simulateMessage('peer1', 'capability.advertise', {
       'capabilities': [
         {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'file.transfer', 'version': 1},
         {'name': 'presence.basic', 'version': 1},
         {'name': 'operation.lifecycle', 'version': 1},
         {'name': 'security.event_log', 'version': 1},
@@ -338,6 +342,7 @@ void main() {
       'status': 'online',
       'capabilities': [
         'clipboard.offer_fetch',
+        'file.transfer',
         'presence.basic',
         'operation.lifecycle',
         'security.event_log',
@@ -358,6 +363,7 @@ void main() {
     ctx.trustState = TrustState.discovered;
     ctx.localAdvertisedCapabilities = [
       Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'file.transfer', version: 1),
       Capability(name: 'presence.basic', version: 1),
       Capability(name: 'operation.lifecycle', version: 1),
       Capability(name: 'security.event_log', version: 1),
@@ -370,6 +376,7 @@ void main() {
     transport.simulateMessage('peer1', 'capability.advertise', {
       'capabilities': [
         {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'file.transfer', 'version': 1},
         {'name': 'presence.basic', 'version': 1},
         {'name': 'operation.lifecycle', 'version': 1},
         {'name': 'security.event_log', 'version': 1},

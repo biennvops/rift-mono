@@ -315,6 +315,7 @@ void main() {
         ctx1.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',
@@ -324,6 +325,7 @@ void main() {
         ctx2.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',
