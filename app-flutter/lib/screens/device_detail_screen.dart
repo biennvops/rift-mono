@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'dart:async';
@@ -420,7 +421,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
   }
 
-  Future<Map<String, String>?> _showSendFileDialog() async {
+  Future<Map<String, String>?> _showSendFileFallbackDialog() async {
     final pathController = TextEditingController();
     final nameController = TextEditingController();
     final typeController =
@@ -513,7 +514,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return result;
   }
 
-  Future<String?> _showDestinationDialog(String suggestedFileName) async {
+  Future<String?> _showDestinationFallbackDialog(String suggestedFileName) async {
     final destinationController = TextEditingController(
       text: Platform.isWindows
           ? r'C:\Users\Public\Downloads\' + suggestedFileName
@@ -580,11 +581,67 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return result;
   }
 
+  Future<Map<String, String>?> _pickSendFileRequest() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: false,
+        lockParentWindow: true,
+      );
+      final files = result?.files;
+      final picked =
+          files != null && files.isNotEmpty ? files.first : null;
+      final path = picked?.path;
+      if (picked == null || path == null || path.isEmpty) {
+        return null;
+      }
+
+      return {
+        'localPath': path,
+        'fileName': picked.name,
+        'mediaType': _guessMediaTypeFromName(picked.name),
+      };
+    } catch (_) {
+      return _showSendFileFallbackDialog();
+    }
+  }
+
+  Future<String?> _pickDestinationPath(String suggestedFileName) async {
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save incoming file',
+        fileName: suggestedFileName,
+        lockParentWindow: true,
+      );
+      if (path == null || path.isEmpty) {
+        return null;
+      }
+      return path;
+    } catch (_) {
+      return _showDestinationFallbackDialog(suggestedFileName);
+    }
+  }
+
+  String _guessMediaTypeFromName(String fileName) {
+    final normalized = fileName.toLowerCase();
+    if (normalized.endsWith('.txt')) return 'text/plain';
+    if (normalized.endsWith('.json')) return 'application/json';
+    if (normalized.endsWith('.pdf')) return 'application/pdf';
+    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (normalized.endsWith('.png')) return 'image/png';
+    if (normalized.endsWith('.gif')) return 'image/gif';
+    if (normalized.endsWith('.mp4')) return 'video/mp4';
+    if (normalized.endsWith('.zip')) return 'application/zip';
+    return 'application/octet-stream';
+  }
+
   Future<void> _sendFile() async {
     final deviceId = peer['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
 
-    final dialogResult = await _showSendFileDialog();
+    final dialogResult = await _pickSendFileRequest();
     if (dialogResult == null) return;
 
     setState(() {
@@ -626,7 +683,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _acceptIncomingOffer(Map<String, dynamic> offer) async {
-    final destinationPath = await _showDestinationDialog(
+    final destinationPath = await _pickDestinationPath(
       offer['fileName']?.toString() ?? 'incoming.bin',
     );
     if (destinationPath == null || destinationPath.isEmpty) {
