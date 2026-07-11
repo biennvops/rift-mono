@@ -15,6 +15,11 @@ public interface IRiftApi
     Task<NotifyClipboardChangeResult> NotifyClipboardChangeAsync(string contentType, long byteSize, string sha256, string contentBase64);
     Task<ListClipboardOffersResult> ListClipboardOffersAsync();
     Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId);
+    Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName = null, string? mediaType = null);
+    Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync();
+    Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite = false);
+    Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message = null);
+    Task<ListFileTransfersResult> ListFileTransfersAsync();
     Task<StartPairingResult> StartPairingAsync(string deviceId);
     Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port);
     Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);

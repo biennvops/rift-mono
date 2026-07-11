@@ -46,6 +46,54 @@ class MockTransport implements IpcTransport {
         '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     'Verified': true,
   };
+  Map<String, dynamic> offerFileResult = {
+    'TransferId': 'transfer-1',
+    'OperationId': 'operation-file-1',
+    'TargetDeviceId': 'rift-peer',
+    'FileName': 'demo.txt',
+    'ByteSize': 12,
+    'ChunkSize': 262144,
+    'ChunkCount': 1,
+  };
+  Map<String, dynamic> listIncomingFileOffersResult = {
+    'Offers': [
+      {
+        'TransferId': 'transfer-incoming',
+        'SourceDeviceId': 'rift-peer',
+        'FileName': 'photo.jpg',
+        'MediaType': 'image/jpeg',
+        'ByteSize': 1234,
+        'Sha256': 'def456',
+        'ChunkSize': 262144,
+        'ChunkCount': 1,
+        'ExpiresAt': '2026-06-30T02:05:00Z',
+      }
+    ]
+  };
+  Map<String, dynamic> acceptFileOfferResult = {
+    'TransferId': 'transfer-incoming',
+    'OperationId': 'operation-file-2',
+    'DestinationPath': 'C:/tmp/photo.jpg',
+  };
+  Map<String, dynamic> rejectFileOfferResult = {
+    'TransferId': 'transfer-incoming',
+    'Rejected': true,
+  };
+  Map<String, dynamic> listFileTransfersResult = {
+    'Transfers': [
+      {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'Direction': 'outgoing',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'BytesTransferred': 12,
+        'State': 'Done',
+      }
+    ]
+  };
   Map<String, dynamic> listOperationsResult = {
     'Operations': [
       {
@@ -156,6 +204,21 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.fetchClipboardContent':
           _sendResult(id, fetchClipboardContentResult);
+          break;
+        case 'rift.offerFile':
+          _sendResult(id, offerFileResult);
+          break;
+        case 'rift.listIncomingFileOffers':
+          _sendResult(id, listIncomingFileOffersResult);
+          break;
+        case 'rift.acceptFileOffer':
+          _sendResult(id, acceptFileOfferResult);
+          break;
+        case 'rift.rejectFileOffer':
+          _sendResult(id, rejectFileOfferResult);
+          break;
+        case 'rift.listFileTransfers':
+          _sendResult(id, listFileTransfersResult);
           break;
         case 'rift.listOperations':
           _sendResult(id, listOperationsResult);
@@ -346,6 +409,92 @@ void main() {
       });
     });
 
+    test('should deliver file transfer notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final offerFuture = client.onFileOffer.first;
+      final progressFuture = client.onFileTransferProgress.first;
+      final completedFuture = client.onFileTransferCompleted.first;
+      final failedFuture = client.onFileTransferFailed.first;
+
+      transport.emitNotification('rift.onFileOffer', {
+        'TransferId': 'transfer-1',
+        'SourceDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'Sha256': 'abc123',
+        'ChunkSize': 262144,
+        'ChunkCount': 1,
+        'ExpiresAt': '2026-06-30T02:10:00Z',
+      });
+      transport.emitNotification('rift.onFileTransferProgress', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'BytesTransferred': 6,
+        'State': 'Active',
+      });
+      transport.emitNotification('rift.onFileTransferCompleted', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'ByteSize': 12,
+        'DestinationPath': 'C:/tmp/demo.txt',
+      });
+      transport.emitNotification('rift.onFileTransferFailed', {
+        'TransferId': 'transfer-2',
+        'OperationId': 'operation-file-2',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'bad.bin',
+        'ByteSize': 8,
+        'FailureReason': 'ConnectionLost',
+      });
+
+      expect(await offerFuture, {
+        'transferId': 'transfer-1',
+        'sourceDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'sha256': 'abc123',
+        'chunkSize': 262144,
+        'chunkCount': 1,
+        'expiresAt': '2026-06-30T02:10:00Z',
+      });
+      expect(await progressFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'bytesTransferred': 6,
+        'state': 'Active',
+      });
+      expect(await completedFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'byteSize': 12,
+        'destinationPath': 'C:/tmp/demo.txt',
+      });
+      expect(await failedFuture, {
+        'transferId': 'transfer-2',
+        'operationId': 'operation-file-2',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'bad.bin',
+        'byteSize': 8,
+        'failureReason': 'ConnectionLost',
+      });
+    });
+
     test('should expose clipboard RPC wrappers', () async {
       await client.connect();
 
@@ -403,6 +552,34 @@ void main() {
             .single['params'],
         {'offerId': 'offer-remote'},
       );
+    });
+
+    test('should expose file transfer RPC wrappers', () async {
+      await client.connect();
+
+      final offerResult = await client.offerFile(
+        targetDeviceId: 'rift-peer',
+        localPath: 'C:/tmp/demo.txt',
+        fileName: 'demo.txt',
+        mediaType: 'text/plain',
+      );
+      final incomingOffers = await client.listIncomingFileOffers();
+      final acceptResult = await client.acceptFileOffer(
+        transferId: 'transfer-incoming',
+        destinationPath: 'C:/tmp/photo.jpg',
+      );
+      final rejectResult = await client.rejectFileOffer(
+        transferId: 'transfer-incoming',
+        failureReason: 'PolicyDenied',
+        message: 'User declined',
+      );
+      final transfers = await client.listFileTransfers();
+
+      expect(offerResult['transferId'], 'transfer-1');
+      expect(incomingOffers['offers'], hasLength(1));
+      expect(acceptResult['destinationPath'], 'C:/tmp/photo.jpg');
+      expect(rejectResult['rejected'], isTrue);
+      expect(transfers['transfers'], hasLength(1));
     });
 
     test('should expose operation RPC wrappers', () async {

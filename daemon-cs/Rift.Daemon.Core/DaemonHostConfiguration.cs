@@ -29,6 +29,7 @@ public static class DaemonHostConfiguration
         services.AddSingleton<IPresenceService, PresenceService>();
         services.AddSingleton<IOperationService, OperationService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
+        services.AddSingleton<IFileTransferService, FileTransferService>();
         services.AddSingleton<IPairingProtocolCoordinator, PairingProtocolCoordinator>();
         services.AddSingleton<IProtocolMessageRouter, ProtocolMessageRouter>();
         services.AddSingleton<IPairingService, PairingService>();

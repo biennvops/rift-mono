@@ -10,11 +10,12 @@ public class RiftApiHandler : IRiftApi
     private readonly IDaemonInfoService _daemonInfoService;
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
     private readonly IClipboardService _clipboardService;
+    private readonly IFileTransferService _fileTransferService;
     private readonly IOperationService _operationService;
     private readonly IPairingService _pairingService;
 
     public RiftApiHandler()
-        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedOperationService(), new UnsupportedPairingService())
+        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedOperationService(), new UnsupportedPairingService())
     {
     }
 
@@ -22,12 +23,14 @@ public class RiftApiHandler : IRiftApi
         IDaemonInfoService daemonInfoService,
         IDiscoveryCoordinator discoveryCoordinator,
         IClipboardService clipboardService,
+        IFileTransferService fileTransferService,
         IOperationService operationService,
         IPairingService pairingService)
     {
         _daemonInfoService = daemonInfoService;
         _discoveryCoordinator = discoveryCoordinator;
         _clipboardService = clipboardService;
+        _fileTransferService = fileTransferService;
         _operationService = operationService;
         _pairingService = pairingService;
     }
@@ -119,6 +122,53 @@ public class RiftApiHandler : IRiftApi
             throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
         }
     }
+
+    [JsonRpcMethod("rift.offerFile")]
+    public async Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName = null, string? mediaType = null)
+    {
+        try
+        {
+            return await _fileTransferService.OfferFileAsync(targetDeviceId, localPath, fileName, mediaType, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.listIncomingFileOffers")]
+    public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() =>
+        _fileTransferService.ListIncomingFileOffersAsync();
+
+    [JsonRpcMethod("rift.acceptFileOffer")]
+    public async Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite = false)
+    {
+        try
+        {
+            return await _fileTransferService.AcceptFileOfferAsync(transferId, destinationPath, overwrite, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.rejectFileOffer")]
+    public async Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message = null)
+    {
+        try
+        {
+            return await _fileTransferService.RejectFileOfferAsync(transferId, failureReason, message, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.listFileTransfers")]
+    public Task<ListFileTransfersResult> ListFileTransfersAsync() =>
+        _fileTransferService.ListFileTransfersAsync();
 
     [JsonRpcMethod("rift.startPairing")]
     public Task<StartPairingResult> StartPairingAsync(string deviceId) =>
@@ -289,6 +339,29 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("Clipboard services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedFileTransferService : IFileTransferService
+    {
+        public Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName, string? mediaType, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() => throw CreateNotConfiguredException();
+        public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw CreateNotConfiguredException();
+        public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleChunkReceivedAsync(string deviceId, string transferId, int chunkIndex, long offset, int byteSize, string chunkSha256, string contentBase64, bool isLastChunk, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleCompleteReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, int chunkCount, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleCancelReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("File transfer services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };
