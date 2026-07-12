@@ -175,6 +175,15 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         transaction.Commit();
     }
 
+    public void DeletePeer(string deviceId)
+    {
+        using var connection = databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Peers WHERE DeviceId = $deviceId;";
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        command.ExecuteNonQuery();
+    }
+
     private static bool IsValidTransition(TrustState currentState, TrustState newState)
     {
         return (currentState, newState) switch

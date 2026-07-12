@@ -12,7 +12,7 @@ class RiftTileService : TileService() {
         Log.i("RiftTile", "RiftTileService onClick")
 
         val intent = Intent(this, ClipboardSenderActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         
         val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {

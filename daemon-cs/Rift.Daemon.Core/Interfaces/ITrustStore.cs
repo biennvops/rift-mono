@@ -64,4 +64,9 @@ public interface ITrustStore
     /// Rejects future connection attempts and retains negative-trust evidence.
     /// </summary>
     void RevokePeer(string deviceId, string revocationEvidence);
+
+    /// <summary>
+    /// Completely removes a peer from the local database.
+    /// </summary>
+    void DeletePeer(string deviceId);
 }

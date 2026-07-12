@@ -20,9 +20,15 @@ public sealed class DaemonInfoService(
 
     public DeviceInfoResult GetDeviceInfo()
     {
+        var platform = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" :
+                       System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX) ? "macOS" : "Linux";
+        var idPart = new string(identityManager.GetDeviceId().Split('-').LastOrDefault()?.Take(4).ToArray() ?? new char[] { '0', '0', '0', '0' }).ToUpperInvariant();
+        var displayName = $"{platform} Desktop {idPart}";
+
         return new DeviceInfoResult
         {
             DeviceId = identityManager.GetDeviceId(),
+            DisplayName = displayName,
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",

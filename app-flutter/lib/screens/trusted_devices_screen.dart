@@ -17,6 +17,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
 
   String? _localDeviceId;
+  Map<String, dynamic>? _localDeviceInfo;
   bool _isDiscovering = false;
   bool _isTogglingDiscovery = false;
   List<dynamic> _trustedPeers = [];
@@ -171,9 +172,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     // prevent the UI from feeling stale.
     setState(() {
       // Remove from discovered if it is no longer discovered/pairing_pending.
-      if (newState == 'trusted' ||
-          newState == 'blocked' ||
-          newState == 'revoked') {
+      if (newState == 'trusted' || newState == 'blocked') {
         _discoveredPeers = _discoveredPeers
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
             .toList(growable: false);
@@ -240,6 +239,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _trustedPeers = [];
           _discoveredPeers = [];
+          _localDeviceInfo = null;
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
@@ -263,6 +263,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (mounted) {
         setState(() {
           _localDeviceId = localDeviceId;
+          _localDeviceInfo = Map<String, dynamic>.from(deviceInfo);
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
           _isDiscovering = isDiscovering;
@@ -312,7 +313,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     const hiddenTrustStates = {
       'trusted',
       'blocked',
-      'revoked',
       'pairing_pending',
     };
 
@@ -619,6 +619,75 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         const SizedBox(width: 4),
         Text('OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
       ],
+    );
+  }
+
+  Widget _buildLocalDeviceCard(Map<String, dynamic> peer, ThemeData theme) {
+    final String deviceIdStr = peer['deviceId']?.toString() ?? '';
+    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = peer['displayName'] ?? (deviceIdStr.isNotEmpty ? shortId : 'This Device');
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.star, 
+                      color: theme.colorScheme.primary
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '$titleText (This Device)',
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  'CURRENT',
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onPrimary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Device ID: $shortId...',
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -1047,6 +1116,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       children: [
+                        if (_localDeviceInfo != null) _buildLocalDeviceCard(_localDeviceInfo!, theme),
                         if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
                         if (_isDiscovering && _discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
                         const SizedBox(height: 80), // Fab spacing

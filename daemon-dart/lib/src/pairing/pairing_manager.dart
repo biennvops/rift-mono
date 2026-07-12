@@ -22,6 +22,7 @@ class PairingManager {
   final IdentityManager identityManager;
   final Map<String, Timer> _pairingTimeouts = {};
   final Set<String> _outboundPairings = {};
+  static const int _pairingTimeoutSeconds = 30;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
   StreamSubscription<String>? _disconnectSubscription;
 
@@ -123,9 +124,9 @@ class PairingManager {
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
         'payload': {
-          'expiresInMs': 120000,
-          'displayName': 'Rift Device', // TODO: Retrieve from system settings later
-        }
+          'expiresInMs': _pairingTimeoutSeconds * 1000,
+          'displayName': _getGeneratedDisplayName(),
+        },
       });
       RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
@@ -287,7 +288,7 @@ class PairingManager {
     if (record == null) {
       throw RiftNotFoundException('Peer not found in TrustStore: $peerDeviceId');
     }
-    // Transition to revoked
+    // Transition to revoked to preserve negative-trust evidence
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.revoked);
     sessionManager.disconnectPeer(peerDeviceId);
     
@@ -569,5 +570,15 @@ class PairingManager {
     final truncated = base32Str.substring(0, 32);
     final hyphenated = truncated.replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)}-');
     return hyphenated.substring(0, 39); // Remove trailing hyphen
+  }
+
+  String _getGeneratedDisplayName() {
+    final os = Platform.operatingSystem;
+    final osCapitalized = os.isNotEmpty ? '${os[0].toUpperCase()}${os.substring(1)}' : 'Unknown';
+    final type = (os == 'android' || os == 'ios') ? 'Phone' : 'Desktop';
+    final idPart = identityManager.deviceId.split('-').length > 1
+        ? identityManager.deviceId.split('-')[1].substring(0, 4).toUpperCase()
+        : '0000';
+    return '$osCapitalized $type $idPart';
   }
 }

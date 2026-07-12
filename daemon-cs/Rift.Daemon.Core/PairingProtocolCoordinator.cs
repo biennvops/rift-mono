@@ -171,9 +171,15 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         try
         {
             _logger.LogInformation("Sending pairing.start to peer {DeviceId}.", deviceId);
+            var platform = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" :
+                           System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX) ? "macOS" : "Linux";
+            var idPart = new string(_identityManager.GetDeviceId().Split('-').LastOrDefault()?.Take(4).ToArray() ?? new char[] { '0', '0', '0', '0' }).ToUpperInvariant();
+            var displayName = $"{platform} Desktop {idPart}";
+
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
-                expiresInMs = PairingExpiryMs
+                expiresInMs = PairingExpiryMs,
+                displayName = displayName
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))

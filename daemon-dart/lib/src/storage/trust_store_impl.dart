@@ -231,6 +231,18 @@ class TrustStoreImpl implements TrustStore {
   }
 
   @override
+  Future<List<PeerRecord>> getAllPeers() async {
+    _ensureInitialized();
+    final stmt = _db!.prepare('SELECT * FROM peers');
+    try {
+      final ResultSet results = stmt.select();
+      return results.map(_rowToPeerRecord).toList();
+    } finally {
+      stmt.dispose();
+    }
+  }
+
+  @override
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async {
     _ensureInitialized();
     

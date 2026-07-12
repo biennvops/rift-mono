@@ -176,7 +176,7 @@ public sealed class PairingService : IPairingService
     public async Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason)
     {
         var peer = GetExistingPeer(deviceId);
-        _trustStore.RevokePeer(deviceId, reason);
+        _trustStore.DeletePeer(deviceId);
 
         var revokedAt = DateTimeOffset.UtcNow;
         await LogEventAsync(SecurityEventTypes.TrustRevoked, deviceId, SecurityEventOutcome.Success, reason);

@@ -203,6 +203,7 @@ abstract class TrustStore {
   Future<void> upsertPeer(PeerRecord record);
   Future<PeerRecord?> getPeer(String deviceId);
   Future<List<PeerRecord>> getPeersByState(TrustState state);
+  Future<List<PeerRecord>> getAllPeers();
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt});
   Future<void> deletePeer(String deviceId);
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt);

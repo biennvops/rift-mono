@@ -470,8 +470,13 @@ class RiftDaemon {
         ),
       );
       await _discoveryService!.startAdvertising();
-      await _discoveryService!.startDiscovery();
-      _isDiscovering = true;
+      final peers = await _trustStore!.getAllPeers();
+      if (peers.isEmpty) {
+        await _discoveryService!.startDiscovery();
+        _isDiscovering = true;
+      } else {
+        _isDiscovering = false;
+      }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
     // explicit connect/handshake when the UI selects a discovered peer.
@@ -527,8 +532,17 @@ class RiftDaemon {
       );
     }
 
+    final os = Platform.operatingSystem;
+    final osCapitalized = os.isNotEmpty ? '${os[0].toUpperCase()}${os.substring(1)}' : 'Unknown';
+    final type = (os == 'android' || os == 'ios') ? 'Phone' : 'Desktop';
+    final idPart = identityManager.deviceId.split('-').length > 1
+        ? identityManager.deviceId.split('-')[1].substring(0, 4).toUpperCase()
+        : '0000';
+    final displayName = '$osCapitalized $type $idPart';
+
     return {
       'deviceId': identityManager.deviceId,
+      'displayName': displayName,
       'fingerprint': _formatFingerprint(identityManager.getDeviceFingerprint()),
       'implementationId': RiftConstants.implementationId,
       'protocolVersion': RiftConstants.protocolVersion,

@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
@@ -325,13 +327,67 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
 
     _clipboardOfferSub = client.onClipboardOffer.listen((event) {
-      final source = event['sourceDeviceId']?.toString() ?? 'a device';
-      final contentType = event['contentType']?.toString() ?? 'clipboard';
-      _maybeNotify('Clipboard offer', '$source offered $contentType.');
+      final contentType = event['contentType']?.toString() ?? '';
+      final offerId = event['offerId']?.toString();
+      final sourceDeviceId = event['sourceDeviceId']?.toString() ?? 'unknown';
+
+      if (offerId == null) return;
+
+      if (contentType != 'text/plain' && contentType != 'clipboard') {
+        // Assume file transfer
+        unawaited(client.fetchClipboardContent(offerId).then((result) async {
+          final contentBase64 = result['contentBase64'] as String?;
+          if (contentBase64 != null) {
+            final bytes = base64.decode(contentBase64);
+            Directory? downloadsDir;
+            if (Platform.isAndroid) {
+              downloadsDir = Directory('/storage/emulated/0/Download');
+            } else {
+              downloadsDir = await getDownloadsDirectory();
+            }
+            if (downloadsDir != null) {
+              if (!downloadsDir.existsSync()) {
+                downloadsDir.createSync(recursive: true);
+              }
+              final filename = 'Rift_Transfer_${DateTime.now().millisecondsSinceEpoch}';
+              final file = File('${downloadsDir.path}/$filename');
+              await file.writeAsBytes(bytes);
+              _maybeNotify('File Received', 'Saved $filename to Downloads from $sourceDeviceId');
+              
+              if (Platform.isAndroid) {
+                _scaffoldMessengerKey.currentState?.showSnackBar(
+                  SnackBar(content: Text('File $filename saved to Downloads')),
+                );
+              }
+            }
+          }
+        }).catchError((e) {
+          debugPrint('Auto-fetch file failed: $e');
+        }));
+      } else if (Platform.isAndroid) {
+        // Text clipboard
+        unawaited(client.fetchClipboardContent(offerId).then((result) {
+          final contentBase64 = result['contentBase64'] as String?;
+          if (contentBase64 != null) {
+            final bytes = base64.decode(contentBase64);
+            try {
+              final text = utf8.decode(bytes);
+              Clipboard.setData(ClipboardData(text: text));
+              _scaffoldMessengerKey.currentState?.showSnackBar(
+                const SnackBar(content: Text('Clipboard synced automatically')),
+              );
+            } catch (_) {
+              // Not text, ignore
+            }
+          }
+        }).catchError((e) {
+          debugPrint('Auto-fetch clipboard failed: $e');
+        }));
+      }
     });
 
     _clipboardExpiredSub = client.onClipboardExpired.listen((event) {
-      _maybeNotify('Clipboard offer expired', 'A clipboard offer expired.');
+      // Intentionally left empty to avoid noisy notifications
     });
   }
 

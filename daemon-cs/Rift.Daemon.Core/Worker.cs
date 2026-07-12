@@ -14,7 +14,8 @@ public class Worker(
     IDiscoveryService discoveryService,
     ITransport transport,
     IProtocolMessageRouter protocolMessageRouter,
-    IPresenceService presenceService) : BackgroundService
+    IPresenceService presenceService,
+    ITrustStore trustStore) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -25,6 +26,12 @@ public class Worker(
 
         var deviceId = identityManager.GetDeviceId();
         discoveryService.StartAdvertising(deviceId, "0.1-draft", "0.1-draft");
+        
+        if (!System.Linq.Enumerable.Any(trustStore.GetAllPeers()))
+        {
+            discoveryService.StartDiscovery();
+        }
+
         transport.MessageReceived += OnTransportMessageReceived;
         transport.SessionStateChanged += OnSessionStateChanged;
 

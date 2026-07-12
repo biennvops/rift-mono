@@ -20,6 +20,7 @@ public sealed class WorkerTests
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
+        var trustStore = new FakeTrustStore();
         await using var worker = new TestWorker(
             NullLogger<Worker>.Instance,
             ipcListener,
@@ -27,7 +28,7 @@ public sealed class WorkerTests
             discoveryService,
             transport,
             protocolRouter,
-            presenceService);
+            presenceService, trustStore);
 
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
@@ -60,6 +61,7 @@ public sealed class WorkerTests
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
+        var trustStore = new FakeTrustStore();
         await using var worker = new TestWorker(
             NullLogger<Worker>.Instance,
             ipcListener,
@@ -67,7 +69,7 @@ public sealed class WorkerTests
             discoveryService,
             transport,
             protocolRouter,
-            presenceService);
+            presenceService, trustStore);
 
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
@@ -95,6 +97,7 @@ public sealed class WorkerTests
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
+        var trustStore = new FakeTrustStore();
         await using var worker = new TestWorker(
             NullLogger<Worker>.Instance,
             ipcListener,
@@ -102,7 +105,7 @@ public sealed class WorkerTests
             discoveryService,
             transport,
             protocolRouter,
-            presenceService);
+            presenceService, trustStore);
 
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
@@ -124,6 +127,7 @@ public sealed class WorkerTests
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
+        var trustStore = new FakeTrustStore();
         await using var worker = new TestWorker(
             NullLogger<Worker>.Instance,
             ipcListener,
@@ -131,7 +135,7 @@ public sealed class WorkerTests
             discoveryService,
             transport,
             protocolRouter,
-            presenceService);
+            presenceService, trustStore);
 
         await worker.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
@@ -158,6 +162,7 @@ public sealed class WorkerTests
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
         var identityManager = new IdentityManager();
+        var trustStore = new FakeTrustStore();
         await using var worker = new TestWorker(
             logger,
             ipcListener,
@@ -165,7 +170,8 @@ public sealed class WorkerTests
             discoveryService,
             transport,
             protocolRouter,
-            presenceService);
+            presenceService,
+            trustStore);
 
         await worker.RunExecuteAsync(CancellationToken.None);
         await ipcListener.Faulted.Task;
@@ -203,8 +209,9 @@ public sealed class WorkerTests
             IDiscoveryService discoveryService,
             ITransport transport,
             IProtocolMessageRouter protocolMessageRouter,
-            IPresenceService presenceService)
-            : base(logger, ipcListener, identityManager, discoveryService, transport, protocolMessageRouter, presenceService)
+            IPresenceService presenceService,
+            ITrustStore trustStore)
+            : base(logger, ipcListener, identityManager, discoveryService, transport, protocolMessageRouter, presenceService, trustStore)
         {
         }
 
@@ -215,6 +222,16 @@ public sealed class WorkerTests
         }
 
         public Task RunExecuteAsync(CancellationToken cancellationToken) => ExecuteAsync(cancellationToken);
+    }
+
+    private sealed class FakeTrustStore : ITrustStore
+    {
+        public void SavePeer(PeerIdentity peer) {}
+        public PeerIdentity? GetPeer(string deviceId) => null;
+        public IEnumerable<PeerIdentity> GetAllPeers() => [];
+        public bool TryTransition(string deviceId, TrustState newState) => false;
+        public void RevokePeer(string deviceId, string revocationEvidence) {}
+        public void DeletePeer(string deviceId) {}
     }
 
     private sealed class FakeIpcListener : IIpcListener

@@ -36,15 +36,11 @@ class MainActivity: FlutterActivity() {
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> {
-                    Log.i(TAG, "startService requested from Flutter")
-                    val serviceIntent = Intent(this, ClipboardForegroundService::class.java)
-                    ContextCompat.startForegroundService(this, serviceIntent)
+                    Log.i(TAG, "startService requested from Flutter (stubbed)")
                     result.success(true)
                 }
                 "stopService" -> {
-                    Log.i(TAG, "stopService requested from Flutter")
-                    val serviceIntent = Intent(this, ClipboardForegroundService::class.java)
-                    stopService(serviceIntent)
+                    Log.i(TAG, "stopService requested from Flutter (stubbed)")
                     result.success(true)
                 }
                 else -> result.notImplemented()

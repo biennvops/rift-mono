@@ -32,6 +32,8 @@ class FakeTrustStore implements TrustStore {
   @override
   Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
   @override
+  Future<List<PeerRecord>> getAllPeers() async => [];
+  @override
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
   @override
   Future<void> deletePeer(String deviceId) async {}

@@ -93,7 +93,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               const SizedBox(height: 16),
               // Title
               Text(
-                'Thu hồi trust từ $displayName?',
+                'Quên thiết bị $displayName?',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.bold,
@@ -105,7 +105,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  'Thiết bị sẽ bị ngắt kết nối ngay. Khóa Ed25519 đưa vào negative-trust store — không thể kết nối lại trừ khi pair lại từ đầu.',
+                  'Thiết bị sẽ bị ngắt kết nối và xóa khỏi danh sách tin cậy. Bạn sẽ phải xác nhận lại (pair) nếu muốn kết nối lại trong tương lai.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
@@ -162,7 +162,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   ),
                   icon: const Icon(Icons.delete_forever),
                   label: const Text(
-                    'Thu hồi',
+                    'Xóa thiết bị',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -651,7 +651,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Thu hồi trust', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: const Text('Xóa thiết bị (Forget)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
