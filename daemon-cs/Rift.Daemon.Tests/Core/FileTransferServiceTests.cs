@@ -243,6 +243,8 @@ public sealed class FileTransferServiceTests : IDisposable
         public void SavePeer(PeerIdentity peer) => _peers[peer.DeviceId] = peer;
 
         public PeerIdentity? GetPeer(string deviceId) => _peers.TryGetValue(deviceId, out var peer) ? peer : null;
+        
+        public void DeletePeer(string deviceId) => _peers.Remove(deviceId);
 
         public IEnumerable<PeerIdentity> GetAllPeers() => _peers.Values;
 

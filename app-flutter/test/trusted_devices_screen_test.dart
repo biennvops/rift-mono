@@ -58,6 +58,24 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
   @override
   Future<dynamic> getDeviceInfo() async => deviceInfo;
   @override

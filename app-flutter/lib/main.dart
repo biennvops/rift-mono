@@ -87,6 +87,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;

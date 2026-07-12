@@ -110,6 +110,9 @@ class FakeTrustStore implements TrustStore {
   Future<void> initialize() async {}
 
   @override
+  Future<List<PeerRecord>> getAllPeers() async => [];
+
+  @override
   Future<void> upsertPeer(PeerRecord record) async {}
 
   @override
@@ -254,8 +257,7 @@ void main() {
         },
       });
 
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(const Duration(milliseconds: 200));
 
       expect(
         transport.sentMessages.any((message) => message['type'] == 'file.chunk'),
