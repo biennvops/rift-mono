@@ -77,6 +77,8 @@ class FakeTransport implements Transport {
 class FakeIdentityManager implements IdentityManager {
   @override
   String get deviceId => 'rift-local';
+  @override
+  String get displayName => 'Android Phone 01';
 
   @override
   Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List peerCertDer) async => 'proof';

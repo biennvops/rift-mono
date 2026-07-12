@@ -231,6 +231,8 @@ public sealed class FileTransferServiceTests : IDisposable
 
         public string GetFingerprint() => "FAKE-FINGERPRINT";
 
+        public string GetDisplayName() => "Windows Desktop 01";
+
         public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature) => true;
     }
 

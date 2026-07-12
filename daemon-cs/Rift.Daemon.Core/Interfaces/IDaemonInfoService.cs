@@ -9,6 +9,7 @@ public sealed class CapabilityInfo
 public sealed class DeviceInfoResult
 {
     public string DeviceId { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
     public string Fingerprint { get; init; } = string.Empty;
     public string ImplementationId { get; init; } = string.Empty;
     public string ProtocolVersion { get; init; } = string.Empty;

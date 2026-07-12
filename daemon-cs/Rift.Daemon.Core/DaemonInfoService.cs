@@ -24,6 +24,7 @@ public sealed class DaemonInfoService(
         return new DeviceInfoResult
         {
             DeviceId = identityManager.GetDeviceId(),
+            DisplayName = identityManager.GetDisplayName(),
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",
@@ -44,7 +45,7 @@ public sealed class DaemonInfoService(
     public ListTrustedPeersResult ListTrustedPeers()
     {
         var peers = trustStore.GetAllPeers()
-            .Where(peer => peer.State != TrustState.Discovered)
+            .Where(peer => peer.State is not (TrustState.Discovered or TrustState.Revoked))
             .Select(peer =>
             {
                 var presence = presenceService.GetPeerPresence(peer.DeviceId);

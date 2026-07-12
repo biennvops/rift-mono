@@ -135,7 +135,7 @@ class PairingManager {
         'destinationDeviceId': peerDeviceId,
         'payload': {
           'expiresInMs': 120000,
-          'displayName': 'Rift Device', // TODO: Retrieve from system settings later
+          'displayName': identityManager.displayName,
         }
       });
       RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');

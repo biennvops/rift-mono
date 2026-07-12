@@ -102,6 +102,7 @@ class FakeIdentityManager implements IdentityManager {
   }
 
   @override String get deviceId => _deviceId;
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => _pubKey;
   @override String get tlsCertificatePem => '';

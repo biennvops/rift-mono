@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'dart:async';
@@ -516,9 +517,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Future<String?> _showDestinationFallbackDialog(String suggestedFileName) async {
     final destinationController = TextEditingController(
-      text: Platform.isWindows
-          ? r'C:\Users\Public\Downloads\' + suggestedFileName
-          : '/tmp/$suggestedFileName',
+      text: await _defaultDestinationPath(suggestedFileName) ??
+          (Platform.isWindows
+              ? r'C:\Users\Public\Downloads\' + suggestedFileName
+              : '/tmp/$suggestedFileName'),
     );
     String? validationError;
 
@@ -608,9 +610,12 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Future<String?> _pickDestinationPath(String suggestedFileName) async {
     try {
+      final defaultPath = await _defaultDestinationPath(suggestedFileName);
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save incoming file',
         fileName: suggestedFileName,
+        initialDirectory:
+            defaultPath == null ? null : File(defaultPath).parent.path,
         lockParentWindow: true,
       );
       if (path == null || path.isEmpty) {
@@ -620,6 +625,39 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     } catch (_) {
       return _showDestinationFallbackDialog(suggestedFileName);
     }
+  }
+
+  Future<String?> _defaultDestinationPath(String suggestedFileName) async {
+    Directory? baseDir;
+    try {
+      baseDir = await getDownloadsDirectory();
+    } catch (_) {
+      baseDir = null;
+    }
+
+    if (baseDir == null) {
+      try {
+        if (Platform.isAndroid) {
+          final external = await getExternalStorageDirectory();
+          if (external != null) {
+            baseDir = Directory(
+              '${external.parent.parent.parent.parent.path}${Platform.pathSeparator}Download',
+            );
+          }
+        }
+      } catch (_) {
+        baseDir = null;
+      }
+    }
+
+    baseDir ??= Platform.isWindows
+        ? Directory(r'C:\Users\Public\Downloads')
+        : Directory('/tmp');
+
+    final cleaned =
+        suggestedFileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+    final fileName = cleaned.isEmpty ? 'incoming.bin' : cleaned;
+    return '${baseDir.path}${Platform.pathSeparator}$fileName';
   }
 
   String _guessMediaTypeFromName(String fileName) {

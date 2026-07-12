@@ -57,6 +57,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         var result = await _handler.GetDeviceInfoAsync();
 
         Assert.Equal(_identityManager.GetDeviceId(), result.DeviceId);
+        Assert.Equal(_identityManager.GetDisplayName(), result.DisplayName);
         Assert.Equal(_identityManager.GetFingerprint(), result.Fingerprint);
         Assert.Equal("riftd-cs/0.1.0", result.ImplementationId);
         Assert.Equal("0.1-draft", result.ProtocolVersion);
@@ -185,6 +186,30 @@ public sealed class RiftApiHandlerTests : IDisposable
             peer.Presence == "online" &&
             peer.LastSeenAt == "2026-06-18T10:05:00Z");
         Assert.DoesNotContain(result.Peers, peer => peer.TrustState == "discovered");
+    }
+
+    [Fact]
+    public async Task ListTrustedPeersAsync_HidesRevokedPeersFromVisibleDeviceList()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-blocked",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Blocked,
+            LastStateTransitionAt = DateTimeOffset.Parse("2026-06-18T10:00:00Z")
+        });
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-revoked",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Revoked,
+            LastStateTransitionAt = DateTimeOffset.Parse("2026-06-18T10:01:00Z")
+        });
+
+        var result = await _handler.ListTrustedPeersAsync();
+
+        Assert.Contains(result.Peers, peer => peer.DeviceId == "rift-peer-blocked" && peer.TrustState == "blocked");
+        Assert.DoesNotContain(result.Peers, peer => peer.DeviceId == "rift-peer-revoked");
     }
 
     [Fact]

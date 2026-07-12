@@ -132,6 +132,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Windows Laptop'), findsOneWidget);
+    expect(find.text('Local Device'), findsOneWidget);
+    expect(find.text('This device'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
   });
 
@@ -161,18 +163,10 @@ void main() {
   });
 
 
-  testWidgets('TrustedDevicesScreen can reset a revoked peer',
+  testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
-    client.trustedPeers = [
-      {
-        'deviceId': 'rift-revoked',
-        'displayName': 'Former Peer',
-        'trustState': 'revoked',
-        'presence': 'offline',
-        'capabilities': <String>[],
-      }
-    ];
+    client.trustedPeers = const [];
     client.discoveredPeers = const [];
 
     await tester.pumpWidget(
@@ -185,13 +179,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Reset').first);
-    await tester.pumpAndSettle();
-    expect(find.text('Reset revoked peer?'), findsOneWidget);
-
-    await tester.tap(find.text('Reset').last);
-    await tester.pumpAndSettle();
-    expect(client.resetRevokedCalled, isTrue);
+    expect(find.text('Former Peer'), findsNothing);
+    expect(find.text('Reset'), findsNothing);
   });
 
   testWidgets('TrustedDevicesScreen can cancel a pairing pending peer',
@@ -324,63 +313,6 @@ void main() {
     expect(find.text('TRUSTED'), findsOneWidget);
     expect(find.text('ONLINE'), findsOneWidget);
     expect(find.text('Verify'), findsNothing);
-  });
-
-  testWidgets(
-      'TrustedDevicesScreen shows peer as discoverable again after revoked peer is reset',
-      (WidgetTester tester) async {
-    final client = FakeJsonRpcRiftClient();
-    client.trustedPeers = [
-      {
-        'deviceId': 'rift-resettable',
-        'displayName': 'Tablet',
-        'trustState': 'revoked',
-        'presence': 'offline',
-        'capabilities': <String>[],
-      }
-    ];
-    client.discoveredPeers = const [];
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: const TrustedDevicesScreen(),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Reset').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reset').last);
-    await tester.pumpAndSettle();
-
-    expect(client.resetRevokedCalled, isTrue);
-
-    client.trustedPeers = const [];
-    client.discoveredPeers = [
-      {
-        'deviceId': 'rift-resettable',
-        'displayName': 'Tablet',
-        'address': '192.168.1.55',
-        'port': 11112,
-        'trustState': 'discovered',
-      }
-    ];
-
-    await client.emitTrustChanged({
-      'deviceId': 'rift-resettable',
-      'previousState': 'revoked',
-      'newState': 'discovered',
-      'reason': 'trust.reset',
-    });
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.text('Tablet'), findsOneWidget);
-    expect(find.text('DISCOVERED'), findsOneWidget);
-    expect(find.text('Verify'), findsOneWidget);
   });
 
   testWidgets(

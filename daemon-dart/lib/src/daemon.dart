@@ -511,8 +511,10 @@ class RiftDaemon {
         ),
       );
       await _discoveryService!.startAdvertising();
-      await _discoveryService!.startDiscovery();
-      _isDiscovering = true;
+      if (await _shouldAutoStartDiscovery()) {
+        await _discoveryService!.startDiscovery();
+        _isDiscovering = true;
+      }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
     // explicit connect/handshake when the UI selects a discovered peer.
@@ -561,6 +563,26 @@ class RiftDaemon {
     await _identityManager?.dispose();
   }
 
+  Future<bool> _shouldAutoStartDiscovery() async {
+    final trustStore = _trustStore;
+    if (trustStore == null) {
+      return true;
+    }
+
+    for (final state in const [
+      TrustState.trusted,
+      TrustState.blocked,
+      TrustState.revoked,
+    ]) {
+      final peers = await trustStore.getPeersByState(state);
+      if (peers.isNotEmpty) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   Map<String, dynamic> getDeviceInfo() {
     final identityManager = _identityManager;
     if (identityManager == null) {
@@ -571,6 +593,7 @@ class RiftDaemon {
 
     return {
       'deviceId': identityManager.deviceId,
+      'displayName': identityManager.displayName,
       'fingerprint': _formatFingerprint(identityManager.getDeviceFingerprint()),
       'implementationId': RiftConstants.implementationId,
       'protocolVersion': RiftConstants.protocolVersion,
@@ -583,13 +606,15 @@ class RiftDaemon {
     final sessionManager = _sessionManager;
     if (trustStore == null) return [];
 
-    // ipc.md: listTrustedPeers is a trust-management surface.
-    // Include all non-discovered peers (pairing_pending, trusted, blocked, revoked).
+    // Device-list surface:
+    // - trusted peers stay visible
+    // - blocked peers stay visible
+    // - pairing_pending stays visible
+    // - revoked peers are intentionally hidden from the list
     final peers = <PeerRecord>[
       ...await trustStore.getPeersByState(TrustState.pairingPending),
       ...await trustStore.getPeersByState(TrustState.trusted),
       ...await trustStore.getPeersByState(TrustState.blocked),
-      ...await trustStore.getPeersByState(TrustState.revoked),
     ];
 
     return peers.map((peer) {

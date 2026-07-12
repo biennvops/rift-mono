@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:collection';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -32,9 +33,12 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
   StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
   int _nextSyntheticId = 1000000;
+  int _nextBootstrapRequestId = -1;
   String? _daemonDeviceId;
   int? _daemonAdvertisedPort;
   String? _daemonFingerprintPrefix;
+  final Map<Object, Completer<Map<String, dynamic>>> _bootstrapRequests =
+      HashMap<Object, Completer<Map<String, dynamic>>>();
 
   @override
   Future<StreamChannel<String>> connect() async {
@@ -103,6 +107,31 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       }
 
       if (message is Map) {
+        final responseId = message['id'];
+        if (responseId != null &&
+            _bootstrapRequests.containsKey(responseId) &&
+            message['jsonrpc'] == '2.0') {
+          final completer = _bootstrapRequests.remove(responseId)!;
+          if (message['error'] is Map) {
+            final error = Map<String, dynamic>.from(message['error'] as Map);
+            completer.completeError(
+              StateError(
+                'Daemon bootstrap RPC failed: ${error['message'] ?? error}',
+              ),
+            );
+          } else {
+            final result = message['result'];
+            if (result is Map<String, dynamic>) {
+              completer.complete(result);
+            } else if (result is Map) {
+              completer.complete(Map<String, dynamic>.from(result));
+            } else {
+              completer.complete({'value': result});
+            }
+          }
+          return;
+        }
+
         if (message['jsonrpc'] == '2.0' &&
             message['method'] == 'rift.daemonReady') {
           final params = message['params'];
@@ -239,6 +268,55 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     );
     await bridge.ensureAdvertising();
     await _attachDiscoveryBridge(bridge);
+    if (await _shouldAutoStartDiscovery()) {
+      await bridge.startDiscovery();
+      _syncDiscoverySnapshotToDaemon();
+    }
+  }
+
+  Future<bool> _shouldAutoStartDiscovery() async {
+    final trusted = await _invokeDaemonBootstrapRpc('rift.listTrustedPeers');
+    if ((trusted['peers'] as List?)?.isNotEmpty == true) {
+      return false;
+    }
+
+    for (final trustState in const ['blocked', 'revoked']) {
+      final result = await _invokeDaemonBootstrapRpc(
+        'rift.listPeersByState',
+        {'trustState': trustState},
+      );
+      if ((result['peers'] as List?)?.isNotEmpty == true) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  Future<Map<String, dynamic>> _invokeDaemonBootstrapRpc(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
+    final port = _rpcPort;
+    if (port == null) {
+      throw StateError('Daemon bootstrap RPC requested before rpcPort was ready');
+    }
+
+    final id = 'transport-bootstrap-${_nextBootstrapRequestId--}';
+    final completer = Completer<Map<String, dynamic>>();
+    _bootstrapRequests[id] = completer;
+    port.send({
+      'jsonrpc': '2.0',
+      'id': id,
+      'method': method,
+      if (params != null) 'params': params,
+    });
+
+    try {
+      return await completer.future.timeout(const Duration(seconds: 10));
+    } finally {
+      _bootstrapRequests.remove(id);
+    }
   }
 
   Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {

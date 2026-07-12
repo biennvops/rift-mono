@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 class MacOSNotifications {
   static const MethodChannel _channel = MethodChannel('rift.permissions');
 
-  static bool get isSupported => Platform.isMacOS;
+  static bool get isSupported => Platform.isMacOS || Platform.isAndroid;
 
   static Future<String> getStatus() async {
     if (!isSupported) return 'unknown';
@@ -23,7 +23,7 @@ class MacOSNotifications {
     required String title,
     required String body,
   }) async {
-    if (!isSupported) return true;
+    if (!Platform.isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.show', {
       'title': title,
       'body': body,

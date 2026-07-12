@@ -74,6 +74,7 @@ class MockSessionManager implements SessionManager {
 
 class FakeIdentityManager implements IdentityManager {
   @override String get deviceId => 'rift-local';
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => Uint8List(32);
   @override String get tlsCertificatePem => '';

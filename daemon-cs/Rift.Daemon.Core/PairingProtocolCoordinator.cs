@@ -174,7 +174,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             _logger.LogInformation("Sending pairing.start to peer {DeviceId}.", deviceId);
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
-                expiresInMs = PairingExpiryMs
+                expiresInMs = PairingExpiryMs,
+                displayName = _identityManager.GetDisplayName()
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
