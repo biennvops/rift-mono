@@ -74,7 +74,12 @@ temp/
 # AI tools
 .agents/
 .codex/
+.claude/
 
 # Gradle
 .gradle/
 **/.gradle/
+
+# Local generated outputs
+dist/
+app-flutter/ios/Runner.xcworkspace/xcshareddata/swiftpm/

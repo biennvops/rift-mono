@@ -1,216 +1,60 @@
-# Rift Android Daemon (Dart) - Usage Guide & Architecture
+# Rift Android Daemon (Dart)
 
-This is the core background module (daemon) on Android for the Rift project, developed in Dart. It handles device identity, certificate generation/parsing, local peer discovery, mTLS transport, pairing, and a Flutter-facing isolate bridge.
+`daemon-dart` is the Android daemon implementation for Rift. It owns device
+identity, peer transport, trust, and the Flutter-facing isolate/JSON-RPC
+bridge on Android.
 
-> **Implementation status note:** The current codebase has a real mTLS transport and Ed25519 Proof of Possession (PoP), and it now follows the current `spec/doc/protocol.md` channel-binding rules via Tier 3 `app-nonce`. Because Dart does not expose `tls-exporter` / `tls-unique`, the daemon sends `bindingType: "app-nonce"` plus a 32-byte `sessionNonce`, then computes `SHA-256(sessionNonce || signerCertDer || verifierCertDer)` exactly as defined in the spec and ADR-0011. The residual limitation is the one already documented by the spec itself: Tier 3 is session-unique, but not as strong as TLS-exporter because it is not cryptographically bound to the underlying TLS transcript.
+## Scope
 
+- Ed25519 identity and P-256 certificate handling
+- fail-closed X.509 extension parsing
+- peer discovery, mTLS session bootstrap, and pairing
+- clipboard and operation lifecycle handling
+- local JSON-RPC IPC through the Android isolate bridge
 
----
+Normative behavior lives in:
 
-## 1. Directory Structure
+- `../spec/doc/protocol.md`
+- `../spec/doc/ipc.md`
+- `../spec/decisions/README.md`
 
-- `bin/daemon.dart`: Minimal standalone entrypoint for local Linux/desktop IPC smoke tests using Unix domain sockets and StreamJsonRpc-compatible framing.
-- `lib/daemon_dart.dart`: The core library exporter bridging internal APIs (like `cert_decoder` and interfaces) to external consumers.
-- `lib/src/interfaces/`: Contains 5 core Interfaces (`IdentityManager`, `TrustStore`, `Transport`, `DiscoveryService`, `ClipboardService`). All business operations must go through these interfaces.
-- `lib/src/crypto/`: Contains extremely important cryptographic logic:
-  - `base32_utils.dart`: Implements RFC 4648 Base32 encoding without padding. Features explicit bit-clamping to prevent 53-bit float integer overflows on Dart Web/JS.
-  - `cert_builder.dart`: Automatically wraps the Ed25519 key into an X.509 certificate using the *Double OCTET STRING* technique. Replaced static sentinels with random 64-bit entropy serials.
-  - `cert_decoder.dart`: A secure X.509 Parser (Fail-Closed).
-  - `identity_manager_impl.dart`: Generates/stores the Ed25519 key. Implements **Atomic Write** against corruption and strict heap zeroing (`dispose()`).
-  - `pop_manager.dart`: Manages the Ed25519 Proof of Possession (PoP) verification with the exact 107-byte signing input required by `protocol.md` Section 5.3.1 and fails closed on malformed proof hex.
-- `lib/src/network/`: 
-  - `frame_codec.dart`: Safe stream transformer handling Length prefix + JSON frames. Strictly limits sizes to 64 KiB pre-auth and 32 MiB post-auth without order-sensitive aliasing hazards.
-  - `transport_impl.dart`: Implements Mutual TLS (mTLS). Defers cert pinning to PoP layer, flushes sockets cleanly, emits `onPeerDisconnected` events to clear stale sessions, and tracks unauthenticated connection timeouts per socket to avoid reconnect races.
-  - `discovery_peer_tracker.dart`: Tracks discovered peer instances and resolves duplicates via `instanceId`.
-  - `discovery_service_factory*.dart`: OS-specific mDNS factory implementations.
-  - `discovery_service_impl.dart`: Uses `nsd` for mDNS. Robustly handles network flaps by diff-ing active instances and evicting removed/null-named peers.
-  - `session_manager.dart`: Orchestrates the `session.hello` state machine. Evaluates PoP signatures using the *signer's own cert DER*, catches Zone exceptions natively, and accurately prunes offline peers to allow seamless reconnections. Also enforces Client-side PoP validation on `session.accept`.
-- `lib/src/core/`:
-  - `rift_constants.dart`: Shared source of truth for protocol version, implementation ID, and capability advertisement metadata used by both handshake and IPC-facing surfaces.
-  - `rift_exceptions.dart`: Typed Rift application exceptions carrying explicit JSON-RPC error codes, reducing reliance on brittle string-matching.
-  - `rift_log.dart`: Local fallback log persistence for offline debugging.
-  - `rpc_utils.dart`: Shared JSON-RPC parameter validation helpers used by both the daemon entrypoint and pairing flows to avoid validation drift.
-- `lib/src/pairing/`:
-  - `pairing_manager.dart`: Manages the Pairing State Machine. Enforces 120s UI timeouts, restores the timeout on failed outbound approve attempts, blocks unauthorized `pairing.approve` packets (Double-Approve Bypass prevention), emits intermediate `rift.onPairingApproved` progress events, and prevents UI Spoofing.
-- `lib/src/clipboard/`:
-  - `clipboard_engine.dart`: In-memory offer/fetch state, expiry, and replay protection.
-  - `clipboard_handler.dart`: Peer protocol handlers for clipboard offer/fetch flows.
-  - `clipboard_models.dart`: Models for clipboard metadata and fetched payloads.
-- `lib/src/storage/`:
-  - `trust_store_impl.dart`: SQLite-backed trust store using WAL mode and Atomic Updates (Exhaustive Edge Validation) to prevent state corruption. It now also preserves pinned `cert_der` values for `trusted`, `blocked`, and `revoked` peers at the storage layer.
-- `lib/src/daemon.dart`: The master orchestrator bounding all services. It now exposes a JSON-RPC-focused isolate bridge via `rpcPort` and protects against UI-layer memory leaks via `try/catch` IPC port setups.
-- `lib/src/operation/`: Operation lifecycle models and `OperationManager` used to track cross-device actions with spec-aligned transitions and retention behavior.
-- `test/`: Contains security and conformance-oriented unit tests across crypto, identity, PoP, frames, pairing, sessions, storage, discovery integration, clipboard flows, operation lifecycle handling, and newer protocol hardening work. See the verification snapshot below for the latest local pass count rather than treating this section as a frozen number.
+## Structure
 
----
+```text
+daemon-dart/
+├── bin/              # standalone/dev entrypoints
+├── lib/src/crypto/   # identity, certs, PoP, parsing
+├── lib/src/network/  # framing, discovery, transport, sessions
+├── lib/src/pairing/  # pairing state machine
+├── lib/src/clipboard/
+├── lib/src/operation/
+├── lib/src/storage/
+└── test/             # unit and integration-style tests
+```
 
-## 2. Usage Guide & Basic Commands
+## Development
 
-> **IMPORTANT NOTE:** All Terminal commands below MUST be run inside the `daemon-dart` directory. Make sure you use the `cd daemon-dart` command before running the package commands.
+Run commands from `daemon-dart/`.
 
-### 2.1. Install Dependencies
-Before working, ensure you have downloaded enough libraries (`pointycastle`, `asn1lib`, `cryptography`, `nsd`, `uuid`, `crypto`):
 ```bash
 flutter pub get
-```
-
-### 2.2. Code Quality Check (Linter)
-All code pushed to the branch must not have warnings. The Linter system is strictly configured in `analysis_options.yaml`.
-```bash
 dart analyze
-```
-> **Note:** Must output `No issues found!` to create a Pull Request.
-
-### 2.3. Run Security Unit Tests
-The test suite currently covers the core cryptography, framing, session, pairing, storage, discovery, and clipboard-related daemon subsystems. The exact count will continue to move as the daemon grows; use the verification snapshot in this README and CI output as the authoritative current count.
-1. **ASN.1 Encryption (`crypto_test`):** Verifies the generated byte array contains the correct Ed25519 OID and randomized RFC 5280 serials (64-bit entropy).
-2. **Fail-Closed Decoding (`decoder_test`):** Strictly verifies 10 advanced CVE-class attack vectors (missing OID, duplicate OID, unsupported critical flags, length manipulation, truncated DER, and fragile OID modifications).
-3. **Stream Network Frame (`frame_codec_test`):** Verifies memory purging, explicit frame boundary upgrades (64 KiB rejection pre-auth vs 32 MiB acceptance post-auth), and prevents double-parsing by directly returning Maps.
-4. **Identity (`identity_test`):** Verifies Atomic Write, Ed25519 PoP signature boundary enforcement (strict 32 bytes), memory zeroing (`dispose`), async contract stubs, and the standard `rift-` Device ID string.
-5. **PoP Validation (`pop_test` & `session_manager_test`):** Verifies Ed25519 Proof of Possession construction/verification against the 107-byte spec shape, strict `bindingType` / `sessionNonce` handling, required envelope fields such as `messageId`, and client-side auth bypass rejection.
-6. **Pairing State Machine (`pairing_manager_test`):** Validates strict protocol transitions, 120s auto-timeouts, Double-Approve Bypass prevention, and Fingerprint spoofing rejections.
-7. **Storage ACID (`trust_store_test` & `trust_store_impl_test`):** Verifies SQLite WAL mode, atomic `transitionState`, prevents mDNS `discovered` downgrade attacks, schema migration, and durable `lastSeenAt` persistence.
-8. **Discovery Integration (`discovery_integration_test`):** Verifies `_rift._tcp` advertisement/discovery over the local UDP/mDNS stack and then feeds the discovered result through the same pure-Dart dedup/eviction tracker used by the daemon discovery path.
-
-```bash
 dart test
 ```
-> **If one or more tests fail:**
-> Treat it as a signal that behavior has regressed or an important invariant is no longer being enforced:
-> - **Error in `crypto_test` / `decoder_test` / `pop_test` / `session_manager_test`:** Proves the ASN.1 byte structure has been manipulated, or the Fail-Closed decoding/PoP mechanism has a loophole (vulnerable to spoofing).
-> - **Error in `pairing_manager_test` / `trust_store_test`:** Proves the Pairing State Machine or SQLite storage is failing, risking Double-Approve Bypass, UI Spoofing, or mDNS Downgrade attacks.
-> - **Error in `frame_codec_test`:** The stream filter system is not working, risking the passage of packets over 32 MiB or RAM overflow.
-> - **Error in `identity_test`:** The Atomic Write structure is failing, or Canonicalization / Length Extension attacks on PoP signatures are possible.
-> - **General Consequence:** Do not assume the implementation is still protocol-safe or review-ready until the failure is understood and fixed.
 
-Latest local verification snapshot:
-- `dart analyze` -> `No issues found!`
-- `dart test` -> `00:07 +131: All tests passed!`
+The standalone runner at `bin/daemon.dart` is for local IPC smoke tests and
+development workflows. Android production hosting remains the foreground-service
+plus isolate model used by the Flutter app.
 
-### 2.4. Standalone Runner Status
-The repository now contains a minimal standalone entrypoint at `bin/daemon.dart`
-for local Linux IPC smoke tests. It starts `RiftDaemon`, listens on a Unix
-domain socket using StreamJsonRpc-compatible `Content-Length` framing, and uses
-the same socket-path conventions that `app-flutter` probes (`$XDG_RUNTIME_DIR`,
-`/tmp/rift-daemon-<uid>/v0.1.sock`, fallback `/tmp/rift-daemon.sock`).
+## Security Notes
 
-To reduce the risk of memory exhaustion from malformed or adversarial local IPC
-clients, the standalone runner enforces a maximum `Content-Length` of 1 MiB and
-rejects out-of-range frames with JSON-RPC `-32600` (Invalid request).
+- The custom X.509 parser is a high-risk component and must fail closed.
+- Dart currently uses the spec-approved Tier 3 `app-nonce` channel binding
+  path because `dart:io` does not expose stronger TLS exporter material.
 
-```bash
-dart run bin/daemon.dart
-```
+## Related Docs
 
-This runner is useful for local desktop verification such as `rift.getDeviceInfo`
-and other IPC smoke tests. It is not yet the final conformance/interop harness,
-and it currently starts with discovery disabled.
-
-### 2.5. Flutter Integration Guide (Android Isolate IPC)
-The root orchestrator is designed to run inside a background isolate hosted by the Android app. The current implementation exposes a `SendPort`/`ReceivePort` bridge, centered around a JSON-RPC-focused `rpcPort`, and operates substantially via JSON-RPC 2.0 complying with `spec/doc/ipc.md`.
-
-To integrate this into the Flutter app, the UI must provide a writable `storagePath` and listen for isolate messages:
-```dart
-import 'dart:isolate';
-import 'package:daemon_dart/daemon_dart.dart';
-
-void startDaemon() async {
-  ReceivePort receivePort = ReceivePort();
-  SendPort? rpcPort;
-  final storagePath = '/data/user/0/com.example.app/files/rift';
-  
-  // Start the background daemon
-  await Isolate.spawn(RiftDaemon.isolateEntryPoint, {
-    'sendPort': receivePort.sendPort,
-    'storagePath': storagePath,
-  });
-
-  // Listen for messages from the Daemon
-  receivePort.listen((message) {
-    if (message is Map<String, dynamic>) {
-      if (message['method'] == 'rift.daemonReady') {
-        rpcPort = message['params']['rpcPort'];
-        print('Daemon is running. Device ID: ${message['params']['deviceId']}');
-        
-        // Example: Standard JSON-RPC command
-        // rpcPort?.send({
-        //   'jsonrpc': '2.0',
-        //   'method': 'rift.approvePairing',
-        //   'id': 1,
-        //   'params': { 'deviceId': 'rift-xyz123', 'fingerprint': 'ABCD-EFGH-IJKL-...' }
-        // });
-      } else if (message['method'] == 'rift.onPairingRequest') {
-        // UI should show a popup with the Fingerprint for User to verify
-        print('Pairing Request from: ${message['params']['displayName']}');
-        print('Fingerprint: ${message['params']['fingerprint']}');
-      } else if (message['method'] == 'rift.onTrustChanged') {
-        // UI should update peer trust status
-        print('Trust Changed: ${message['params']['deviceId']} -> ${message['params']['newState']}');
-      }
-    }
-  });
-}
-```
-This establishes the partially aligned JSON-RPC 2.0 IPC bridge used by the Dart daemon. The request/notification flow follows `ipc.md`, but the isolate-specific `SendPort` transport details and other backlog IPC methods mean the daemon should not yet be described as fully conformant.
-
-### 2.6. Clipboard IPC & Protocol Surface (Week 7 / M4 Groundwork)
-The daemon now includes an in-memory clipboard offer/fetch engine for the
-Week 7 clipboard milestone. The current implementation follows the clipboard
-message families in `protocol.md` and the local IPC methods in `ipc.md`:
-
-- **Peer protocol handlers:** `clipboard.offer`, `clipboard.fetchRequest`,
-  `clipboard.fetchResponse`, `clipboard.fetchReject`
-- **IPC methods:** `rift.notifyClipboardChange`, `rift.listClipboardOffers`,
-  `rift.fetchClipboardContent`
-- **IPC notifications:** `rift.onClipboardOffer`, `rift.onClipboardExpired`
-
-Important implementation notes:
-- `rift.notifyClipboardChange` now requires `contentBase64` in addition to
-  `contentType`, `byteSize`, and `sha256`. The daemon validates that the
-  decoded bytes match both `byteSize` and `sha256` before broadcasting any
-  metadata offer.
-- Local clipboard content is held only in daemon memory for active local
-  offers, and remote offers are tracked separately from local offers so
-  `rift.listClipboardOffers` returns peer offers only.
-- `offerSequence` monotonic replay protection is enforced per peer, and
-  clipboard fetch responses are accepted only after the daemon verifies
-  `byteSize` and `sha256`.
-- Fetch serving is fail-closed: only offers owned by the local device may be
-  served to peers.
-
-### 2.7. Operation Lifecycle & Error Handling (Week 8 / M5)
-The daemon now wraps cross-device clipboard fetch work in an operation
-lifecycle layer aligned with `spec/doc/protocol.md` and `spec/doc/ipc.md`.
-
-Current Week 8 implementation highlights:
-- `clipboard.fetch` now runs through an `OperationManager` rather than keeping
-  lifecycle state implicitly inside clipboard flow state alone.
-- The Dart daemon exposes the operation IPC surface needed by the Flutter app:
-  `rift.listOperations`, `rift.getOperation`, and `rift.onOperationTransition`.
-- Transition validation is centralized and fail-closed:
-  - valid forward transitions are accepted
-  - terminal states are idempotent for duplicate same-state reports
-  - conflicting or out-of-order transitions raise `InvalidTransition`
-- Recent operations are retained in memory with oldest-first pruning once the
-  retention limit is exceeded.
-
-Focused Week 8 verification completed locally:
-- `dart test test/operation_manager_test.dart`
-- `dart test test/clipboard_handler_test.dart`
-- `dart test test/clipboard_engine_test.dart`
-
-### 2.8. Network Handshake & Discovery Hardening (Week 7 Stabilization)
-- **Duplicate Connection Race Condition:** Resolved a deadlock (`Peer closed connection before sending session.hello`) by properly replacing stale incoming sockets instead of rejecting valid reconnection attempts when roles match.
-- **mDNS Discovery Stability:** The daemon now explicitly filters out its own Device ID during mDNS ingestion. This prevents the UI from generating 'Unknown Device' artifacts or tracking its own local instance after Flutter hot reloads.
-
----
-
-## 3. Compliance Level with System Specification (Protocol & IPC)
-- **With `protocol.md`:** 
-  - Implemented the main crypto building blocks required by the spec: ECDSA P-256 self-signed certificates, the custom Ed25519 X.509 extension, fail-closed extension parsing, `rift-` device ID derivation, and state-dependent frame limits (64 KiB pre-auth / 32 MiB post-auth).
-  - Implemented session bootstrap, PoP verification, strict envelope/schema validation (`messageId`, `destinationDeviceId`, `requiredExtensions`), client-side `session.accept` verification, pairing hardening, and trust-store persistence.
-  - **Known gaps:** Dart still cannot use Tier 1 `tls-exporter` or Tier 2 `tls-unique`, so the implementation remains on the spec-approved Tier 3 `app-nonce` path rather than stronger TLS-bound channel binding.
-- **With `ipc.md`:** 
-  - The code implements the isolate entrypoint and all required IPC-facing commands/events needed by the Flutter app: `rift.startPairing`, `rift.approvePairing`, `rift.rejectPairing`, `rift.onTrustChanged`, `rift.onPairingRequest`, `rift.onPairingApproved`, plus the Week 7 clipboard surface `rift.notifyClipboardChange`, `rift.listClipboardOffers`, `rift.fetchClipboardContent`, `rift.onClipboardOffer`, and `rift.onClipboardExpired`.
-  - Clipboard IPC validation is now stricter at the daemon boundary: malformed base64, mismatched `byteSize`, mismatched `sha256`, and oversized clipboard payloads are rejected before the daemon advertises an offer to peers.
-  - Week 8 extends the IPC surface with `rift.listOperations`, `rift.getOperation`, and `rift.onOperationTransition`, allowing the local client to inspect operation state/history and react to lifecycle changes.
+- `CHANGELOG.md`
+- `../spec/vectors/README.md`
+- `../tests-conformance/README.md`
+- `../tests-interop/README.md`

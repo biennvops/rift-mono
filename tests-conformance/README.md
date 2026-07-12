@@ -1,26 +1,30 @@
 # Conformance Test Harness
 
-This directory contains protocol conformance tests backed by declarative JSON
-test cases. The Dart runner is implemented and executable today; the .NET
-runner remains a separate follow-up.
+This directory contains declarative protocol conformance tests shared across
+Rift implementations.
+
+## Purpose
+
+- validate implementation behavior against the written protocol
+- keep vectors and test cases independent from daemon internals
+- support multiple runners over the same declarative cases
 
 ## Structure
 
-- `testcases/`: Declarative JSON test cases with binary artifacts referenced by path.
-- `schema.md`: Documentation for the JSON test-case schema.
-- `runners/dotnet/`: C# test runner skeleton for the daemon-cs implementation.
-- `runners/dart/`: Dart test runner that executes the current vector suites.
+- `testcases/` - declarative JSON test cases
+- `schema.md` - test case schema documentation
+- `runners/dart/` - executable Dart runner
+- `runners/dotnet/` - .NET runner work-in-progress
 
-## Adding a Runner
-
-Runners must parse the test cases in `testcases/` and map them to their
-implementation's internal APIs. The runner's only job is to execute the inputs
-and assert they match `expected`.
-
-To run the Dart conformance vectors locally:
+## Run The Dart Runner
 
 ```bash
 cd tests-conformance
 dart pub get
 dart run runners/dart/runner.dart
 ```
+
+## Related Inputs
+
+- `../spec/doc/protocol.md`
+- `../spec/vectors/README.md`

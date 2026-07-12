@@ -1,195 +1,31 @@
-# Interoperability Tests
+# Interoperability Harness
 
-This directory tracks recorded real-device interop evidence across the active
-Rift platform pairs. The goal is to separate:
+This directory contains cross-platform interoperability test material for Rift.
+It is the place for harness code, repeatable validation procedures, and stored
+evidence formats for daemon-to-daemon and app-to-daemon interoperability.
 
-- code health and automated coverage
-- real pairing/trust behavior observed on actual platform combinations
+Active status and sign-off tracking belong in GitHub Projects, not in this
+README.
 
-## Sign-off rule
+## Purpose
 
-Interop is considered complete for a platform pair only when both layers are
-satisfied:
+- exercise cross-implementation behavior beyond single-daemon unit tests
+- capture reusable validation workflows for real device pairs
+- keep interoperability evidence separate from normative protocol docs
 
-- **Code health:** platform transports, app analysis, and automated tests are green.
-- **Interop evidence:** real-device pairing/trust behavior has been exercised and recorded.
+## Current Contents
 
-This file tracks the second layer.
+- `test/` - lightweight automated interop-oriented tests and harness code
+- `pubspec.*` - Dart package metadata for the harness
 
-## Local-network scope reminder
+## Usage
 
-The current Rift profile is LAN-first. Real-device sign-off for a platform pair
-must demonstrate that the pair still works when the devices share a reachable
-local network but the LAN has no upstream internet access. The inverse case
-also matters: internet access alone does not count as readiness if local
-multicast discovery or direct peer reachability is absent.
+Run from `tests-interop/`:
 
-For Android platform pairs, current real-device evidence also needs to be read
-with one implementation caveat in mind: Android's Dart `SecureServerSocket`
-does not reliably provisionally accept arbitrary self-signed inbound client
-certificates during server-side TLS handshake. Current Linux <-> Android and
-desktop <-> Android success therefore depends on Android proactively opening an
-authenticated outbound session and the desktop side reusing that session rather
-than forcing a fresh inbound Android TLS handshake.
+```bash
+dart pub get
+dart test
+```
 
-## Automated coverage in this directory
-
-The Dart tests currently checked in under `tests-interop/test/` are a
-lightweight harness around in-memory `SessionManager` instances from
-`daemon-dart`. They are useful for:
-
-- validating message-shape assumptions around presence updates
-- exercising disconnect cleanup logic in a controlled environment
-- exercising clipboard offer/fetch flows, integrity checks, and boundary cases
-- keeping the Week 6 harness package alive in CI
-
-Current checked-in simulated coverage includes:
-
-- `presence_sync_test.dart` for Week 6 presence-state propagation
-- `clipboard_transfer_test.dart` for Week 7 clipboard offer/fetch behavior,
-  including:
-  - successful fetch flow
-  - SHA-256 / `byteSize` integrity preservation
-  - oversized payload rejection
-  - empty payload handling
-  - UTF-8 / special-character preservation
-- `file_transfer_test.dart` for simulated daemon-to-daemon file transfer
-  behavior, including:
-  - negotiated `file.transfer` capability usage
-  - `file.offer` to `file.accept` happy path
-  - chunk delivery and whole-file SHA-256 preservation
-  - verified destination-file finalization
-
-They are **not** a substitute for real host-to-host or daemon-to-daemon interop
-evidence, and they do not by themselves satisfy the sign-off matrix below.
-
-## Latest update
-
-- Date: 2026-07-04
-- Branch: current Week 7 clipboard batch
-- Scope:
-  - prior Android <-> Linux pairing / trust evidence retained below
-  - Week 7 simulated clipboard offer/fetch coverage added
-  - live Milestone M4 clipboard evidence still pending
-
-- Date: 2026-07-11
-- Branch: current file-transfer extension work
-- Scope:
-  - simulated daemon-to-daemon file transfer coverage added in
-    `test/file_transfer_test.dart`
-  - real Windows <-> Android file-transfer evidence still pending
-
-## Platform-pair matrix
-
-Legend:
-
-- `PASS`: recorded and verified manually
-- `PARTIAL`: some real-device evidence exists, but not enough for sign-off
-- `READY`: code path is prepared, but no recorded real-device evidence yet
-- `FAIL`: reproduced failure remains open
-- `UNKNOWN`: not evaluated in this directory yet
-
-| Pair | Transport / discovery readiness | Pairing A -> B | Pairing B -> A | Trust sync | Presence Sync | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| Windows <-> Android | PARTIAL | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Windows Flutter <-> `daemon-cs` IPC readiness verified; Android Flutter <-> `daemon-dart` IPC readiness verified; real peer discovery observed. Full pairing evidence still missing. |
-| Linux <-> Android | PARTIAL | PARTIAL | PARTIAL | PARTIAL | UNKNOWN | Real pairing work was exercised on devices on 2026-06-23 and 2026-06-24. Both directions established secure sessions and reached `trusted` in active debugging, but the full regression matrix below is not yet recorded cleanly enough for sign-off. |
-| macOS <-> Android | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Week 6 expansion scope: Evaluate macOS launchd daemon with Android. |
-| Linux <-> Windows | READY | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | Both sides now share the same C# pairing/session core, but no recorded real-device run is captured here yet. |
-
-## Recorded evidence by platform
-
-### Windows
-
-- Windows Flutter <-> `daemon-cs`: PASS
-  - Named pipe connection established successfully.
-  - `rift.getDeviceInfo` returned populated values.
-  - Settings / Debug screen loaded without infinite loading.
-  - Trusted Devices screen loaded without crashes or IPC errors.
-
-### Android
-
-- Android Flutter <-> `daemon-dart`: PASS for IPC readiness
-  - App launched on a physical Android device.
-  - Daemon isolate reached ready state after transport fixes.
-  - `rift.getDeviceInfo`, `rift.startDiscovery`, and `rift.stopDiscovery`
-    succeeded in the verified run.
-
-### Discovery
-
-- Real peer discovery: PASS
-  - Android/Windows observed a real peer in the discovered/trusted-device flow
-    during manual verification.
-
-### Linux
-
-- Linux `daemon-cs` host readiness: PASS
-  - Real IPC socket binding works.
-  - mDNS advertising and discovery startup work.
-  - TLS transport startup works.
-  - Writable local state under the user data directory works.
-
-## Linux <-> Android status
-
-The Linux <-> Android path has moved past simple host readiness. The following
-was observed during active manual debugging on 2026-06-23 and 2026-06-24:
-
-- secure session establishment succeeded in both directions
-- capability negotiation succeeded
-- pairing request / approve flows reached the point where both sides could
-  transition to `trusted`
-- trust-state cleanup and IPC propagation bugs were identified and fixed during
-  the run
-
-However, this directory still does **not** contain a clean recorded pass for the
-full manual matrix below, so Linux <-> Android remains `PARTIAL` rather than
-fully signed off.
-
-## Manual validation matrix still required for sign-off
-
-The following runs still need a clean recorded result before Milestone M3 can be
-considered complete for each relevant pair:
-
-| Case | Windows <-> Android | Linux <-> Android | macOS <-> Android | Linux <-> Windows |
-| --- | --- | --- | --- | --- |
-| Same LAN, internet available | TODO | TODO | TODO | TODO |
-| Same LAN, no internet uplink | TODO | TODO | TODO | TODO |
-| Same SSID, client isolation enabled | TODO | TODO | TODO | TODO |
-| Multicast unavailable, direct local IP still reachable | TODO | TODO | TODO | TODO |
-| Pairing happy path A -> B | TODO | TODO | TODO | TODO |
-| Pairing happy path B -> A | TODO | TODO | TODO | TODO |
-| Reject flow | TODO | TODO | TODO | TODO |
-| Cancel / timeout flow | TODO | TODO | TODO | TODO |
-| Trust persistence after app / daemon restart | TODO | TODO | TODO | TODO |
-| Revoke / untrust flow | TODO | TODO | TODO | TODO |
-| Disconnect behavior after `trusted` | TODO | TODO | TODO | TODO |
-| Disconnect behavior during `pairing_pending` | TODO | TODO | TODO | TODO |
-| **Week 6:** Heartbeat latency within threshold | TODO | TODO | TODO | TODO |
-| **Week 6:** Presence sync (offline to online) | TODO | TODO | TODO | TODO |
-| **Week 6:** Presence sync (online to offline) | TODO | TODO | TODO | TODO |
-| **Week 6:** Capability awareness (Unsupported op fails) | TODO | TODO | TODO | TODO |
-
-## Current conclusion
-
-Interop transport and discovery are validated well enough to support active
-pairing work on real devices. Windows <-> Android has IPC readiness evidence.
-Linux <-> Android has partial real pairing evidence from hands-on debugging, but
-not yet a clean sign-off matrix. Linux <-> Windows remains code-ready but
-unevaluated in this directory.
-
-For Week 7 specifically, this directory now contains automated simulated
-clipboard coverage, but Milestone M4 still requires recorded live interop
-evidence before clipboard transfer can be treated as fully signed off for any
-platform pair.
-
-For the file-transfer extension specifically, the same rule applies:
-simulated daemon-to-daemon coverage is useful to validate the protocol flow,
-but it does not by itself count as recorded Windows <-> Android runtime
-evidence.
-
-## Follow-up engineering work
-
-These items are no longer milestone blockers, but they remain worthwhile
-follow-ups after M3 if profiling or future regressions justify the work:
-
-- Replace or reduce Windows named-pipe polling if power/CPU traces show overhead.
-- Add deeper transport-level tests for Windows named pipes and Android isolate lifecycle.
+Use this directory for reproducible interop procedures and evidence templates.
+Do not treat it as the project roadmap or source of current completion status.
