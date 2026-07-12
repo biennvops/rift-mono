@@ -15,11 +15,13 @@ import 'package:daemon_dart/src/crypto/base32_utils.dart';
 import 'package:basic_utils/basic_utils.dart';
 
 class MockSessionManager implements SessionManager {
+  final Map<String, SessionContext> contexts = {};
+
   @override
   Future<bool> Function(String)? get peerAllowanceResolver => null;
 
   @override
-  SessionContext? getContext(String peerDeviceId) => null;
+  SessionContext? getContext(String peerDeviceId) => contexts[peerDeviceId];
   @override
   void injectContextForTesting(SessionContext ctx) {}
   @override
@@ -49,6 +51,10 @@ class MockSessionManager implements SessionManager {
 
   void simulateNetworkMessage(String peerDeviceId, Uint8List? cert, Map<String, dynamic> payload) {
     _messageController.add(ProtocolMessage(peerDeviceId, cert, payload));
+  }
+
+  void simulateDisconnect(String peerDeviceId) {
+    _disconnectController.add(peerDeviceId);
   }
 
   @override
@@ -616,6 +622,30 @@ void main() {
       await Future.delayed(Duration.zero);
 
       expect(sessionManager.disconnectedPeers, isNot(contains('rift-peer')));
+    });
+
+    test('transient disconnect during pairing does not revert when replacement session appears quickly', () async {
+      await trustStore.upsertPeer(PeerRecord(
+        deviceId: 'rift-peer',
+        certDer: testCertDer,
+        state: TrustState.pairingPending,
+        updatedAt: DateTime.now().toUtc(),
+      ));
+
+      sessionManager.simulateDisconnect('rift-peer');
+
+      Future<void>.delayed(const Duration(milliseconds: 200), () {
+        final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+          ..handshakeState = HandshakeState.established
+          ..capabilityNegotiated = true;
+        sessionManager.contexts['rift-peer'] = ctx;
+      });
+
+      await Future<void>.delayed(const Duration(milliseconds: 1700));
+
+      final peer = await trustStore.getPeer('rift-peer');
+      expect(peer, isNotNull);
+      expect(peer!.state, TrustState.pairingPending);
     });
   });
 }

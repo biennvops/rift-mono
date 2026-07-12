@@ -17,6 +17,8 @@ import '../core/rpc_utils.dart';
 
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
+  static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
+
   final TrustStore trustStore;
   final SessionManager sessionManager;
   final IdentityManager identityManager;
@@ -42,6 +44,15 @@ class PairingManager {
 
   void _handlePeerDisconnected(String peerDeviceId) async {
     try {
+      await Future<void>.delayed(_disconnectGracePeriod);
+      final ctx = sessionManager.getContext(peerDeviceId);
+      if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+        RiftLog.info(
+          '[Pairing] Ignoring transient disconnect for $peerDeviceId because an authenticated replacement session is already established',
+        );
+        return;
+      }
+
       _cancelTimeoutTimer(peerDeviceId);
       final record = await trustStore.getPeer(peerDeviceId);
       if (record != null && record.state == TrustState.pairingPending) {

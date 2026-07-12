@@ -22,6 +22,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private static readonly TimeSpan ActiveSessionFallbackWindow = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan DuplicateOutboundRetryDelay = TimeSpan.FromMilliseconds(1250);
     private static readonly TimeSpan ManualEndpointRetryDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan PairingDisconnectGracePeriod = TimeSpan.FromMilliseconds(1500);
 
     private readonly ITransport _transport;
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
@@ -737,6 +738,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
 
     private async Task HandlePeerDisconnectedAsync(string peerDeviceId)
     {
+        if (await WaitForActiveSessionAsync(peerDeviceId, PairingDisconnectGracePeriod, CancellationToken.None).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Observed a transient pairing disconnect for peer {DeviceId}; an authenticated replacement session became active before pairing was reverted.",
+                peerDeviceId);
+            return;
+        }
+
         _pairingStates.TryRemove(peerDeviceId, out _);
 
         var peer = _trustStore.GetPeer(peerDeviceId);
