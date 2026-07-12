@@ -879,13 +879,49 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     if (deviceId != null && _isSelfDevice(deviceId)) {
       return;
     }
-
     try {
+      if (deviceId != null) {
+        if (trustState == 'blocked') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Unblock device?',
+            message: 'This will return $titleText to discovered state.',
+            confirmLabel: 'Unblock',
+          );
+          if (confirmed) {
+            await client.unblockPeer(deviceId);
+            await _loadData();
+          }
+          return;
+        } else if (trustState == 'revoked') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Reset revoked peer?',
+            message:
+                'This will clear the revoked state for $titleText and return it to discovered devices.',
+            confirmLabel: 'Reset',
+          );
+          if (confirmed) {
+            await client.resetRevokedPeer(deviceId);
+            await _loadData();
+          }
+          return;
+        } else if (trustState == 'pairing_pending') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Cancel pairing?',
+            message: 'This will drop the pending trust flow for $titleText.',
+            confirmLabel: 'Cancel pairing',
+          );
+          if (confirmed) {
+            await client.rejectPairing(deviceId);
+            await _loadData();
+          }
+          return;
+        }
+      }
+
       if (!isTrusted) {
         if (deviceId == null && (address == null || port == null)) {
           return;
         }
-        final client = context.read<JsonRpcRiftClient>();
         if (deviceId != null) {
           assert(
             !_isSelfDevice(deviceId),
@@ -908,28 +944,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         );
         await _loadData();
         return;
-      }
-
-      if (deviceId == null) return;
-
-      if (trustState == 'blocked') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Unblock device?',
-          message: 'This will return $titleText to discovered state.',
-          confirmLabel: 'Unblock',
-        );
-        if (!confirmed) return;
-        await client.unblockPeer(deviceId);
-      } else if (trustState == 'revoked') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Reset revoked peer?',
-          message:
-              'This will clear the revoked state for $titleText and return it to discovered devices.',
-          confirmLabel: 'Reset',
-        );
-        if (!confirmed) return;
-        await client.resetRevokedPeer(deviceId);
-      } else if (trustState == 'trusted') {
+      } else {
         final isOnline = peer['presence'] == 'online';
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
@@ -940,21 +955,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         );
         await _loadData();
-      } else if (trustState == 'pairing_pending') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Cancel pairing?',
-          message: 'This will drop the pending trust flow for $titleText.',
-          confirmLabel: 'Cancel pairing',
-        );
-        if (!confirmed) return;
-        if (trustState == 'pairing_pending') {
-          await client.rejectPairing(deviceId);
-        } else {
-          await client.revokeTrust(
-              deviceId, 'User revoked trust from device manager');
-        }
       }
-      await _loadData();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -996,48 +997,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Mở Rift trên thiết bị khác cùng mạng LAN để bắt đầu.',
+          'Mở Rift trên thiết bị khác để bắt đầu.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
           textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 32),
-        ElevatedButton.icon(
-          onPressed: (_isDiscovering || _isTogglingDiscovery) ? null : _toggleDiscovery,
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
-            ),
-            elevation: 1,
-            side: const BorderSide(color: Colors.transparent),
-          ).copyWith(
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) {
-                return theme.colorScheme.surfaceContainerHighest;
-              }
-              return theme.colorScheme.primary;
-            }),
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) {
-                return theme.colorScheme.onSurfaceVariant;
-              }
-              return theme.colorScheme.onPrimary;
-            }),
-          ),
-          icon: _isTogglingDiscovery 
-            ? SizedBox(
-                width: 18, height: 18, 
-                child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.onSurfaceVariant)
-              ) 
-            : const Icon(Icons.refresh, size: 18),
-          label: Text(
-            'Tìm Thiết Bị',
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: (_isDiscovering || _isTogglingDiscovery) ? theme.colorScheme.onSurfaceVariant : theme.colorScheme.onPrimary,
-            ),
-          ),
         ),
         const SizedBox(height: 32),
         Container(
@@ -1060,7 +1024,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               ),
               const SizedBox(width: 8),
               Text(
-                'mDNS Listening on port 5353',
+                'Sẵn sàng kết nối qua Wi-Fi',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

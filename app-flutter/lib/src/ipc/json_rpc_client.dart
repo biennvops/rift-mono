@@ -662,7 +662,10 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.startDiscovery');
+    final r = await _client!.sendRequest('rift.startDiscovery').timeout(
+      const Duration(seconds: 15),
+      onTimeout: () => throw TimeoutException('Discovery request timed out'),
+    );
     return _canonicalizeResult(r);
   }
 

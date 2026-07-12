@@ -110,6 +110,9 @@ class FakeTransport implements Transport {
 }
 
 class FakeIdentityManager implements IdentityManager {
+  @override
+  String get displayName => 'Fake Device';
+
   final String _deviceId;
   final SimpleKeyPair _keyPair;
   final Uint8List _testCertDer;

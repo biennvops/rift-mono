@@ -30,7 +30,7 @@ class FileTransferService {
   final Map<String, _OutgoingTransferState> _outgoingTransfers = {};
   final Map<String, _IncomingTransferState> _incomingTransfers = {};
 
-  late final StreamSubscription<ProtocolMessage> _messageSub;
+  late final StreamSubscription<void> _messageSub;
 
   final _fileOfferController = StreamController<Map<String, dynamic>>.broadcast();
   final _progressController = StreamController<Map<String, dynamic>>.broadcast();
@@ -56,7 +56,7 @@ class FileTransferService {
         _operationManager = operationManager,
         _localDeviceId = localDeviceId,
         _storagePath = storagePath {
-    _messageSub = _sessionManager.onMessage.listen(_handleMessage);
+    _messageSub = _sessionManager.onMessage.asyncMap(_handleMessage).listen((_) {});
   }
 
   Future<void> dispose() async {
@@ -536,6 +536,13 @@ class FileTransferService {
       await raf.close();
     }
 
+    if (transfer.nextChunkIndex == 0) {
+      _operationManager.transitionOperation(
+        transfer.operationId,
+        OperationState.active,
+      );
+    }
+    
     transfer.bytesTransferred += chunkBytes.length;
     transfer.nextChunkIndex += 1;
     transfer.state = 'active';

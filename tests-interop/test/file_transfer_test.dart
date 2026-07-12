@@ -24,6 +24,9 @@ class FakeTrustStore implements TrustStore {
   Future<void> upsertPeer(PeerRecord record) async {}
 
   @override
+  Future<List<PeerRecord>> getAllPeers() async => [];
+
+  @override
   Future<PeerRecord?> getPeer(String deviceId) async => PeerRecord(
         deviceId: deviceId,
         certDer: Uint8List(0),
@@ -149,6 +152,9 @@ class FakeTransport implements Transport {
 }
 
 class FakeIdentityManager implements IdentityManager {
+  @override
+  String get displayName => 'Fake Device';
+
   final String _deviceId;
   final SimpleKeyPair _keyPair;
   final Uint8List _testCertDer;
@@ -488,11 +494,11 @@ void main() {
       );
       expect(
         operationManager1.getOperation(offerResult.operationId).state.wireName,
-        'done',
+        'Done',
       );
       expect(
         operationManager2.getOperation(acceptResult.operationId).state.wireName,
-        'done',
+        'Done',
       );
     });
   });
