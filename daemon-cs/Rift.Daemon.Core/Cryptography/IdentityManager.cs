@@ -171,6 +171,12 @@ public class IdentityManager : IIdentityManager
         var edKeyBytes = _ed25519PublicKey.GetEncoded();
         return DeriveDeviceId(edKeyBytes);
     }
+
+    public string GetDisplayName()
+    {
+        EnsureIdentityInitialized();
+        return DeriveDisplayName(_ed25519PublicKey.GetEncoded());
+    }
     
     public static string DeriveDeviceId(byte[] edKeyBytes)
     {
@@ -217,6 +223,46 @@ public class IdentityManager : IIdentityManager
         // Chunk into 8 groups of 4 characters
         var chunks = Enumerable.Range(0, 8).Select(i => base32.Substring(i * 4, 4));
         return string.Join("-", chunks);
+    }
+
+    public static string DeriveDisplayName(byte[] edKeyBytes)
+    {
+        using var sha256 = SHA256.Create();
+        var hash = sha256.ComputeHash(edKeyBytes);
+        var number = ((hash[0] << 8) | hash[1]) % 100 + 1;
+        return $"{GetPlatformLabel()} {GetDeviceTypeLabel()} {number:00}";
+    }
+
+    private static string GetPlatformLabel()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return "Windows";
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return "macOS";
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return "Linux";
+        }
+
+        return "Unknown";
+    }
+
+    private static string GetDeviceTypeLabel()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ||
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ||
+            RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return "Desktop";
+        }
+
+        return "Device";
     }
 
     public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature)

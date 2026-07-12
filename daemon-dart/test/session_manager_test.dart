@@ -91,6 +91,7 @@ class FakeTrustStore implements TrustStore {
 
 class FakeIdentityManager implements IdentityManager {
   @override String get deviceId => 'rift-local';
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => Uint8List(32);
   @override String get tlsCertificatePem => '';
@@ -229,6 +230,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -261,6 +263,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -511,6 +514,7 @@ void main() {
           'identityVerified': true,
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},

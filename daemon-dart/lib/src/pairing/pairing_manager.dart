@@ -17,6 +17,8 @@ import '../core/rpc_utils.dart';
 
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
+  static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
+
   final TrustStore trustStore;
   final SessionManager sessionManager;
   final IdentityManager identityManager;
@@ -43,6 +45,15 @@ class PairingManager {
 
   void _handlePeerDisconnected(String peerDeviceId) async {
     try {
+      await Future<void>.delayed(_disconnectGracePeriod);
+      final ctx = sessionManager.getContext(peerDeviceId);
+      if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+        RiftLog.info(
+          '[Pairing] Ignoring transient disconnect for $peerDeviceId because an authenticated replacement session is already established',
+        );
+        return;
+      }
+
       _cancelTimeoutTimer(peerDeviceId);
       final record = await trustStore.getPeer(peerDeviceId);
       if (record != null && record.state == TrustState.pairingPending) {
@@ -125,7 +136,7 @@ class PairingManager {
         'destinationDeviceId': peerDeviceId,
         'payload': {
           'expiresInMs': _pairingTimeoutSeconds * 1000,
-          'displayName': _getGeneratedDisplayName(),
+          'displayName': identityManager.displayName,
         },
       });
       RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');
@@ -570,15 +581,5 @@ class PairingManager {
     final truncated = base32Str.substring(0, 32);
     final hyphenated = truncated.replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)}-');
     return hyphenated.substring(0, 39); // Remove trailing hyphen
-  }
-
-  String _getGeneratedDisplayName() {
-    final os = Platform.operatingSystem;
-    final osCapitalized = os.isNotEmpty ? '${os[0].toUpperCase()}${os.substring(1)}' : 'Unknown';
-    final type = (os == 'android' || os == 'ios') ? 'Phone' : 'Desktop';
-    final idPart = identityManager.deviceId.split('-').length > 1
-        ? identityManager.deviceId.split('-')[1].substring(0, 4).toUpperCase()
-        : '0000';
-    return '$osCapitalized $type $idPart';
   }
 }

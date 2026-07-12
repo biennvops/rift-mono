@@ -26,6 +26,7 @@ dependencies:
   tray_manager: ^0.5.3
   google_fonts: ^8.1.0
   shared_preferences: ^2.5.5
+  file_picker: ^10.3.2
 
 dev_dependencies:
   flutter_test:

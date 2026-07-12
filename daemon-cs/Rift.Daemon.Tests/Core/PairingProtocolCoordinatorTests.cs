@@ -709,7 +709,9 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         _transport.RaiseSessionStateChanged("rift-peer-disconnected", isOnline: false);
 
         await WaitForConditionAsync(() =>
-            _trustStore.GetPeer("rift-peer-disconnected")?.State == TrustState.Discovered);
+            _trustStore.GetPeer("rift-peer-disconnected")?.State == TrustState.Discovered,
+            attempts: 40,
+            delayMs: 100);
 
         var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
         {
@@ -719,6 +721,45 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         });
 
         Assert.Contains(events, evt => evt.FailureReason == "PeerUnreachable");
+    }
+
+    [Fact]
+    public async Task SessionStateChanged_OfflineDuringPairing_PreservesPendingStateWhenReplacementSessionAppearsQuickly()
+    {
+        _transport.ActiveSessions.Add("rift-peer-transient-disconnect");
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-transient-disconnect",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.PairingPending,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-transient-disconnect");
+
+        _transport.ActiveSessions.Remove("rift-peer-transient-disconnect");
+        _transport.RaiseSessionStateChanged("rift-peer-transient-disconnect", isOnline: false);
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(200);
+            _transport.ActiveSessions.Add("rift-peer-transient-disconnect");
+            _transport.RaiseSessionStateChanged("rift-peer-transient-disconnect", isOnline: true);
+        });
+
+        await Task.Delay(1800);
+
+        var peer = _trustStore.GetPeer("rift-peer-transient-disconnect");
+        Assert.Equal(TrustState.PairingPending, peer!.State);
+
+        var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.PairingRejected],
+            PeerDeviceId = "rift-peer-transient-disconnect",
+            Limit = 10
+        });
+
+        Assert.DoesNotContain(events, evt => evt.FailureReason == "PeerUnreachable");
     }
 
     [Fact]

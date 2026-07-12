@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Networking;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 
@@ -11,11 +12,11 @@ public class Worker(
     ILogger<Worker> logger,
     IIpcListener ipcListener,
     IIdentityManager identityManager,
+    ITrustStore trustStore,
     IDiscoveryService discoveryService,
     ITransport transport,
     IProtocolMessageRouter protocolMessageRouter,
-    IPresenceService presenceService,
-    ITrustStore trustStore) : BackgroundService
+    IPresenceService presenceService) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -26,12 +27,10 @@ public class Worker(
 
         var deviceId = identityManager.GetDeviceId();
         discoveryService.StartAdvertising(deviceId, "0.1-draft", "0.1-draft");
-        
-        if (!System.Linq.Enumerable.Any(trustStore.GetAllPeers()))
+        if (ShouldAutoStartDiscovery(trustStore))
         {
             discoveryService.StartDiscovery();
         }
-
         transport.MessageReceived += OnTransportMessageReceived;
         transport.SessionStateChanged += OnSessionStateChanged;
 
@@ -154,5 +153,11 @@ public class Worker(
             var payloadBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
             await transport.SendAsync(peerDeviceId, payloadBytes, cancellationToken);
         }
+    }
+
+    internal static bool ShouldAutoStartDiscovery(ITrustStore trustStore)
+    {
+        return !trustStore.GetAllPeers().Any(peer =>
+            peer.State is TrustState.Trusted or TrustState.Blocked or TrustState.Revoked);
     }
 }

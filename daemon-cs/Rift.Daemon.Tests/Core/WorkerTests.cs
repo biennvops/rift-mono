@@ -16,6 +16,7 @@ public sealed class WorkerTests
     {
         var ipcListener = new FakeIpcListener();
         var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
         var transport = new FakeTransport();
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
@@ -25,6 +26,7 @@ public sealed class WorkerTests
             NullLogger<Worker>.Instance,
             ipcListener,
             identityManager,
+            trustStore,
             discoveryService,
             transport,
             protocolRouter,
@@ -42,6 +44,7 @@ public sealed class WorkerTests
         Assert.Equal("online", presence!.Status);
         Assert.Contains("clipboard.offer_fetch", presence.Capabilities);
         Assert.True(discoveryService.StartAdvertisingCalled);
+        Assert.True(discoveryService.StartDiscoveryCalled);
         Assert.Contains(transport.SentMessages, message =>
             message.PeerDeviceId == "rift-peer-online" &&
             message.Type == "presence.update" &&
@@ -57,6 +60,7 @@ public sealed class WorkerTests
     {
         var ipcListener = new FakeIpcListener();
         var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
         var transport = new FakeTransport();
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
@@ -66,6 +70,7 @@ public sealed class WorkerTests
             NullLogger<Worker>.Instance,
             ipcListener,
             identityManager,
+            trustStore,
             discoveryService,
             transport,
             protocolRouter,
@@ -93,6 +98,7 @@ public sealed class WorkerTests
     {
         var ipcListener = new FakeIpcListener();
         var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
         var transport = new FakeTransport();
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
@@ -102,6 +108,7 @@ public sealed class WorkerTests
             NullLogger<Worker>.Instance,
             ipcListener,
             identityManager,
+            trustStore,
             discoveryService,
             transport,
             protocolRouter,
@@ -123,6 +130,7 @@ public sealed class WorkerTests
     {
         var ipcListener = new FakeIpcListener();
         var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
         var transport = new FakeTransport();
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
@@ -132,6 +140,7 @@ public sealed class WorkerTests
             NullLogger<Worker>.Instance,
             ipcListener,
             identityManager,
+            trustStore,
             discoveryService,
             transport,
             protocolRouter,
@@ -158,6 +167,7 @@ public sealed class WorkerTests
         var logger = new ListLogger<Worker>();
         var ipcListener = new DelayedFaultIpcListener(TimeSpan.FromMilliseconds(50), new InvalidOperationException("ipc boom"));
         var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
         var transport = new CompletingTransport();
         var protocolRouter = new FakeProtocolMessageRouter();
         var presenceService = new PresenceService();
@@ -167,6 +177,7 @@ public sealed class WorkerTests
             logger,
             ipcListener,
             identityManager,
+            trustStore,
             discoveryService,
             transport,
             protocolRouter,
@@ -184,6 +195,41 @@ public sealed class WorkerTests
             entry.LogLevel == LogLevel.Error &&
             entry.Exception?.ToString().Contains("ipc boom", StringComparison.Ordinal) == true &&
             entry.Message.Contains("IPC listener", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DoesNotAutoStartDiscovery_WhenKnownManagedPeersExist()
+    {
+        var ipcListener = new FakeIpcListener();
+        var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
+        trustStore.Peers.Add(new PeerIdentity
+        {
+            DeviceId = "rift-known-peer",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Blocked,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        var transport = new FakeTransport();
+        var protocolRouter = new FakeProtocolMessageRouter();
+        var presenceService = new PresenceService();
+        var identityManager = new IdentityManager();
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            identityManager,
+            trustStore,
+            discoveryService,
+            transport,
+            protocolRouter,
+            presenceService);
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
+
+        Assert.False(discoveryService.StartDiscoveryCalled);
+
+        await worker.StopAsync(CancellationToken.None);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs = 3000)
@@ -206,12 +252,12 @@ public sealed class WorkerTests
             Microsoft.Extensions.Logging.ILogger<Worker> logger,
             IIpcListener ipcListener,
             IIdentityManager identityManager,
+            ITrustStore trustStore,
             IDiscoveryService discoveryService,
             ITransport transport,
             IProtocolMessageRouter protocolMessageRouter,
-            IPresenceService presenceService,
-            ITrustStore trustStore)
-            : base(logger, ipcListener, identityManager, discoveryService, transport, protocolMessageRouter, presenceService, trustStore)
+            IPresenceService presenceService)
+            : base(logger, ipcListener, identityManager, trustStore, discoveryService, transport, protocolMessageRouter, presenceService)
         {
         }
 
@@ -260,6 +306,7 @@ public sealed class WorkerTests
         }
 
         public bool StartAdvertisingCalled { get; private set; }
+        public bool StartDiscoveryCalled { get; private set; }
 
         public bool StopAdvertisingCalled { get; private set; }
 
@@ -277,6 +324,7 @@ public sealed class WorkerTests
 
         public void StartDiscovery()
         {
+            StartDiscoveryCalled = true;
         }
 
         public void StopDiscovery()
@@ -372,6 +420,21 @@ public sealed class WorkerTests
     private sealed record SentMessage(string PeerDeviceId, string Type, IReadOnlyList<string> Capabilities);
 
     private sealed record RoutedMessage(string PeerDeviceId, string Payload);
+
+    private sealed class FakeTrustStore : ITrustStore
+    {
+        public List<PeerIdentity> Peers { get; } = [];
+
+        public void SavePeer(PeerIdentity peer) => throw new NotImplementedException();
+
+        public PeerIdentity? GetPeer(string deviceId) => throw new NotImplementedException();
+
+        public IEnumerable<PeerIdentity> GetAllPeers() => Peers;
+
+        public bool TryTransition(string deviceId, TrustState newState) => throw new NotImplementedException();
+
+        public void RevokePeer(string deviceId, string revocationEvidence) => throw new NotImplementedException();
+    }
 
     private sealed class ListLogger<T> : ILogger<T>
     {

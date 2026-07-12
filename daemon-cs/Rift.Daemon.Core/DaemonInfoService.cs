@@ -13,6 +13,7 @@ public sealed class DaemonInfoService(
     private static readonly CapabilityInfo[] Capabilities =
     [
         new() { Name = "clipboard.offer_fetch", Version = 1 },
+        new() { Name = "file.transfer", Version = 1 },
         new() { Name = "presence.basic", Version = 1 },
         new() { Name = "operation.lifecycle", Version = 1 },
         new() { Name = "security.event_log", Version = 1 }
@@ -20,15 +21,11 @@ public sealed class DaemonInfoService(
 
     public DeviceInfoResult GetDeviceInfo()
     {
-        var platform = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" :
-                       System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.OSX) ? "macOS" : "Linux";
-        var idPart = new string(identityManager.GetDeviceId().Split('-').LastOrDefault()?.Take(4).ToArray() ?? new char[] { '0', '0', '0', '0' }).ToUpperInvariant();
-        var displayName = $"{platform} Desktop {idPart}";
 
         return new DeviceInfoResult
         {
             DeviceId = identityManager.GetDeviceId(),
-            DisplayName = displayName,
+            DisplayName = identityManager.GetDisplayName(),
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",
@@ -49,7 +46,7 @@ public sealed class DaemonInfoService(
     public ListTrustedPeersResult ListTrustedPeers()
     {
         var peers = trustStore.GetAllPeers()
-            .Where(peer => peer.State != TrustState.Discovered)
+            .Where(peer => peer.State is not (TrustState.Discovered or TrustState.Revoked))
             .Select(peer =>
             {
                 var presence = presenceService.GetPeerPresence(peer.DeviceId);

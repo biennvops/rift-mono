@@ -103,6 +103,7 @@ class FakeIdentityManager implements IdentityManager {
   }
 
   @override String get deviceId => _deviceId;
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => _pubKey;
   @override String get tlsCertificatePem => '';
@@ -316,6 +317,7 @@ void main() {
         ctx1.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',
@@ -325,6 +327,7 @@ void main() {
         ctx2.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',

@@ -24,6 +24,7 @@ import 'package:daemon_dart/src/pairing/pairing_manager.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
+import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
 import 'package:daemon_dart/src/operation/operation_manager.dart';
 import 'package:daemon_dart/src/operation/operation_models.dart';
 import 'package:path/path.dart' as p;
@@ -331,6 +332,7 @@ class RiftDaemon {
   PairingManager? _pairingManager;
   ClipboardEngine? _clipboardEngine;
   ClipboardProtocolHandler? _clipboardHandler;
+  FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
@@ -420,6 +422,13 @@ class RiftDaemon {
         _identityManager!.deviceId,
       );
       _operationManager = OperationManager();
+      _fileTransferService = FileTransferService(
+        sessionManager: _sessionManager!,
+        trustStore: _trustStore!,
+        operationManager: _operationManager!,
+        localDeviceId: _identityManager!.deviceId,
+        storagePath: storagePath,
+      );
 
       _clipboardEngine!.onOfferAdded.listen((offer) {
         onIpcEvent?.call({
@@ -434,6 +443,38 @@ class RiftDaemon {
           'jsonrpc': '2.0',
           'method': 'rift.onClipboardExpired',
           'params': {'offerId': offerId},
+        });
+      });
+
+      _fileTransferService!.onFileOffer.listen((offer) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileOffer',
+          'params': offer,
+        });
+      });
+
+      _fileTransferService!.onTransferProgress.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferProgress',
+          'params': event,
+        });
+      });
+
+      _fileTransferService!.onTransferCompleted.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferCompleted',
+          'params': event,
+        });
+      });
+
+      _fileTransferService!.onTransferFailed.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferFailed',
+          'params': event,
         });
       });
 
@@ -470,12 +511,9 @@ class RiftDaemon {
         ),
       );
       await _discoveryService!.startAdvertising();
-      final peers = await _trustStore!.getAllPeers();
-      if (peers.isEmpty) {
+      if (await _shouldAutoStartDiscovery()) {
         await _discoveryService!.startDiscovery();
         _isDiscovering = true;
-      } else {
-        _isDiscovering = false;
       }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
@@ -514,6 +552,7 @@ class RiftDaemon {
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
+    await _fileTransferService?.dispose();
     _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
@@ -524,6 +563,26 @@ class RiftDaemon {
     await _identityManager?.dispose();
   }
 
+  Future<bool> _shouldAutoStartDiscovery() async {
+    final trustStore = _trustStore;
+    if (trustStore == null) {
+      return true;
+    }
+
+    for (final state in const [
+      TrustState.trusted,
+      TrustState.blocked,
+      TrustState.revoked,
+    ]) {
+      final peers = await trustStore.getPeersByState(state);
+      if (peers.isNotEmpty) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   Map<String, dynamic> getDeviceInfo() {
     final identityManager = _identityManager;
     if (identityManager == null) {
@@ -532,17 +591,11 @@ class RiftDaemon {
       );
     }
 
-    final os = Platform.operatingSystem;
-    final osCapitalized = os.isNotEmpty ? '${os[0].toUpperCase()}${os.substring(1)}' : 'Unknown';
-    final type = (os == 'android' || os == 'ios') ? 'Phone' : 'Desktop';
-    final idPart = identityManager.deviceId.split('-').length > 1
-        ? identityManager.deviceId.split('-')[1].substring(0, 4).toUpperCase()
-        : '0000';
-    final displayName = '$osCapitalized $type $idPart';
+
 
     return {
       'deviceId': identityManager.deviceId,
-      'displayName': displayName,
+      'displayName': identityManager.displayName,
       'fingerprint': _formatFingerprint(identityManager.getDeviceFingerprint()),
       'implementationId': RiftConstants.implementationId,
       'protocolVersion': RiftConstants.protocolVersion,
@@ -555,13 +608,15 @@ class RiftDaemon {
     final sessionManager = _sessionManager;
     if (trustStore == null) return [];
 
-    // ipc.md: listTrustedPeers is a trust-management surface.
-    // Include all non-discovered peers (pairing_pending, trusted, blocked, revoked).
+    // Device-list surface:
+    // - trusted peers stay visible
+    // - blocked peers stay visible
+    // - pairing_pending stays visible
+    // - revoked peers are intentionally hidden from the list
     final peers = <PeerRecord>[
       ...await trustStore.getPeersByState(TrustState.pairingPending),
       ...await trustStore.getPeersByState(TrustState.trusted),
       ...await trustStore.getPeersByState(TrustState.blocked),
-      ...await trustStore.getPeersByState(TrustState.revoked),
     ];
 
     return peers.map((peer) {
@@ -833,6 +888,74 @@ class RiftDaemon {
           };
         }).toList();
         return {'offers': allOffers};
+
+      case 'rift.offerFile':
+        _requireTransportServices();
+        final targetDeviceId = RpcUtils.requireStringParam(params, 'targetDeviceId');
+        final localPath = RpcUtils.requireStringParam(params, 'localPath');
+        await _ensureTrustedSessionForPeer(targetDeviceId);
+        final result = await _fileTransferService!.offerFile(
+          targetDeviceId: targetDeviceId,
+          localPath: localPath,
+          fileName: params['fileName'] as String?,
+          mediaType: params['mediaType'] as String?,
+        );
+        return result.toJson();
+
+      case 'rift.listIncomingFileOffers':
+        _requireTransportServices();
+        return {'offers': _fileTransferService!.listIncomingFileOffers()};
+
+      case 'rift.acceptFileOffer':
+        _requireTransportServices();
+        final transferId = RpcUtils.requireStringParam(params, 'transferId');
+        final destinationPath = RpcUtils.requireStringParam(
+          params,
+          'destinationPath',
+        );
+        final offer = _fileTransferService!
+            .listIncomingFileOffers()
+            .cast<Map<String, dynamic>>()
+            .firstWhere(
+              (candidate) => candidate['transferId'] == transferId,
+              orElse: () => <String, dynamic>{},
+            );
+        final sourceDeviceId = offer['sourceDeviceId'] as String?;
+        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) {
+          await _ensureTrustedSessionForPeer(sourceDeviceId);
+        }
+        final result = await _fileTransferService!.acceptFileOffer(
+          transferId: transferId,
+          destinationPath: destinationPath,
+          overwrite: params['overwrite'] as bool? ?? false,
+        );
+        return result.toJson();
+
+      case 'rift.rejectFileOffer':
+        _requireTransportServices();
+        final transferId = RpcUtils.requireStringParam(params, 'transferId');
+        final failureReason = RpcUtils.requireStringParam(params, 'failureReason');
+        final offer = _fileTransferService!
+            .listIncomingFileOffers()
+            .cast<Map<String, dynamic>>()
+            .firstWhere(
+              (candidate) => candidate['transferId'] == transferId,
+              orElse: () => <String, dynamic>{},
+            );
+        final sourceDeviceId = offer['sourceDeviceId'] as String?;
+        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) {
+          await _ensureTrustedSessionForPeer(sourceDeviceId);
+        }
+        final result = await _fileTransferService!.rejectFileOffer(
+          transferId: transferId,
+          failureReason: failureReason,
+          message: params['message'] as String?,
+        );
+        return result.toJson();
+
+      case 'rift.listFileTransfers':
+        _requireTransportServices();
+        return {'transfers': _fileTransferService!.listFileTransfers()};
 
       case 'rift.fetchClipboardContent':
         _requireTransportServices();

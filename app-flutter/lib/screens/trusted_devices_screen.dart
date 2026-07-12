@@ -775,6 +775,69 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     );
   }
 
+  Widget _buildLocalDeviceCard() {
+    final theme = Theme.of(context);
+    final localDeviceInfo = _localDeviceInfo;
+    if (localDeviceInfo == null) {
+      return const SizedBox.shrink();
+    }
+
+    final deviceId = localDeviceInfo['deviceId']?.toString() ?? '';
+    final displayName = localDeviceInfo['displayName']?.toString();
+    final titleText = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : (deviceId.isNotEmpty ? deviceId : 'This Device');
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: theme.colorScheme.primary),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.devices, color: theme.colorScheme.onPrimaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titleText,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'This device',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                  ),
+                ),
+                if (deviceId.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    deviceId,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer.withOpacity(
+                        0.82,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildActionBtn(String trustState, bool isTrusted, Map<String, dynamic> peer, String titleText, ThemeData theme) {
     if (trustState == 'blocked' || trustState == 'revoked') {
       final label = trustState == 'blocked' ? 'Unblock' : 'Reset';
@@ -1103,11 +1166,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                         physics: const AlwaysScrollableScrollPhysics(),
                         child: ConstrainedBox(
                           constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                          child: Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                              child: _buildEmptyState(theme),
-                            ),
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 16),
+                              _buildLocalDeviceCard(),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                                child: _buildEmptyState(theme),
+                              ),
+                            ],
                           ),
                         ),
                       ),

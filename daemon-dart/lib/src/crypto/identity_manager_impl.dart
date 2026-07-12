@@ -16,6 +16,7 @@ class IdentityManagerImpl implements IdentityManager {
   Uint8List? _privateKey;
   Uint8List? _publicKey;
   String _deviceId = '';
+  String _displayName = '';
   Uint8List? _fingerprintBytes;
   SimpleKeyPair? _cachedKeyPair;
 
@@ -74,6 +75,7 @@ class IdentityManagerImpl implements IdentityManager {
     // Device ID: 'rift-' + first 32 chars of lowercase Base32(SHA-256(pubkey))
     final base32Str = Base32Utils.encode(_fingerprintBytes!).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
+    _displayName = _deriveDisplayName(_fingerprintBytes!);
   }
 
   @override
@@ -84,6 +86,9 @@ class IdentityManagerImpl implements IdentityManager {
 
   @override
   String get deviceId => _deviceId;
+
+  @override
+  String get displayName => _displayName;
 
   @override
   String get tlsCertificatePem => _tlsCertificatePem;
@@ -136,9 +141,26 @@ class IdentityManagerImpl implements IdentityManager {
       _tlsCertificateDer = null;
     }
     _deviceId = '';
+    _displayName = '';
     _tlsCertificatePem = '';
     _tlsPrivateKeyPem = '';
     _cachedKeyPair = null;
+  }
+
+  static String _deriveDisplayName(Uint8List fingerprintBytes) {
+    final platform = Platform.isAndroid
+        ? 'Android'
+        : Platform.isWindows
+            ? 'Windows'
+            : Platform.isMacOS
+                ? 'macOS'
+                : Platform.isLinux
+                    ? 'Linux'
+                    : 'Unknown';
+    final deviceType = Platform.isAndroid ? 'Phone' : 'Desktop';
+    final numericId =
+        (((fingerprintBytes[0] << 8) | fingerprintBytes[1]) % 100) + 1;
+    return '$platform $deviceType ${numericId.toString().padLeft(2, '0')}';
   }
 
   /// Decodes a PEM certificate to DER bytes.

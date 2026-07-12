@@ -23,6 +23,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly FakeTransport _transport;
     private readonly OperationService _operationService;
     private readonly ClipboardService _clipboardService;
+    private readonly FileTransferService _fileTransferService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -40,13 +41,14 @@ public sealed class RiftApiHandlerTests : IDisposable
         var daemonInfoService = new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, discoveryCoordinator, _presenceService, _transport);
         _operationService = new OperationService(null, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
         _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
+        _fileTransferService = new FileTransferService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<FileTransferService>.Instance);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _operationService, pairingService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _operationService, pairingService);
     }
 
     [Fact]
@@ -55,6 +57,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         var result = await _handler.GetDeviceInfoAsync();
 
         Assert.Equal(_identityManager.GetDeviceId(), result.DeviceId);
+        Assert.Equal(_identityManager.GetDisplayName(), result.DisplayName);
         Assert.Equal(_identityManager.GetFingerprint(), result.Fingerprint);
         Assert.Equal("riftd-cs/0.1.0", result.ImplementationId);
         Assert.Equal("0.1-draft", result.ProtocolVersion);
@@ -152,6 +155,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager), _presenceService, _transport),
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
+            _fileTransferService,
             _operationService,
             pairingService);
 
@@ -182,6 +186,30 @@ public sealed class RiftApiHandlerTests : IDisposable
             peer.Presence == "online" &&
             peer.LastSeenAt == "2026-06-18T10:05:00Z");
         Assert.DoesNotContain(result.Peers, peer => peer.TrustState == "discovered");
+    }
+
+    [Fact]
+    public async Task ListTrustedPeersAsync_HidesRevokedPeersFromVisibleDeviceList()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-blocked",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Blocked,
+            LastStateTransitionAt = DateTimeOffset.Parse("2026-06-18T10:00:00Z")
+        });
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-revoked",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Revoked,
+            LastStateTransitionAt = DateTimeOffset.Parse("2026-06-18T10:01:00Z")
+        });
+
+        var result = await _handler.ListTrustedPeersAsync();
+
+        Assert.Contains(result.Peers, peer => peer.DeviceId == "rift-peer-blocked" && peer.TrustState == "blocked");
+        Assert.DoesNotContain(result.Peers, peer => peer.DeviceId == "rift-peer-revoked");
     }
 
     [Fact]
@@ -220,6 +248,39 @@ public sealed class RiftApiHandlerTests : IDisposable
 
         Assert.Contains("rift-peer-clipboard", result.BroadcastTo);
         Assert.Contains(_transport.SentMessages, message => message.PeerDeviceId == "rift-peer-clipboard" && message.Type == "clipboard.offer");
+    }
+
+    [Fact]
+    public async Task OfferFileAsync_SendsFileOfferToTrustedCapablePeer()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-file",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-file", "online", null, ["file.transfer"]);
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"rift-api-file-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(tempFile, "hello file");
+        try
+        {
+            var result = await _handler.OfferFileAsync("rift-peer-file", tempFile, "demo.txt", "text/plain");
+
+            Assert.Equal("rift-peer-file", result.TargetDeviceId);
+            Assert.Equal("demo.txt", result.FileName);
+            Assert.Contains(_transport.SentMessages, message =>
+                message.PeerDeviceId == "rift-peer-file" &&
+                message.Type == "file.offer");
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
     }
 
     [Fact]
@@ -453,6 +514,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DaemonInfoService(_identityManager, _securityEventLog, _trustStore, new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager), _presenceService, _transport),
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
+            _fileTransferService,
             _operationService,
             new ThrowingPairingService());
 

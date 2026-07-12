@@ -19,6 +19,7 @@ import 'screens/clipboard_transfer_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
@@ -83,12 +84,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
-  StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
-  StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
-  StreamSubscription<String>? _clipboardStatusSub;
+  StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
+  StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
+  final Set<String> _autoAcceptingTransferIds = <String>{};
 
   bool get _enableDesktopShellIntegration =>
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
@@ -106,7 +108,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _bindPairingRequests();
       _bindNotifications();
       _bindClipboardChannel();
-      _bindDesktopClipboardStatus();
     });
   }
 
@@ -114,22 +115,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _clipboardManager ??= context.read<DesktopClipboardManager?>();
-  }
-
-  void _bindDesktopClipboardStatus() {
-    final clipboardManager = _clipboardManager;
-    if (clipboardManager == null) return;
-
-    _clipboardStatusSub = clipboardManager.onStatusUpdate.listen((status) {
-      if (!mounted) return;
-      _scaffoldMessengerKey.currentState?.clearSnackBars();
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text(status),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    });
   }
 
   static const _clipboardChannel =
@@ -199,9 +184,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
     _pairingRequestSub?.cancel();
     _trustChangedSub?.cancel();
-    _clipboardOfferSub?.cancel();
-    _clipboardExpiredSub?.cancel();
-    _clipboardStatusSub?.cancel();
+    _fileOfferSub?.cancel();
+    _fileCompletedSub?.cancel();
+    _fileFailedSub?.cancel();
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
@@ -329,43 +314,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _clipboardOfferSub = client.onClipboardOffer.listen((event) {
       final contentType = event['contentType']?.toString() ?? '';
       final offerId = event['offerId']?.toString();
-      final sourceDeviceId = event['sourceDeviceId']?.toString() ?? 'unknown';
 
       if (offerId == null) return;
 
-      if (contentType != 'text/plain' && contentType != 'clipboard') {
-        // Assume file transfer
-        unawaited(client.fetchClipboardContent(offerId).then((result) async {
-          final contentBase64 = result['contentBase64'] as String?;
-          if (contentBase64 != null) {
-            final bytes = base64.decode(contentBase64);
-            Directory? downloadsDir;
-            if (Platform.isAndroid) {
-              downloadsDir = Directory('/storage/emulated/0/Download');
-            } else {
-              downloadsDir = await getDownloadsDirectory();
-            }
-            if (downloadsDir != null) {
-              if (!downloadsDir.existsSync()) {
-                downloadsDir.createSync(recursive: true);
-              }
-              final filename = 'Rift_Transfer_${DateTime.now().millisecondsSinceEpoch}';
-              final file = File('${downloadsDir.path}/$filename');
-              await file.writeAsBytes(bytes);
-              _maybeNotify('File Received', 'Saved $filename to Downloads from $sourceDeviceId');
-              
-              if (Platform.isAndroid) {
-                _scaffoldMessengerKey.currentState?.showSnackBar(
-                  SnackBar(content: Text('File $filename saved to Downloads')),
-                );
-              }
-            }
-          }
-        }).catchError((e) {
-          debugPrint('Auto-fetch file failed: $e');
-        }));
-      } else if (Platform.isAndroid) {
-        // Text clipboard
+      if ((contentType == 'text/plain' || contentType == 'clipboard') && Platform.isAndroid) {
+        // Text clipboard auto-fetch
         unawaited(client.fetchClipboardContent(offerId).then((result) {
           final contentBase64 = result['contentBase64'] as String?;
           if (contentBase64 != null) {
@@ -389,6 +342,153 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _clipboardExpiredSub = client.onClipboardExpired.listen((event) {
       // Intentionally left empty to avoid noisy notifications
     });
+
+    _fileOfferSub = client.onFileOffer.listen((event) {
+      unawaited(_handleIncomingFileOffer(event));
+    });
+
+    _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
+      final fileName = event['fileName']?.toString() ?? 'file';
+      final peer = event['peerDeviceId']?.toString() ?? 'trusted device';
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('Received $fileName from $peer')),
+      );
+      _maybeNotify('File received', '$fileName received from $peer.');
+    });
+
+    _fileFailedSub = client.onFileTransferFailed.listen((event) {
+      final fileName = event['fileName']?.toString() ?? 'file';
+      final reason = event['failureReason']?.toString() ?? 'failed';
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('File transfer failed for $fileName: $reason')),
+      );
+      _maybeNotify('File transfer failed', '$fileName failed: $reason.');
+    });
+  }
+
+  Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
+    final transferId = event['transferId']?.toString();
+    final fileName = event['fileName']?.toString();
+    final sourceDeviceId = event['sourceDeviceId']?.toString() ?? 'trusted device';
+    if (transferId == null ||
+        transferId.isEmpty ||
+        fileName == null ||
+        fileName.isEmpty) {
+      return;
+    }
+    if (_autoAcceptingTransferIds.contains(transferId)) {
+      return;
+    }
+
+    _autoAcceptingTransferIds.add(transferId);
+    try {
+      final destinationPath = await _buildDefaultIncomingFilePath(fileName);
+      if (destinationPath == null || destinationPath.isEmpty) {
+        return;
+      }
+
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('Receiving $fileName from $sourceDeviceId...')),
+      );
+      _maybeNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
+
+      final client = context.read<JsonRpcRiftClient>();
+      await client.acceptFileOffer(
+        transferId: transferId,
+        destinationPath: destinationPath,
+        overwrite: false,
+      );
+    } catch (error) {
+      final client = context.read<JsonRpcRiftClient>();
+      try {
+        await client.rejectFileOffer(
+          transferId: transferId,
+          failureReason: 'PolicyDenied',
+          message: 'Automatic save to Downloads was unavailable.',
+        );
+      } catch (_) {
+        // Best-effort reject if auto-accept setup fails.
+      }
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text('Could not auto-save incoming file: $error'),
+        ),
+      );
+    } finally {
+      _autoAcceptingTransferIds.remove(transferId);
+    }
+  }
+
+  Future<String?> _buildDefaultIncomingFilePath(String fileName) async {
+    final downloadsDir = await _resolveDownloadsDirectory();
+    if (downloadsDir == null) {
+      return null;
+    }
+
+    await downloadsDir.create(recursive: true);
+    final sanitizedFileName = _sanitizeFileName(fileName);
+    var candidate = File(_joinPath(downloadsDir.path, sanitizedFileName));
+    if (!candidate.existsSync()) {
+      return candidate.path;
+    }
+
+    final dotIndex = sanitizedFileName.lastIndexOf('.');
+    final hasExtension = dotIndex > 0 && dotIndex < sanitizedFileName.length - 1;
+    final stem =
+        hasExtension ? sanitizedFileName.substring(0, dotIndex) : sanitizedFileName;
+    final extension = hasExtension ? sanitizedFileName.substring(dotIndex) : '';
+
+    for (var i = 1; i <= 999; i += 1) {
+      candidate = File(_joinPath(downloadsDir.path, '$stem ($i)$extension'));
+      if (!candidate.existsSync()) {
+        return candidate.path;
+      }
+    }
+
+    return candidate.path;
+  }
+
+  Future<Directory?> _resolveDownloadsDirectory() async {
+    try {
+      final downloads = await getDownloadsDirectory();
+      if (downloads != null) {
+        return downloads;
+      }
+    } catch (_) {
+      // Fall through to platform-specific defaults.
+    }
+
+    try {
+      if (Platform.isAndroid) {
+        final external = await getExternalStorageDirectory();
+        if (external != null) {
+          return Directory(
+            _joinPath(external.parent.parent.parent.parent.path, 'Download'),
+          );
+        }
+      }
+    } catch (_) {
+      // Fall through to final fallback.
+    }
+
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      return Directory(_joinPath(docs.path, 'Downloads'));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _sanitizeFileName(String fileName) {
+    final cleaned = fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+    return cleaned.isEmpty ? 'incoming.bin' : cleaned;
+  }
+
+  String _joinPath(String a, String b) {
+    if (a.endsWith(Platform.pathSeparator)) {
+      return '$a$b';
+    }
+    return '$a${Platform.pathSeparator}$b';
   }
 
   @override

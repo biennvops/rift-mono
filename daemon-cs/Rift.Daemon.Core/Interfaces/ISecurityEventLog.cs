@@ -38,6 +38,11 @@ public static class SecurityEventTypes
     public const string ClipboardFetched = "clipboard.fetched";
     public const string ClipboardExpired = "clipboard.expired";
     public const string ClipboardOfferReplay = "clipboard.offer_replay";
+    public const string FileOffered = "file.offered";
+    public const string FileTransferCompleted = "file.completed";
+    public const string FileTransferFailed = "file.failed";
+    public const string FileTransferRejected = "file.rejected";
+    public const string FileTransferExpired = "file.expired";
     public const string MessageMalformed = "message.malformed";
     public const string CertificateMalformed = "certificate.malformed";
     public const string PolicyDenied = "policy.denied";

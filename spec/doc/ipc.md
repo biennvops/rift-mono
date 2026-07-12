@@ -90,6 +90,7 @@ Returns the local device's identity information.
 ```json
 {
   "deviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+  "displayName": "Windows Desktop 07",
   "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ",
   "implementationId": "riftd-cs/0.1.0",
   "protocolVersion": "0.1-draft",
@@ -101,6 +102,10 @@ Returns the local device's identity information.
   ]
 }
 ```
+
+`displayName` is daemon-generated and stable for the local identity. In v0.1-draft
+it is derived from the current platform, a coarse device type, and a stable
+two-digit identifier, for example `Windows Desktop 07` or `Android Phone 12`.
 
 **Errors:** `-32012` if identity is not yet initialized.
 
@@ -238,8 +243,13 @@ Rejects an incoming or outgoing pairing.
 
 #### `rift.listTrustedPeers`
 
-Returns all non-discovered peers in the trust store with their current state
-(`pairing_pending`, `trusted`, `blocked`, `revoked`).
+Returns the peers that should remain visible in the device-management list:
+`pairing_pending`, `trusted`, and `blocked`.
+
+Revoked peers are intentionally excluded from this list. Revocation behaves
+like forgetting the device from the visible list while still retaining durable
+negative-trust evidence internally so future connections from that identity are
+rejected.
 
 **Params:** none.
 
@@ -275,7 +285,9 @@ Returns all peers in the trust store for a given `trustState`.
 
 #### `rift.revokeTrust`
 
-Revokes trust for a peer. Deletes key material, terminates sessions, permanently rejects future connections from the revoked Ed25519 key.
+Revokes trust for a peer. Terminates active trust, removes the peer from the
+visible device list, and permanently rejects future connections from the
+revoked Ed25519 key until an explicit reset.
 
 **Params:**
 

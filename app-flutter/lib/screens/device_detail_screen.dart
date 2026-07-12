@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'dart:async';
+import 'dart:io';
 
 class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
@@ -16,12 +19,30 @@ class DeviceDetailScreen extends StatefulWidget {
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   late Map<String, dynamic> peer;
   late bool isOnline;
+  bool _isLoadingFileOffers = false;
+  bool _isSendingFile = false;
+  List<Map<String, dynamic>> _incomingFileOffers = [];
+  StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
+  StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
 
   @override
   void initState() {
     super.initState();
     peer = widget.peer;
     isOnline = widget.isOnline;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadIncomingFileOffers();
+      _bindFileTransferNotifications();
+    });
+  }
+
+  @override
+  void dispose() {
+    _fileOfferSub?.cancel();
+    _fileCompletedSub?.cancel();
+    _fileFailedSub?.cancel();
+    super.dispose();
   }
 
   String _formatFingerprintWithColons(String? fp) {
@@ -46,6 +67,64 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final min = parsed.minute.toString().padLeft(2, '0');
     final sec = parsed.second.toString().padLeft(2, '0');
     return '$yyyy-$mm-$dd $hh:$min:$sec';
+  }
+
+  void _bindFileTransferNotifications() {
+    final client = context.read<JsonRpcRiftClient>();
+    final deviceId = peer['deviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty) {
+      return;
+    }
+
+    _fileOfferSub = client.onFileOffer.listen((event) {
+      if (event['sourceDeviceId']?.toString() == deviceId && mounted) {
+        _loadIncomingFileOffers();
+      }
+    });
+    _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
+      if (event['peerDeviceId']?.toString() == deviceId && mounted) {
+        _loadIncomingFileOffers();
+      }
+    });
+    _fileFailedSub = client.onFileTransferFailed.listen((event) {
+      if (event['peerDeviceId']?.toString() == deviceId && mounted) {
+        _loadIncomingFileOffers();
+      }
+    });
+  }
+
+  Future<void> _loadIncomingFileOffers() async {
+    final deviceId = peer['deviceId']?.toString();
+    if (!mounted || deviceId == null || deviceId.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _isLoadingFileOffers = true;
+    });
+
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      final result = await client.listIncomingFileOffers() as Map;
+      final offers = List<Map<String, dynamic>>.from(
+        (result['offers'] as List? ?? const <dynamic>[]).map(
+          (offer) => Map<String, dynamic>.from(offer as Map),
+        ),
+      ).where((offer) => offer['sourceDeviceId']?.toString() == deviceId).toList(growable: false);
+
+      if (!mounted) return;
+      setState(() {
+        _incomingFileOffers = offers;
+      });
+    } catch (_) {
+      if (!mounted) return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingFileOffers = false;
+        });
+      }
+    }
   }
 
   Future<bool> _showRevokeBottomSheet(String displayName, String fingerprint) async {
@@ -343,6 +422,352 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
   }
 
+  Future<Map<String, String>?> _showSendFileFallbackDialog() async {
+    final pathController = TextEditingController();
+    final nameController = TextEditingController();
+    final typeController =
+        TextEditingController(text: 'application/octet-stream');
+    String? validationError;
+
+    final result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void submit() {
+              final path = pathController.text.trim();
+              final name = nameController.text.trim();
+              final type = typeController.text.trim();
+              if (path.isEmpty) {
+                setDialogState(() {
+                  validationError = 'Enter a local file path.';
+                });
+                return;
+              }
+              if (!File(path).existsSync()) {
+                setDialogState(() {
+                  validationError = 'That file path does not exist.';
+                });
+                return;
+              }
+              Navigator.of(dialogContext).pop({
+                'localPath': path,
+                'fileName': name,
+                'mediaType': type,
+              });
+            }
+
+            return AlertDialog(
+              title: const Text('Send File'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: pathController,
+                      decoration: const InputDecoration(
+                        labelText: 'Local path',
+                        hintText: r'C:\Users\you\Downloads\example.pdf',
+                      ),
+                      autofocus: true,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Display file name (optional)',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: typeController,
+                      decoration: const InputDecoration(
+                        labelText: 'Media type',
+                      ),
+                    ),
+                    if (validationError != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        validationError!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  child: const Text('Send'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return result;
+  }
+
+  Future<String?> _showDestinationFallbackDialog(String suggestedFileName) async {
+    final destinationController = TextEditingController(
+      text: await _defaultDestinationPath(suggestedFileName) ??
+          (Platform.isWindows
+              ? r'C:\Users\Public\Downloads\' + suggestedFileName
+              : '/tmp/$suggestedFileName'),
+    );
+    String? validationError;
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void submit() {
+              final path = destinationController.text.trim();
+              if (path.isEmpty) {
+                setDialogState(() {
+                  validationError = 'Enter a destination path.';
+                });
+                return;
+              }
+              Navigator.of(dialogContext).pop(path);
+            }
+
+            return AlertDialog(
+              title: const Text('Save Incoming File'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: destinationController,
+                      decoration: const InputDecoration(
+                        labelText: 'Destination path',
+                      ),
+                      autofocus: true,
+                    ),
+                    if (validationError != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        validationError!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: submit,
+                  child: const Text('Accept'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return result;
+  }
+
+  Future<Map<String, String>?> _pickSendFileRequest() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        withData: false,
+        lockParentWindow: true,
+      );
+      final files = result?.files;
+      final picked =
+          files != null && files.isNotEmpty ? files.first : null;
+      final path = picked?.path;
+      if (picked == null || path == null || path.isEmpty) {
+        return null;
+      }
+
+      return {
+        'localPath': path,
+        'fileName': picked.name,
+        'mediaType': _guessMediaTypeFromName(picked.name),
+      };
+    } catch (_) {
+      return _showSendFileFallbackDialog();
+    }
+  }
+
+  Future<String?> _pickDestinationPath(String suggestedFileName) async {
+    try {
+      final defaultPath = await _defaultDestinationPath(suggestedFileName);
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save incoming file',
+        fileName: suggestedFileName,
+        initialDirectory:
+            defaultPath == null ? null : File(defaultPath).parent.path,
+        lockParentWindow: true,
+      );
+      if (path == null || path.isEmpty) {
+        return null;
+      }
+      return path;
+    } catch (_) {
+      return _showDestinationFallbackDialog(suggestedFileName);
+    }
+  }
+
+  Future<String?> _defaultDestinationPath(String suggestedFileName) async {
+    Directory? baseDir;
+    try {
+      baseDir = await getDownloadsDirectory();
+    } catch (_) {
+      baseDir = null;
+    }
+
+    if (baseDir == null) {
+      try {
+        if (Platform.isAndroid) {
+          final external = await getExternalStorageDirectory();
+          if (external != null) {
+            baseDir = Directory(
+              '${external.parent.parent.parent.parent.path}${Platform.pathSeparator}Download',
+            );
+          }
+        }
+      } catch (_) {
+        baseDir = null;
+      }
+    }
+
+    baseDir ??= Platform.isWindows
+        ? Directory(r'C:\Users\Public\Downloads')
+        : Directory('/tmp');
+
+    final cleaned =
+        suggestedFileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+    final fileName = cleaned.isEmpty ? 'incoming.bin' : cleaned;
+    return '${baseDir.path}${Platform.pathSeparator}$fileName';
+  }
+
+  String _guessMediaTypeFromName(String fileName) {
+    final normalized = fileName.toLowerCase();
+    if (normalized.endsWith('.txt')) return 'text/plain';
+    if (normalized.endsWith('.json')) return 'application/json';
+    if (normalized.endsWith('.pdf')) return 'application/pdf';
+    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+      return 'image/jpeg';
+    }
+    if (normalized.endsWith('.png')) return 'image/png';
+    if (normalized.endsWith('.gif')) return 'image/gif';
+    if (normalized.endsWith('.mp4')) return 'video/mp4';
+    if (normalized.endsWith('.zip')) return 'application/zip';
+    return 'application/octet-stream';
+  }
+
+  Future<void> _sendFile() async {
+    final deviceId = peer['deviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty) return;
+
+    final dialogResult = await _pickSendFileRequest();
+    if (dialogResult == null) return;
+
+    setState(() {
+      _isSendingFile = true;
+    });
+
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      final result = await client.offerFile(
+        targetDeviceId: deviceId,
+        localPath: dialogResult['localPath']!,
+        fileName: dialogResult['fileName']?.isNotEmpty == true
+            ? dialogResult['fileName']
+            : null,
+        mediaType: dialogResult['mediaType']?.isNotEmpty == true
+            ? dialogResult['mediaType']
+            : null,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Sent file offer ${result['fileName'] ?? dialogResult['localPath']}'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSendingFile = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _acceptIncomingOffer(Map<String, dynamic> offer) async {
+    final destinationPath = await _pickDestinationPath(
+      offer['fileName']?.toString() ?? 'incoming.bin',
+    );
+    if (destinationPath == null || destinationPath.isEmpty) {
+      return;
+    }
+
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      await client.acceptFileOffer(
+        transferId: offer['transferId']?.toString() ?? '',
+        destinationPath: destinationPath,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Accepted ${offer['fileName'] ?? 'file'}')),
+      );
+      await _loadIncomingFileOffers();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      );
+    }
+  }
+
+  Future<void> _rejectIncomingOffer(Map<String, dynamic> offer) async {
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      await client.rejectFileOffer(
+        transferId: offer['transferId']?.toString() ?? '',
+        failureReason: 'PolicyDenied',
+        message: 'User declined from device detail screen',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Rejected ${offer['fileName'] ?? 'file'}')),
+      );
+      await _loadIncomingFileOffers();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -365,6 +790,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final capabilities = List<String>.from(
       (peer['capabilities'] as List? ?? const <dynamic>[]).map((e) => e.toString()),
     );
+    final canTransferFiles =
+        trustState == 'trusted' && capabilities.contains('file.transfer');
     final recentEvents = List<Map<String, dynamic>>.from(
       (peer['recentEvents'] as List? ?? const <dynamic>[]).map(
         (e) => Map<String, dynamic>.from(e as Map),
@@ -601,6 +1028,129 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     Text(tlsCipher, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
                   ],
                 ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          Text('FILE TRANSFER', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  canTransferFiles
+                      ? 'This peer negotiated the file.transfer capability.'
+                      : 'File transfer is unavailable until this peer negotiates file.transfer and is trusted.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: canTransferFiles && !_isSendingFile ? _sendFile : null,
+                    icon: _isSendingFile
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.upload_file),
+                    label: Text(_isSendingFile ? 'Sending...' : 'Send File'),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Text(
+                      'Incoming offers',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_isLoadingFileOffers)
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    else
+                      IconButton(
+                        onPressed: _loadIncomingFileOffers,
+                        icon: const Icon(Icons.refresh),
+                        tooltip: 'Refresh incoming offers',
+                      ),
+                  ],
+                ),
+                if (_incomingFileOffers.isEmpty)
+                  Text(
+                    'No incoming file offers from this device right now.',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  )
+                else
+                  Column(
+                    children: _incomingFileOffers.map((offer) {
+                      final fileName =
+                          offer['fileName']?.toString() ?? 'Unknown file';
+                      final byteSize = offer['byteSize']?.toString() ?? '0';
+                      return Container(
+                        margin: const EdgeInsets.only(top: 12),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              fileName,
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${offer['mediaType'] ?? 'application/octet-stream'} • $byteSize bytes',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => _rejectIncomingOffer(offer),
+                                    child: const Text('Reject'),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: FilledButton(
+                                    onPressed: () => _acceptIncomingOffer(offer),
+                                    child: const Text('Accept'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(growable: false),
+                  ),
               ],
             ),
           ),
