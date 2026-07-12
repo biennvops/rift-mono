@@ -633,7 +633,7 @@ class FileTransferService {
     _OutgoingTransferState transfer, {
     int? requestedChunkSize,
   }) async {
-    final chunkSize = _normalizeChunkSize(requestedChunkSize) ?? transfer.chunkSize;
+    final chunkSize = _normalizeChunkSize(requestedChunkSize);
     final file = File(transfer.localPath);
     if (!await file.exists()) {
       await _failOutgoingTransfer(transfer, 'NotFound', 'Local file is no longer available.');
@@ -799,7 +799,7 @@ class FileTransferService {
     _sessionManager.requireCapability(peerDeviceId, requiredCapability);
   }
 
-  int? _normalizeChunkSize(int? chunkSize) {
+  int _normalizeChunkSize(int? chunkSize) {
     if (chunkSize == null || chunkSize <= 0) {
       return defaultChunkSize;
     }
