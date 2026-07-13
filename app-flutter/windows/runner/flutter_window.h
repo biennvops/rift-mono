@@ -6,6 +6,7 @@
 #include <flutter/event_channel.h>
 #include <flutter/event_sink.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -27,6 +28,7 @@ class FlutterWindow : public Win32Window {
 
  private:
   void RegisterClipboardEventChannel();
+  void RegisterClipboardMethodChannel();
 
   // The project to run.
   flutter::DartProject project_;
@@ -37,6 +39,8 @@ class FlutterWindow : public Win32Window {
       clipboard_event_channel_;
   std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>
       clipboard_event_sink_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      clipboard_method_channel_;
   bool clipboard_listener_registered_ = false;
 };
 

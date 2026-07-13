@@ -19,12 +19,90 @@ import 'screens/clipboard_transfer_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/platform/macos_notifications.dart';
+
+const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
+String? _lastDesktopClipboardReadFingerprint;
+
+String _desktopClipboardFingerprint(String contentType, Uint8List bytes) {
+  final byteDigest = base64Encode(bytes);
+  return '$contentType:${bytes.length}:$byteDigest';
+}
+
+Future<ClipboardContentPayload?> _readDesktopClipboardContent() async {
+  final raw = await _desktopClipboardChannel.invokeMethod<Object>(
+    'getClipboardContent',
+  );
+  if (raw is! Map) {
+    if (_lastDesktopClipboardReadFingerprint != 'empty') {
+      _lastDesktopClipboardReadFingerprint = 'empty';
+      debugPrint(
+          '[Desktop Clipboard] No clipboard payload returned by native bridge.');
+    }
+    return null;
+  }
+
+  final contentType = raw['contentType'] as String?;
+  final bytes = raw['bytes'];
+  if (contentType == null || bytes is! Uint8List) {
+    debugPrint(
+      '[Desktop Clipboard] Native bridge returned an incomplete payload: '
+      'contentType=$contentType bytesType=${bytes.runtimeType}',
+    );
+    return null;
+  }
+
+  final fingerprint = _desktopClipboardFingerprint(contentType, bytes);
+  if (_lastDesktopClipboardReadFingerprint != fingerprint) {
+    _lastDesktopClipboardReadFingerprint = fingerprint;
+    debugPrint(
+      '[Desktop Clipboard] Read native payload type=$contentType bytes=${bytes.length}',
+    );
+  }
+
+  return ClipboardContentPayload(
+    contentType: contentType,
+    bytes: bytes,
+  );
+}
+
+Future<void> _writeDesktopClipboardContent(
+  ClipboardContentPayload payload,
+) async {
+  final applied = await _desktopClipboardChannel.invokeMethod<bool>(
+    'setClipboardContent',
+    {
+      'contentType': payload.contentType,
+      'bytes': payload.bytes,
+    },
+  );
+  if (applied != true) {
+    throw StateError(
+      'Desktop clipboard payload was not applied for ${payload.contentType}.',
+    );
+  }
+  debugPrint(
+    '[Desktop Clipboard] Applied native payload type=${payload.contentType} bytes=${payload.byteSize}',
+  );
+}
+
+DesktopClipboardManager _createDesktopClipboardManager(
+    JsonRpcRiftClient client) {
+  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+    return DesktopClipboardManager(
+      client,
+      readClipboardContent: _readDesktopClipboardContent,
+      writeClipboardContent: _writeDesktopClipboardContent,
+      supportedContentTypes: const <String>{'text/plain', 'image/png'},
+    );
+  }
+
+  return DesktopClipboardManager(client);
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,7 +124,7 @@ void main() async {
   }
 
   final client = JsonRpcRiftClient(TransportFactory.create());
-  final clipboardManager = DesktopClipboardManager(client);
+  final clipboardManager = _createDesktopClipboardManager(client);
   // Start the connection immediately in the background
   client.connect().catchError((Object error, StackTrace stackTrace) {
     debugPrint('Initial IPC connection failed (will auto-reconnect): $error');
@@ -122,21 +200,52 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   static const _clipboardChannel =
       MethodChannel('com.biennvops.rift/clipboard');
 
+  Future<void> _applyAndroidClipboardPayload({
+    required String contentType,
+    required String contentBase64,
+  }) async {
+    final applied = await _clipboardChannel.invokeMethod<bool>(
+      'setClipboardContent',
+      {
+        'contentType': contentType,
+        'contentBase64': contentBase64,
+      },
+    );
+    if (applied != true) {
+      throw StateError('Android clipboard payload was not applied');
+    }
+  }
+
   Future<void> _bindClipboardChannel() async {
     // The native clipboard channel only exists on Android.
     if (!Platform.isAndroid) return;
 
     final clipboardManager = _clipboardManager;
-    debugPrint('[Android Clipboard] Binding MethodChannel');
     _clipboardChannel.setMethodCallHandler((call) async {
       if (call.method == 'onClipboardChanged') {
-        final text = call.arguments['text'] as String?;
-        debugPrint(
-            '[Android Clipboard] MethodChannel onClipboardChanged textLength=${text?.length ?? 0}');
+        final args = Map<Object?, Object?>.from(
+          call.arguments as Map<Object?, Object?>? ??
+              const <Object?, Object?>{},
+        );
+        final contentType = args['contentType'] as String?;
+        final contentBase64 = args['contentBase64'] as String?;
+        final text = args['text'] as String?;
+        if (contentType != null && contentBase64 != null) {
+          try {
+            await clipboardManager?.handleExternalClipboardContent(
+              ClipboardContentPayload(
+                contentType: contentType,
+                bytes: base64.decode(contentBase64),
+              ),
+            );
+            return;
+          } catch (e) {
+            debugPrint(
+                '[Android Clipboard] Failed to handle clipboard payload: $e');
+          }
+        }
         if (text != null) {
           try {
-            debugPrint(
-                '[Android Clipboard] Calling handleExternalClipboardText textLength=${text.length}');
             await clipboardManager?.handleExternalClipboardText(text);
           } catch (e) {
             debugPrint(
@@ -148,7 +257,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     try {
       final started = await _clipboardChannel.invokeMethod('startService');
       _clipboardServiceStarted = true;
-      debugPrint('[Android Clipboard] startService result=$started');
+      if (started != true) {
+        debugPrint('[Android Clipboard] startService returned $started');
+      }
     } catch (e) {
       debugPrint('[Android Clipboard] Failed to start clipboard service: $e');
     }
@@ -189,6 +300,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _fileOfferSub?.cancel();
     _fileCompletedSub?.cancel();
     _fileFailedSub?.cancel();
+    _clipboardOfferSub?.cancel();
+    _clipboardExpiredSub?.cancel();
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
@@ -319,25 +432,37 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
       if (offerId == null) return;
 
-      if ((contentType == 'text/plain' || contentType == 'clipboard') && Platform.isAndroid) {
-        // Text clipboard auto-fetch
-        unawaited(client.fetchClipboardContent(offerId).then((result) {
-          final contentBase64 = result['contentBase64'] as String?;
-          if (contentBase64 != null) {
-            final bytes = base64.decode(contentBase64);
-            try {
-              final text = utf8.decode(bytes);
-              Clipboard.setData(ClipboardData(text: text));
-              _scaffoldMessengerKey.currentState?.showSnackBar(
-                const SnackBar(content: Text('Clipboard synced automatically')),
-              );
-            } catch (_) {
-              // Not text, ignore
+      if ((contentType == 'text/plain' ||
+              contentType == 'clipboard' ||
+              contentType == 'image/png') &&
+          Platform.isAndroid) {
+        // Clipboard auto-fetch for Android-supported clipboard payloads.
+        unawaited(() async {
+          try {
+            final result = await client.fetchClipboardContent(offerId);
+            final contentBase64 = result['contentBase64'] as String?;
+            if (contentBase64 == null) {
+              return;
             }
+
+            if (contentType == 'text/plain' || contentType == 'clipboard') {
+              final bytes = base64.decode(contentBase64);
+              final text = utf8.decode(bytes);
+              await Clipboard.setData(ClipboardData(text: text));
+            } else {
+              await _applyAndroidClipboardPayload(
+                contentType: contentType,
+                contentBase64: contentBase64,
+              );
+            }
+
+            _scaffoldMessengerKey.currentState?.showSnackBar(
+              const SnackBar(content: Text('Clipboard synced automatically')),
+            );
+          } catch (e) {
+            debugPrint('Auto-fetch clipboard failed: $e');
           }
-        }).catchError((e) {
-          debugPrint('Auto-fetch clipboard failed: $e');
-        }));
+        }());
       }
     });
 
@@ -371,7 +496,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
     final transferId = event['transferId']?.toString();
     final fileName = event['fileName']?.toString();
-    final sourceDeviceId = event['sourceDeviceId']?.toString() ?? 'trusted device';
+    final sourceDeviceId =
+        event['sourceDeviceId']?.toString() ?? 'trusted device';
     if (transferId == null ||
         transferId.isEmpty ||
         fileName == null ||
@@ -383,6 +509,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     _autoAcceptingTransferIds.add(transferId);
+    final client = context.read<JsonRpcRiftClient>();
     try {
       final destinationPath = await _buildDefaultIncomingFilePath(fileName);
       if (destinationPath == null || destinationPath.isEmpty) {
@@ -392,16 +519,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _scaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(content: Text('Receiving $fileName from $sourceDeviceId...')),
       );
-      _maybeNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
+      _maybeNotify(
+          'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 
-      final client = context.read<JsonRpcRiftClient>();
       await client.acceptFileOffer(
         transferId: transferId,
         destinationPath: destinationPath,
         overwrite: false,
       );
     } catch (error) {
-      final client = context.read<JsonRpcRiftClient>();
       try {
         await client.rejectFileOffer(
           transferId: transferId,
@@ -435,9 +561,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     final dotIndex = sanitizedFileName.lastIndexOf('.');
-    final hasExtension = dotIndex > 0 && dotIndex < sanitizedFileName.length - 1;
-    final stem =
-        hasExtension ? sanitizedFileName.substring(0, dotIndex) : sanitizedFileName;
+    final hasExtension =
+        dotIndex > 0 && dotIndex < sanitizedFileName.length - 1;
+    final stem = hasExtension
+        ? sanitizedFileName.substring(0, dotIndex)
+        : sanitizedFileName;
     final extension = hasExtension ? sanitizedFileName.substring(dotIndex) : '';
 
     for (var i = 1; i <= 999; i += 1) {

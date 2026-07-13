@@ -85,6 +85,7 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
     return {'operations': [], 'total': 0};
   }
 
+  @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
 
   @override

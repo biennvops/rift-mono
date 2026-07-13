@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
@@ -114,7 +115,8 @@ void main() {
       await client.dispose();
     });
 
-    test('resyncs clipboard offers on startup and auto-applies text/plain offers',
+    test(
+        'resyncs clipboard offers on startup and auto-applies text/plain offers',
         () async {
       transport.listClipboardOffersResult = {
         'Offers': [
@@ -162,7 +164,8 @@ void main() {
       );
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
             .length,
         1,
       );
@@ -211,7 +214,8 @@ void main() {
       expect(clipboardWrites, ['hello']);
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .isEmpty,
         isTrue,
       );
@@ -219,7 +223,8 @@ void main() {
       await manager.dispose();
     });
 
-    test('suppresses overlapping echoes for sequential fetched clipboard writes',
+    test(
+        'suppresses overlapping echoes for sequential fetched clipboard writes',
         () async {
       transport.listClipboardOffersResult = {
         'Offers': [
@@ -285,7 +290,8 @@ void main() {
       expect(clipboardWrites, ['hello', 'world']);
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .isEmpty,
         isTrue,
       );
@@ -293,7 +299,8 @@ void main() {
       await manager.dispose();
     });
 
-    test('ignores unsupported content types instead of auto-fetching', () async {
+    test('ignores unsupported content types instead of auto-fetching',
+        () async {
       await client.connect();
       final statuses = <String>[];
 
@@ -321,7 +328,8 @@ void main() {
       expect(manager.activeOffers.keys, contains('offer-image'));
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
             .isEmpty,
         isTrue,
       );
@@ -329,6 +337,107 @@ void main() {
       expect(statuses, isEmpty);
 
       await statusSub.cancel();
+      await manager.dispose();
+    });
+
+    test('auto-fetches supported image offers when a binary writer is provided',
+        () async {
+      await client.connect();
+      final writtenPayloads = <ClipboardContentPayload>[];
+      final statuses = <String>[];
+      final pngBytes = Uint8List.fromList(<int>[137, 80, 78, 71, 1, 2, 3, 4]);
+      final pngBase64 = base64Encode(pngBytes);
+
+      transport.fetchResultsByOfferId['offer-image'] = {
+        'OfferId': 'offer-image',
+        'ContentBase64': pngBase64,
+        'ByteSize': pngBytes.length,
+        'Sha256':
+            '0f0516581cb7b841f3d98cbf31cb37b2db5ecff5a1d39d90f307d2f071d8d4f3',
+        'Verified': true,
+      };
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardContent: (payload) async {
+          writtenPayloads.add(payload);
+        },
+        supportedContentTypes: const <String>{'text/plain', 'image/png'},
+      );
+      final statusSub = manager.onStatusUpdate.listen(statuses.add);
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-image',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'image/png',
+        'ByteSize': pngBytes.length,
+        'Sha256':
+            '0f0516581cb7b841f3d98cbf31cb37b2db5ecff5a1d39d90f307d2f071d8d4f3',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        transport.requests
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
+            .length,
+        1,
+      );
+      expect(writtenPayloads, hasLength(1));
+      expect(writtenPayloads.single.contentType, 'image/png');
+      expect(writtenPayloads.single.bytes, orderedEquals(pngBytes));
+      expect(statuses, contains('Clipboard content received from peer'));
+
+      await statusSub.cancel();
+      await manager.dispose();
+    });
+
+    test('sends binary clipboard payloads when a content reader is provided',
+        () async {
+      await client.connect();
+      final imagePayload = ClipboardContentPayload(
+        contentType: 'image/png',
+        bytes: Uint8List.fromList(<int>[137, 80, 78, 71, 9, 8, 7, 6]),
+      );
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardContent: () async => imagePayload,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+        },
+        supportedContentTypes: const <String>{'text/plain', 'image/png'},
+      );
+      await manager.start();
+
+      clipboardChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+
+      final request = transport.requests.singleWhere(
+        (candidate) => candidate['method'] == 'rift.notifyClipboardChange',
+      );
+      expect(
+        request['params'],
+        containsPair('contentType', 'image/png'),
+      );
+      expect(
+        request['params'],
+        containsPair('byteSize', imagePayload.byteSize),
+      );
+      expect(
+        request['params'],
+        containsPair('contentBase64', imagePayload.contentBase64),
+      );
+      expect(
+        request['params'],
+        containsPair('sha256', imagePayload.sha256Hex),
+      );
+
       await manager.dispose();
     });
 
@@ -407,7 +516,8 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .length,
         1,
       );
@@ -418,7 +528,8 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .length,
         2,
       );
@@ -526,18 +637,25 @@ void main() {
       expect(manager.activeOffers.keys, contains('offer-new'));
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
             .length,
         2,
       );
 
       await manager.dispose();
     });
-    test('polling fallback correctly tracks clipboard changes and ignores initial state', () async {
-      String? mockClipboardState = 'initial_content';
-      Future<String?> mockReader() async => mockClipboardState;
+    test(
+        'polling fallback correctly tracks binary clipboard changes and ignores initial state',
+        () async {
+      ClipboardContentPayload? mockClipboardState =
+          ClipboardContentPayload.text(
+        'initial_content',
+      );
+      Future<ClipboardContentPayload?> mockReader() async => mockClipboardState;
 
-      final pollingStream = DesktopClipboardManager.pollClipboardForTesting(mockReader);
+      final pollingStream =
+          DesktopClipboardManager.pollClipboardForTesting(mockReader);
       final emittedEvents = <Object?>[];
       final sub = pollingStream.listen(emittedEvents.add);
 
@@ -547,22 +665,29 @@ void main() {
 
       // First tick with no change
       await Future<void>.delayed(const Duration(seconds: 1));
-      expect(emittedEvents, isEmpty, reason: 'Should not emit when content is unchanged');
+      expect(emittedEvents, isEmpty,
+          reason: 'Should not emit when content is unchanged');
 
       // Change content
-      mockClipboardState = 'new_content';
+      mockClipboardState = ClipboardContentPayload.text('new_content');
       await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
-      expect(emittedEvents.length, 1, reason: 'Should emit once when content changes');
+      expect(emittedEvents.length, 1,
+          reason: 'Should emit once when content changes');
 
       // Change to null
       mockClipboardState = null;
       await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
-      expect(emittedEvents.length, 1, reason: 'Should not emit when content becomes null');
+      expect(emittedEvents.length, 1,
+          reason: 'Should not emit when content becomes null');
 
       // Change again
-      mockClipboardState = 'another_content';
+      mockClipboardState = ClipboardContentPayload(
+        contentType: 'image/png',
+        bytes: Uint8List.fromList(<int>[137, 80, 78, 71, 1, 2, 3]),
+      );
       await Future<void>.delayed(const Duration(seconds: 1, milliseconds: 100));
-      expect(emittedEvents.length, 2, reason: 'Should emit when content changes again');
+      expect(emittedEvents.length, 2,
+          reason: 'Should emit when content changes again');
 
       await sub.cancel();
     });

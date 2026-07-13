@@ -11,6 +11,7 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     PermissionsBridge.register(with: flutterViewController.engine.binaryMessenger)
+    DesktopClipboardBridge.register(with: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
