@@ -279,17 +279,6 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     if ((trusted['peers'] as List?)?.isNotEmpty == true) {
       return false;
     }
-
-    for (final trustState in const ['blocked']) {
-      final result = await _invokeDaemonBootstrapRpc(
-        'rift.listPeersByState',
-        {'trustState': trustState},
-      );
-      if ((result['peers'] as List?)?.isNotEmpty == true) {
-        return false;
-      }
-    }
-
     return true;
   }
 

@@ -290,10 +290,11 @@ Returns all peers in the trust store for a given `trustState`.
 
 #### `rift.revokeTrust`
 
-Forgets a peer. Terminates active trust, deletes the local trusted-peer record,
-and allows the device to pair again from scratch the next time it is
-rediscovered. The RPC method name is retained for compatibility with older
-clients.
+Revokes a peer's trust. Terminates active trust, removes the peer from the
+visible trusted-device list, and retains durable negative-trust evidence so
+future connections from that identity are rejected until the revoked record is
+explicitly cleared. The RPC method name is retained for compatibility with
+older clients.
 
 **Params:**
 
@@ -302,7 +303,7 @@ clients.
 | `deviceId` | device ID string | Yes      | The peer to forget                  |
 | `reason`   | string           | Yes      | Human-readable reason for audit log |
 
-**Result:** `{ "removed": true, "removedAt": "2026-05-30T10:05:00Z" }`
+**Result:** `{ "revoked": true, "revokedAt": "2026-05-30T10:05:00Z" }`
 
 **Errors:** `-32009` if peer not found.
 

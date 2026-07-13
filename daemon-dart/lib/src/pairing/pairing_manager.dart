@@ -121,7 +121,7 @@ class PairingManager {
     // Transition state to pairingPending
     await trustStore.transitionState(peerDeviceId, record.state, TrustState.pairingPending);
 
-    // Start 120s timeout countdown
+    // Start the local timeout countdown using the advertised outbound expiry.
     _startTimeoutTimer(peerDeviceId);
     _outboundPairings.add(peerDeviceId);
 
@@ -395,12 +395,14 @@ class PairingManager {
           );
         }
         
-        _startTimeoutTimer(peerDeviceId);
-        
         // Issue 4 fix: use the peer's actual expiresInMs rather than a hard-coded 30 000.
         // Clamp to [1 000, 300 000] to guard against pathological values from untrusted peers.
         final rawExpiry = payload['expiresInMs'] as int;
         final clampedExpiry = rawExpiry.clamp(1000, 300000);
+        _startTimeoutTimer(
+          peerDeviceId,
+          timeout: Duration(milliseconds: clampedExpiry),
+        );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
         final displayName = payload['displayName'] as String? ?? 'Unknown Device';
 
@@ -562,11 +564,14 @@ class PairingManager {
     }
   }
 
-  void _startTimeoutTimer(String peerDeviceId) {
+  void _startTimeoutTimer(String peerDeviceId, {Duration? timeout}) {
     _cancelTimeoutTimer(peerDeviceId);
-    _pairingTimeouts[peerDeviceId] = Timer(const Duration(seconds: 120), () {
-      _rejectPairing(peerDeviceId); // Auto reject after 120 seconds
-    });
+    _pairingTimeouts[peerDeviceId] = Timer(
+      timeout ?? const Duration(seconds: _pairingTimeoutSeconds),
+      () {
+        _rejectPairing(peerDeviceId);
+      },
+    );
   }
 
   void _cancelTimeoutTimer(String peerDeviceId, {bool clearOutbound = true}) {

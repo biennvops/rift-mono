@@ -136,9 +136,6 @@ final class DesktopClipboardBridge {
       return
     }
 
-    let pasteboard = NSPasteboard.general
-    pasteboard.clearContents()
-
     switch contentType {
     case "text/plain", "clipboard":
       guard let text = String(data: typedData.data, encoding: .utf8) else {
@@ -146,10 +143,14 @@ final class DesktopClipboardBridge {
         result(false)
         return
       }
+      let pasteboard = NSPasteboard.general
+      pasteboard.clearContents()
       let applied = pasteboard.setString(text, forType: .string)
       NSLog("Rift clipboard bridge: wrote text/plain payload (%lu bytes) success=%@", typedData.data.count, applied.description)
       result(applied)
     case "image/png":
+      let pasteboard = NSPasteboard.general
+      pasteboard.clearContents()
       let applied = pasteboard.setData(typedData.data, forType: .png)
       NSLog("Rift clipboard bridge: wrote image/png payload (%lu bytes) success=%@", typedData.data.count, applied.description)
       result(applied)

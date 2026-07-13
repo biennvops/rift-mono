@@ -59,14 +59,54 @@ void log_empty_clipboard_if_changed() {
   g_message("Rift clipboard bridge: no supported clipboard payload available.");
 }
 
-FlMethodResponse* get_clipboard_content() {
-  GtkClipboard* clipboard = gtk_clipboard_get_default(gdk_display_get_default());
-  if (clipboard == nullptr) {
-    g_message("Rift clipboard bridge: GTK clipboard was unavailable.");
-    return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+struct ClipboardReadRequest {
+  FlMethodCall* method_call;
+};
+
+FlMethodResponse* build_clipboard_response(const char* content_type,
+                                           const uint8_t* bytes,
+                                           size_t bytes_length) {
+  g_autoptr(FlValue) response = fl_value_new_map();
+  fl_value_set_string_take(
+      response, "contentType", fl_value_new_string(content_type));
+  fl_value_set_string_take(
+      response,
+      "bytes",
+      fl_value_new_uint8_list(bytes, bytes_length));
+  return FL_METHOD_RESPONSE(fl_method_success_response_new(response));
+}
+
+void respond_to_clipboard_request(ClipboardReadRequest* request,
+                                  FlMethodResponse* response) {
+  fl_method_call_respond(request->method_call, response, nullptr);
+  g_object_unref(request->method_call);
+  g_free(request);
+}
+
+void clipboard_text_requested_cb(GtkClipboard* clipboard,
+                                 const gchar* text,
+                                 gpointer user_data) {
+  auto* request = static_cast<ClipboardReadRequest*>(user_data);
+  if (text != nullptr) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(text);
+    const auto bytes_length = strlen(text);
+    log_clipboard_read_if_changed("text/plain", bytes, bytes_length);
+    g_autoptr(FlMethodResponse) response =
+        build_clipboard_response("text/plain", bytes, bytes_length);
+    respond_to_clipboard_request(request, response);
+    return;
   }
 
-  g_autoptr(GdkPixbuf) image = gtk_clipboard_wait_for_image(clipboard);
+  log_empty_clipboard_if_changed();
+  g_autoptr(FlMethodResponse) response =
+      FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  respond_to_clipboard_request(request, response);
+}
+
+void clipboard_image_requested_cb(GtkClipboard* clipboard,
+                                  GdkPixbuf* image,
+                                  gpointer user_data) {
+  auto* request = static_cast<ClipboardReadRequest*>(user_data);
   if (image != nullptr) {
     gchar* buffer = nullptr;
     gsize buffer_size = 0;
@@ -82,16 +122,13 @@ FlMethodResponse* get_clipboard_content() {
           "image/png",
           reinterpret_cast<const uint8_t*>(buffer),
           buffer_size);
-      g_autoptr(FlValue) response = fl_value_new_map();
-      fl_value_set_string_take(
-          response, "contentType", fl_value_new_string("image/png"));
-      fl_value_set_string_take(
-          response,
-          "bytes",
-          fl_value_new_uint8_list(reinterpret_cast<const uint8_t*>(buffer),
-                                  buffer_size));
+      g_autoptr(FlMethodResponse) response = build_clipboard_response(
+          "image/png",
+          reinterpret_cast<const uint8_t*>(buffer),
+          buffer_size);
       g_free(buffer);
-      return FL_METHOD_RESPONSE(fl_method_success_response_new(response));
+      respond_to_clipboard_request(request, response);
+      return;
     }
     if (error != nullptr) {
       g_warning("Rift clipboard bridge: failed to encode PNG clipboard image: %s",
@@ -99,25 +136,23 @@ FlMethodResponse* get_clipboard_content() {
     }
   }
 
-  g_autofree gchar* text = gtk_clipboard_wait_for_text(clipboard);
-  if (text != nullptr) {
-    log_clipboard_read_if_changed(
-        "text/plain",
-        reinterpret_cast<const uint8_t*>(text),
-        strlen(text));
-    g_autoptr(FlValue) response = fl_value_new_map();
-    fl_value_set_string_take(
-        response, "contentType", fl_value_new_string("text/plain"));
-    fl_value_set_string_take(
-        response,
-        "bytes",
-        fl_value_new_uint8_list(reinterpret_cast<const uint8_t*>(text),
-                                strlen(text)));
-    return FL_METHOD_RESPONSE(fl_method_success_response_new(response));
+  gtk_clipboard_request_text(clipboard, clipboard_text_requested_cb, request);
+}
+
+bool begin_async_get_clipboard_content(FlMethodCall* method_call) {
+  GtkClipboard* clipboard = gtk_clipboard_get_default(gdk_display_get_default());
+  if (clipboard == nullptr) {
+    g_message("Rift clipboard bridge: GTK clipboard was unavailable.");
+    g_autoptr(FlMethodResponse) response =
+        FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+    fl_method_call_respond(method_call, response, nullptr);
+    return true;
   }
 
-  log_empty_clipboard_if_changed();
-  return FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  auto* request = g_new0(ClipboardReadRequest, 1);
+  request->method_call = FL_METHOD_CALL(g_object_ref(method_call));
+  gtk_clipboard_request_image(clipboard, clipboard_image_requested_cb, request);
+  return true;
 }
 
 FlMethodResponse* set_clipboard_content(FlValue* args) {
@@ -191,7 +226,8 @@ void clipboard_method_call_cb(FlMethodChannel* channel,
   g_autoptr(FlMethodResponse) response = nullptr;
 
   if (strcmp(method, "getClipboardContent") == 0) {
-    response = get_clipboard_content();
+    begin_async_get_clipboard_content(method_call);
+    return;
   } else if (strcmp(method, "setClipboardContent") == 0) {
     response = set_clipboard_content(fl_method_call_get_args(method_call));
   } else {

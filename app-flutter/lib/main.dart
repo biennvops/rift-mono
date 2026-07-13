@@ -33,6 +33,20 @@ String _desktopClipboardFingerprint(String contentType, Uint8List bytes) {
   return '$contentType:${bytes.length}:$byteDigest';
 }
 
+String sanitizeIncomingFileName(String fileName) {
+  final segments = fileName
+      .split(RegExp(r'[\\/]+'))
+      .where((segment) => segment.isNotEmpty)
+      .toList(growable: false);
+  final basename = segments.isEmpty ? null : segments.last;
+  final cleaned =
+      (basename ?? fileName).replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+  if (cleaned.isEmpty || RegExp(r'^\.+$').hasMatch(cleaned)) {
+    return 'incoming.bin';
+  }
+  return cleaned;
+}
+
 Future<ClipboardContentPayload?> _readDesktopClipboardContent() async {
   final raw = await _desktopClipboardChannel.invokeMethod<Object>(
     'getClipboardContent',
@@ -610,8 +624,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   String _sanitizeFileName(String fileName) {
-    final cleaned = fileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
-    return cleaned.isEmpty ? 'incoming.bin' : cleaned;
+    return sanitizeIncomingFileName(fileName);
   }
 
   String _joinPath(String a, String b) {

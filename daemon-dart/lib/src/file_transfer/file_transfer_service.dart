@@ -19,6 +19,7 @@ class FileTransferService {
   static const int defaultChunkSize = 256 * 1024;
   static const int maxChunkSize = 4 * 1024 * 1024;
   static const int defaultOfferExpiryMs = 300000;
+  static const int maxIncomingOfferByteSize = 32 * 1024 * 1024;
 
   final SessionManager _sessionManager;
   final TrustStore _trustStore;
@@ -213,10 +214,11 @@ class FileTransferService {
       );
     }
 
+    final stagingFileName = _sanitizeIncomingStagingFileName(offer.fileName);
     final stagingDirectory =
         Directory(p.join(_storagePath, 'file-transfer', transferId));
     await stagingDirectory.create(recursive: true);
-    final stagingPath = p.join(stagingDirectory.path, '${offer.fileName}.part');
+    final stagingPath = p.join(stagingDirectory.path, '$stagingFileName.part');
     final stagingFile = File(stagingPath);
     if (await stagingFile.exists()) {
       await stagingFile.delete();
@@ -405,8 +407,15 @@ class FileTransferService {
         byteSize < 0 ||
         sha256.isEmpty ||
         chunkCount < 0 ||
+        expiresInMs <= 0 ||
         required != requiredCapability) {
       throw const RiftException(-32001, 'Malformed file.offer payload.');
+    }
+    if (byteSize > maxIncomingOfferByteSize) {
+      throw const RiftException(
+        -32007,
+        'Incoming file offer exceeded the maximum supported size.',
+      );
     }
 
     await _ensurePeerCanUseFileTransfer(peerDeviceId);
@@ -708,6 +717,7 @@ class FileTransferService {
     transfer.state = 'done';
     _operationManager.transitionOperation(transfer.operationId, OperationState.done);
     _emitCompleted(transfer.toInfo());
+    _outgoingTransfers.remove(transfer.transferId);
   }
 
   Future<void> _failOutgoingTransfer(
@@ -719,6 +729,7 @@ class FileTransferService {
     transfer.failureReason = failureReason;
     _transitionOperationToFailed(transfer.operationId, failureReason);
     _emitFailed(transfer.toInfo(), message);
+    _outgoingTransfers.remove(transfer.transferId);
   }
 
   Future<void> _failIncomingTransfer(
@@ -817,6 +828,17 @@ class FileTransferService {
       return 0;
     }
     return ((byteSize + chunkSize) - 1) ~/ chunkSize;
+  }
+
+  String _sanitizeIncomingStagingFileName(String fileName) {
+    final sanitized = p.basename(fileName).trim();
+    if (sanitized.isEmpty || RegExp(r'^\.+$').hasMatch(sanitized)) {
+      throw const RiftException(
+        -32001,
+        'Incoming file offer had an invalid file name.',
+      );
+    }
+    return sanitized;
   }
 
   Future<String> _computeFileSha256(File file) async {

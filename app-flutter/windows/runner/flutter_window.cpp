@@ -270,59 +270,78 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
             return;
           }
 
-          if (!OpenClipboard(GetHandle())) {
-            LogClipboardMessage("OpenClipboard failed for write.");
-            result->Success(flutter::EncodableValue(false));
-            return;
-          }
-
-          EmptyClipboard();
           bool applied = false;
+          UINT clipboard_format = 0;
+          HGLOBAL memory = nullptr;
           if (*content_type == "text/plain" || *content_type == "clipboard") {
             std::string utf8_text(bytes->begin(), bytes->end());
             std::wstring utf16_text = Utf16FromUtf8(utf8_text);
-            HGLOBAL memory = GlobalAlloc(
+            if (utf16_text.empty() && !bytes->empty()) {
+              LogClipboardMessage("failed to decode text/plain payload.");
+            } else {
+              clipboard_format = CF_UNICODETEXT;
+              memory = GlobalAlloc(
                 GMEM_MOVEABLE,
                 (utf16_text.size() + 1) * sizeof(wchar_t));
-            if (memory != nullptr) {
-              auto* target = static_cast<wchar_t*>(GlobalLock(memory));
-              if (target != nullptr) {
-                memcpy(target, utf16_text.c_str(),
-                       utf16_text.size() * sizeof(wchar_t));
-                target[utf16_text.size()] = L'\0';
-                GlobalUnlock(memory);
-                applied = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
-                LogClipboardMessage(std::string("write text/plain payload (") +
-                                    std::to_string(bytes->size()) +
-                                    " bytes) success=" +
-                                    (applied ? "true" : "false"));
-              }
-              if (!applied) {
-                GlobalFree(memory);
+              if (memory != nullptr) {
+                auto* target = static_cast<wchar_t*>(GlobalLock(memory));
+                if (target != nullptr) {
+                  memcpy(target, utf16_text.c_str(),
+                         utf16_text.size() * sizeof(wchar_t));
+                  target[utf16_text.size()] = L'\0';
+                  GlobalUnlock(memory);
+                } else {
+                  GlobalFree(memory);
+                  memory = nullptr;
+                }
               }
             }
           } else if (*content_type == "image/png") {
-            UINT png_format = RegisterClipboardFormatW(L"PNG");
-            HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes->size());
+            clipboard_format = RegisterClipboardFormatW(L"PNG");
+            memory = GlobalAlloc(GMEM_MOVEABLE, bytes->size());
             if (memory != nullptr) {
               auto* target = static_cast<uint8_t*>(GlobalLock(memory));
               if (target != nullptr) {
                 memcpy(target, bytes->data(), bytes->size());
                 GlobalUnlock(memory);
-                applied = SetClipboardData(png_format, memory) != nullptr;
-                LogClipboardMessage(std::string("write image/png payload (") +
-                                    std::to_string(bytes->size()) +
-                                    " bytes) success=" +
-                                    (applied ? "true" : "false"));
-              }
-              if (!applied) {
+              } else {
                 GlobalFree(memory);
+                memory = nullptr;
               }
             }
           }
           if (*content_type != "text/plain" && *content_type != "clipboard" &&
               *content_type != "image/png") {
             LogClipboardMessage("unsupported write content type " + *content_type);
+          }
+
+          if (memory == nullptr) {
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+
+          if (!OpenClipboard(GetHandle())) {
+            LogClipboardMessage("OpenClipboard failed for write.");
+            GlobalFree(memory);
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+
+          EmptyClipboard();
+          applied = SetClipboardData(clipboard_format, memory) != nullptr;
+          if (*content_type == "text/plain" || *content_type == "clipboard") {
+            LogClipboardMessage(std::string("write text/plain payload (") +
+                                std::to_string(bytes->size()) +
+                                " bytes) success=" +
+                                (applied ? "true" : "false"));
+          } else if (*content_type == "image/png") {
+            LogClipboardMessage(std::string("write image/png payload (") +
+                                std::to_string(bytes->size()) +
+                                " bytes) success=" +
+                                (applied ? "true" : "false"));
+          }
+          if (!applied) {
+            GlobalFree(memory);
           }
 
           CloseClipboard();

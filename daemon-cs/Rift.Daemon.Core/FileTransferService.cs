@@ -14,6 +14,7 @@ public sealed class FileTransferService : IFileTransferService
     private const int DefaultChunkSize = 256 * 1024;
     private const int MaxChunkSize = 4 * 1024 * 1024;
     private const int DefaultOfferExpiryMs = 300000;
+    private const long MaxIncomingOfferByteSize = 32L * 1024 * 1024;
     private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
 
     private readonly ITransport _transport;
@@ -116,7 +117,8 @@ public sealed class FileTransferService : IFileTransferService
             Sha256 = sha256,
             ChunkSize = DefaultChunkSize,
             ChunkCount = chunkCount,
-            ExpiresAt = _timeProvider.GetUtcNow().AddMilliseconds(DefaultOfferExpiryMs)
+            ExpiresAt = _timeProvider.GetUtcNow().AddMilliseconds(DefaultOfferExpiryMs),
+            SendCancellation = new CancellationTokenSource()
         };
         _outgoingTransfers[transferId] = transfer;
 
@@ -225,9 +227,10 @@ public sealed class FileTransferService : IFileTransferService
             throw new FileTransferFailureException("PolicyDenied", -32010, $"Destination file '{fullDestinationPath}' already exists.");
         }
 
+        var stagingFileName = SanitizeIncomingStagingFileName(offer.FileName);
         var stagingDirectory = Path.Combine(Path.GetTempPath(), "rift-file-transfer", transferId);
         Directory.CreateDirectory(stagingDirectory);
-        var stagingPath = Path.Combine(stagingDirectory, $"{offer.FileName}.part");
+        var stagingPath = Path.Combine(stagingDirectory, $"{stagingFileName}.part");
         if (File.Exists(stagingPath))
         {
             File.Delete(stagingPath);
@@ -341,6 +344,21 @@ public sealed class FileTransferService : IFileTransferService
     {
         EnsurePayloadIdentityMatches(offer.DeviceId, offer.PayloadSourceDeviceId, "file.offer");
         EnsurePeerCanUseFileTransfer(offer.DeviceId, offer.RequiredCapability);
+        if (string.IsNullOrWhiteSpace(offer.TransferId) ||
+            string.IsNullOrWhiteSpace(offer.FileName) ||
+            offer.ByteSize < 0 ||
+            string.IsNullOrWhiteSpace(offer.Sha256) ||
+            offer.ChunkCount < 0 ||
+            offer.ExpiresInMs <= 0 ||
+            !string.Equals(offer.RequiredCapability, RequiredCapability, StringComparison.Ordinal))
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Malformed file.offer payload.");
+        }
+
+        if (offer.ByteSize > MaxIncomingOfferByteSize)
+        {
+            throw new FileTransferFailureException("PayloadTooLarge", -32007, "Incoming file offer exceeded the maximum supported size.");
+        }
 
         _remoteOffers[offer.TransferId] = new RemoteFileOfferState
         {
@@ -453,11 +471,6 @@ public sealed class FileTransferService : IFileTransferService
 
         transfer.BytesTransferred += byteSize;
         transfer.NextChunkIndex++;
-        if (isLastChunk)
-        {
-            transfer.SawLastChunk = true;
-        }
-
         TransitionActiveIfPossible(transfer.OperationId);
         await NotifyTransferProgressAsync(transfer, null, cancellationToken).ConfigureAwait(false);
     }
@@ -541,8 +554,9 @@ public sealed class FileTransferService : IFileTransferService
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        if (_outgoingTransfers.TryRemove(transferId, out var outgoing))
         {
+            outgoing.SendCancellation.Cancel();
             TryTransitionFailure(outgoing.OperationId, failureReason);
             await NotifyTransferFailedAsync(
                 outgoing.TransferId,
@@ -553,11 +567,14 @@ public sealed class FileTransferService : IFileTransferService
                 failureReason,
                 message,
                 cancellationToken).ConfigureAwait(false);
+            outgoing.SendCancellation.Dispose();
         }
     }
 
     private async Task SendFileChunksAsync(OutgoingTransferState transfer, CancellationToken cancellationToken)
     {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, transfer.SendCancellation.Token);
+        var sendCancellationToken = linkedCts.Token;
         try
         {
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Active);
@@ -569,7 +586,8 @@ public sealed class FileTransferService : IFileTransferService
 
             while (true)
             {
-                var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, chunkSize), cancellationToken).ConfigureAwait(false);
+                sendCancellationToken.ThrowIfCancellationRequested();
+                var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, chunkSize), sendCancellationToken).ConfigureAwait(false);
                 if (bytesRead == 0)
                 {
                     break;
@@ -594,12 +612,12 @@ public sealed class FileTransferService : IFileTransferService
                     }
                 };
 
-                await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
+                await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(envelope), sendCancellationToken).ConfigureAwait(false);
 
                 offset += bytesRead;
                 chunkIndex++;
                 transfer.BytesTransferred = offset;
-                await NotifyTransferProgressAsync(transfer, null, cancellationToken).ConfigureAwait(false);
+                await NotifyTransferProgressAsync(transfer, null, sendCancellationToken).ConfigureAwait(false);
             }
 
             var completeEnvelope = new
@@ -617,7 +635,7 @@ public sealed class FileTransferService : IFileTransferService
                 }
             };
 
-            await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), cancellationToken).ConfigureAwait(false);
+            await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), sendCancellationToken).ConfigureAwait(false);
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
             LogEvent(SecurityEventTypes.FileTransferCompleted, transfer.TargetDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null, transfer.OperationId);
             await NotifyTransferCompletedAsync(
@@ -627,7 +645,11 @@ public sealed class FileTransferService : IFileTransferService
                 transfer.FileName,
                 transfer.ByteSize,
                 null,
-                cancellationToken).ConfigureAwait(false);
+                sendCancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (transfer.SendCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("File transfer {TransferId} stopped after remote cancellation.", transfer.TransferId);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException)
         {
@@ -643,6 +665,11 @@ public sealed class FileTransferService : IFileTransferService
                 "ConnectionLost",
                 ex.Message,
                 cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+            transfer.SendCancellation.Dispose();
         }
     }
 
@@ -837,6 +864,17 @@ public sealed class FileTransferService : IFileTransferService
         }
 
         return (int)((byteSize + chunkSize - 1) / chunkSize);
+    }
+
+    private static string SanitizeIncomingStagingFileName(string fileName)
+    {
+        var sanitized = Path.GetFileName(fileName).Trim();
+        if (string.IsNullOrEmpty(sanitized) || sanitized.All(static ch => ch == '.'))
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Incoming file offer had an invalid file name.");
+        }
+
+        return sanitized;
     }
 
     private static int NormalizeChunkSize(int chunkSize)
@@ -1163,6 +1201,7 @@ public sealed class FileTransferService : IFileTransferService
         public int ChunkCount { get; init; }
         public int? AcceptedChunkSize { get; set; }
         public DateTimeOffset ExpiresAt { get; init; }
+        public CancellationTokenSource SendCancellation { get; init; } = new();
         public Task? SendTask { get; set; }
     }
 
@@ -1179,7 +1218,6 @@ public sealed class FileTransferService : IFileTransferService
         public int ChunkSize { get; init; }
         public int ExpectedChunkCount { get; init; }
         public int NextChunkIndex { get; set; }
-        public bool SawLastChunk { get; set; }
         public string DestinationPath { get; init; } = string.Empty;
         public string StagingDirectory { get; init; } = string.Empty;
         public string StagingPath { get; init; } = string.Empty;

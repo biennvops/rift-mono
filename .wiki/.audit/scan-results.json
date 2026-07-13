@@ -8,61 +8,61 @@
     "medium": 5,
     "provenance_state": "partial"
   },
-  "artifact": "/Users/user/Projects/rift-mono/.wiki/output/architecture-and-erds-2026-07-11.md",
+  "artifact": ".wiki/output/architecture-and-erds-2026-07-11.md",
   "findings": [
     {
       "severity": "high",
       "title": "C# revocation does not terminate live sessions",
       "evidence": [
-        "/Users/user/Projects/rift-mono/daemon-cs/Rift.Daemon.Core/PairingService.cs:176",
-        "/Users/user/Projects/rift-mono/daemon-dart/lib/src/pairing/pairing_manager.dart:290"
+        "daemon-cs/Rift.Daemon.Core/PairingService.cs:176",
+        "daemon-dart/lib/src/pairing/pairing_manager.dart:290"
       ]
     },
     {
       "severity": "high",
       "title": "C# advertises capabilities whose peer message families are still unsupported",
       "evidence": [
-        "/Users/user/Projects/rift-mono/daemon-cs/Rift.Daemon.Core/Networking/SessionBootstrap.cs:197",
-        "/Users/user/Projects/rift-mono/daemon-cs/Rift.Daemon.Core/ProtocolMessageRouter.cs:108"
+        "daemon-cs/Rift.Daemon.Core/Networking/SessionBootstrap.cs:197",
+        "daemon-cs/Rift.Daemon.Core/ProtocolMessageRouter.cs:108"
       ]
     },
     {
       "severity": "medium",
       "title": "Discovery identity hints are advertised by default",
       "evidence": [
-        "/Users/user/Projects/rift-mono/daemon-cs/Rift.Daemon.Core/Networking/DiscoveryService.cs:61",
-        "/Users/user/Projects/rift-mono/daemon-dart/lib/src/daemon.dart:463"
+        "daemon-cs/Rift.Daemon.Core/Networking/DiscoveryService.cs:61",
+        "daemon-dart/lib/src/daemon.dart:463"
       ]
     },
     {
       "severity": "medium",
       "title": "Android Ed25519 identity seed is still plaintext file-backed",
       "evidence": [
-        "/Users/user/Projects/rift-mono/daemon-dart/lib/src/crypto/identity_manager_impl.dart:30"
+        "daemon-dart/lib/src/crypto/identity_manager_impl.dart:30"
       ]
     },
     {
       "severity": "medium",
       "title": ".NET conformance and true cross-daemon interop coverage are incomplete",
       "evidence": [
-        "/Users/user/Projects/rift-mono/tests-conformance/runners/dotnet/Runner.cs:1",
-        "/Users/user/Projects/rift-mono/tests-interop/test/clipboard_transfer_test.dart:18",
-        "/Users/user/Projects/rift-mono/tests-interop/test/presence_sync_test.dart:14"
+        "tests-conformance/runners/dotnet/Runner.cs:1",
+        "tests-interop/test/clipboard_transfer_test.dart:18",
+        "tests-interop/test/presence_sync_test.dart:14"
       ]
     },
     {
       "severity": "medium",
       "title": "IPC response shape still diverges across daemons",
       "evidence": [
-        "/Users/user/Projects/rift-mono/app-flutter/lib/src/ipc/json_rpc_client.dart:92"
+        "app-flutter/lib/src/ipc/json_rpc_client.dart:92"
       ]
     },
     {
       "severity": "medium",
       "title": "Operation history is in-memory only",
       "evidence": [
-        "/Users/user/Projects/rift-mono/daemon-cs/Rift.Daemon.Core/OperationService.cs:8",
-        "/Users/user/Projects/rift-mono/daemon-dart/lib/src/operation/operation_manager.dart:6"
+        "daemon-cs/Rift.Daemon.Core/OperationService.cs:8",
+        "daemon-dart/lib/src/operation/operation_manager.dart:6"
       ]
     }
   ]

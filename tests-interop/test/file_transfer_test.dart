@@ -501,5 +501,40 @@ void main() {
         'Done',
       );
     });
+
+    test('sender records failure when receiver rejects the offered file', () async {
+      await establishSession();
+
+      final sourceFile = File(
+        '${tempDir1.path}${Platform.pathSeparator}reject-me.txt',
+      );
+      await sourceFile.writeAsString('please reject me');
+
+      final offerResult = await service1.offerFile(
+        targetDeviceId: 'rift-device2',
+        localPath: sourceFile.path,
+        fileName: 'reject-me.txt',
+        mediaType: 'text/plain',
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await service2.rejectFileOffer(
+        transferId: offerResult.transferId,
+        failureReason: 'PolicyDenied',
+        message: 'User declined',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final transfers = service1.listFileTransfers();
+      expect(
+        transfers.any(
+          (transfer) =>
+              transfer['transferId'] == offerResult.transferId &&
+              transfer['state'] == 'failed' &&
+              transfer['failureReason'] == 'PolicyDenied',
+        ),
+        isTrue,
+      );
+    });
   });
 }

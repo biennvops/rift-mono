@@ -529,7 +529,8 @@ public sealed class TlsTransport : ITransport, IDisposable
         if (existingPeer.State == TrustState.Revoked)
         {
             _trustStore.DeletePeer(deviceId);
-            return;
+            await LogSecurityEventAsync(SecurityEventTypes.ConnectionRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, "Unauthorized");
+            throw new UnauthorizedAccessException("Peer identity is revoked.");
         }
 
         if (existingPeer.State == TrustState.Blocked)

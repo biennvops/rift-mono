@@ -159,7 +159,7 @@ void main() {
       expect(peer!.state, TrustState.discovered);
     });
 
-    test('Process pairing.start sends correct event to UI and starts 120s timeout', () async {
+    test('Process pairing.start sends correct event to UI and uses peer expiry', () async {
       sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
         'type': 'pairing.start',
         'payload': {
@@ -178,8 +178,9 @@ void main() {
       expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
       expect(ipcEvents[0]['params']['fingerprint'], testFingerprint);
       
-      // Wait 120s timeout
-      // Because FakeAsync is not used, skip real 120s wait test and only verify correct state transition.
+      expect(ipcEvents[0]['params']['expiresInMs'], 120000);
+      // Because FakeAsync is not used, skip waiting for the actual timer and
+      // verify the surfaced expiry instead.
     });
 
     test('Process pairing.start still notifies UI when peer is already pairingPending', () async {

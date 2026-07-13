@@ -318,6 +318,24 @@ Future<T> joinSingleFlightOperation<T>({
   }
 }
 
+@visibleForTesting
+Future<bool> allowPeerHandshake({
+  required TrustStore trustStore,
+  required String peerDeviceId,
+}) async {
+  final record = await trustStore.getPeer(peerDeviceId);
+  if (record == null) {
+    return true;
+  }
+
+  if (record.state == TrustState.revoked) {
+    await trustStore.deletePeer(peerDeviceId);
+    return false;
+  }
+
+  return record.state != TrustState.blocked;
+}
+
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
@@ -381,17 +399,10 @@ class RiftDaemon {
         _transport!,
         _identityManager!,
         _trustStore!,
-        peerAllowanceResolver: (peerDeviceId) async {
-          final record = await _trustStore!.getPeer(peerDeviceId);
-          if (record == null) {
-            return true;
-          }
-          if (record.state == TrustState.revoked) {
-            await _trustStore!.deletePeer(peerDeviceId);
-            return true;
-          }
-          return record.state != TrustState.blocked;
-        },
+        peerAllowanceResolver: (peerDeviceId) => allowPeerHandshake(
+          trustStore: _trustStore!,
+          peerDeviceId: peerDeviceId,
+        ),
       );
 
       _sessionManager!.onTrustedSessionReady.listen((ctx) {
@@ -575,10 +586,7 @@ class RiftDaemon {
       return true;
     }
 
-    for (final state in const [
-      TrustState.trusted,
-      TrustState.blocked,
-    ]) {
+    for (final state in const [TrustState.trusted]) {
       final peers = await trustStore.getPeersByState(state);
       if (peers.isNotEmpty) {
         return false;

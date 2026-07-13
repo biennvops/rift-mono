@@ -69,9 +69,8 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         Assert.Contains(authFailures, evt => evt.FailureReason == "AuthenticationFailed");
     }
 
-    [Theory]
-    [InlineData(TrustState.Blocked)]
-    public async Task ValidatePeerBeforeHandshakeAsync_RejectsBlockedPeer(TrustState trustState)
+    [Fact]
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsBlockedPeer()
     {
         var remoteIdentity = new IdentityManager();
         remoteIdentity.EnsureIdentityInitialized();
@@ -79,7 +78,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         {
             DeviceId = remoteIdentity.GetDeviceId(),
             Ed25519PublicKey = remoteIdentity.GetEd25519PublicKey(),
-            State = trustState,
+            State = TrustState.Blocked,
             LastStateTransitionAt = DateTimeOffset.UtcNow,
             RevocationEvidence = null
         });
@@ -95,6 +94,35 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
 
         Assert.Contains("blocked", ex.Message, StringComparison.Ordinal);
         Assert.Contains(rejectionEvents, evt => evt.FailureReason == "Unauthorized");
+        Assert.NotNull(_trustStore.GetPeer(remoteIdentity.GetDeviceId()));
+    }
+
+    [Fact]
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsRevokedPeerAndDeletesStoredRecord()
+    {
+        var remoteIdentity = new IdentityManager();
+        remoteIdentity.EnsureIdentityInitialized();
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = remoteIdentity.GetDeviceId(),
+            Ed25519PublicKey = remoteIdentity.GetEd25519PublicKey(),
+            State = TrustState.Revoked,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            RevocationEvidence = "user revoked trust"
+        });
+
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _transport.ValidatePeerBeforeHandshakeAsync(remoteIdentity.GetTlsCertificate(), remoteIdentity.GetDeviceId()));
+        var rejectionEvents = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.ConnectionRejected],
+            PeerDeviceId = remoteIdentity.GetDeviceId(),
+            Limit = 10
+        });
+
+        Assert.Contains("revoked", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(rejectionEvents, evt => evt.FailureReason == "Unauthorized");
+        Assert.Null(_trustStore.GetPeer(remoteIdentity.GetDeviceId()));
     }
 
     [Fact]

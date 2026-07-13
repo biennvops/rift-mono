@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
 import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
@@ -233,6 +234,84 @@ void main() {
       expect(offers.single['fileName'], 'hello.txt');
     });
 
+    test('rejects oversized incoming file offers', () async {
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '99999999-9999-4999-8999-999999999999',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          'fileName': 'huge.bin',
+          'mediaType': 'application/octet-stream',
+          'byteSize': 33554433,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.listIncomingFileOffers(), isEmpty);
+    });
+
+    test('rejects negative byteSize in incoming file offers', () async {
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '10101010-1010-4010-8010-101010101010',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+          'fileName': 'bad.bin',
+          'mediaType': 'application/octet-stream',
+          'byteSize': -1,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.listIncomingFileOffers(), isEmpty);
+    });
+
+    test('rejects nonpositive expiresInMs in incoming file offers', () async {
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '20202020-2020-4020-8020-202020202020',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          'fileName': 'bad.bin',
+          'mediaType': 'application/octet-stream',
+          'byteSize': 5,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 0,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(service.listIncomingFileOffers(), isEmpty);
+    });
+
     test('sends file chunks and completion after peer accepts an outgoing offer', () async {
       final localFile = File('${tempDir.path}${Platform.pathSeparator}sample.txt');
       await localFile.writeAsString('hello world');
@@ -267,6 +346,103 @@ void main() {
         transport.sentMessages.any((message) => message['type'] == 'file.complete'),
         isTrue,
       );
+    });
+
+    test('rejects dot-only incoming file names before staging', () async {
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '44444444-4444-4444-8444-444444444444',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': '55555555-5555-4555-8555-555555555555',
+          'fileName': '.',
+          'mediaType': 'text/plain',
+          'byteSize': 5,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      await expectLater(
+        service.acceptFileOffer(
+          transferId: '55555555-5555-4555-8555-555555555555',
+          destinationPath:
+              '${tempDir.path}${Platform.pathSeparator}received.txt',
+        ),
+        throwsA(
+          isA<RiftException>().having(
+            (error) => error.message,
+            'message',
+            contains('invalid file name'),
+          ),
+        ),
+      );
+    });
+
+    test('uses basename for incoming staging path', () async {
+      const transferId = '66666666-6666-4666-8666-666666666666';
+      const sha256Hex =
+          '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '77777777-7777-4777-8777-777777777777',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': transferId,
+          'fileName': '../../escaped',
+          'mediaType': 'text/plain',
+          'byteSize': 5,
+          'sha256': sha256Hex,
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      final outsideFile = File(
+        '${tempDir.path}${Platform.pathSeparator}escaped.part',
+      );
+      if (await outsideFile.exists()) {
+        await outsideFile.delete();
+      }
+
+      await service.acceptFileOffer(
+        transferId: transferId,
+        destinationPath: '${tempDir.path}${Platform.pathSeparator}received.txt',
+      );
+
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '88888888-8888-4888-8888-888888888888',
+        'type': 'file.chunk',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': transferId,
+          'chunkIndex': 0,
+          'offset': 0,
+          'byteSize': 5,
+          'chunkSha256': sha256Hex,
+          'contentBase64': base64.encode(utf8.encode('hello')),
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(await outsideFile.exists(), isFalse);
     });
   });
 }
