@@ -169,7 +169,7 @@ void main() {
       expect(transport.isDisconnected, isTrue);
     });
 
-    test('Blocked or revoked peer is rejected during session.hello bootstrap', () async {
+    test('Blocked peer is rejected during session.hello bootstrap', () async {
       allowPeer = false;
 
       transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {

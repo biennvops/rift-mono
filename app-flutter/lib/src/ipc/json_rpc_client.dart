@@ -80,8 +80,7 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onOperationTransition =>
       _operationTransitionController.stream;
 
-  late final _connectionChangedController =
-      StreamController<bool>.broadcast();
+  late final _connectionChangedController = StreamController<bool>.broadcast();
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
 
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
@@ -124,6 +123,7 @@ class JsonRpcRiftClient {
     'Peers': 'peers',
     'TrustState': 'trustState',
     'DisplayName': 'displayName',
+    'Platform': 'platform',
     'Address': 'address',
     'Port': 'port',
     'TxtRecord': 'txtRecord',
@@ -144,6 +144,8 @@ class JsonRpcRiftClient {
     'LastSeenAt': 'lastSeenAt',
     'TrustedDeviceId': 'trustedDeviceId',
     'PersistedAt': 'persistedAt',
+    'Removed': 'removed',
+    'RemovedAt': 'removedAt',
     'RevokedAt': 'revokedAt',
     'Revoked': 'revoked',
     'Rejected': 'rejected',
@@ -276,8 +278,9 @@ class JsonRpcRiftClient {
     if (withoutJsonRpc.contains('Peer not found')) {
       return 'This device is no longer available.';
     }
-    if (withoutJsonRpc.contains('blocked or revoked')) {
-      return 'This device cannot be paired until its trust state is reset.';
+    if (withoutJsonRpc.contains('Peer is blocked') ||
+        withoutJsonRpc.contains('peer identity is blocked')) {
+      return 'This device is blocked and cannot be paired until it is unblocked.';
     }
     if (withoutJsonRpc.contains('No pending pairing exists')) {
       return 'There is no pending pairing request for this device.';
@@ -442,8 +445,8 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod(
-          'rift.onFileTransferProgress', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onFileTransferProgress',
+          (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferProgress',
           _asMap(params),
@@ -457,8 +460,8 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod(
-          'rift.onFileTransferCompleted', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onFileTransferCompleted',
+          (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferCompleted',
           _asMap(params),
@@ -471,8 +474,8 @@ class JsonRpcRiftClient {
           ],
         );
       });
-      _client!.registerMethod(
-          'rift.onFileTransferFailed', (json_rpc.Parameters params) {
+      _client!.registerMethod('rift.onFileTransferFailed',
+          (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileTransferFailed',
           _asMap(params),
@@ -546,7 +549,7 @@ class JsonRpcRiftClient {
     // Exponential Backoff Reconnect (infinite retries, capped delay)
     final delaySeconds = (1 << _reconnectAttempts).clamp(1, 5);
     final delay = Duration(seconds: delaySeconds);
-    
+
     _log.info(
         'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
     _reconnectTimer = Timer(delay, () {
@@ -663,9 +666,10 @@ class JsonRpcRiftClient {
       throw StateError('Not connected to daemon');
     }
     final r = await _client!.sendRequest('rift.startDiscovery').timeout(
-      const Duration(seconds: 15),
-      onTimeout: () => throw TimeoutException('Discovery request timed out'),
-    );
+          const Duration(seconds: 15),
+          onTimeout: () =>
+              throw TimeoutException('Discovery request timed out'),
+        );
     return _canonicalizeResult(r);
   }
 
@@ -687,8 +691,8 @@ class JsonRpcRiftClient {
       return pending;
     }
 
-    final future = _client!
-        .sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
+    final future =
+        _client!.sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
       _canonicalizeResult,
     );
     _pendingStartPairings[deviceId] = future;
@@ -712,11 +716,10 @@ class JsonRpcRiftClient {
       return pending;
     }
 
-    final future = _client!
-        .sendRequest('rift.startPairingByEndpoint', {
-          'address': address,
-          'port': port,
-        }).then(_canonicalizeResult);
+    final future = _client!.sendRequest('rift.startPairingByEndpoint', {
+      'address': address,
+      'port': port,
+    }).then(_canonicalizeResult);
     _pendingEndpointPairings[key] = future;
     try {
       return await future;

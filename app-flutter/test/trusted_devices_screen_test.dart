@@ -27,6 +27,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     {
       'deviceId': 'rift-trusted',
       'displayName': 'Windows Laptop',
+      'platform': 'windows',
       'trustState': 'trusted',
       'presence': 'online',
       'capabilities': ['presence.basic'],
@@ -43,6 +44,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Map<String, dynamic> deviceInfo = {
     'deviceId': 'rift-local-device',
     'displayName': 'Local Device',
+    'platform': 'linux',
   };
 
   @override
@@ -63,10 +65,12 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
@@ -180,7 +184,6 @@ void main() {
     expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
   });
 
-
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -208,6 +211,7 @@ void main() {
       {
         'deviceId': 'rift-pending',
         'displayName': 'Pending Peer',
+        'platform': 'android',
         'trustState': 'pairing_pending',
         'presence': 'offline',
         'capabilities': <String>[],
@@ -232,6 +236,7 @@ void main() {
     await tester.tap(find.text('Cancel pairing'));
     await tester.pumpAndSettle();
     expect(client.rejectCalled, isTrue);
+    expect(find.text('PENDING'), findsOneWidget);
   });
 
   testWidgets(
@@ -242,6 +247,7 @@ void main() {
       {
         'deviceId': 'rift-shared',
         'displayName': 'Linux Box',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -251,6 +257,7 @@ void main() {
       {
         'deviceId': 'rift-shared',
         'displayName': 'Linux Box',
+        'platform': 'linux',
         'address': '192.168.1.20',
         'port': 9140,
         'trustState': 'discovered',
@@ -258,6 +265,7 @@ void main() {
       {
         'deviceId': 'rift-pending',
         'displayName': 'Pending Box',
+        'platform': 'android',
         'address': '192.168.1.21',
         'port': 9141,
         'trustState': 'pairing_pending',
@@ -288,6 +296,7 @@ void main() {
       {
         'deviceId': 'rift-transition',
         'displayName': 'Phone',
+        'platform': 'android',
         'address': '192.168.1.50',
         'port': 11112,
         'trustState': 'discovered',
@@ -311,6 +320,7 @@ void main() {
       {
         'deviceId': 'rift-transition',
         'displayName': 'Phone',
+        'platform': 'android',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -341,6 +351,7 @@ void main() {
       {
         'deviceId': 'rift-capable',
         'displayName': 'Linux Workstation',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': [
@@ -365,6 +376,7 @@ void main() {
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
     expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.byIcon(Icons.terminal), findsWidgets);
   });
 
   testWidgets(
@@ -375,6 +387,7 @@ void main() {
       {
         'deviceId': 'rift-refresh',
         'displayName': 'Desk Node',
+        'platform': 'windows',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -398,6 +411,7 @@ void main() {
       {
         'deviceId': 'rift-refresh',
         'displayName': 'Desk Node',
+        'platform': 'windows',
         'trustState': 'trusted',
         'presence': 'offline',
         'capabilities': ['presence.basic'],
@@ -420,6 +434,7 @@ void main() {
       {
         'deviceId': 'rift-covered',
         'displayName': 'Covered Peer',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -451,5 +466,71 @@ void main() {
 
     expect(find.text('Covered route'), findsOneWidget);
     expect(client.listTrustedPeersCallCount, equals(callsBeforeCover));
+  });
+
+  testWidgets('TrustedDevicesScreen chooses icons from platform field',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-android',
+        'displayName': 'Pixel',
+        'platform': 'android',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['presence.basic'],
+      },
+      {
+        'deviceId': 'rift-linux',
+        'displayName': 'Linux Box',
+        'platform': 'linux',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-windows',
+        'displayName': 'Windows Box',
+        'platform': 'windows',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-macos',
+        'displayName': 'Mac Box',
+        'platform': 'macos',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-mystery',
+        'displayName': 'Mystery Box',
+        'platform': 'unknown',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.smartphone), findsOneWidget);
+    expect(find.byIcon(Icons.laptop_windows), findsAtLeastNWidgets(1));
+    expect(find.byIcon(Icons.laptop_mac), findsOneWidget);
+    expect(find.byIcon(Icons.terminal), findsAtLeastNWidgets(1));
+    await tester.scrollUntilVisible(find.text('Mystery Box'), 200);
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.devices), findsOneWidget);
   });
 }

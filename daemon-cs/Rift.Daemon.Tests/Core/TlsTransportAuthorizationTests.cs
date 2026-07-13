@@ -71,8 +71,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
 
     [Theory]
     [InlineData(TrustState.Blocked)]
-    [InlineData(TrustState.Revoked)]
-    public async Task ValidatePeerBeforeHandshakeAsync_RejectsBlockedOrRevokedPeer(TrustState trustState)
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsBlockedPeer(TrustState trustState)
     {
         var remoteIdentity = new IdentityManager();
         remoteIdentity.EnsureIdentityInitialized();
@@ -82,7 +81,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
             Ed25519PublicKey = remoteIdentity.GetEd25519PublicKey(),
             State = trustState,
             LastStateTransitionAt = DateTimeOffset.UtcNow,
-            RevocationEvidence = trustState == TrustState.Revoked ? "user-request" : null
+            RevocationEvidence = null
         });
 
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -94,7 +93,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
             Limit = 10
         });
 
-        Assert.Contains("blocked or revoked", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("blocked", ex.Message, StringComparison.Ordinal);
         Assert.Contains(rejectionEvents, evt => evt.FailureReason == "Unauthorized");
     }
 

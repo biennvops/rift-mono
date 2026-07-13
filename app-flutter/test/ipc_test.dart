@@ -15,7 +15,7 @@ class MockTransport implements IpcTransport {
   int connectionAttempts = 0;
   bool shouldFailConnect = false;
   String listTrustedPeersJson =
-      '{"Peers":[{"DeviceId":"rift-peer","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
+      '{"Peers":[{"DeviceId":"rift-peer","Platform":"windows","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
   Map<String, dynamic> startPairingResult = {
     'Fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     'PeerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
@@ -159,7 +159,7 @@ class MockTransport implements IpcTransport {
     if (shouldFailConnect) {
       throw Exception('Mock connection failure');
     }
-    
+
     isConnected = true;
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
@@ -173,6 +173,7 @@ class MockTransport implements IpcTransport {
         case 'rift.getDeviceInfo':
           _sendResult(id, {
             'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'platform': 'windows',
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
@@ -189,7 +190,8 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.approvePairing':
           _sendResult(id, {
-            'TrustedDeviceId': (decoded['params'] as Map<String, dynamic>)['deviceId'],
+            'TrustedDeviceId':
+                (decoded['params'] as Map<String, dynamic>)['deviceId'],
             'PersistedAt': '2026-06-24T02:00:00Z',
           });
           break;
@@ -271,6 +273,7 @@ void main() {
           result,
           equals({
             'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'platform': 'windows',
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
@@ -280,7 +283,8 @@ void main() {
           }));
     });
 
-    test('should canonicalize C# trust state enum values to IPC format', () async {
+    test('should canonicalize C# trust state enum values to IPC format',
+        () async {
       await client.connect();
 
       final result = await client.listTrustedPeers();
@@ -290,6 +294,7 @@ void main() {
           'peers': [
             {
               'deviceId': 'rift-peer',
+              'platform': 'windows',
               'trustState': 'pairing_pending',
               'presence': 'offline',
               'capabilities': <dynamic>[],
@@ -322,43 +327,47 @@ void main() {
         // Connect synchronously within the fake async zone
         client.connect();
         async.flushMicrotasks();
-        
+
         expect(client.isConnected, isTrue);
-        
+
         int initialAttempts = transport.connectionAttempts;
-        
+
         // Trigger disconnect
         transport.triggerDisconnect();
         async.flushMicrotasks(); // Wait for onDone to propagate
-        
-        // json_rpc_2 might use futures that we need to yield to. 
+
+        // json_rpc_2 might use futures that we need to yield to.
         // Advance time by 2 seconds to trigger the exponential backoff timer (first wait is 1s)
         async.elapse(const Duration(seconds: 2));
         async.flushMicrotasks();
-        
+
         // Should have attempted to reconnect at least once
         expect(transport.connectionAttempts, greaterThan(initialAttempts));
-        
+
         // Verify reconnect counter reset logic
         // It successfully reconnected, so attempts should be reset to 0.
         // A second disconnect should trigger attempt 1 again (waiting 1 second).
         int attemptsAfterFirstReconnect = transport.connectionAttempts;
         transport.triggerDisconnect();
         async.flushMicrotasks();
-        
-        async.elapse(const Duration(seconds: 1)); // First backoff is 1s (1 << 0)
+
+        async
+            .elapse(const Duration(seconds: 1)); // First backoff is 1s (1 << 0)
         async.flushMicrotasks();
-        
+
         // It should have attempted exactly 1 more time
-        expect(transport.connectionAttempts, equals(attemptsAfterFirstReconnect + 1));
-        
+        expect(transport.connectionAttempts,
+            equals(attemptsAfterFirstReconnect + 1));
+
         // Manually disconnect to avoid tearDown hanging outside fakeAsync
         client.disconnect();
         async.flushMicrotasks();
       });
     });
 
-    test('should deliver incoming pairing request notification with canonicalized fields', () async {
+    test(
+        'should deliver incoming pairing request notification with canonicalized fields',
+        () async {
       await client.connect();
 
       final eventFuture = client.onPairingRequest.first;
@@ -378,7 +387,8 @@ void main() {
       });
     });
 
-    test('should deliver clipboard notifications with canonicalized fields', () async {
+    test('should deliver clipboard notifications with canonicalized fields',
+        () async {
       await client.connect();
 
       final offerFuture = client.onClipboardOffer.first;
@@ -536,7 +546,8 @@ void main() {
 
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .single['params'],
         {
           'contentType': 'text/plain',
@@ -548,7 +559,8 @@ void main() {
       );
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
             .single['params'],
         {'offerId': 'offer-remote'},
       );
@@ -652,8 +664,7 @@ void main() {
       });
     });
 
-    test(
-        'should preserve failureReason on operation transition notifications',
+    test('should preserve failureReason on operation transition notifications',
         () async {
       await client.connect();
 
@@ -676,7 +687,8 @@ void main() {
       });
     });
 
-    test('Linux to Android style flow: approve sends correct IPC request and receives completion events',
+    test(
+        'Linux to Android style flow: approve sends correct IPC request and receives completion events',
         () async {
       await client.connect();
 
@@ -725,7 +737,8 @@ void main() {
           'PEER-1111-2222-3333-4444-5555-6666-7777-8888');
     });
 
-    test('Android to Linux style flow: startPairing returns fingerprints and daemon can close pending flow',
+    test(
+        'Android to Linux style flow: startPairing returns fingerprints and daemon can close pending flow',
         () async {
       await client.connect();
 

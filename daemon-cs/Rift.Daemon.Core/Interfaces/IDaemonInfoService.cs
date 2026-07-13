@@ -10,6 +10,7 @@ public sealed class DeviceInfoResult
 {
     public string DeviceId { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
+    public string Platform { get; init; } = "unknown";
     public string Fingerprint { get; init; } = string.Empty;
     public string ImplementationId { get; init; } = string.Empty;
     public string ProtocolVersion { get; init; } = string.Empty;
@@ -25,6 +26,8 @@ public sealed class QueryEventLogResult
 public sealed class TrustedPeerInfo
 {
     public string DeviceId { get; init; } = string.Empty;
+    public string? DisplayName { get; init; }
+    public string Platform { get; init; } = "unknown";
     public string TrustState { get; init; } = string.Empty;
     public string? PairedAt { get; init; }
     public string? LastSeenAt { get; init; }

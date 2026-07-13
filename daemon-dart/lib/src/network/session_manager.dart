@@ -616,10 +616,10 @@ class SessionManager {
         await _rejectSession(
           peerDeviceId,
           'Unauthorized',
-          'peer identity is blocked or revoked',
+          'peer identity is blocked',
         );
         throw SessionException(
-          'Unauthorized: peer identity is blocked or revoked',
+          'Unauthorized: peer identity is blocked',
         );
       }
       ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);

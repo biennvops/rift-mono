@@ -15,6 +15,8 @@ public enum TrustState
 public class PeerIdentity
 {
     public string DeviceId { get; init; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string Platform { get; set; } = "unknown";
     public byte[]? Ed25519PublicKey { get; set; }
     public TrustState State { get; set; }
 

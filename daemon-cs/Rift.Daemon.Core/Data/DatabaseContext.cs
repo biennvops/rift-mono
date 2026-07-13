@@ -7,7 +7,7 @@ public sealed class DatabaseContext
 {
     private const int BusyTimeoutMs = 5000;
     private static readonly Regex SqlIdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
-    private static readonly Regex ColumnDefinitionPattern = new("^[A-Za-z0-9_(), ]+$", RegexOptions.Compiled);
+    private static readonly Regex ColumnDefinitionPattern = new("^[A-Za-z0-9_(),' ]+$", RegexOptions.Compiled);
     private readonly string _connectionString;
 
     public DatabaseContext(string databasePath)
@@ -53,6 +53,8 @@ public sealed class DatabaseContext
 
             CREATE TABLE IF NOT EXISTS Peers (
                 DeviceId TEXT NOT NULL PRIMARY KEY,
+                DisplayName TEXT NULL,
+                Platform TEXT NOT NULL DEFAULT 'unknown',
                 Ed25519PublicKey BLOB NULL,
                 State TEXT NOT NULL,
                 CertificateFingerprint TEXT NULL,
@@ -90,6 +92,8 @@ public sealed class DatabaseContext
 
         EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
         EnsureLocalIdentitySecretColumnsNullable(connection);
+        EnsureColumnExists(connection, "Peers", "DisplayName", "TEXT NULL");
+        EnsureColumnExists(connection, "Peers", "Platform", "TEXT NOT NULL DEFAULT 'unknown'");
         EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
     }
 
@@ -202,8 +206,7 @@ public sealed class DatabaseContext
             columnDefinition.Contains("--", StringComparison.Ordinal) ||
             columnDefinition.Contains("/*", StringComparison.Ordinal) ||
             columnDefinition.Contains("*/", StringComparison.Ordinal) ||
-            columnDefinition.Contains('"', StringComparison.Ordinal) ||
-            columnDefinition.Contains('\'', StringComparison.Ordinal))
+            columnDefinition.Contains('"', StringComparison.Ordinal))
         {
             throw new ArgumentException($"Unsafe SQL column definition '{columnDefinition}'.", nameof(columnDefinition));
         }

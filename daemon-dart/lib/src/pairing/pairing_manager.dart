@@ -91,7 +91,6 @@ class PairingManager {
         await _rejectPairing(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
       case 'rift.unpair':
-        // Handle trust revocation (revoked)
         await _unpair(
           RpcUtils.requireStringParam(params, 'deviceId'),
           reason: RpcUtils.requireStringParam(params, 'reason'),
@@ -111,8 +110,12 @@ class PairingManager {
     RiftLog.debug('[Pairing] Sending pairing.start to $peerDeviceId');
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
-    if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
-      throw const RiftUnauthorizedException('Peer is blocked or revoked');
+    if (record.state == TrustState.revoked) {
+      await trustStore.deletePeer(peerDeviceId);
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    if (record.state == TrustState.blocked) {
+      throw const RiftUnauthorizedException('Peer is blocked');
     }
     
     // Transition state to pairingPending
@@ -299,8 +302,7 @@ class PairingManager {
     if (record == null) {
       throw RiftNotFoundException('Peer not found in TrustStore: $peerDeviceId');
     }
-    // Transition to revoked to preserve negative-trust evidence
-    await trustStore.transitionState(peerDeviceId, record.state, TrustState.revoked);
+    await trustStore.deletePeer(peerDeviceId);
     sessionManager.disconnectPeer(peerDeviceId);
     
     onIpcEvent({
@@ -309,7 +311,7 @@ class PairingManager {
       'params': {
         'deviceId': peerDeviceId,
         'previousState': record.state.toJson(),
-        'newState': TrustState.revoked.toJson(),
+        'newState': 'removed',
         'reason': reason,
       }
     });
@@ -326,11 +328,7 @@ class PairingManager {
       );
     }
 
-    await trustStore.transitionState(
-      peerDeviceId,
-      TrustState.revoked,
-      TrustState.discovered,
-    );
+    await trustStore.deletePeer(peerDeviceId);
 
     onIpcEvent({
       'jsonrpc': '2.0',
@@ -338,8 +336,8 @@ class PairingManager {
       'params': {
         'deviceId': peerDeviceId,
         'previousState': TrustState.revoked.toJson(),
-        'newState': TrustState.discovered.toJson(),
-        'reason': 'Peer reset from revoked by user',
+        'newState': 'removed',
+        'reason': 'Legacy revoked peer removed by user',
       }
     });
   }
@@ -372,8 +370,12 @@ class PairingManager {
           return;
         }
         
-        // If blocked or revoked, silently drop the packet
-        if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
+        if (record.state == TrustState.revoked) {
+          await trustStore.deletePeer(peerDeviceId);
+        }
+
+        // If blocked, silently drop the packet
+        if (record.state == TrustState.blocked) {
           return;
         }
 
@@ -525,11 +527,24 @@ class PairingManager {
       );
       await trustStore.upsertPeer(record);
     } else {
-      // Trusted, blocked, and revoked peers keep their pinned certificate until
-      // an explicit re-pair / trust-state reset occurs.
+      // Trusted and blocked peers keep their pinned certificate until an
+      // explicit local action changes trust.
       if (record.state == TrustState.trusted ||
-          record.state == TrustState.blocked ||
-          record.state == TrustState.revoked) {
+          record.state == TrustState.blocked) {
+        return;
+      }
+
+      if (record.state == TrustState.revoked) {
+        await trustStore.deletePeer(peerDeviceId);
+        final replacement = PeerRecord(
+          deviceId: peerDeviceId,
+          displayName: record.displayName,
+          certDer: certDer,
+          state: TrustState.discovered,
+          pairedAt: null,
+          updatedAt: DateTime.now().toUtc(),
+        );
+        await trustStore.upsertPeer(replacement);
         return;
       }
 

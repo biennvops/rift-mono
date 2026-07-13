@@ -17,7 +17,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   
   int _trustedCount = 0;
   int _blockedCount = 0;
-  int _revokedCount = 0;
+  int _pendingCount = 0;
   int _discoveredCount = 0;
   
   List<Map<String, dynamic>> _recentEvents = [];
@@ -121,7 +121,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
 
       int trusted = 0;
       int blocked = 0;
-      int revoked = 0;
+      int pending = 0;
       
       for (final p in peers) {
         final state = p['trustState']?.toString() ?? 'unknown';
@@ -129,8 +129,8 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
           trusted++;
         } else if (state == 'blocked') {
           blocked++;
-        } else if (state == 'revoked') {
-          revoked++;
+        } else if (state == 'pairing_pending') {
+          pending++;
         }
       }
       
@@ -148,7 +148,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
         setState(() {
           _trustedCount = trusted;
           _blockedCount = blocked;
-          _revokedCount = revoked;
+          _pendingCount = pending;
           _discoveredCount = discovered.length;
           _recentEvents = events;
           _criticalAlert = alert;
@@ -464,11 +464,11 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                       ),
                       _buildBentoCard(
                         context: context,
-                        label: 'REVOKED',
-                        icon: Icons.history_toggle_off,
-                        count: _revokedCount,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        labelColor: theme.colorScheme.onSurfaceVariant,
+                        label: 'PENDING',
+                        icon: Icons.hourglass_top,
+                        count: _pendingCount,
+                        color: Colors.amber.shade700,
+                        labelColor: Colors.amber.shade700,
                       ),
                       _buildBentoCard(
                         context: context,

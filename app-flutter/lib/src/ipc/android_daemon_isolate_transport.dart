@@ -280,7 +280,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       return false;
     }
 
-    for (final trustState in const ['blocked', 'revoked']) {
+    for (final trustState in const ['blocked']) {
       final result = await _invokeDaemonBootstrapRpc(
         'rift.listPeersByState',
         {'trustState': trustState},

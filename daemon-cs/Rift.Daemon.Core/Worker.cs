@@ -158,6 +158,6 @@ public class Worker(
     internal static bool ShouldAutoStartDiscovery(ITrustStore trustStore)
     {
         return !trustStore.GetAllPeers().Any(peer =>
-            peer.State is TrustState.Trusted or TrustState.Blocked or TrustState.Revoked);
+            peer.State is TrustState.Trusted or TrustState.Blocked);
     }
 }

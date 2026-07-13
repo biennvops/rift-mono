@@ -51,9 +51,15 @@ public sealed class PairingService : IPairingService
         var peer = GetExistingPeer(deviceId);
         EnsurePeerHasPublicKey(peer);
 
-        if (peer.State is TrustState.Blocked or TrustState.Revoked)
+        if (peer.State == TrustState.Revoked)
         {
-            throw CreateRpcException(-32004, "Peer is blocked or revoked.");
+            _trustStore.DeletePeer(deviceId);
+            throw CreateRpcException(-32009, "Peer not found.");
+        }
+
+        if (peer.State == TrustState.Blocked)
+        {
+            throw CreateRpcException(-32004, "Peer is blocked.");
         }
 
         if (peer.State is not (TrustState.Discovered or TrustState.PairingPending))
@@ -179,10 +185,12 @@ public sealed class PairingService : IPairingService
         _trustStore.DeletePeer(deviceId);
 
         var revokedAt = DateTimeOffset.UtcNow;
-        await LogEventAsync(SecurityEventTypes.TrustRevoked, deviceId, SecurityEventOutcome.Success, reason);
-        await NotifyTrustChangedAsync(deviceId, ToJsonState(peer.State), "revoked", reason);
+        await LogEventAsync(SecurityEventTypes.TrustRemoved, deviceId, SecurityEventOutcome.Success, reason);
+        await NotifyTrustChangedAsync(deviceId, ToJsonState(peer.State), "removed", reason);
         return new RevokeTrustResult
         {
+            Removed = true,
+            RemovedAt = revokedAt.ToString("O"),
             Revoked = true,
             RevokedAt = revokedAt.ToString("O")
         };
@@ -214,13 +222,9 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, "Peer is not in revoked state.");
         }
 
-        if (!_trustStore.TryTransition(deviceId, TrustState.Discovered))
-        {
-            throw CreateRpcException(-32008, "Failed to reset revoked peer.");
-        }
-
-        await LogEventAsync(SecurityEventTypes.TrustTransitioned, deviceId, SecurityEventOutcome.Success, null);
-        await NotifyTrustChangedAsync(deviceId, "revoked", "discovered", "Peer reset from revoked locally.");
+        _trustStore.DeletePeer(deviceId);
+        await LogEventAsync(SecurityEventTypes.TrustRemoved, deviceId, SecurityEventOutcome.Success, "Legacy revoked peer removed locally.");
+        await NotifyTrustChangedAsync(deviceId, "revoked", "removed", "Legacy revoked peer removed locally.");
         return new ResetRevokedPeerResult { Reset = true };
     }
 

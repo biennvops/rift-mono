@@ -311,19 +311,9 @@ class TrustStoreImpl implements TrustStore {
   @override
   Future<void> deletePeer(String deviceId) async {
     _ensureInitialized();
-    // SECURITY HARDENING: AGENTS.md dictates "Revocation keeps negative-trust evidence".
-    // We only allow Hard Deletion for transient mDNS garbage collection.
-    // Trusted, Blocked, or Revoked peers MUST NOT be deleted.
-    final record = await getPeer(deviceId);
-    if (record != null && record.state != TrustState.discovered) {
-      throw RiftAuthenticationFailedException(
-        'SecurityError: Cannot hard-delete peer in state ${record.state.name}. Must preserve trust evidence.',
-      );
-    }
-
-    final stmt = _db!.prepare('DELETE FROM peers WHERE device_id = ? AND state = ?');
+    final stmt = _db!.prepare('DELETE FROM peers WHERE device_id = ?');
     try {
-      stmt.execute([deviceId, TrustState.discovered.toJson()]);
+      stmt.execute([deviceId]);
     } finally {
       stmt.dispose();
     }

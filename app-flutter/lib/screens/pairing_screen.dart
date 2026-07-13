@@ -780,36 +780,6 @@ class _PairingScreenState extends State<PairingScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24.0),
                       child: Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.error)),
                     ),
-                    if (_error!.contains('until its trust state is reset') && _deviceId != null) ...[
-                      const SizedBox(height: 24),
-                      ElevatedButton.icon(
-                        onPressed: () async {
-                          final client = context.read<JsonRpcRiftClient>();
-                          setState(() {
-                            _busy = true;
-                            _error = null;
-                            _status = 'Resetting trust state...';
-                          });
-                          try {
-                            await client.resetRevokedPeer(_deviceId!);
-                            // Sau khi reset, tự động thử kết nối lại
-                            _startPairing(_deviceId!);
-                          } catch (e) {
-                            if (!mounted) return;
-                            setState(() {
-                              _busy = false;
-                              _error = 'Reset failed: $e';
-                            });
-                          }
-                        },
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Khôi phục kết nối (Reset)'),
-                        style: ElevatedButton.styleFrom(
-                          foregroundColor: theme.colorScheme.onPrimary,
-                          backgroundColor: theme.colorScheme.primary,
-                        ),
-                      ),
-                    ]
                   ]
                 ],
               ),

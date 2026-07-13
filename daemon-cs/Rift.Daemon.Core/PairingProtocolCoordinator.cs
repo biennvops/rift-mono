@@ -464,6 +464,12 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
                 ? displayNameElement.GetString()
                 : null;
+            if (!string.IsNullOrWhiteSpace(displayName))
+            {
+                peer.DisplayName = displayName;
+                peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+                _trustStore.SavePeer(peer);
+            }
 
             await NotifyPairingRequestAsync(
                 peerDeviceId,

@@ -1,4 +1,5 @@
 using Rift.Daemon.Core.Interfaces;
+using System.Runtime.InteropServices;
 
 namespace Rift.Daemon.Core;
 
@@ -26,6 +27,7 @@ public sealed class DaemonInfoService(
         {
             DeviceId = identityManager.GetDeviceId(),
             DisplayName = identityManager.GetDisplayName(),
+            Platform = GetLocalPlatform(),
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",
@@ -53,6 +55,8 @@ public sealed class DaemonInfoService(
                 return new TrustedPeerInfo
                 {
                     DeviceId = peer.DeviceId,
+                    DisplayName = peer.DisplayName,
+                    Platform = NormalizePlatform(peer.Platform, peer.DisplayName),
                     TrustState = peer.State.ToString().ToLowerInvariant(),
                     PairedAt = peer.State == TrustState.Trusted ? peer.LastStateTransitionAt.ToString("O") : null,
                     LastSeenAt = presence?.LastSeenAt,
@@ -79,6 +83,8 @@ public sealed class DaemonInfoService(
             .Select(x => new DiscoveredPeerInfo
             {
                 DeviceId = x.Peer.DeviceId,
+                DisplayName = x.Peer.DisplayName,
+                Platform = NormalizePlatform(x.Peer.Platform, x.Peer.DisplayName),
                 InstanceId = x.Peer.DeviceId,
                 Address = x.Endpoint!.Address,
                 Port = x.Endpoint!.Port,
@@ -99,6 +105,61 @@ public sealed class DaemonInfoService(
             Peers = activeDiscoveries.Peers.Concat(discoveredFromTrustStore).ToArray(),
             IsDiscovering = activeDiscoveries.IsDiscovering
         };
+    }
+
+    private static string GetLocalPlatform()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return "windows";
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            return "macos";
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return "linux";
+        }
+
+        return "unknown";
+    }
+
+    internal static string NormalizePlatform(string? platform, string? displayName)
+    {
+        if (!string.IsNullOrWhiteSpace(platform) && platform != "unknown")
+        {
+            return platform;
+        }
+
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return "unknown";
+        }
+
+        if (displayName.StartsWith("Android ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "android";
+        }
+
+        if (displayName.StartsWith("Windows ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "windows";
+        }
+
+        if (displayName.StartsWith("macOS ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "macos";
+        }
+
+        if (displayName.StartsWith("Linux ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "linux";
+        }
+
+        return "unknown";
     }
 
     public GetPeerPresenceResult GetPeerPresence(string deviceId)

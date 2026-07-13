@@ -181,7 +181,7 @@ void main() {
       await store.appendSecurityEvent(
         SecurityEventRecord(
           eventId: 'evt-2',
-          eventType: 'trust.revoked',
+          eventType: 'trust.removed',
           severity: 'warning',
           localDeviceId: 'rift-local',
           peerDeviceId: 'rift-peer-b',

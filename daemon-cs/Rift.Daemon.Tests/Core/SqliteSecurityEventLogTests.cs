@@ -34,7 +34,7 @@ public sealed class SqliteSecurityEventLogTests : IDisposable
 
         await _eventLog.LogEventAsync(new SecurityEventRecord
         {
-            EventType = SecurityEventTypes.TrustRevoked,
+            EventType = SecurityEventTypes.TrustRemoved,
             Severity = SecurityEventSeverity.Warning,
             LocalDeviceId = "rift-local",
             PeerDeviceId = "rift-peer-b",

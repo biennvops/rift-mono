@@ -98,6 +98,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     rejectedDeviceId = deviceId;
     return {'rejected': true};
   }
+
 }
 
 void main() {
@@ -361,4 +362,5 @@ void main() {
       findsOneWidget,
     );
   });
+
 }

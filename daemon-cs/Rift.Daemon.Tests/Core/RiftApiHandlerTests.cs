@@ -454,7 +454,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task ResetRevokedPeerAsync_ReturnsPeerToDiscovered()
+    public async Task ResetRevokedPeerAsync_RemovesLegacyRevokedPeer()
     {
         var deviceId = "rift-revoked-peer";
         _trustStore.SavePeer(new PeerIdentity
@@ -470,9 +470,28 @@ public sealed class RiftApiHandlerTests : IDisposable
         var peer = _trustStore.GetPeer(deviceId);
 
         Assert.True(result.Reset);
-        Assert.NotNull(peer);
-        Assert.Equal(TrustState.Discovered, peer!.State);
-        Assert.Null(peer.RevocationEvidence);
+        Assert.Null(peer);
+    }
+
+    [Fact]
+    public async Task RevokeTrustAsync_DeletesPeerForForgetFlow()
+    {
+        var deviceId = "rift-trusted-peer";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            DisplayName = "Linux Box",
+            Platform = "linux",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var result = await _handler.RevokeTrustAsync(deviceId, "user-request");
+        var peer = _trustStore.GetPeer(deviceId);
+
+        Assert.True(result.Revoked);
+        Assert.Null(peer);
     }
 
     [Fact]

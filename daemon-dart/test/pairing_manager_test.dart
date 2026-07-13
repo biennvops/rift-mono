@@ -236,7 +236,7 @@ void main() {
       expect(ipcEvents[0]['method'], 'rift.onPairingComplete');
     });
 
-    test('resetRevokedPeer returns revoked peer to discovered', () async {
+    test('resetRevokedPeer removes legacy revoked peer record', () async {
       await trustStore.upsertPeer(PeerRecord(
         deviceId: 'rift-revoked',
         certDer: testCertDer,
@@ -252,11 +252,10 @@ void main() {
       });
 
       final peer = await trustStore.getPeer('rift-revoked');
-      expect(peer, isNotNull);
-      expect(peer!.state, TrustState.discovered);
+      expect(peer, isNull);
       expect(ipcEvents.single['method'], 'rift.onTrustChanged');
       expect(ipcEvents.single['params']['previousState'], 'revoked');
-      expect(ipcEvents.single['params']['newState'], 'discovered');
+      expect(ipcEvents.single['params']['newState'], 'removed');
     });
 
     test('approvePairing keeps pairing pending if network send fails', () async {
@@ -417,7 +416,7 @@ void main() {
       expect(peer!.state, TrustState.discovered);
     });
 
-    test('Revoked peer sending pairing.start is ignored', () async {
+    test('Legacy revoked peer sending pairing.start is treated as forgotten', () async {
       await trustStore.upsertPeer(PeerRecord(
         deviceId: 'rift-revoked',
         certDer: testCertDer,
@@ -433,8 +432,9 @@ void main() {
       await Future.delayed(Duration.zero);
 
       final peer = await trustStore.getPeer('rift-revoked');
-      expect(peer!.state, TrustState.revoked);
-      expect(ipcEvents.where((event) => event['method'] == 'rift.onPairingRequest'), isEmpty);
+      expect(peer, isNotNull);
+      expect(peer!.state, TrustState.pairingPending);
+      expect(ipcEvents.where((event) => event['method'] == 'rift.onPairingRequest'), isNotEmpty);
     });
 
     test('Trusted peer sending pairing.start is ignored', () async {
@@ -522,9 +522,10 @@ void main() {
       });
 
       final peer = await trustStore.getPeer('rift-peer');
-      expect(peer!.state, TrustState.revoked);
+      expect(peer, isNull);
       expect(sessionManager.disconnectedPeers, contains('rift-peer'));
       expect(ipcEvents.single['params']['reason'], 'User requested unpair');
+      expect(ipcEvents.single['params']['newState'], 'removed');
     });
 
     test('Unblock peer returns blocked device to discovered', () async {

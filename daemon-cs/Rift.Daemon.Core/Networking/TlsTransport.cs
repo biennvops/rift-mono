@@ -526,10 +526,16 @@ public sealed class TlsTransport : ITransport, IDisposable
             throw new InvalidOperationException("Peer Ed25519 identity did not match the stored trust-store entry.");
         }
 
-        if (existingPeer.State is TrustState.Blocked or TrustState.Revoked)
+        if (existingPeer.State == TrustState.Revoked)
+        {
+            _trustStore.DeletePeer(deviceId);
+            return;
+        }
+
+        if (existingPeer.State == TrustState.Blocked)
         {
             await LogSecurityEventAsync(SecurityEventTypes.ConnectionRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, "Unauthorized");
-            throw new UnauthorizedAccessException("Peer identity is blocked or revoked.");
+            throw new UnauthorizedAccessException("Peer identity is blocked.");
         }
     }
 

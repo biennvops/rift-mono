@@ -184,7 +184,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  'Thiết bị sẽ bị ngắt kết nối và xóa khỏi danh sách tin cậy. Bạn sẽ phải xác nhận lại (pair) nếu muốn kết nối lại trong tương lai.',
+                  'Thiết bị sẽ bị xóa khỏi danh sách đã tin cậy trên máy này. Khi thấy lại nó trong danh sách khám phá, bạn có thể pair từ đầu như một thiết bị mới.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
@@ -241,7 +241,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   ),
                   icon: const Icon(Icons.delete_forever),
                   label: const Text(
-                    'Xóa thiết bị',
+                    'Quên thiết bị',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -397,8 +397,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     if (!confirmed) return;
     
     try {
-      await client.revokeTrust(deviceId, 'User revoked from Device Detail');
-      if (mounted) Navigator.of(context).pop();
+      await client.revokeTrust(deviceId, 'User removed trusted device from Device Detail');
+      if (mounted) {
+        Navigator.of(context).pop({
+          'action': 'forgotten',
+          'deviceId': deviceId,
+          'displayName': displayName,
+        });
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
@@ -1201,7 +1207,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               padding: const EdgeInsets.symmetric(vertical: 16),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
-            child: const Text('Xóa thiết bị (Forget)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: const Text('Quên thiết bị', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
