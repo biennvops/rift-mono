@@ -46,16 +46,12 @@ class FileTransferService {
   Stream<Map<String, dynamic>> get onTransferFailed => _failedController.stream;
 
   FileTransferService({
-    required SessionManager sessionManager,
-    required TrustStore trustStore,
-    required OperationManager operationManager,
-    required String localDeviceId,
-    required String storagePath,
-  })  : _sessionManager = sessionManager,
-        _trustStore = trustStore,
-        _operationManager = operationManager,
-        _localDeviceId = localDeviceId,
-        _storagePath = storagePath {
+    required this._sessionManager,
+    required this._trustStore,
+    required this._operationManager,
+    required this._localDeviceId,
+    required this._storagePath,
+  }) {
     _messageSub = _sessionManager.onMessage.asyncMap(_handleMessage).listen((_) {});
   }
 
@@ -927,7 +923,7 @@ class _OutgoingTransferState {
   final int chunkSize;
   final int chunkCount;
   final DateTime expiresAt;
-  int bytesTransferred;
+  int bytesTransferred = 0;
   String state;
   String? failureReason;
 
@@ -944,8 +940,6 @@ class _OutgoingTransferState {
     required this.chunkCount,
     required this.expiresAt,
     required this.state,
-    this.bytesTransferred = 0,
-    this.failureReason,
   });
 
   FileTransferInfo toInfo() => FileTransferInfo(
@@ -976,8 +970,8 @@ class _IncomingTransferState {
   final String stagingDirectory;
   final String stagingPath;
   final bool overwrite;
-  int bytesTransferred;
-  int nextChunkIndex;
+  int bytesTransferred = 0;
+  int nextChunkIndex = 0;
   String state;
   String? failureReason;
 
@@ -996,9 +990,6 @@ class _IncomingTransferState {
     required this.stagingPath,
     required this.overwrite,
     required this.state,
-    this.bytesTransferred = 0,
-    this.nextChunkIndex = 0,
-    this.failureReason,
   });
 
   FileTransferInfo toInfo() => FileTransferInfo(

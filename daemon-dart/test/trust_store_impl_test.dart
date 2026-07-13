@@ -412,7 +412,7 @@ void main() {
       store.dispose();
     });
 
-    test('Should forbid hard-delete for non-discovered peers (preserve negative-trust evidence)', () async {
+    test('Should allow hard-delete for forget flow peers', () async {
       final store = TrustStoreImpl(':memory:');
       await store.initialize();
 
@@ -425,10 +425,9 @@ void main() {
         ),
       );
 
-      expect(
-        () => store.deletePeer('rift-peer-no-delete'),
-        throwsA(isA<RiftAuthenticationFailedException>()),
-      );
+      await store.deletePeer('rift-peer-no-delete');
+      final loaded = await store.getPeer('rift-peer-no-delete');
+      expect(loaded, isNull);
 
       store.dispose();
     });

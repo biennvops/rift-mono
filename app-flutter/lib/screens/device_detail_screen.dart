@@ -522,8 +522,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<String?> _showDestinationFallbackDialog(String suggestedFileName) async {
+    final resolvedDefaultPath = await _defaultDestinationPath(suggestedFileName);
+    if (!mounted) {
+      return null;
+    }
+
     final destinationController = TextEditingController(
-      text: await _defaultDestinationPath(suggestedFileName) ??
+      text: resolvedDefaultPath ??
           (Platform.isWindows
               ? r'C:\Users\Public\Downloads\' + suggestedFileName
               : '/tmp/$suggestedFileName'),
@@ -687,13 +692,16 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
     final dialogResult = await _pickSendFileRequest();
     if (dialogResult == null) return;
+    if (!mounted) return;
+
+    final client = context.read<JsonRpcRiftClient>();
+    final messenger = ScaffoldMessenger.of(context);
 
     setState(() {
       _isSendingFile = true;
     });
 
     try {
-      final client = context.read<JsonRpcRiftClient>();
       final result = await client.offerFile(
         targetDeviceId: deviceId,
         localPath: dialogResult['localPath']!,
@@ -706,7 +714,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
               'Sent file offer ${result['fileName'] ?? dialogResult['localPath']}'),
@@ -714,7 +722,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
       );
     } finally {
@@ -733,21 +741,24 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     if (destinationPath == null || destinationPath.isEmpty) {
       return;
     }
+    if (!mounted) return;
+
+    final client = context.read<JsonRpcRiftClient>();
+    final messenger = ScaffoldMessenger.of(context);
 
     try {
-      final client = context.read<JsonRpcRiftClient>();
       await client.acceptFileOffer(
         transferId: offer['transferId']?.toString() ?? '',
         destinationPath: destinationPath,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('Accepted ${offer['fileName'] ?? 'file'}')),
       );
       await _loadIncomingFileOffers();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
       );
     }
