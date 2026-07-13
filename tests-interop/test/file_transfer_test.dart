@@ -402,24 +402,20 @@ void main() {
       await Future.wait([wait1, wait2]);
 
       transport1.onSentMessage.listen((message) {
-        Future<void>.delayed(Duration.zero, () {
-          transport2.simulateIncomingMessage(
-            'rift-device1',
-            testCertDer1,
-            pubKeyBytes1,
-            message,
-          );
-        });
+        transport2.simulateIncomingMessage(
+          'rift-device1',
+          testCertDer1,
+          pubKeyBytes1,
+          message,
+        );
       });
       transport2.onSentMessage.listen((message) {
-        Future<void>.delayed(Duration.zero, () {
-          transport1.simulateIncomingMessage(
-            'rift-device2',
-            testCertDer2,
-            pubKeyBytes2,
-            message,
-          );
-        });
+        transport1.simulateIncomingMessage(
+          'rift-device2',
+          testCertDer2,
+          pubKeyBytes2,
+          message,
+        );
       });
     }
 
