@@ -368,6 +368,11 @@ class FileTransferService {
       );
       final transferId = payload['transferId'] as String?;
       if (transferId != null) {
+        await _failTransferLocally(
+          transferId,
+          _failureReasonForError(error),
+          error.toString(),
+        );
         await _trySendCancel(
           msg.peerDeviceId,
           transferId,
@@ -726,6 +731,23 @@ class FileTransferService {
     _incomingTransfers.remove(transfer.transferId);
     _remoteOffers.remove(transfer.transferId);
     await _deleteDirectoryIfExists(transfer.stagingDirectory);
+  }
+
+  Future<void> _failTransferLocally(
+    String transferId,
+    String failureReason,
+    String? message,
+  ) async {
+    final incoming = _incomingTransfers[transferId];
+    if (incoming != null) {
+      await _failIncomingTransfer(incoming, failureReason, message);
+      return;
+    }
+
+    final outgoing = _outgoingTransfers[transferId];
+    if (outgoing != null) {
+      await _failOutgoingTransfer(outgoing, failureReason, message);
+    }
   }
 
   void _transitionOperationToFailed(String operationId, String failureReason) {

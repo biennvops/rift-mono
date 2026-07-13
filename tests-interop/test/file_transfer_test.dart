@@ -467,6 +467,9 @@ void main() {
       final completedFuture = service2.onTransferCompleted.first.timeout(
         const Duration(seconds: 5),
       );
+      final failedFuture = service2.onTransferFailed.first.timeout(
+        const Duration(seconds: 5),
+      );
       final destinationPath =
           '${tempDir2.path}${Platform.pathSeparator}received-hello.txt';
 
@@ -478,8 +481,13 @@ void main() {
 
       expect(acceptResult.transferId, offerResult.transferId);
 
-      final completed = await completedFuture;
+      final outcome = await Future.any<dynamic>([
+        completedFuture.then((value) => ('completed', value)),
+        failedFuture.then((value) => ('failed', value)),
+      ]);
       final destinationFile = File(destinationPath);
+      expect(outcome.$1, 'completed', reason: 'transfer failed: ${outcome.$2}');
+      final completed = outcome.$2 as Map<String, dynamic>;
 
       expect(completed['transferId'], offerResult.transferId);
       expect(await destinationFile.exists(), isTrue);
