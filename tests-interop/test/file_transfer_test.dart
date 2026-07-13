@@ -164,6 +164,8 @@ class FakeIdentityManager implements IdentityManager {
 
   @override
   String get deviceId => _deviceId;
+  @override
+  String get displayName => 'Interop Device $_deviceId';
 
   @override
   Uint8List getDeviceFingerprint() => Uint8List(32);

@@ -112,7 +112,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _clipboardManager ??= context.read<DesktopClipboardManager?>();
+    if (_clipboardManager != null) {
+      return;
+    }
+
+    try {
+      _clipboardManager = context.read<DesktopClipboardManager?>();
+    } on ProviderNotFoundException {
+      _clipboardManager = null;
+    }
   }
 
   static const _clipboardChannel =
