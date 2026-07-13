@@ -757,8 +757,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                   Text(
                     deviceId,
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer.withOpacity(
-                        0.82,
+                      color: theme.colorScheme.onPrimaryContainer.withValues(
+                        alpha: 0.82,
                       ),
                     ),
                   ),

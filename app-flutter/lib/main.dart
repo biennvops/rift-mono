@@ -333,6 +333,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
+    final client = context.read<JsonRpcRiftClient>();
     final transferId = event['transferId']?.toString();
     final fileName = event['fileName']?.toString();
     final sourceDeviceId = event['sourceDeviceId']?.toString() ?? 'trusted device';
@@ -358,14 +359,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
       _maybeNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 
-      final client = context.read<JsonRpcRiftClient>();
       await client.acceptFileOffer(
         transferId: transferId,
         destinationPath: destinationPath,
         overwrite: false,
       );
     } catch (error) {
-      final client = context.read<JsonRpcRiftClient>();
       try {
         await client.rejectFileOffer(
           transferId: transferId,

@@ -522,6 +522,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               ? r'C:\Users\Public\Downloads\' + suggestedFileName
               : '/tmp/$suggestedFileName'),
     );
+    if (!mounted) {
+      return null;
+    }
     String? validationError;
 
     final result = await showDialog<String>(
@@ -676,6 +679,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _sendFile() async {
+    final client = context.read<JsonRpcRiftClient>();
     final deviceId = peer['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
 
@@ -687,7 +691,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     });
 
     try {
-      final client = context.read<JsonRpcRiftClient>();
       final result = await client.offerFile(
         targetDeviceId: deviceId,
         localPath: dialogResult['localPath']!,
@@ -721,6 +724,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<void> _acceptIncomingOffer(Map<String, dynamic> offer) async {
+    final client = context.read<JsonRpcRiftClient>();
     final destinationPath = await _pickDestinationPath(
       offer['fileName']?.toString() ?? 'incoming.bin',
     );
@@ -729,7 +733,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
 
     try {
-      final client = context.read<JsonRpcRiftClient>();
       await client.acceptFileOffer(
         transferId: offer['transferId']?.toString() ?? '',
         destinationPath: destinationPath,
