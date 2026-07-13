@@ -118,11 +118,11 @@ class FakeTrustStore implements TrustStore {
 
   @override
   Future<PeerRecord?> getPeer(String deviceId) async => PeerRecord(
-        deviceId: deviceId,
-        certDer: Uint8List(32),
-        state: TrustState.trusted,
-        updatedAt: DateTime.now().toUtc(),
-      );
+    deviceId: deviceId,
+    certDer: Uint8List(32),
+    state: TrustState.trusted,
+    updatedAt: DateTime.now().toUtc(),
+  );
 
   @override
   Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
@@ -173,7 +173,9 @@ void main() {
         FakeTrustStore(),
       );
       operationManager = OperationManager();
-      tempDir = await Directory.systemTemp.createTemp('rift-file-transfer-test');
+      tempDir = await Directory.systemTemp.createTemp(
+        'rift-file-transfer-test',
+      );
       service = FileTransferService(
         sessionManager: sessionManager,
         trustStore: FakeTrustStore(),
@@ -228,7 +230,10 @@ void main() {
       final notification = await offerFuture;
       final offers = service.listIncomingFileOffers();
 
-      expect(notification['transferId'], '22222222-2222-4222-8222-222222222222');
+      expect(
+        notification['transferId'],
+        '22222222-2222-4222-8222-222222222222',
+      );
       expect(notification['sourceDeviceId'], 'rift-peer');
       expect(offers, hasLength(1));
       expect(offers.single['fileName'], 'hello.txt');
@@ -312,41 +317,50 @@ void main() {
       expect(service.listIncomingFileOffers(), isEmpty);
     });
 
-    test('sends file chunks and completion after peer accepts an outgoing offer', () async {
-      final localFile = File('${tempDir.path}${Platform.pathSeparator}sample.txt');
-      await localFile.writeAsString('hello world');
+    test(
+      'sends file chunks and completion after peer accepts an outgoing offer',
+      () async {
+        final localFile = File(
+          '${tempDir.path}${Platform.pathSeparator}sample.txt',
+        );
+        await localFile.writeAsString('hello world');
 
-      final result = await service.offerFile(
-        targetDeviceId: 'rift-peer',
-        localPath: localFile.path,
-      );
+        final result = await service.offerFile(
+          targetDeviceId: 'rift-peer',
+          localPath: localFile.path,
+        );
 
-      expect(transport.sentMessages.first['type'], 'file.offer');
+        expect(transport.sentMessages.first['type'], 'file.offer');
 
-      transport.simulateIncomingMessage('rift-peer', {
-        'rift': '0.1-draft',
-        'messageId': '33333333-3333-4333-8333-333333333333',
-        'type': 'file.accept',
-        'sourceDeviceId': 'rift-peer',
-        'destinationDeviceId': 'rift-local',
-        'payload': {
-          'transferId': result.transferId,
-          'receivingDeviceId': 'rift-peer',
-          'chunkSize': 262144,
-        },
-      });
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '33333333-3333-4333-8333-333333333333',
+          'type': 'file.accept',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': result.transferId,
+            'receivingDeviceId': 'rift-peer',
+            'chunkSize': 262144,
+          },
+        });
 
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
 
-      expect(
-        transport.sentMessages.any((message) => message['type'] == 'file.chunk'),
-        isTrue,
-      );
-      expect(
-        transport.sentMessages.any((message) => message['type'] == 'file.complete'),
-        isTrue,
-      );
-    });
+        expect(
+          transport.sentMessages.any(
+            (message) => message['type'] == 'file.chunk',
+          ),
+          isTrue,
+        );
+        expect(
+          transport.sentMessages.any(
+            (message) => message['type'] == 'file.complete',
+          ),
+          isTrue,
+        );
+      },
+    );
 
     test('rejects dot-only incoming file names before staging', () async {
       transport.simulateIncomingMessage('rift-peer', {
@@ -444,5 +458,77 @@ void main() {
 
       expect(await outsideFile.exists(), isFalse);
     });
+
+    test(
+      'completed incoming transfer notification carries destinationPath',
+      () async {
+        const transferId = '99999999-9999-4999-8999-999999999999';
+        const sha256Hex =
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824';
+        final destinationPath =
+            '${tempDir.path}${Platform.pathSeparator}received-final.txt';
+        final completedFuture = service.onTransferCompleted.first;
+
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '12121212-1212-4212-8212-121212121212',
+          'type': 'file.offer',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': transferId,
+            'fileName': 'hello.txt',
+            'mediaType': 'text/plain',
+            'byteSize': 5,
+            'sha256': sha256Hex,
+            'chunkSize': 262144,
+            'chunkCount': 1,
+            'expiresInMs': 300000,
+            'sourceDeviceId': 'rift-peer',
+            'requiredCapability': 'file.transfer',
+          },
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        await service.acceptFileOffer(
+          transferId: transferId,
+          destinationPath: destinationPath,
+        );
+
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '13131313-1313-4313-8313-131313131313',
+          'type': 'file.chunk',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': transferId,
+            'chunkIndex': 0,
+            'offset': 0,
+            'byteSize': 5,
+            'chunkSha256': sha256Hex,
+            'contentBase64': base64.encode(utf8.encode('hello')),
+            'isLastChunk': true,
+          },
+        });
+
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId': '14141414-1414-4414-8414-141414141414',
+          'type': 'file.complete',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': transferId,
+            'byteSize': 5,
+            'sha256': sha256Hex,
+            'chunkCount': 1,
+          },
+        });
+
+        final completed = await completedFuture;
+        expect(completed['destinationPath'], destinationPath);
+      },
+    );
   });
 }

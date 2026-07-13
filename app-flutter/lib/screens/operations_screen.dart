@@ -230,11 +230,14 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   children: [
                     Row(
                       children: [
-                        Text(
-                          name,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.bold,
+                        Flexible(
+                          child: Text(
+                            name,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.bold,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -258,10 +261,13 @@ class _OperationsScreenState extends State<OperationsScreen> {
                       children: [
                         Icon(Icons.devices, size: 16, color: theme.colorScheme.onSurfaceVariant),
                         const SizedBox(width: 4),
-                        Text(
-                          peer,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                        Expanded(
+                          child: Text(
+                            peer,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

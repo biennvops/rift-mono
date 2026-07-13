@@ -182,6 +182,20 @@ public sealed class PairingService : IPairingService
     public async Task<RevokeTrustResult> RevokeTrustAsync(string deviceId, string reason)
     {
         var peer = GetExistingPeer(deviceId);
+        if (_pairingProtocolCoordinator is not null)
+        {
+            try
+            {
+                await _pairingProtocolCoordinator.NotifyLocalTrustRemovedAsync(deviceId, reason);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
+            {
+                _logger.LogInformation(
+                    ex,
+                    "Skipping advisory trust.remove for peer {DeviceId} because no authenticated session is open.",
+                    deviceId);
+            }
+        }
         _trustStore.DeletePeer(deviceId);
 
         var revokedAt = DateTimeOffset.UtcNow;

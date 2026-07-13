@@ -1139,7 +1139,8 @@ public sealed class FileTransferService : IFileTransferService
             ByteSize = transfer.ByteSize,
             BytesTransferred = transfer.BytesTransferred,
             State = operation?.State ?? "Unknown",
-            FailureReason = operation?.FailureReason
+            FailureReason = operation?.FailureReason,
+            DestinationPath = null
         };
     }
 
@@ -1157,7 +1158,8 @@ public sealed class FileTransferService : IFileTransferService
             ByteSize = transfer.ByteSize,
             BytesTransferred = transfer.BytesTransferred,
             State = operation?.State ?? "Unknown",
-            FailureReason = operation?.FailureReason
+            FailureReason = operation?.FailureReason,
+            DestinationPath = transfer.DestinationPath
         };
     }
 

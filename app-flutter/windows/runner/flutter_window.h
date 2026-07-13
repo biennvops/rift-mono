@@ -29,6 +29,23 @@ class FlutterWindow : public Win32Window {
  private:
   void RegisterClipboardEventChannel();
   void RegisterClipboardMethodChannel();
+  void RegisterWindowsShellMethodChannel();
+  void InitializeShellNotificationIcon();
+  void CleanupShellNotificationIcon();
+  bool ShowTransferNotification(
+      const std::wstring& title,
+      const std::wstring& body,
+      const std::wstring& destination_path);
+  bool ShowNotification(
+      const std::wstring& title,
+      const std::wstring& body,
+      const std::string& route,
+      const std::string& device_id,
+      const std::string& display_name,
+      const std::string& fingerprint,
+      int64_t expires_in_ms,
+      const std::wstring& destination_path);
+  void DispatchPendingNotificationAction();
 
   // The project to run.
   flutter::DartProject project_;
@@ -41,7 +58,16 @@ class FlutterWindow : public Win32Window {
       clipboard_event_sink_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       clipboard_method_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      windows_shell_method_channel_;
   bool clipboard_listener_registered_ = false;
+  bool shell_notification_icon_registered_ = false;
+  std::wstring pending_notification_destination_path_;
+  std::string pending_notification_route_;
+  std::string pending_notification_device_id_;
+  std::string pending_notification_display_name_;
+  std::string pending_notification_fingerprint_;
+  int64_t pending_notification_expires_in_ms_ = -1;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

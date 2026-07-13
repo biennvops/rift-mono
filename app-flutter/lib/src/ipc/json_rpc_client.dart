@@ -291,6 +291,9 @@ class JsonRpcRiftClient {
     if (withoutJsonRpc.contains('Connection failed. Tried:')) {
       return 'Could not connect to the local daemon.';
     }
+    if (withoutJsonRpc.contains('Failed to reconnect trusted peer')) {
+      return 'Could not reconnect to this trusted device. Make sure it is online and reachable on the same local network, then try again.';
+    }
 
     return withoutJsonRpc;
   }
@@ -326,6 +329,26 @@ class JsonRpcRiftClient {
 
   Future<void> connect() async {
     if (_isConnected) return;
+    final pending = _connectFuture;
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _connectImpl();
+    _connectFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_connectFuture, future)) {
+        _connectFuture = null;
+      }
+    }
+  }
+
+  Future<void> _connectImpl() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _isReconnecting = false;
 
     _log.info('Connecting to daemon...');
     try {
@@ -524,15 +547,13 @@ class JsonRpcRiftClient {
 
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+  Future<void>? _connectFuture;
 
   StreamController<String>? _outController;
 
   bool _isReconnecting = false;
 
   Future<void> _handleDisconnect() async {
-    if (_isReconnecting) return;
-    _isReconnecting = true;
-
     _setConnectionState(false);
     _client = null;
 
@@ -546,27 +567,44 @@ class JsonRpcRiftClient {
       _log.warning('Error during disconnect: $e');
     }
 
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_isConnected || _isReconnecting) {
+      return;
+    }
+
     // Exponential Backoff Reconnect (infinite retries, capped delay)
+    _isReconnecting = true;
     final delaySeconds = (1 << _reconnectAttempts).clamp(1, 5);
     final delay = Duration(seconds: delaySeconds);
 
     _log.info(
         'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
+    _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
       _reconnectAttempts++;
       connect().catchError((e) {
         _log.severe('Reconnect failed: $e');
       }).whenComplete(() {
+        final shouldRetry = !_isConnected;
         _isReconnecting = false;
+        if (shouldRetry) {
+          _scheduleReconnect();
+        }
       });
     });
   }
 
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _reconnectAttempts = 0;
     _setConnectionState(false);
     _isReconnecting = false;
+    _connectFuture = null;
     await _client?.close();
     _client = null;
     await _outController?.close();

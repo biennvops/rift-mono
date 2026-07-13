@@ -11,6 +11,12 @@ import android.util.Log
 import android.widget.Toast
 
 class ClipboardSenderActivity : Activity() {
+    companion object {
+        private const val notificationIntentRouteKey = "rift.notification.route"
+        private const val notificationIntentPayloadPrefix = "rift.notification.payload."
+        private const val clipboardSendRoute = "clipboard.send"
+    }
+
     private var hasHandled = false
     private val handler = Handler(Looper.getMainLooper())
 
@@ -47,13 +53,27 @@ class ClipboardSenderActivity : Activity() {
         val payload = AndroidClipboardCodec.encodePrimaryClip(this, clipboard)
 
         if (payload != null) {
-            val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
-            intent.setPackage(packageName)
-            payload.forEach { (key, value) -> intent.putExtra(key, value) }
-            sendBroadcast(intent)
+            if (MainActivity.isClipboardRelayReady) {
+                val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
+                intent.setPackage(packageName)
+                payload.forEach { (key, value) -> intent.putExtra(key, value) }
+                sendBroadcast(intent)
+            } else {
+                val launchIntent = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(notificationIntentRouteKey, clipboardSendRoute)
+                    payload.forEach { (key, value) ->
+                        putExtra("$notificationIntentPayloadPrefix$key", value)
+                    }
+                }
+                startActivity(launchIntent)
+            }
 
             val message = when (payload["contentType"]) {
                 "image/png" -> "Image sent to Rift"
+                "text/plain" -> "Text sent to Rift"
                 else -> "Sent to Rift"
             }
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

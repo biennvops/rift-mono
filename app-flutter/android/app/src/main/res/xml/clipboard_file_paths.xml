@@ -3,4 +3,13 @@
     <cache-path
         name="clipboard"
         path="clipboard/" />
+    <external-path
+        name="external"
+        path="." />
+    <files-path
+        name="files"
+        path="." />
+    <external-files-path
+        name="external_files"
+        path="." />
 </paths>

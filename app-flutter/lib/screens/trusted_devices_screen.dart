@@ -25,6 +25,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   String? _error;
   bool _isLoadingData = false;
   bool _reloadQueued = false;
+  bool _autoDiscoveryAttempted = false;
 
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
@@ -284,6 +285,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           _error = null;
         });
       }
+      if (trustedPeers.isEmpty) {
+        _autoDiscoveryAttempted = false;
+      } else if (!isDiscovering) {
+        unawaited(_ensureTrustedPeerDiscovery(client));
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -347,6 +353,29 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }).toList(growable: false);
   }
 
+  Future<void> _ensureTrustedPeerDiscovery(JsonRpcRiftClient client) async {
+    if (_autoDiscoveryAttempted ||
+        _trustedPeers.isEmpty ||
+        _isDiscovering ||
+        _isTogglingDiscovery) {
+      return;
+    }
+
+    _autoDiscoveryAttempted = true;
+    try {
+      await client.startDiscovery();
+      if (mounted) {
+        setState(() {
+          _isDiscovering = true;
+          _error = null;
+        });
+      }
+      _scheduleReload();
+    } catch (_) {
+      _autoDiscoveryAttempted = false;
+    }
+  }
+
   Future<void> _toggleDiscovery() async {
     if (_isTogglingDiscovery) return;
     setState(() {
@@ -379,6 +408,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           _isDiscovering = nextDiscovering;
           _error = null;
         });
+      }
+      if (!nextDiscovering) {
+        _autoDiscoveryAttempted = true;
       }
       await _loadData();
     } catch (e) {
@@ -1186,6 +1218,19 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasTrustedPeers = _trustedPeers.any(
+      (peer) => peer is Map && peer['trustState']?.toString() == 'trusted',
+    );
+    final discoveryLabel = _isDiscovering
+        ? (hasTrustedPeers ? 'Stop Adding' : 'Stop Discovery')
+        : (hasTrustedPeers ? 'Add Devices' : 'Discover Devices');
+    final discoveryIcon = _isTogglingDiscovery
+        ? null
+        : Icon(
+            _isDiscovering
+                ? Icons.search_off
+                : (hasTrustedPeers ? Icons.person_add_alt_1 : Icons.search),
+          );
     return Scaffold(
       body: _error != null && _trustedPeers.isEmpty && _discoveredPeers.isEmpty
           ? Center(
@@ -1275,8 +1320,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                     child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: theme.colorScheme.onPrimaryContainer))
-                : Icon(_isDiscovering ? Icons.search_off : Icons.search),
-            label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices',
+                : discoveryIcon,
+            label: Text(discoveryLabel,
                 style: theme.textTheme.labelMedium
                     ?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
           ),

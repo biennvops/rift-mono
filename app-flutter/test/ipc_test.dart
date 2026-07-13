@@ -14,6 +14,7 @@ class MockTransport implements IpcTransport {
   bool isConnected = false;
   int connectionAttempts = 0;
   bool shouldFailConnect = false;
+  int failConnectAttempts = 0;
   String listTrustedPeersJson =
       '{"Peers":[{"DeviceId":"rift-peer","Platform":"windows","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
   Map<String, dynamic> startPairingResult = {
@@ -84,13 +85,14 @@ class MockTransport implements IpcTransport {
       {
         'TransferId': 'transfer-1',
         'OperationId': 'operation-file-1',
-        'Direction': 'outgoing',
+        'Direction': 'incoming',
         'PeerDeviceId': 'rift-peer',
         'FileName': 'demo.txt',
         'MediaType': 'text/plain',
         'ByteSize': 12,
         'BytesTransferred': 12,
         'State': 'Done',
+        'DestinationPath': 'C:/tmp/demo.txt',
       }
     ]
   };
@@ -156,7 +158,10 @@ class MockTransport implements IpcTransport {
   @override
   Future<StreamChannel<String>> connect() async {
     connectionAttempts++;
-    if (shouldFailConnect) {
+    if (shouldFailConnect || failConnectAttempts > 0) {
+      if (failConnectAttempts > 0) {
+        failConnectAttempts -= 1;
+      }
       throw Exception('Mock connection failure');
     }
 
@@ -320,6 +325,17 @@ void main() {
         ),
         equals('Daemon not connected.'),
       );
+
+      expect(
+        JsonRpcRiftClient.formatDisplayError(
+          Exception(
+            "JSON-RPC error -32000: Failed to reconnect trusted peer 'rift-nyvhp4uu4axifolkhwvzgoskuytlozui' using discovery endpoints. Peer closed connection before sending session.hello.",
+          ),
+        ),
+        equals(
+          'Could not reconnect to this trusted device. Make sure it is online and reachable on the same local network, then try again.',
+        ),
+      );
     });
 
     test('should attempt reconnection on unexpected disconnect', () {
@@ -360,6 +376,34 @@ void main() {
             equals(attemptsAfterFirstReconnect + 1));
 
         // Manually disconnect to avoid tearDown hanging outside fakeAsync
+        client.disconnect();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('should keep retrying reconnect after a failed reconnect attempt', () {
+      fakeAsync((async) {
+        client.connect();
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isTrue);
+
+        transport.failConnectAttempts = 1;
+        final initialAttempts = transport.connectionAttempts;
+
+        transport.triggerDisconnect();
+        async.flushMicrotasks();
+
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+        expect(client.isConnected, isFalse);
+
+        async.elapse(const Duration(seconds: 2));
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isTrue);
+        expect(transport.connectionAttempts, greaterThan(initialAttempts + 1));
+
         client.disconnect();
         async.flushMicrotasks();
       });

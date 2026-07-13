@@ -79,6 +79,18 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyLocalTrustRemovedAsync_SendsTrustRemoveMessage()
+    {
+        await _coordinator.NotifyLocalTrustRemovedAsync("rift-peer-removed", "User removed trusted device");
+
+        var message = Assert.Single(_transport.SentMessages);
+        Assert.Equal("rift-peer-removed", message.PeerDeviceId);
+        Assert.Equal("trust.remove", message.Type);
+        Assert.Equal("rift-peer-removed", message.Payload.GetProperty("removedDeviceId").GetString());
+        Assert.Equal("User removed trusted device", message.Payload.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public async Task NotifyLocalPairingStarted_WhenConnectFails_ThrowsHelpfulError()
     {
         _transport.ConnectException = new InvalidOperationException("tls rejected");
@@ -105,6 +117,33 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         Assert.Contains("Failed to establish a secure session", ex.Message);
         Assert.Contains("rift-peer-connect-fail", ex.Message);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_TrustRemove_RemovesTrustedPeerAndNotifiesUi()
+    {
+        var peerDeviceId = "rift-peer-removed";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(peerDeviceId, CreateEnvelope(peerDeviceId, "trust.remove", new
+        {
+            removedDeviceId = _identityManager.GetDeviceId(),
+            reason = "Peer removed this device",
+            removedAt = _timeProvider.GetUtcNow().ToString("O")
+        }), CancellationToken.None);
+
+        Assert.Null(_trustStore.GetPeer(peerDeviceId));
+        Assert.Contains(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onTrustChanged" &&
+                Equals(notification.Parameters["deviceId"], peerDeviceId) &&
+                Equals(notification.Parameters["newState"], "removed"));
     }
 
     [Fact]

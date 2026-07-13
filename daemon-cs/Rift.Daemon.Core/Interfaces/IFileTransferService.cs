@@ -34,6 +34,7 @@ public sealed class FileTransferInfo
     public long BytesTransferred { get; init; }
     public string State { get; init; } = string.Empty;
     public string? FailureReason { get; init; }
+    public string? DestinationPath { get; init; }
 }
 
 public sealed class OfferFileResult

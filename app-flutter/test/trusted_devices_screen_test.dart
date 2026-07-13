@@ -20,9 +20,12 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
   bool rejectCalled = false;
+  int startDiscoveryCallCount = 0;
+  int stopDiscoveryCallCount = 0;
   String? manualPairAddress;
   int? manualPairPort;
   int listTrustedPeersCallCount = 0;
+  bool isDiscovering = true;
   List<Map<String, dynamic>> trustedPeers = [
     {
       'deviceId': 'rift-trusted',
@@ -85,7 +88,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> listDiscoveredPeers() async => {
         'peers': discoveredPeers,
-        'isDiscovering': true,
+        'isDiscovering': isDiscovering,
       };
   @override
   Future<dynamic> listTrustedPeers() async {
@@ -94,9 +97,19 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 
   @override
-  Future<dynamic> startDiscovery() async => {'started': true};
+  Future<dynamic> startDiscovery() async {
+    startDiscoveryCallCount += 1;
+    isDiscovering = true;
+    return {'started': true};
+  }
+
   @override
-  Future<dynamic> stopDiscovery() async => {'stopped': true};
+  Future<dynamic> stopDiscovery() async {
+    stopDiscoveryCallCount += 1;
+    isDiscovering = false;
+    return {'stopped': true};
+  }
+
   @override
   Future<dynamic> unblockPeer(String deviceId) async {
     unblockCalled = true;
@@ -157,6 +170,27 @@ void main() {
     expect(find.text('Local Device'), findsOneWidget);
     expect(find.text('This device'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
+    expect(find.text('Stop Adding'), findsOneWidget);
+  });
+
+  testWidgets(
+      'TrustedDevicesScreen auto-starts discovery when trusted peers exist but discovery is offline',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..isDiscovering = false
+      ..discoveredPeers = const [];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const TrustedDevicesScreen(),
+      ),
+    ));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(client.startDiscoveryCallCount, 1);
+    expect(find.text('Stop Adding'), findsOneWidget);
   });
 
   testWidgets('TrustedDevicesScreen supports manual Pair by IP flow',

@@ -33,8 +33,10 @@ class FileTransferService {
 
   late final StreamSubscription<void> _messageSub;
 
-  final _fileOfferController = StreamController<Map<String, dynamic>>.broadcast();
-  final _progressController = StreamController<Map<String, dynamic>>.broadcast();
+  final _fileOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _progressController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final _completedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _failedController = StreamController<Map<String, dynamic>>.broadcast();
@@ -53,7 +55,9 @@ class FileTransferService {
     required this._localDeviceId,
     required this._storagePath,
   }) {
-    _messageSub = _sessionManager.onMessage.asyncMap(_handleMessage).listen((_) {});
+    _messageSub = _sessionManager.onMessage
+        .asyncMap(_handleMessage)
+        .listen((_) {});
   }
 
   Future<void> dispose() async {
@@ -129,9 +133,9 @@ class FileTransferService {
       sha256: wholeFileHash,
       chunkSize: defaultChunkSize,
       chunkCount: chunkCount,
-      expiresAt: DateTime.now()
-          .toUtc()
-          .add(const Duration(milliseconds: defaultOfferExpiryMs)),
+      expiresAt: DateTime.now().toUtc().add(
+        const Duration(milliseconds: defaultOfferExpiryMs),
+      ),
       state: 'pending',
     );
     _outgoingTransfers[transferId] = transfer;
@@ -157,7 +161,10 @@ class FileTransferService {
     });
 
     transfer.state = 'dispatched';
-    _operationManager.transitionOperation(operationId, OperationState.dispatched);
+    _operationManager.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
     return OfferFileResult(
       transferId: transferId,
       operationId: operationId,
@@ -173,7 +180,9 @@ class FileTransferService {
     _pruneExpiredOffers();
     final offers = _remoteOffers.values.toList(growable: false)
       ..sort((a, b) => a.expiresAt.compareTo(b.expiresAt));
-    return offers.map((offer) => offer.toInfo().toJson()).toList(growable: false);
+    return offers
+        .map((offer) => offer.toInfo().toJson())
+        .toList(growable: false);
   }
 
   Future<AcceptFileOfferResult> acceptFileOffer({
@@ -185,7 +194,9 @@ class FileTransferService {
 
     final offer = _remoteOffers[transferId];
     if (offer == null) {
-      throw RiftNotFoundException("Incoming file offer '$transferId' was not found.");
+      throw RiftNotFoundException(
+        "Incoming file offer '$transferId' was not found.",
+      );
     }
 
     await _ensurePeerCanUseFileTransfer(offer.sourceDeviceId);
@@ -199,7 +210,8 @@ class FileTransferService {
 
     final fullDestinationPath = p.normalize(p.absolute(destinationPath));
     final destinationDirectory = p.dirname(fullDestinationPath);
-    if (destinationDirectory.isEmpty || destinationDirectory == fullDestinationPath) {
+    if (destinationDirectory.isEmpty ||
+        destinationDirectory == fullDestinationPath) {
       throw const RiftException(
         -32001,
         'Destination path must include a parent directory.',
@@ -215,8 +227,9 @@ class FileTransferService {
     }
 
     final stagingFileName = _sanitizeIncomingStagingFileName(offer.fileName);
-    final stagingDirectory =
-        Directory(p.join(_storagePath, 'file-transfer', transferId));
+    final stagingDirectory = Directory(
+      p.join(_storagePath, 'file-transfer', transferId),
+    );
     await stagingDirectory.create(recursive: true);
     final stagingPath = p.join(stagingDirectory.path, '$stagingFileName.part');
     final stagingFile = File(stagingPath);
@@ -240,7 +253,10 @@ class FileTransferService {
         'byteSize': offer.byteSize,
       },
     );
-    _operationManager.transitionOperation(operationId, OperationState.dispatched);
+    _operationManager.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
 
     final transfer = _IncomingTransferState(
       transferId: transferId,
@@ -291,7 +307,9 @@ class FileTransferService {
 
     final offer = _remoteOffers.remove(transferId);
     if (offer == null) {
-      throw RiftNotFoundException("Incoming file offer '$transferId' was not found.");
+      throw RiftNotFoundException(
+        "Incoming file offer '$transferId' was not found.",
+      );
     }
 
     await _ensurePeerCanUseFileTransfer(offer.sourceDeviceId);
@@ -317,7 +335,9 @@ class FileTransferService {
       ..._outgoingTransfers.values.map((transfer) => transfer.toInfo()),
       ..._incomingTransfers.values.map((transfer) => transfer.toInfo()),
     ]..sort((a, b) => b.transferId.compareTo(a.transferId));
-    return transfers.map((transfer) => transfer.toJson()).toList(growable: false);
+    return transfers
+        .map((transfer) => transfer.toJson())
+        .toList(growable: false);
   }
 
   Future<void> _handleMessage(ProtocolMessage msg) async {
@@ -329,13 +349,17 @@ class FileTransferService {
     try {
       _sessionManager.requireCapability(msg.peerDeviceId, requiredCapability);
     } catch (error) {
-      RiftLog.warn('[FileTransfer] Dropping $type from ${msg.peerDeviceId}: $error');
+      RiftLog.warn(
+        '[FileTransfer] Dropping $type from ${msg.peerDeviceId}: $error',
+      );
       return;
     }
 
     final payload = msg.payload['payload'] as Map<String, dynamic>?;
     if (payload == null) {
-      RiftLog.warn('[FileTransfer] Missing payload for $type from ${msg.peerDeviceId}');
+      RiftLog.warn(
+        '[FileTransfer] Missing payload for $type from ${msg.peerDeviceId}',
+      );
       return;
     }
 
@@ -429,8 +453,9 @@ class FileTransferService {
       sha256: sha256,
       chunkSize: chunkSize,
       chunkCount: chunkCount,
-      expiresAt:
-          DateTime.now().toUtc().add(Duration(milliseconds: expiresInMs)),
+      expiresAt: DateTime.now().toUtc().add(
+        Duration(milliseconds: expiresInMs),
+      ),
     );
     _remoteOffers[transferId] = offer;
     _emitOffer(offer.toInfo());
@@ -453,7 +478,9 @@ class FileTransferService {
 
     final transfer = _outgoingTransfers[transferId];
     if (transfer == null) {
-      throw RiftNotFoundException("Outgoing transfer '$transferId' was not found.");
+      throw RiftNotFoundException(
+        "Outgoing transfer '$transferId' was not found.",
+      );
     }
     if (transfer.targetDeviceId != peerDeviceId) {
       throw const RiftUnauthorizedException(
@@ -462,7 +489,10 @@ class FileTransferService {
     }
 
     transfer.state = 'active';
-    _operationManager.transitionOperation(transfer.operationId, OperationState.active);
+    _operationManager.transitionOperation(
+      transfer.operationId,
+      OperationState.active,
+    );
     await _sendOutgoingTransfer(
       transfer,
       requestedChunkSize: payload['chunkSize'] as int?,
@@ -501,7 +531,9 @@ class FileTransferService {
 
     final transfer = _incomingTransfers[transferId];
     if (transfer == null) {
-      throw RiftNotFoundException("Incoming transfer '$transferId' was not found.");
+      throw RiftNotFoundException(
+        "Incoming transfer '$transferId' was not found.",
+      );
     }
     if (transfer.sourceDeviceId != peerDeviceId) {
       throw const RiftUnauthorizedException(
@@ -547,7 +579,7 @@ class FileTransferService {
         OperationState.active,
       );
     }
-    
+
     transfer.bytesTransferred += chunkBytes.length;
     transfer.nextChunkIndex += 1;
     transfer.state = 'active';
@@ -564,7 +596,9 @@ class FileTransferService {
     final chunkCount = payload['chunkCount'] as int? ?? -1;
     final transfer = _incomingTransfers[transferId];
     if (transfer == null) {
-      throw RiftNotFoundException("Incoming transfer '$transferId' was not found.");
+      throw RiftNotFoundException(
+        "Incoming transfer '$transferId' was not found.",
+      );
     }
     if (transfer.sourceDeviceId != peerDeviceId) {
       throw const RiftUnauthorizedException(
@@ -597,7 +631,9 @@ class FileTransferService {
       );
     }
 
-    await Directory(p.dirname(transfer.destinationPath)).create(recursive: true);
+    await Directory(
+      p.dirname(transfer.destinationPath),
+    ).create(recursive: true);
     if (await destinationFile.exists()) {
       await destinationFile.delete();
     }
@@ -613,7 +649,10 @@ class FileTransferService {
     }
 
     transfer.state = 'done';
-    _operationManager.transitionOperation(transfer.operationId, OperationState.done);
+    _operationManager.transitionOperation(
+      transfer.operationId,
+      OperationState.done,
+    );
     _incomingTransfers.remove(transfer.transferId);
     _remoteOffers.remove(transfer.transferId);
     _emitCompleted(transfer.toInfo());
@@ -648,7 +687,11 @@ class FileTransferService {
     final chunkSize = _normalizeChunkSize(requestedChunkSize);
     final file = File(transfer.localPath);
     if (!await file.exists()) {
-      await _failOutgoingTransfer(transfer, 'NotFound', 'Local file is no longer available.');
+      await _failOutgoingTransfer(
+        transfer,
+        'NotFound',
+        'Local file is no longer available.',
+      );
       return;
     }
 
@@ -661,7 +704,10 @@ class FileTransferService {
         final nextChunkSize = remaining < chunkSize ? remaining : chunkSize;
         final bytes = await raf.read(nextChunkSize);
         if (bytes.isEmpty) {
-          throw const RiftException(-32000, 'Unexpected end of file while sending transfer.');
+          throw const RiftException(
+            -32000,
+            'Unexpected end of file while sending transfer.',
+          );
         }
 
         final chunkHash = sha256.convert(bytes).toString();
@@ -715,7 +761,10 @@ class FileTransferService {
     });
 
     transfer.state = 'done';
-    _operationManager.transitionOperation(transfer.operationId, OperationState.done);
+    _operationManager.transitionOperation(
+      transfer.operationId,
+      OperationState.done,
+    );
     _emitCompleted(transfer.toInfo());
     _outgoingTransfers.remove(transfer.transferId);
   }
@@ -921,16 +970,16 @@ class _RemoteFileOfferState {
   });
 
   IncomingFileOfferInfo toInfo() => IncomingFileOfferInfo(
-        transferId: transferId,
-        sourceDeviceId: sourceDeviceId,
-        fileName: fileName,
-        mediaType: mediaType,
-        byteSize: byteSize,
-        sha256: sha256,
-        chunkSize: chunkSize,
-        chunkCount: chunkCount,
-        expiresAt: expiresAt.toIso8601String(),
-      );
+    transferId: transferId,
+    sourceDeviceId: sourceDeviceId,
+    fileName: fileName,
+    mediaType: mediaType,
+    byteSize: byteSize,
+    sha256: sha256,
+    chunkSize: chunkSize,
+    chunkCount: chunkCount,
+    expiresAt: expiresAt.toIso8601String(),
+  );
 }
 
 class _OutgoingTransferState {
@@ -965,17 +1014,18 @@ class _OutgoingTransferState {
   });
 
   FileTransferInfo toInfo() => FileTransferInfo(
-        transferId: transferId,
-        operationId: operationId,
-        direction: 'outgoing',
-        peerDeviceId: targetDeviceId,
-        fileName: fileName,
-        mediaType: mediaType,
-        byteSize: byteSize,
-        bytesTransferred: bytesTransferred,
-        state: state,
-        failureReason: failureReason,
-      );
+    transferId: transferId,
+    operationId: operationId,
+    direction: 'outgoing',
+    peerDeviceId: targetDeviceId,
+    fileName: fileName,
+    mediaType: mediaType,
+    byteSize: byteSize,
+    bytesTransferred: bytesTransferred,
+    state: state,
+    failureReason: failureReason,
+    destinationPath: null,
+  );
 }
 
 class _IncomingTransferState {
@@ -1015,15 +1065,16 @@ class _IncomingTransferState {
   });
 
   FileTransferInfo toInfo() => FileTransferInfo(
-        transferId: transferId,
-        operationId: operationId,
-        direction: 'incoming',
-        peerDeviceId: sourceDeviceId,
-        fileName: fileName,
-        mediaType: mediaType,
-        byteSize: byteSize,
-        bytesTransferred: bytesTransferred,
-        state: state,
-        failureReason: failureReason,
-      );
+    transferId: transferId,
+    operationId: operationId,
+    direction: 'incoming',
+    peerDeviceId: sourceDeviceId,
+    fileName: fileName,
+    mediaType: mediaType,
+    byteSize: byteSize,
+    bytesTransferred: bytesTransferred,
+    state: state,
+    failureReason: failureReason,
+    destinationPath: destinationPath,
+  );
 }

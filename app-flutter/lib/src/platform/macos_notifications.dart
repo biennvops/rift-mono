@@ -22,12 +22,22 @@ class MacOSNotifications {
   static Future<bool> show({
     required String title,
     required String body,
+    String? route,
+    Map<String, Object?>? payload,
   }) async {
     if (!Platform.isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.show', {
       'title': title,
       'body': body,
+      if (route != null) 'route': route,
+      if (payload != null) 'payload': payload,
     });
     return res ?? false;
+  }
+
+  static void setMethodCallHandler(
+    Future<dynamic> Function(MethodCall call)? handler,
+  ) {
+    _channel.setMethodCallHandler(handler);
   }
 }

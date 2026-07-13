@@ -4,13 +4,16 @@ import CryptoKit
 import FlutterMacOS
 import UserNotifications
 
-final class PermissionsBridge {
+final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
   static let channelName = "rift.permissions"
+  private static let shared = PermissionsBridge()
+  private static var channel: FlutterMethodChannel?
 
   static func register(with messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: channelName, binaryMessenger: messenger)
-    let instance = PermissionsBridge()
-    channel.setMethodCallHandler(instance.handle)
+    Self.channel = channel
+    channel.setMethodCallHandler(Self.shared.handle)
+    UNUserNotificationCenter.current().delegate = Self.shared
   }
 
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -58,11 +61,22 @@ final class PermissionsBridge {
     let dict = args as? [String: Any]
     let title = dict?["title"] as? String ?? "Rift"
     let body = dict?["body"] as? String ?? ""
+    let route = dict?["route"] as? String
+    let payload = dict?["payload"] as? [String: Any]
 
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
     content.sound = .default
+    if let route {
+      var userInfo: [AnyHashable: Any] = ["route": route]
+      if let payload {
+        for (key, value) in payload {
+          userInfo[key] = value
+        }
+      }
+      content.userInfo = userInfo
+    }
 
     let request = UNNotificationRequest(
       identifier: UUID().uuidString,
@@ -77,6 +91,31 @@ final class PermissionsBridge {
       }
       result(true)
     }
+  }
+
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let userInfo = response.notification.request.content.userInfo
+    guard let route = userInfo["route"] as? String else {
+      completionHandler()
+      return
+    }
+
+    var payload: [String: Any] = ["route": route]
+    for (key, value) in userInfo {
+      guard let stringKey = key as? String, stringKey != "route" else {
+        continue
+      }
+      payload[stringKey] = value
+    }
+
+    DispatchQueue.main.async {
+      PermissionsBridge.channel?.invokeMethod("notificationActivated", arguments: payload)
+    }
+    completionHandler()
   }
 }
 

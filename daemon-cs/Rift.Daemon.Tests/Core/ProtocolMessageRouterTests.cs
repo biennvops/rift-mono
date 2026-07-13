@@ -156,6 +156,30 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_TrustRemove_RoutesToPairingCoordinatorForTrustedPeer()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-trust-remove",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _router.HandleMessageAsync(
+            CreateSession("rift-peer-trust-remove", ["presence.basic"], allowsProtectedTraffic: true),
+            CreateEnvelope("rift-peer-trust-remove", "trust.remove", new
+            {
+                removedDeviceId = _identityManager.GetDeviceId(),
+                reason = "Peer removed this device",
+                removedAt = "2026-07-14T08:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_trustStore.GetPeer("rift-peer-trust-remove"));
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_ClipboardFetchRequest_RoutesToClipboardService()
     {
         _trustStore.SavePeer(new PeerIdentity

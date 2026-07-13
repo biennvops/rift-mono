@@ -495,6 +495,37 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task RevokeTrustAsync_DeletesPeerEvenWhenNoOpenSessionExists()
+    {
+        var deviceId = "rift-trusted-peer-offline";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            DisplayName = "Offline Linux Box",
+            Platform = "linux",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var pairingService = new PairingService(
+            _trustStore,
+            _identityManager,
+            _securityEventLog,
+            pairingProtocolCoordinator: new FakePairingProtocolCoordinator("rift-manual-peer")
+            {
+                TrustRemoveException = new InvalidOperationException($"No open session exists for {deviceId}.")
+            },
+            logger: NullLogger<PairingService>.Instance);
+
+        var result = await pairingService.RevokeTrustAsync(deviceId, "user-request");
+        var peer = _trustStore.GetPeer(deviceId);
+
+        Assert.True(result.Revoked);
+        Assert.Null(peer);
+    }
+
+    [Fact]
     public async Task QueryEventLogAsync_ReturnsPersistedPairingEvents()
     {
         var peerPublicKey = new byte[32];
@@ -643,6 +674,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
 
         public (string Host, int Port)? LastEndpoint { get; private set; }
+        public Exception? TrustRemoveException { get; set; }
 
         public Task<string> ConnectToEndpointForPairingAsync(string host, int port, CancellationToken cancellationToken = default)
         {
@@ -657,5 +689,15 @@ public sealed class RiftApiHandlerTests : IDisposable
         public Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task NotifyLocalPairingStartedAsync(string deviceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+        {
+            if (TrustRemoveException is not null)
+            {
+                return Task.FromException(TrustRemoveException);
+            }
+
+            return Task.CompletedTask;
+        }
     }
 }

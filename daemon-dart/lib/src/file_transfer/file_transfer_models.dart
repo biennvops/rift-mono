@@ -22,16 +22,16 @@ class IncomingFileOfferInfo {
   });
 
   Map<String, dynamic> toJson() => {
-        'transferId': transferId,
-        'sourceDeviceId': sourceDeviceId,
-        'fileName': fileName,
-        'mediaType': mediaType,
-        'byteSize': byteSize,
-        'sha256': sha256,
-        'chunkSize': chunkSize,
-        'chunkCount': chunkCount,
-        'expiresAt': expiresAt,
-      };
+    'transferId': transferId,
+    'sourceDeviceId': sourceDeviceId,
+    'fileName': fileName,
+    'mediaType': mediaType,
+    'byteSize': byteSize,
+    'sha256': sha256,
+    'chunkSize': chunkSize,
+    'chunkCount': chunkCount,
+    'expiresAt': expiresAt,
+  };
 }
 
 class FileTransferInfo {
@@ -45,6 +45,7 @@ class FileTransferInfo {
   final int bytesTransferred;
   final String state;
   final String? failureReason;
+  final String? destinationPath;
 
   const FileTransferInfo({
     required this.transferId,
@@ -57,6 +58,7 @@ class FileTransferInfo {
     required this.bytesTransferred,
     required this.state,
     this.failureReason,
+    this.destinationPath,
   });
 
   Map<String, dynamic> toJson() {
@@ -73,6 +75,9 @@ class FileTransferInfo {
     };
     if (failureReason != null) {
       json['failureReason'] = failureReason;
+    }
+    if (destinationPath != null) {
+      json['destinationPath'] = destinationPath;
     }
     return json;
   }
@@ -98,14 +103,14 @@ class OfferFileResult {
   });
 
   Map<String, dynamic> toJson() => {
-        'transferId': transferId,
-        'operationId': operationId,
-        'targetDeviceId': targetDeviceId,
-        'fileName': fileName,
-        'byteSize': byteSize,
-        'chunkSize': chunkSize,
-        'chunkCount': chunkCount,
-      };
+    'transferId': transferId,
+    'operationId': operationId,
+    'targetDeviceId': targetDeviceId,
+    'fileName': fileName,
+    'byteSize': byteSize,
+    'chunkSize': chunkSize,
+    'chunkCount': chunkCount,
+  };
 }
 
 class AcceptFileOfferResult {
@@ -120,10 +125,10 @@ class AcceptFileOfferResult {
   });
 
   Map<String, dynamic> toJson() => {
-        'transferId': transferId,
-        'operationId': operationId,
-        'destinationPath': destinationPath,
-      };
+    'transferId': transferId,
+    'operationId': operationId,
+    'destinationPath': destinationPath,
+  };
 }
 
 class RejectFileOfferResult {
@@ -136,7 +141,7 @@ class RejectFileOfferResult {
   });
 
   Map<String, dynamic> toJson() => {
-        'transferId': transferId,
-        'rejected': rejected,
-      };
+    'transferId': transferId,
+    'rejected': rejected,
+  };
 }

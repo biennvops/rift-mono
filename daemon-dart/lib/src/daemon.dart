@@ -269,6 +269,7 @@ Future<String> reconnectTrustedPeerViaEndpoints({
             endpoint.address,
             endpoint.port,
             expectedDeviceId: peerDeviceId,
+            forceFreshSession: true,
           )
           .timeout(timeout);
 
@@ -395,7 +396,7 @@ class RiftDaemon {
     }
 
     if (_transport != null) {
-        _sessionManager = SessionManager(
+      _sessionManager = SessionManager(
         _transport!,
         _identityManager!,
         _trustStore!,
@@ -1878,6 +1879,7 @@ class RiftDaemon {
   Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
     final trustStore = _trustStore;
     final sessionManager = _sessionManager;
+    final transport = _transport;
     if (trustStore == null || sessionManager == null) {
       throw const RiftIdentityNotInitializedException(
         'Daemon services not initialized',
@@ -1894,11 +1896,27 @@ class RiftDaemon {
 
     final ctx = sessionManager.getContext(peerDeviceId);
     if (ctx != null && ctx.handshakeState == HandshakeState.established) {
-      return peerDeviceId;
+      if (transport?.getPeerSocketEndpoint(peerDeviceId) == null) {
+        RiftLog.warn(
+          '[Reconnect] Session context for peerDeviceId=$peerDeviceId was established '
+          'but no active transport socket remained. Reconnecting.',
+        );
+        sessionManager.disconnectPeer(peerDeviceId);
+      } else {
+        return peerDeviceId;
+      }
     }
     if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
-      await sessionManager.waitForSessionEstablished(peerDeviceId);
-      return peerDeviceId;
+      if (transport?.getPeerSocketEndpoint(peerDeviceId) == null) {
+        RiftLog.warn(
+          '[Reconnect] In-flight handshake for peerDeviceId=$peerDeviceId had no active '
+          'transport socket. Restarting reconnect.',
+        );
+        sessionManager.disconnectPeer(peerDeviceId);
+      } else {
+        await sessionManager.waitForSessionEstablished(peerDeviceId);
+        return peerDeviceId;
+      }
     }
 
     return joinSingleFlightOperation(

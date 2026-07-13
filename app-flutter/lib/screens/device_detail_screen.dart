@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+
 import '../src/ipc/json_rpc_client.dart';
-import 'dart:async';
-import 'dart:io';
 
 class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
 
-  const DeviceDetailScreen({super.key, required this.peer, required this.isOnline});
+  const DeviceDetailScreen({
+    super.key,
+    required this.peer,
+    required this.isOnline,
+  });
 
   @override
   State<DeviceDetailScreen> createState() => _DeviceDetailScreenState();
@@ -19,30 +20,12 @@ class DeviceDetailScreen extends StatefulWidget {
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   late Map<String, dynamic> peer;
   late bool isOnline;
-  bool _isLoadingFileOffers = false;
-  bool _isSendingFile = false;
-  List<Map<String, dynamic>> _incomingFileOffers = [];
-  StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
-  StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
-  StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
 
   @override
   void initState() {
     super.initState();
     peer = widget.peer;
     isOnline = widget.isOnline;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadIncomingFileOffers();
-      _bindFileTransferNotifications();
-    });
-  }
-
-  @override
-  void dispose() {
-    _fileOfferSub?.cancel();
-    _fileCompletedSub?.cancel();
-    _fileFailedSub?.cancel();
-    super.dispose();
   }
 
   String _formatFingerprintWithColons(String? fp) {
@@ -51,7 +34,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     if (clean.isEmpty) return fp;
     final chunks = <String>[];
     for (int i = 0; i < clean.length; i += 2) {
-      chunks.add(clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2));
+      chunks.add(
+        clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2),
+      );
     }
     return chunks.join(':');
   }
@@ -69,68 +54,29 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return '$yyyy-$mm-$dd $hh:$min:$sec';
   }
 
-  void _bindFileTransferNotifications() {
-    final client = context.read<JsonRpcRiftClient>();
-    final deviceId = peer['deviceId']?.toString();
-    if (deviceId == null || deviceId.isEmpty) {
-      return;
-    }
-
-    _fileOfferSub = client.onFileOffer.listen((event) {
-      if (event['sourceDeviceId']?.toString() == deviceId && mounted) {
-        _loadIncomingFileOffers();
-      }
-    });
-    _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
-      if (event['peerDeviceId']?.toString() == deviceId && mounted) {
-        _loadIncomingFileOffers();
-      }
-    });
-    _fileFailedSub = client.onFileTransferFailed.listen((event) {
-      if (event['peerDeviceId']?.toString() == deviceId && mounted) {
-        _loadIncomingFileOffers();
-      }
-    });
-  }
-
-  Future<void> _loadIncomingFileOffers() async {
-    final deviceId = peer['deviceId']?.toString();
-    if (!mounted || deviceId == null || deviceId.isEmpty) {
-      return;
-    }
-
-    setState(() {
-      _isLoadingFileOffers = true;
-    });
-
-    try {
-      final client = context.read<JsonRpcRiftClient>();
-      final result = await client.listIncomingFileOffers() as Map;
-      final offers = List<Map<String, dynamic>>.from(
-        (result['offers'] as List? ?? const <dynamic>[]).map(
-          (offer) => Map<String, dynamic>.from(offer as Map),
-        ),
-      ).where((offer) => offer['sourceDeviceId']?.toString() == deviceId).toList(growable: false);
-
-      if (!mounted) return;
-      setState(() {
-        _incomingFileOffers = offers;
-      });
-    } catch (_) {
-      if (!mounted) return;
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoadingFileOffers = false;
-        });
-      }
+  IconData _platformIcon(String? platform) {
+    switch (platform?.toLowerCase()) {
+      case 'android':
+      case 'ios':
+        return Icons.smartphone;
+      case 'windows':
+        return Icons.desktop_windows;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.computer;
+      default:
+        return Icons.devices;
     }
   }
 
-  Future<bool> _showRevokeBottomSheet(String displayName, String fingerprint) async {
+  Future<bool> _showForgetBottomSheet(
+    String displayName,
+    String fingerprint,
+  ) async {
     final theme = Theme.of(context);
-    final shortFingerprint = fingerprint.length > 16 
-        ? '${fingerprint.substring(0, 16)}...' 
+    final shortFingerprint = fingerprint.length > 16
+        ? '${fingerprint.substring(0, 16)}...'
         : fingerprint;
 
     final result = await showModalBottomSheet<bool>(
@@ -153,7 +99,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Drag Handle
               Container(
                 width: 48,
                 height: 6,
@@ -163,14 +108,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
-              // Warning Icon
-              Icon(
-                Icons.warning,
-                size: 48,
-                color: theme.colorScheme.error,
-              ),
+              Icon(Icons.warning, size: 48, color: theme.colorScheme.error),
               const SizedBox(height: 16),
-              // Title
               Text(
                 'Quên thiết bị $displayName?',
                 textAlign: TextAlign.center,
@@ -180,11 +119,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              // Warning Text
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  'Thiết bị sẽ bị xóa khỏi danh sách đã tin cậy trên máy này. Khi thấy lại nó trong danh sách khám phá, bạn có thể pair từ đầu như một thiết bị mới.',
+                  'Thiết bị sẽ bị xóa khỏi danh sách đã tin cậy trên máy này. Khi thấy lại nó trong danh sách khám phá, bạn có thể pair lại từ đầu.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
@@ -192,7 +130,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              // Technical Detail Box
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -217,7 +154,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           shortFingerprint,
                           style: theme.textTheme.labelMedium?.copyWith(
                             color: theme.colorScheme.onSurface,
-                            letterSpacing: 1.0,
+                            letterSpacing: 1,
                           ),
                         ),
                       ],
@@ -226,7 +163,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              // Buttons
               SizedBox(
                 width: double.infinity,
                 height: 48,
@@ -296,7 +232,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Drag Handle
               Container(
                 width: 48,
                 height: 4,
@@ -306,7 +241,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              // Block Icon
               Container(
                 width: 48,
                 height: 48,
@@ -321,7 +255,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              // Title
               Text(
                 'Chặn $displayName?',
                 textAlign: TextAlign.center,
@@ -331,7 +264,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              // Content Text
               Text(
                 'Thiết bị bị chặn vĩnh viễn. Mọi kết nối từ khóa Ed25519 này sẽ bị từ chối tự động.',
                 textAlign: TextAlign.center,
@@ -340,7 +272,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              // Buttons
               SizedBox(
                 width: double.infinity,
                 height: 48,
@@ -355,7 +286,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   ),
                   child: const Text(
                     'Chặn vĩnh viễn',
-                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -374,7 +305,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   ),
                   child: const Text(
                     'Hủy',
-                    style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1.0),
+                    style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
               ),
@@ -386,403 +317,46 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return result ?? false;
   }
 
-  Future<void> _revokeTrust() async {
+  Future<void> _forgetPeer() async {
     final deviceId = peer['deviceId']?.toString();
-    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final displayName = peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
     final fingerprint = peer['fingerprint']?.toString() ?? 'Unknown';
     if (deviceId == null) return;
-    
     final client = context.read<JsonRpcRiftClient>();
-    final confirmed = await _showRevokeBottomSheet(displayName ?? 'Unknown', fingerprint);
+
+    final confirmed = await _showForgetBottomSheet(displayName, fingerprint);
     if (!confirmed) return;
-    
+
     try {
-      await client.revokeTrust(deviceId, 'User removed trusted device from Device Detail');
-      if (mounted) {
-        Navigator.of(context).pop({
-          'action': 'forgotten',
-          'deviceId': deviceId,
-          'displayName': displayName,
-        });
-      }
+      await client.revokeTrust(
+            deviceId,
+            'User removed trusted device from Device Detail',
+          );
+      if (!mounted) return;
+      Navigator.of(context).pop({
+        'action': 'forgotten',
+        'deviceId': deviceId,
+        'displayName': displayName,
+      });
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
   }
 
   Future<void> _blockPeer() async {
     final deviceId = peer['deviceId']?.toString();
-    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final displayName = peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
     if (deviceId == null) return;
-    
-    final confirmed = await _showBlockBottomSheet(displayName ?? 'Unknown');
-    if (!confirmed) return;
-    
-    try {
-      // Block is not yet implemented in the JsonRpcRiftClient.
-      // await client.blockPeer(deviceId);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Block not implemented in daemon yet')));
-      // if (mounted) Navigator.of(context).pop();
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    }
-  }
 
-  Future<Map<String, String>?> _showSendFileFallbackDialog() async {
-    final pathController = TextEditingController();
-    final nameController = TextEditingController();
-    final typeController =
-        TextEditingController(text: 'application/octet-stream');
-    String? validationError;
+    final confirmed = await _showBlockBottomSheet(displayName);
+    if (!confirmed || !mounted) return;
 
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            void submit() {
-              final path = pathController.text.trim();
-              final name = nameController.text.trim();
-              final type = typeController.text.trim();
-              if (path.isEmpty) {
-                setDialogState(() {
-                  validationError = 'Enter a local file path.';
-                });
-                return;
-              }
-              if (!File(path).existsSync()) {
-                setDialogState(() {
-                  validationError = 'That file path does not exist.';
-                });
-                return;
-              }
-              Navigator.of(dialogContext).pop({
-                'localPath': path,
-                'fileName': name,
-                'mediaType': type,
-              });
-            }
-
-            return AlertDialog(
-              title: const Text('Send File'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: pathController,
-                      decoration: const InputDecoration(
-                        labelText: 'Local path',
-                        hintText: r'C:\Users\you\Downloads\example.pdf',
-                      ),
-                      autofocus: true,
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: nameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Display file name (optional)',
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: typeController,
-                      decoration: const InputDecoration(
-                        labelText: 'Media type',
-                      ),
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        validationError!,
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.error),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: submit,
-                  child: const Text('Send'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Block not implemented in daemon yet')),
     );
-
-    return result;
-  }
-
-  Future<String?> _showDestinationFallbackDialog(String suggestedFileName) async {
-    final resolvedDefaultPath = await _defaultDestinationPath(suggestedFileName);
-    if (!mounted) {
-      return null;
-    }
-
-    final destinationController = TextEditingController(
-      text: resolvedDefaultPath ??
-          (Platform.isWindows
-              ? r'C:\Users\Public\Downloads\' + suggestedFileName
-              : '/tmp/$suggestedFileName'),
-    );
-    String? validationError;
-
-    final result = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            void submit() {
-              final path = destinationController.text.trim();
-              if (path.isEmpty) {
-                setDialogState(() {
-                  validationError = 'Enter a destination path.';
-                });
-                return;
-              }
-              Navigator.of(dialogContext).pop(path);
-            }
-
-            return AlertDialog(
-              title: const Text('Save Incoming File'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: destinationController,
-                      decoration: const InputDecoration(
-                        labelText: 'Destination path',
-                      ),
-                      autofocus: true,
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        validationError!,
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.error),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: submit,
-                  child: const Text('Accept'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    return result;
-  }
-
-  Future<Map<String, String>?> _pickSendFileRequest() async {
-    try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: false,
-        withData: false,
-        lockParentWindow: true,
-      );
-      final files = result?.files;
-      final picked =
-          files != null && files.isNotEmpty ? files.first : null;
-      final path = picked?.path;
-      if (picked == null || path == null || path.isEmpty) {
-        return null;
-      }
-
-      return {
-        'localPath': path,
-        'fileName': picked.name,
-        'mediaType': _guessMediaTypeFromName(picked.name),
-      };
-    } catch (_) {
-      return _showSendFileFallbackDialog();
-    }
-  }
-
-  Future<String?> _pickDestinationPath(String suggestedFileName) async {
-    try {
-      final defaultPath = await _defaultDestinationPath(suggestedFileName);
-      final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'Save incoming file',
-        fileName: suggestedFileName,
-        initialDirectory:
-            defaultPath == null ? null : File(defaultPath).parent.path,
-        lockParentWindow: true,
-      );
-      if (path == null || path.isEmpty) {
-        return null;
-      }
-      return path;
-    } catch (_) {
-      return _showDestinationFallbackDialog(suggestedFileName);
-    }
-  }
-
-  Future<String?> _defaultDestinationPath(String suggestedFileName) async {
-    Directory? baseDir;
-    try {
-      baseDir = await getDownloadsDirectory();
-    } catch (_) {
-      baseDir = null;
-    }
-
-    if (baseDir == null) {
-      try {
-        if (Platform.isAndroid) {
-          final external = await getExternalStorageDirectory();
-          if (external != null) {
-            baseDir = Directory(
-              '${external.parent.parent.parent.parent.path}${Platform.pathSeparator}Download',
-            );
-          }
-        }
-      } catch (_) {
-        baseDir = null;
-      }
-    }
-
-    baseDir ??= Platform.isWindows
-        ? Directory(r'C:\Users\Public\Downloads')
-        : Directory('/tmp');
-
-    final cleaned =
-        suggestedFileName.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
-    final fileName = cleaned.isEmpty ? 'incoming.bin' : cleaned;
-    return '${baseDir.path}${Platform.pathSeparator}$fileName';
-  }
-
-  String _guessMediaTypeFromName(String fileName) {
-    final normalized = fileName.toLowerCase();
-    if (normalized.endsWith('.txt')) return 'text/plain';
-    if (normalized.endsWith('.json')) return 'application/json';
-    if (normalized.endsWith('.pdf')) return 'application/pdf';
-    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
-      return 'image/jpeg';
-    }
-    if (normalized.endsWith('.png')) return 'image/png';
-    if (normalized.endsWith('.gif')) return 'image/gif';
-    if (normalized.endsWith('.mp4')) return 'video/mp4';
-    if (normalized.endsWith('.zip')) return 'application/zip';
-    return 'application/octet-stream';
-  }
-
-  Future<void> _sendFile() async {
-    final deviceId = peer['deviceId']?.toString();
-    if (deviceId == null || deviceId.isEmpty) return;
-
-    final dialogResult = await _pickSendFileRequest();
-    if (dialogResult == null) return;
-    if (!mounted) return;
-
-    final client = context.read<JsonRpcRiftClient>();
-    final messenger = ScaffoldMessenger.of(context);
-
-    setState(() {
-      _isSendingFile = true;
-    });
-
-    try {
-      final result = await client.offerFile(
-        targetDeviceId: deviceId,
-        localPath: dialogResult['localPath']!,
-        fileName: dialogResult['fileName']?.isNotEmpty == true
-            ? dialogResult['fileName']
-            : null,
-        mediaType: dialogResult['mediaType']?.isNotEmpty == true
-            ? dialogResult['mediaType']
-            : null,
-      );
-
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-              'Sent file offer ${result['fileName'] ?? dialogResult['localPath']}'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSendingFile = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _acceptIncomingOffer(Map<String, dynamic> offer) async {
-    final destinationPath = await _pickDestinationPath(
-      offer['fileName']?.toString() ?? 'incoming.bin',
-    );
-    if (destinationPath == null || destinationPath.isEmpty) {
-      return;
-    }
-    if (!mounted) return;
-
-    final client = context.read<JsonRpcRiftClient>();
-    final messenger = ScaffoldMessenger.of(context);
-
-    try {
-      await client.acceptFileOffer(
-        transferId: offer['transferId']?.toString() ?? '',
-        destinationPath: destinationPath,
-      );
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Accepted ${offer['fileName'] ?? 'file'}')),
-      );
-      await _loadIncomingFileOffers();
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
-      );
-    }
-  }
-
-  Future<void> _rejectIncomingOffer(Map<String, dynamic> offer) async {
-    try {
-      final client = context.read<JsonRpcRiftClient>();
-      await client.rejectFileOffer(
-        transferId: offer['transferId']?.toString() ?? '',
-        failureReason: 'PolicyDenied',
-        message: 'User declined from device detail screen',
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Rejected ${offer['fileName'] ?? 'file'}')),
-      );
-      await _loadIncomingFileOffers();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
-      );
-    }
   }
 
   @override
@@ -796,22 +370,18 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         peer['implementationId']?.toString() ?? 'Unavailable';
     final protocolVersion =
         peer['protocolVersion']?.toString() ?? 'Unavailable';
-    final ipAddress =
-        peer['lastAddress']?.toString() ?? peer['address']?.toString() ?? 'Unavailable';
-    final uptime = peer['sessionUptime']?.toString() ?? 'Unavailable';
+    final platform = peer['platform']?.toString();
+    final ipAddress = peer['lastAddress']?.toString() ??
+        peer['address']?.toString() ??
+        'Unavailable';
     final tlsCipher = peer['tlsCipher']?.toString() ?? 'Unavailable';
     final latency =
         peer['latencyMs'] != null ? '${peer['latencyMs']} ms' : 'Unavailable';
     final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
     final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
     final capabilities = List<String>.from(
-      (peer['capabilities'] as List? ?? const <dynamic>[]).map((e) => e.toString()),
-    );
-    final canTransferFiles =
-        trustState == 'trusted' && capabilities.contains('file.transfer');
-    final recentEvents = List<Map<String, dynamic>>.from(
-      (peer['recentEvents'] as List? ?? const <dynamic>[]).map(
-        (e) => Map<String, dynamic>.from(e as Map),
+      (peer['capabilities'] as List? ?? const <dynamic>[]).map(
+        (item) => item.toString(),
       ),
     );
 
@@ -835,7 +405,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Header Section
           Center(
             child: Column(
               children: [
@@ -848,28 +417,39 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     shape: BoxShape.circle,
                     border: Border.all(color: theme.colorScheme.outlineVariant),
                   ),
-                  child: Icon(Icons.laptop_mac, size: 32, color: theme.colorScheme.onSurface),
+                  child: Icon(
+                    _platformIcon(platform),
+                    size: 32,
+                    color: theme.colorScheme.onSurface,
+                  ),
                 ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.secondaryContainer,
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.verified, size: 14, color: theme.colorScheme.onSecondaryContainer),
-                          const SizedBox(width: 4),
-                        Text(
-                          trustState.toUpperCase(),
-                          style: theme.textTheme.labelSmall?.copyWith(
+                          Icon(
+                            Icons.verified,
+                            size: 14,
                             color: theme.colorScheme.onSecondaryContainer,
-                            fontWeight: FontWeight.bold,
                           ),
-                        ),
+                          const SizedBox(width: 4),
+                          Text(
+                            trustState.toUpperCase(),
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSecondaryContainer,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -877,16 +457,26 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     Row(
                       children: [
                         Container(
-                          width: 8, height: 8,
+                          width: 8,
+                          height: 8,
                           decoration: BoxDecoration(
-                            color: isOnline ? theme.colorScheme.secondary : theme.colorScheme.outline,
+                            color: isOnline
+                                ? theme.colorScheme.secondary
+                                : theme.colorScheme.outline,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 4),
-                        Text(isOnline ? 'ONLINE' : 'OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: isOnline ? theme.colorScheme.secondary : theme.colorScheme.outline)),
+                        Text(
+                          isOnline ? 'ONLINE' : 'OFFLINE',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: isOnline
+                                ? theme.colorScheme.secondary
+                                : theme.colorScheme.outline,
+                          ),
+                        ),
                       ],
-                    )
+                    ),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -902,323 +492,148 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             ),
           ),
           const SizedBox(height: 24),
-          
-          // Identity Bento
-          Text('IDENTITY', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Device ID', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                Text(deviceId, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface)),
-                const SizedBox(height: 12),
-                Text('Fingerprint', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(_formatFingerprintWithColons(fingerprint), style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface, letterSpacing: 1.0)),
+          _buildSection(
+            theme,
+            'IDENTITY',
+            [
+              _buildInfoLine(theme, 'Device ID', deviceId),
+              const SizedBox(height: 12),
+              Text(
+                'Fingerprint',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Certificate', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                          Text(
-                            implementationId,
+              ),
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(top: 4),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _formatFingerprintWithColons(fingerprint),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildInfoColumn(
+                      theme,
+                      'Certificate',
+                      implementationId,
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildInfoColumn(
+                      theme,
+                      'Protocol',
+                      protocolVersion,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          _buildSection(
+            theme,
+            'SESSION & CAPABILITIES',
+            [
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildInfoColumn(
+                      theme,
+                      'Platform',
+                      platform?.toUpperCase() ?? 'Unavailable',
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildInfoColumn(theme, 'IP Address', ipAddress),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildInfoColumn(theme, 'Latency', latency),
+                  ),
+                  Expanded(
+                    child: _buildInfoColumn(theme, 'TLS Cipher', tlsCipher),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Divider(
+                height: 1,
+                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Capabilities',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: capabilities.isEmpty
+                    ? [
+                        Text(
+                          'Unavailable',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ]
+                    : capabilities.map((capability) {
+                        return Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
+                            ),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            capability,
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: theme.colorScheme.onSurface,
                             ),
                           ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Protocol', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                          Text(
-                            protocolVersion,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          
-          // Session & Capabilities
-          Text('SESSION & CAPABILITIES', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Capabilities', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: capabilities.isEmpty
-                      ? [
-                          Text(
-                            'Unavailable',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ]
-                      : capabilities.map((capability) {
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              capability,
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.onSurface,
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                ),
-                const SizedBox(height: 16),
-                Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('IP Address', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                          Text(ipAddress, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Uptime', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                          Text(uptime, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Latency', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                    Text(latency, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
-                    const SizedBox(height: 12),
-                    Text('TLS Cipher', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                    Text(tlsCipher, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-
-          Text('FILE TRANSFER', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  canTransferFiles
-                      ? 'This peer negotiated the file.transfer capability.'
-                      : 'File transfer is unavailable until this peer negotiates file.transfer and is trusted.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: canTransferFiles && !_isSendingFile ? _sendFile : null,
-                    icon: _isSendingFile
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.upload_file),
-                    label: Text(_isSendingFile ? 'Sending...' : 'Send File'),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Text(
-                      'Incoming offers',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (_isLoadingFileOffers)
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    else
-                      IconButton(
-                        onPressed: _loadIncomingFileOffers,
-                        icon: const Icon(Icons.refresh),
-                        tooltip: 'Refresh incoming offers',
-                      ),
-                  ],
-                ),
-                if (_incomingFileOffers.isEmpty)
-                  Text(
-                    'No incoming file offers from this device right now.',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  )
-                else
-                  Column(
-                    children: _incomingFileOffers.map((offer) {
-                      final fileName =
-                          offer['fileName']?.toString() ?? 'Unknown file';
-                      final byteSize = offer['byteSize']?.toString() ?? '0';
-                      return Container(
-                        margin: const EdgeInsets.only(top: 12),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surfaceContainer,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fileName,
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: theme.colorScheme.onSurface,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${offer['mediaType'] ?? 'application/octet-stream'} • $byteSize bytes',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: OutlinedButton(
-                                    onPressed: () => _rejectIncomingOffer(offer),
-                                    child: const Text('Reject'),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: FilledButton(
-                                    onPressed: () => _acceptIncomingOffer(offer),
-                                    child: const Text('Accept'),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(growable: false),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          
-          // Recent Events
-          Text('RECENT EVENTS', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, letterSpacing: 1.5)),
-          const SizedBox(height: 4),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: recentEvents.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'No device-specific events are exposed by the daemon yet.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  )
-                : Column(
-                    children: [
-                      for (int i = 0; i < recentEvents.length; i++) ...[
-                        _buildEventRow(
-                          recentEvents[i]['timestamp']?.toString() ?? '--:--',
-                          recentEvents[i]['eventType']?.toString() ?? 'unknown',
-                          theme,
-                          recentEvents[i]['outcome']?.toString() == 'success',
-                        ),
-                        if (i != recentEvents.length - 1)
-                          Divider(height: 1, color: theme.colorScheme.outlineVariant),
-                      ],
-                    ],
-                  ),
+                        );
+                      }).toList(growable: false),
+              ),
+            ],
           ),
           const SizedBox(height: 32),
-          
-          // Actions
           OutlinedButton(
-            onPressed: _revokeTrust,
+            onPressed: _forgetPeer,
             style: OutlinedButton.styleFrom(
               foregroundColor: theme.colorScheme.error,
               side: BorderSide(color: theme.colorScheme.error),
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
-            child: const Text('Quên thiết bị', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: const Text(
+              'Quên thiết bị',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
           ),
           const SizedBox(height: 12),
           ElevatedButton(
@@ -1227,9 +642,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               backgroundColor: theme.colorScheme.error,
               foregroundColor: theme.colorScheme.onError,
               padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
-            child: const Text('Chặn', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            child: const Text(
+              'Chặn',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
           ),
           const SizedBox(height: 8),
           Text(
@@ -1245,26 +665,72 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  Widget _buildEventRow(String time, String event, ThemeData theme, bool highlight) {
-    return Padding(
-      padding: const EdgeInsets.all(12),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(time, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+  Widget _buildSection(ThemeData theme, String title, List<Widget> children) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 1.5,
           ),
-          Expanded(
-            child: Text(
-              event,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: highlight ? theme.colorScheme.secondary : theme.colorScheme.onSurface,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLowest,
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+            borderRadius: BorderRadius.circular(12),
           ),
-        ],
-      ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: children,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoLine(ThemeData theme, String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildInfoColumn(ThemeData theme, String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+      ],
     );
   }
 }

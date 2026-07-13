@@ -32,6 +32,17 @@ public sealed class ProtocolMessageRouter(
             return;
         }
 
+        if (string.Equals(messageType, "trust.remove", StringComparison.Ordinal))
+        {
+            if (!session.AllowsProtectedTraffic)
+            {
+                throw new UnauthorizedAccessException($"Session for '{session.PeerDeviceId}' is not authorized for protected traffic.");
+            }
+
+            await pairingProtocolCoordinator.HandleMessageAsync(peerDeviceId, payload, cancellationToken);
+            return;
+        }
+
         if (string.Equals(messageType, "clipboard.offer", StringComparison.Ordinal))
         {
             EnsureProtectedMessageAllowed(session, "clipboard.offer_fetch", messageType);

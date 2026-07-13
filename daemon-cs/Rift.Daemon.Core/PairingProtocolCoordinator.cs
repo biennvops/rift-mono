@@ -393,13 +393,25 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }, cancellationToken);
     }
 
+    public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+    {
+        return SendProtocolMessageAsync(deviceId, "trust.remove", new
+        {
+            removedDeviceId = deviceId,
+            reason,
+            removedAt = _timeProvider.GetUtcNow().ToString("O")
+        }, cancellationToken);
+    }
+
     public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         await PruneExpiredSessionsAsync(cancellationToken);
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var messageType = root.GetProperty("type").GetString();
-        if (string.IsNullOrWhiteSpace(messageType) || !messageType.StartsWith("pairing.", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(messageType) ||
+            (!messageType.StartsWith("pairing.", StringComparison.Ordinal) &&
+             !string.Equals(messageType, "trust.remove", StringComparison.Ordinal)))
         {
             return;
         }
@@ -420,7 +432,41 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             case "pairing.complete":
                 await HandlePairingCompleteAsync(peerDeviceId, payloadElement, cancellationToken);
                 break;
+            case "trust.remove":
+                await HandleTrustRemoveAsync(peerDeviceId, payloadElement, cancellationToken);
+                break;
         }
+    }
+
+    private async Task HandleTrustRemoveAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var removedDeviceId = payload.GetProperty("removedDeviceId").GetString();
+        if (!string.Equals(removedDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Ignoring trust.remove from peer {DeviceId} that targeted {RemovedDeviceId}.",
+                peerDeviceId,
+                removedDeviceId);
+            return;
+        }
+
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        if (peer is null || peer.State != TrustState.Trusted)
+        {
+            _logger.LogWarning(
+                "Ignoring trust.remove from non-trusted or unknown peer {DeviceId}.",
+                peerDeviceId);
+            return;
+        }
+
+        var reason = payload.TryGetProperty("reason", out var reasonElement) && reasonElement.ValueKind == JsonValueKind.String
+            ? reasonElement.GetString()
+            : "Peer removed trust.";
+        _trustStore.DeletePeer(peerDeviceId);
+        _pairingStates.TryRemove(peerDeviceId, out _);
+        await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken);
+        await LogEventAsync(SecurityEventTypes.TrustRemoved, peerDeviceId, SecurityEventOutcome.Success, reason, cancellationToken);
+        await NotifyTrustChangedAsync(peerDeviceId, "trusted", "removed", reason ?? "Peer removed trust.", cancellationToken);
     }
 
     private async Task HandlePairingStartAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
