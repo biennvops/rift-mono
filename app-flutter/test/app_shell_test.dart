@@ -75,6 +75,17 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
+  Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed =>
+      const Stream.empty();
+
+  @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
 
   @override
@@ -150,6 +161,12 @@ void main() {
     when(() => mockClient.onClipboardOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onClipboardExpired)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileOffer)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferCompleted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferFailed)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
         .thenAnswer((_) => Stream.value(true));
