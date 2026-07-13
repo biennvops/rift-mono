@@ -516,6 +516,11 @@ void main() {
         fileName: 'reject-me.txt',
         mediaType: 'text/plain',
       );
+      final failedEventFuture = service1.onTransferFailed.firstWhere(
+        (event) =>
+            event['transferId'] == offerResult.transferId &&
+            event['failureReason'] == 'PolicyDenied',
+      );
 
       await Future<void>.delayed(const Duration(milliseconds: 100));
       await service2.rejectFileOffer(
@@ -523,18 +528,11 @@ void main() {
         failureReason: 'PolicyDenied',
         message: 'User declined',
       );
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final failedEvent = await failedEventFuture;
 
-      final transfers = service1.listFileTransfers();
-      expect(
-        transfers.any(
-          (transfer) =>
-              transfer['transferId'] == offerResult.transferId &&
-              transfer['state'] == 'failed' &&
-              transfer['failureReason'] == 'PolicyDenied',
-        ),
-        isTrue,
-      );
+      expect(failedEvent['transferId'], offerResult.transferId);
+      expect(failedEvent['failureReason'], 'PolicyDenied');
+      expect(service1.listFileTransfers(), isEmpty);
     });
   });
 }
