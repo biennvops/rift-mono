@@ -153,6 +153,19 @@ class FakeTrustStore implements TrustStore {
   Future<int> countSecurityEvents(SecurityEventQuery query) async => 0;
 }
 
+Future<void> waitForCondition(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('Condition not met within $timeout.');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
 void main() {
   group('FileTransferService', () {
     late FakeTransport transport;
@@ -254,8 +267,11 @@ void main() {
         },
       });
 
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
+      await waitForCondition(
+        () => transport.sentMessages.any(
+          (message) => message['type'] == 'file.complete',
+        ),
+      );
 
       expect(
         transport.sentMessages.any((message) => message['type'] == 'file.chunk'),
