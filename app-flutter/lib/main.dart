@@ -193,6 +193,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       ValueNotifier<String?>(null);
   final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
       <Map<String, dynamic>>[];
+  final List<Map<String, String>> _pendingSharedSendItems =
+      <Map<String, String>>[];
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -305,6 +307,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
+        unawaited(_flushPendingSharedSendItems());
       }
     });
   }
@@ -492,12 +495,48 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (items.isEmpty) {
       return;
     }
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _pendingSharedSendItems.addAll(items);
+      debugPrint(
+        '[Send Queue] Buffered ${items.length} shared item(s); daemon not connected yet.',
+      );
+      return;
+    }
     final result = await context.read<SendQueueController>().enqueueRequests(
           items,
         );
     debugPrint(
       '[Send Queue] Enqueued shared items: added=${result.added} skipped=${result.skipped}',
     );
+  }
+
+  Future<void> _flushPendingSharedSendItems() async {
+    if (_pendingSharedSendItems.isEmpty) {
+      return;
+    }
+    final pending = List<Map<String, String>>.from(_pendingSharedSendItems);
+    _pendingSharedSendItems.clear();
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      // Put them back; we'll try again on the next reconnect.
+      _pendingSharedSendItems.insertAll(0, pending);
+      return;
+    }
+    final result = await context.read<SendQueueController>().enqueueRequests(
+          pending,
+        );
+    debugPrint(
+      '[Send Queue] Drained buffered shared items: added=${result.added} skipped=${result.skipped}',
+    );
+    // If anything still couldn't be enqueued (e.g., file disappeared), re-buffer
+    // so we don't lose the user's intent — they'll see it once the daemon
+    // recovers and can act on it.
+    if (result.skipped > 0 && !_pendingSharedSendItems.contains(pending.first)) {
+      debugPrint(
+        '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
+      );
+    }
   }
 
   void _openIncomingPairingRequest(Map<String, dynamic> payload) {
