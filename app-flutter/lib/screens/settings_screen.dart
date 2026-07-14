@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import 'event_log_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
 import '../src/platform/macos_notifications.dart';
 
@@ -22,11 +24,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _error;
   String _notificationPermissionStatus = 'unknown';
   bool _clipboardNotificationsEnabled = false;
+  bool _notificationSyncEnabled = true;
+  final TextEditingController _notificationBlacklistController =
+      TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _fetchDeviceInfo();
+  }
+
+  @override
+  void dispose() {
+    _notificationBlacklistController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchDeviceInfo() async {
@@ -47,6 +58,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _notificationPermissionStatus = notificationStatus;
         _clipboardNotificationsEnabled =
             prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
+        _notificationSyncEnabled =
+            prefs.getBool(AppPrefs.notificationSyncEnabled) ?? true;
+        _notificationBlacklistController.text =
+            (prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
+                    const <String>[])
+                .join('\n');
         _isLoading = false;
       });
     } catch (e) {
@@ -91,6 +108,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _clipboardNotificationsEnabled = enabled;
     });
+  }
+
+  List<String> _notificationBlacklistPackages() {
+    return _notificationBlacklistController.text
+        .split(RegExp(r'[\n,]'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  Future<void> _persistNotificationSyncPolicy() async {
+    final blacklist = _notificationBlacklistPackages();
+    await persistNotificationSyncPolicyPreferences(
+      enabled: _notificationSyncEnabled,
+      blacklistedPackages: blacklist,
+    );
+    if (!mounted) {
+      return;
+    }
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    if (!client.isConnected) {
+      return;
+    }
+    try {
+      await client.updateNotificationSyncPolicy(
+        enabled: _notificationSyncEnabled,
+        blacklistedPackages: blacklist,
+      );
+    } catch (error) {
+      if (JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      );
+    }
   }
 
   bool get _canOpenNotificationSettings => Platform.isAndroid;
@@ -387,6 +444,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     value: _clipboardNotificationsEnabled,
                     onChanged: _setClipboardNotificationsEnabled,
+                  ),
+                ),
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    secondary: Icon(
+                      Icons.notifications_active,
+                      color: theme.colorScheme.outline,
+                    ),
+                    title: const Text('Android notification sync'),
+                    subtitle: Text(
+                      'On by default. Mirror Android notifications to trusted desktop devices only.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    value: _notificationSyncEnabled,
+                    onChanged: (enabled) async {
+                      setState(() {
+                        _notificationSyncEnabled = enabled;
+                      });
+                      await _persistNotificationSyncPolicy();
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: TextField(
+                    controller: _notificationBlacklistController,
+                    minLines: 2,
+                    maxLines: 4,
+                    onChanged: (_) {
+                      unawaited(_persistNotificationSyncPolicy());
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Notification blacklist',
+                      helperText:
+                          'One Android package per line. Blacklisted apps stay local.',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ),
               ],

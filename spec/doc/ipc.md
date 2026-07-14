@@ -99,7 +99,8 @@ Returns the local device's identity information.
     { "name": "clipboard.offer_fetch", "version": 1 },
     { "name": "presence.basic", "version": 1 },
     { "name": "operation.lifecycle", "version": 1 },
-    { "name": "security.event_log", "version": 1 }
+    { "name": "security.event_log", "version": 1 },
+    { "name": "notification.sync", "version": 1 }
   ]
 }
 ```
@@ -587,7 +588,83 @@ Rejects an incoming file offer.
 }
 ```
 
-### 4.7 Presence
+### 4.7 Notification Sync
+
+#### `rift.listNotifications`
+
+Returns the locally cached mirrored notification inbox plus the current local notification-sync policy.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "notifications": [
+    {
+      "notificationId": "android:com.example.chat:42",
+      "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "packageName": "com.example.chat",
+      "appName": "Example Chat",
+      "title": "Riley",
+      "bodyPreview": "See you at 6?",
+      "postedAt": "2026-07-14T09:58:00Z",
+      "isDismissible": true,
+      "isOpenable": true
+    }
+  ],
+  "policy": {
+    "enabled": true,
+    "blacklistedPackages": ["com.bank.example"]
+  }
+}
+```
+
+#### `rift.performNotificationAction`
+
+Requests a remote action against an Android-origin mirrored notification.
+
+**Params:**
+
+| Field            | Type   | Required | Description                                 |
+| ---------------- | ------ | -------- | ------------------------------------------- |
+| `notificationId` | string | Yes      | Android-origin stable notification ID       |
+| `action`         | string | Yes      | Closed vocabulary: `open` or `dismiss`      |
+
+**Result:**
+
+```json
+{
+  "operationId": "018f2f9a-8b7c-4a4b-9c0d-666666666667",
+  "notificationId": "android:com.example.chat:42",
+  "action": "open",
+  "state": "Pending"
+}
+```
+
+**Errors:** `-32003` if `notification.sync` is unavailable, `-32009` if the mirrored notification no longer exists, `-32010` if local policy denies the action.
+
+#### `rift.updateNotificationSyncPolicy`
+
+Updates the local notification-sync policy. In v1, the default policy is enabled with a package blacklist.
+
+**Params:**
+
+| Field                 | Type             | Required | Description                                   |
+| --------------------- | ---------------- | -------- | --------------------------------------------- |
+| `enabled`             | boolean          | Yes      | Whether Android notification sync is enabled  |
+| `blacklistedPackages` | array of strings | Yes      | Android package names excluded from syncing   |
+
+**Result:**
+
+```json
+{
+  "enabled": true,
+  "blacklistedPackages": ["com.bank.example"]
+}
+```
+
+### 4.8 Presence
 
 #### `rift.getPeerPresence`
 
@@ -612,7 +689,7 @@ Returns presence information for a specific trusted peer.
 
 **Errors:** `-32009` if peer not found, `-32004` if peer not trusted.
 
-### 4.8 Operations
+### 4.9 Operations
 
 #### `rift.listOperations`
 
@@ -674,7 +751,7 @@ Returns details for a single operation, including its transition history.
 
 **Errors:** `-32009` if operation not found.
 
-### 4.9 Event Log
+### 4.10 Event Log
 
 #### `rift.queryEventLog`
 
@@ -724,6 +801,10 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |
 | `rift.onClipboardOffer`      | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }`  | New clipboard offer from a peer      |
 | `rift.onClipboardExpired`    | `{ "offerId" }`                                                                        | Clipboard offer expired              |
+| `rift.onNotificationPosted`  | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification posted         |
+| `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
+| `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
+| `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
 | `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |

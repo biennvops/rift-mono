@@ -8,7 +8,8 @@ public sealed class ProtocolMessageRouter(
     IPairingProtocolCoordinator pairingProtocolCoordinator,
     IPresenceService presenceService,
     IClipboardService clipboardService,
-    IFileTransferService fileTransferService) : IProtocolMessageRouter
+    IFileTransferService fileTransferService,
+    INotificationSyncService notificationSyncService) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
@@ -114,6 +115,72 @@ public sealed class ProtocolMessageRouter(
                 : [];
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
+            return;
+        }
+
+        if (string.Equals(messageType, "notification.posted", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "notification.sync", messageType);
+            var notificationPayload = root.GetProperty("payload");
+            EnsureEnvelopeIdentityMatches(peerDeviceId, notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty, messageType);
+            await notificationSyncService.HandleNotificationPostedAsync(
+                ParseNotificationRecord(notificationPayload),
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "notification.updated", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "notification.sync", messageType);
+            var notificationPayload = root.GetProperty("payload");
+            EnsureEnvelopeIdentityMatches(peerDeviceId, notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty, messageType);
+            await notificationSyncService.HandleNotificationUpdatedAsync(
+                ParseNotificationRecord(notificationPayload),
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "notification.removed", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "notification.sync", messageType);
+            var notificationPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            await notificationSyncService.HandleNotificationRemovedAsync(
+                new NotificationRemovedRecord
+                {
+                    NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
+                    SourceDeviceId = payloadSourceDeviceId,
+                    RemovedAt = notificationPayload.TryGetProperty("removedAt", out var removedAtElement)
+                        ? removedAtElement.GetString()
+                        : null
+                },
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "notification.actionResult", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "notification.sync", messageType);
+            var notificationPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            await notificationSyncService.HandleNotificationActionResultAsync(
+                new NotificationActionResultRecord
+                {
+                    NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
+                    SourceDeviceId = payloadSourceDeviceId,
+                    RequestingDeviceId = notificationPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
+                    Action = notificationPayload.GetProperty("action").GetString() ?? string.Empty,
+                    Success = notificationPayload.GetProperty("success").GetBoolean(),
+                    FailureReason = notificationPayload.TryGetProperty("failureReason", out var failureReasonElement)
+                        ? failureReasonElement.GetString()
+                        : null,
+                    Message = notificationPayload.TryGetProperty("message", out var actionMessageElement)
+                        ? actionMessageElement.GetString()
+                        : null
+                },
+                cancellationToken);
             return;
         }
 
@@ -244,5 +311,29 @@ public sealed class ProtocolMessageRouter(
         }
 
         throw new UnauthorizedAccessException($"{messageType} sourceDeviceId did not match the authenticated peer identity.");
+    }
+
+    private static NotificationSyncRecord ParseNotificationRecord(JsonElement notificationPayload)
+    {
+        IReadOnlyDictionary<string, object?>? icon = null;
+        if (notificationPayload.TryGetProperty("icon", out var iconElement) &&
+            iconElement.ValueKind == JsonValueKind.Object)
+        {
+            icon = JsonSerializer.Deserialize<Dictionary<string, object?>>(iconElement.GetRawText());
+        }
+
+        return new NotificationSyncRecord
+        {
+            NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
+            SourceDeviceId = notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
+            PackageName = notificationPayload.GetProperty("packageName").GetString() ?? string.Empty,
+            AppName = notificationPayload.GetProperty("appName").GetString() ?? string.Empty,
+            Title = notificationPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,
+            BodyPreview = notificationPayload.TryGetProperty("bodyPreview", out var bodyPreviewElement) ? bodyPreviewElement.GetString() : null,
+            PostedAt = notificationPayload.GetProperty("postedAt").GetString() ?? string.Empty,
+            IsDismissible = notificationPayload.GetProperty("isDismissible").GetBoolean(),
+            IsOpenable = notificationPayload.GetProperty("isOpenable").GetBoolean(),
+            Icon = icon
+        };
     }
 }

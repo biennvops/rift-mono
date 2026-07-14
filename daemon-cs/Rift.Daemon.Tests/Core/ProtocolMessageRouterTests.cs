@@ -20,6 +20,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly PairingProtocolCoordinator _pairingCoordinator;
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
+    private readonly NotificationSyncService _notificationSyncService;
     private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
     private readonly FakeTransport _pairingTransport;
@@ -56,7 +57,15 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _operationService,
             null,
             NullLogger<FileTransferService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService);
+        _notificationSyncService = new NotificationSyncService(
+            _clipboardTransport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            null,
+            NullLogger<NotificationSyncService>.Instance);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _notificationSyncService);
     }
 
     [Fact]
@@ -368,6 +377,55 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 File.Delete(tempFile);
             }
         }
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationPosted_RoutesToNotificationSyncService()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-notification",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _router.HandleMessageAsync(
+            CreateSession("rift-peer-notification", ["notification.sync", "presence.basic", "operation.lifecycle", "security.event_log"]),
+            CreateEnvelope("rift-peer-notification", "notification.posted", new
+            {
+                notificationId = "notif-router-1",
+                sourceDeviceId = "rift-peer-notification",
+                packageName = "com.example.chat",
+                appName = "Example Chat",
+                title = "Riley",
+                bodyPreview = "See you at 6?",
+                postedAt = "2026-07-14T10:00:00Z",
+                isDismissible = true,
+                isOpenable = true
+            }),
+            CancellationToken.None);
+
+        var notifications = await _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
+        Assert.Contains(notifications.Notifications, notification => notification.NotificationId == "notif-router-1");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationPosted_RejectsWhenCapabilityWasNotNegotiated()
+    {
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession("rift-peer-notification", ["presence.basic", "operation.lifecycle", "security.event_log"]),
+            CreateEnvelope("rift-peer-notification", "notification.posted", new
+            {
+                notificationId = "notif-router-unauthorized",
+                sourceDeviceId = "rift-peer-notification",
+                packageName = "com.example.chat",
+                appName = "Example Chat",
+                postedAt = "2026-07-14T10:00:00Z",
+                isDismissible = true,
+                isOpenable = true
+            }),
+            CancellationToken.None));
     }
 
     [Fact]

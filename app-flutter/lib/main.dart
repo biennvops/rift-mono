@@ -22,6 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
+import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
@@ -308,8 +309,22 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
         unawaited(_flushPendingSharedSendItems());
+        unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
+  }
+
+  Future<void> _reapplyNotificationSyncPolicy(JsonRpcRiftClient client) async {
+    try {
+      await pushSavedNotificationSyncPolicy(client);
+    } catch (error) {
+      if (JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        return;
+      }
+      debugPrint(
+        '[Notification Sync] Failed to reapply saved policy after reconnect: $error',
+      );
+    }
   }
 
   Future<dynamic> _handlePlatformNotificationMethodCall(MethodCall call) async {
@@ -454,6 +469,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   void _handleNotificationActionPayload(Map<String, dynamic> payload) {
     final route = payload['route']?.toString();
+    final notificationAction = payload['notificationAction']?.toString();
+    final notificationId = payload['notificationId']?.toString();
+    if (notificationAction != null &&
+        notificationId != null &&
+        notificationId.isNotEmpty) {
+      final client = context.read<JsonRpcRiftClient>();
+      if (client.isConnected) {
+        unawaited(
+          client.performNotificationAction(
+            notificationId: notificationId,
+            action: notificationAction,
+          ).catchError((_) {}),
+        );
+      }
+    }
     if (route == null || route.isEmpty) {
       return;
     }
@@ -477,6 +507,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
+      case NotificationRoute.historyNotifications:
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:

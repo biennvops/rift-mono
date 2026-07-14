@@ -15,6 +15,7 @@ public sealed class DaemonInfoService(
     [
         new() { Name = "clipboard.offer_fetch", Version = 1 },
         new() { Name = "file.transfer", Version = 1 },
+        new() { Name = "notification.sync", Version = 1 },
         new() { Name = "presence.basic", Version = 1 },
         new() { Name = "operation.lifecycle", Version = 1 },
         new() { Name = "security.event_log", Version = 1 }

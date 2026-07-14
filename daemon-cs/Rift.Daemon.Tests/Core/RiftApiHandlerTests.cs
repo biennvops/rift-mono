@@ -25,6 +25,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
     private readonly SendQueueService _sendQueueService;
+    private readonly FakeNotificationSyncService _notificationSyncService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -44,13 +45,14 @@ public sealed class RiftApiHandlerTests : IDisposable
         _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         _fileTransferService = new FileTransferService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<FileTransferService>.Instance);
         _sendQueueService = new SendQueueService(_trustStore, null);
+        _notificationSyncService = new FakeNotificationSyncService();
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _notificationSyncService);
     }
 
     [Fact]
@@ -64,6 +66,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Equal("riftd-cs/0.1.0", result.ImplementationId);
         Assert.Equal("0.1-draft", result.ProtocolVersion);
         Assert.Contains(result.Capabilities, capability => capability.Name == "security.event_log");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "notification.sync");
     }
 
     [Fact]
@@ -160,7 +163,8 @@ public sealed class RiftApiHandlerTests : IDisposable
             _fileTransferService,
             _sendQueueService,
             _operationService,
-            pairingService);
+            pairingService,
+            _notificationSyncService);
 
         var result = await handler.StartPairingByEndpointAsync("10.53.38.174", 9140);
 
@@ -581,6 +585,21 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task NotificationSyncMethods_DelegateToNotificationService()
+    {
+        var listed = await _handler.ListNotificationsAsync();
+        var action = await _handler.PerformNotificationActionAsync("notif-1", "open");
+        var policy = await _handler.UpdateNotificationSyncPolicyAsync(true, ["com.bank.example"]);
+
+        Assert.Single(listed.Notifications);
+        Assert.Equal("notif-1", listed.Notifications[0].NotificationId);
+        Assert.Equal("operation-notification-1", action.OperationId);
+        Assert.Equal("open", action.Action);
+        Assert.True(policy.Enabled);
+        Assert.Equal(["com.bank.example"], policy.BlacklistedPackages);
+    }
+
+    [Fact]
     public async Task StartPairingAsync_UnexpectedServiceFailure_ReturnsInternalError()
     {
         var handler = new RiftApiHandler(
@@ -590,7 +609,8 @@ public sealed class RiftApiHandlerTests : IDisposable
             _fileTransferService,
             _sendQueueService,
             _operationService,
-            new ThrowingPairingService());
+            new ThrowingPairingService(),
+            _notificationSyncService);
 
         var ex = await Assert.ThrowsAsync<LocalRpcException>(() => handler.StartPairingAsync("rift-peer-failure"));
 
@@ -635,6 +655,64 @@ public sealed class RiftApiHandlerTests : IDisposable
         {
             PeerDiscovered?.Invoke(this, args);
         }
+    }
+
+    private sealed class FakeNotificationSyncService : INotificationSyncService
+    {
+        public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new ListNotificationsResult
+            {
+                Notifications =
+                [
+                    new NotificationSyncRecord
+                    {
+                        NotificationId = "notif-1",
+                        SourceDeviceId = "rift-peer",
+                        PackageName = "com.example.chat",
+                        AppName = "Example Chat",
+                        Title = "Riley",
+                        BodyPreview = "See you at 6?",
+                        PostedAt = "2026-07-14T10:00:00Z",
+                        IsDismissible = true,
+                        IsOpenable = true
+                    }
+                ],
+                Policy = new NotificationSyncPolicy
+                {
+                    Enabled = true,
+                    BlacklistedPackages = ["com.bank.example"]
+                }
+            });
+        }
+
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new PerformNotificationActionResult
+            {
+                OperationId = "operation-notification-1",
+                NotificationId = notificationId,
+                Action = action,
+                State = "Pending"
+            });
+        }
+
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotificationSyncPolicy
+            {
+                Enabled = enabled,
+                BlacklistedPackages = blacklistedPackages.ToArray()
+            });
+        }
+
+        public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class FakeTransport : ITransport

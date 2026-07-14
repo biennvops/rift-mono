@@ -42,6 +42,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
+  final List<Map<String, dynamic>> notifications = <Map<String, dynamic>>[];
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> queueItems;
   final List<Map<String, Object>> clipboardNotifications =
@@ -58,7 +59,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   ];
   final List<Map<String, String>> offeredFiles = <Map<String, String>>[];
   final List<Object> offerFileFailures = <Object>[];
-  final List<Map<String, String>> assignedQueueTargets = <Map<String, String>>[];
+  final List<Map<String, String>> assignedQueueTargets =
+      <Map<String, String>>[];
   final List<String> retriedQueueItems = <String>[];
   final List<String> removedQueueItems = <String>[];
   bool _isConnected;
@@ -72,6 +74,22 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onClipboardExpired =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationPosted =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationUpdated =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationRemoved =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationActionResult =>
       const Stream<Map<String, dynamic>>.empty();
 
   @override
@@ -104,6 +122,15 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   Future<dynamic> listIncomingFileOffers() async => {'offers': []};
 
   @override
+  Future<dynamic> listNotifications() async => {
+        'notifications': notifications,
+        'policy': {
+          'enabled': true,
+          'blacklistedPackages': <String>[],
+        },
+      };
+
+  @override
   Future<dynamic> listTrustedPeers() async => {
         'peers': trustedPeers,
       };
@@ -125,6 +152,19 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       'contentBase64': contentBase64,
     });
     return const <String, Object>{'ok': true};
+  }
+
+  @override
+  Future<dynamic> performNotificationAction({
+    required String notificationId,
+    required String action,
+  }) async {
+    return {
+      'operationId': 'notification-op-1',
+      'notificationId': notificationId,
+      'action': action,
+      'state': 'Pending',
+    };
   }
 
   @override
@@ -164,7 +204,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       'queueItemId': queueItemId,
       'targetDeviceId': targetDeviceId,
     });
-    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    final item =
+        queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
     item['targetDeviceId'] = targetDeviceId;
     item['status'] = 'dispatching';
     return item;
@@ -173,7 +214,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> retrySendQueueItem(String queueItemId) async {
     retriedQueueItems.add(queueItemId);
-    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    final item =
+        queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
     item['status'] = 'dispatching';
     return item;
   }
@@ -232,10 +274,14 @@ void main() {
 
   testWidgets('Transfer activity hides folder action for direct-open flow',
       (WidgetTester tester) async {
-    await tester.pumpWidget(buildScreen(revealInFolder: false));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
+    final routeNotifier =
+        ValueNotifier<String?>(NotificationRoute.historyTransferActivity);
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        routeNotifier: routeNotifier,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('report.pdf'), findsOneWidget);
@@ -251,10 +297,14 @@ void main() {
 
   testWidgets('Transfer activity shows folder action for desktop flow',
       (WidgetTester tester) async {
-    await tester.pumpWidget(buildScreen(revealInFolder: true));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
+    final routeNotifier =
+        ValueNotifier<String?>(NotificationRoute.historyTransferActivity);
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        routeNotifier: routeNotifier,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('report.pdf'), findsOneWidget);
@@ -283,11 +333,10 @@ void main() {
       buildScreen(
         revealInFolder: true,
         client: client,
+        routeNotifier:
+            ValueNotifier<String?>(NotificationRoute.historyTransferActivity),
       ),
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
     await tester.pumpAndSettle();
 
     expect(find.text('clip.mp4'), findsOneWidget);
@@ -564,5 +613,4 @@ void main() {
     expect(client.removedQueueItems, ['queue-1']);
     expect(find.text('demo-1.txt'), findsNothing);
   });
-
 }
