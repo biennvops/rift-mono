@@ -24,6 +24,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly OperationService _operationService;
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
+    private readonly SendQueueService _sendQueueService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -42,13 +43,14 @@ public sealed class RiftApiHandlerTests : IDisposable
         _operationService = new OperationService(null, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
         _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         _fileTransferService = new FileTransferService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<FileTransferService>.Instance);
+        _sendQueueService = new SendQueueService(_trustStore, null);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _operationService, pairingService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService);
     }
 
     [Fact]
@@ -156,6 +158,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
             _fileTransferService,
+            _sendQueueService,
             _operationService,
             pairingService);
 
@@ -230,6 +233,26 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Equal("online", result.Status);
         Assert.Equal("2026-06-18T10:07:00Z", result.LastSeenAt);
         Assert.Contains("presence.basic", result.Capabilities);
+    }
+
+    [Fact]
+    public async Task EnqueueFileSendAsync_ReturnsQueueItem()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"rift-api-send-queue-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "hello");
+        try
+        {
+            var result = await _handler.EnqueueFileSendAsync(path, "queued.txt", "text/plain");
+            var listed = await _handler.ListSendQueueAsync();
+
+            Assert.False(string.IsNullOrWhiteSpace(result.QueueItemId));
+            Assert.Equal("waiting_for_target", result.Status);
+            Assert.Contains(listed.Items, item => item.QueueItemId == result.QueueItemId && item.FileName == "queued.txt");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -565,6 +588,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
             _fileTransferService,
+            _sendQueueService,
             _operationService,
             new ThrowingPairingService());
 

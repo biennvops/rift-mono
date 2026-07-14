@@ -22,6 +22,15 @@ Normative behavior lives in:
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
 - Android: isolate transport to `daemon-dart`
 
+macOS notes:
+
+- send-file picking uses the shared Flutter `file_picker` flow with
+  multi-select enabled
+- the app can accept files via `Open With Rift` / document-open on macOS and
+  route them into the send queue / History -> Send screen
+- a dedicated macOS share extension scaffold now exists in `macos/RiftShareExtension/`
+  using an App Group handoff, but the Xcode target wiring is still the next step
+
 The Flutter layer should not duplicate authoritative trust or identity state.
 That data lives in the daemon.
 

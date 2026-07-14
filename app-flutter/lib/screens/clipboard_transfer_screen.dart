@@ -7,7 +7,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../src/file_transfer/file_storage.dart';
+import '../src/file_transfer/legacy_send_queue_coordinator.dart';
+import '../src/file_transfer/send_queue_controller.dart';
+import '../src/file_transfer/send_queue_entry.dart';
+import '../src/file_transfer/send_queue_mode_coordinator.dart';
 import '../src/file_transfer/send_queue_panel.dart';
+import '../src/file_transfer/send_queue_summary.dart';
+import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/notification_route.dart';
 
@@ -36,7 +42,7 @@ class ClipboardTransferScreen extends StatefulWidget {
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
   final bool? revealCompletedTransfersInFolderOverride;
   final ValueNotifier<String?>? routeNotifier;
-  final ValueNotifier<List<Map<String, String>>?>? sharedSendRequestsNotifier;
+  final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
   const ClipboardTransferScreen({
     super.key,
@@ -45,7 +51,7 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.pickSendFilesOverride,
     this.revealCompletedTransfersInFolderOverride,
     this.routeNotifier,
-    this.sharedSendRequestsNotifier,
+    this.sharedClipboardTextNotifier,
   });
 
   @override
@@ -54,13 +60,13 @@ class ClipboardTransferScreen extends StatefulWidget {
 }
 
 class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
+  static const _legacyQueueCoordinator = LegacySendQueueCoordinator();
   final List<Map<String, dynamic>> _clipboardOffers = [];
   final List<Map<String, dynamic>> _incomingFileOffers = [];
   final List<Map<String, dynamic>> _fileTransfers = [];
   final List<Map<String, dynamic>> _trustedPeers = [];
-  final List<_StagedSendFile> _stagedFiles = [];
   final Set<String> _hiddenOfferIds = <String>{};
-  final Set<String> _sendingFilePeerIds = <String>{};
+  final Set<String> _legacySendingFilePeerIds = <String>{};
 
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
@@ -69,6 +75,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
+  StreamSubscription<bool>? _connectionChangedSub;
 
   bool _isRefreshing = false;
   bool _isRefreshingFileOffers = false;
@@ -79,24 +86,24 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ??
       shouldRevealCompletedTransferDestination();
+  SendQueueController get _sendQueue => context.read<SendQueueController>();
+  SendQueueModeCoordinator get _queueMode =>
+      SendQueueModeCoordinator(_sendQueue, _legacyQueueCoordinator);
 
   @override
   void initState() {
     super.initState();
     widget.routeNotifier?.addListener(_handleExternalRoute);
-    widget.sharedSendRequestsNotifier?.addListener(_handleExternalSharedSend);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _bindStreams();
+      unawaited(_restoreStagedQueue());
       _refreshAll();
-      _handleExternalSharedSend();
     });
   }
 
   @override
   void dispose() {
     widget.routeNotifier?.removeListener(_handleExternalRoute);
-    widget.sharedSendRequestsNotifier
-        ?.removeListener(_handleExternalSharedSend);
     _clipboardOfferSub?.cancel();
     _clipboardExpiredSub?.cancel();
     _fileOfferSub?.cancel();
@@ -104,6 +111,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _fileCompletedSub?.cancel();
     _fileFailedSub?.cancel();
     _trustChangedSub?.cancel();
+    _connectionChangedSub?.cancel();
     super.dispose();
   }
 
@@ -127,21 +135,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     widget.routeNotifier?.value = null;
   }
 
-  void _handleExternalSharedSend() {
-    final requests = widget.sharedSendRequestsNotifier?.value;
-    if (requests == null || requests.isEmpty || !mounted) {
-      return;
-    }
-    widget.sharedSendRequestsNotifier?.value = null;
-    unawaited(
-      _queueSendRequests(
-        requests,
-        switchToSendSection: true,
-        successPrefix: 'Ready to send',
-      ),
-    );
-  }
-
   void _bindStreams() {
     final client = context.read<JsonRpcRiftClient>();
     _clipboardOfferSub = client.onClipboardOffer.listen((_) {
@@ -161,20 +154,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       }
     });
     _fileProgressSub = client.onFileTransferProgress.listen((event) {
-      _applyTransferProgress(event);
+      unawaited(_handleLegacyTransferProgress(event));
       if (mounted) {
         unawaited(_refreshTransfers());
       }
     });
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
-      _applyTransferCompleted(event);
+      unawaited(_handleLegacyTransferCompleted(event));
       if (mounted) {
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
       }
     });
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
-      _applyTransferFailed(event);
+      unawaited(_handleLegacyTransferFailed(event));
       if (mounted) {
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
@@ -184,6 +177,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (mounted) {
         unawaited(_refreshTrustedPeers());
       }
+    });
+    _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
+      if (!mounted || !isConnected) {
+        return;
+      }
+      unawaited(_refreshTrustedPeers().then((_) => _resumeRecoverableQueue()));
     });
   }
 
@@ -203,6 +202,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       }
     }
   }
+
+  Future<void> _restoreStagedQueue() async {
+    if (!mounted) {
+      return;
+    }
+    await _sendQueue.restore();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      // Queue state lives in controller; rebuild after restore.
+    });
+    unawaited(_persistStagedQueue());
+  }
+
+  Future<void> _persistStagedQueue() => _sendQueue.persist();
 
   bool _matchesDeviceFilter(String? deviceId) {
     final filter = widget.deviceId;
@@ -339,6 +354,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           ..clear()
           ..addAll(peers);
       });
+      unawaited(_reconcileLegacyStagedQueueWithTrustedPeers());
+      unawaited(_resumeRecoverableQueue());
     } catch (_) {
       if (!mounted) return;
     } finally {
@@ -371,6 +388,81 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     return '${deviceId.substring(0, 12)}...';
   }
 
+  void _reconcileStagedQueueWithTrustedPeers() {
+    if (!mounted) {
+      return;
+    }
+
+    final fileCapablePeerIds = _fileCapablePeers
+        .map((peer) => peer['deviceId']?.toString() ?? '')
+        .where((deviceId) => deviceId.isNotEmpty)
+        .toSet();
+
+    var changed = false;
+    for (final staged in _sendQueue.items) {
+      if (staged.status == SendQueueStatus.sent) {
+        continue;
+      }
+      final targetDeviceId = staged.targetDeviceId;
+      if (targetDeviceId == null || targetDeviceId.isEmpty) {
+        continue;
+      }
+      if (fileCapablePeerIds.contains(targetDeviceId)) {
+        continue;
+      }
+
+      final nextMessage =
+          'Target device ${_peerDisplayName(targetDeviceId)} is no longer available for file transfer.';
+      if (staged.status != SendQueueStatus.failed ||
+          staged.errorMessage != nextMessage ||
+          staged.autoRetryWhenPeerAvailable ||
+          staged.transferId != null ||
+          staged.operationId != null ||
+          staged.bytesTransferred != 0) {
+        staged.status = SendQueueStatus.failed;
+        staged.errorMessage = nextMessage;
+        staged.autoRetryWhenPeerAvailable = false;
+        staged.transferId = null;
+        staged.operationId = null;
+        staged.bytesTransferred = 0;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      setState(() {});
+      unawaited(_persistStagedQueue());
+    }
+  }
+
+  Future<void> _reconcileLegacyStagedQueueWithTrustedPeers() async {
+    if (!await _queueMode.isLegacyLocalQueueMode()) {
+      return;
+    }
+    _reconcileStagedQueueWithTrustedPeers();
+  }
+
+  Future<void> _handleLegacyTransferProgress(Map<String, dynamic> event) async {
+    if (!await _queueMode.isLegacyLocalQueueMode()) {
+      return;
+    }
+    _applyTransferProgress(event);
+  }
+
+  Future<void> _handleLegacyTransferCompleted(Map<String, dynamic> event) async {
+    if (!await _queueMode.isLegacyLocalQueueMode()) {
+      return;
+    }
+    _applyTransferCompleted(event);
+  }
+
+  Future<void> _handleLegacyTransferFailed(Map<String, dynamic> event) async {
+    if (!await _queueMode.isLegacyLocalQueueMode()) {
+      return;
+    }
+    _applyTransferFailed(event);
+  }
+
   void _applyTransferProgress(Map<String, dynamic> event) {
     final transferId = event['transferId']?.toString();
     if (transferId == null || transferId.isEmpty) {
@@ -387,6 +479,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           staged.bytesTransferred;
       staged.status = SendQueueStatus.sending;
     });
+    unawaited(_persistStagedQueue());
   }
 
   void _applyTransferCompleted(Map<String, dynamic> event) {
@@ -404,7 +497,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       staged.bytesTransferred = staged.byteSize;
       staged.status = SendQueueStatus.sent;
       staged.errorMessage = null;
+      staged.autoRetryWhenPeerAvailable = false;
     });
+    unawaited(_persistStagedQueue());
   }
 
   void _applyTransferFailed(Map<String, dynamic> event) {
@@ -418,15 +513,171 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return;
     }
 
+    final rawMessage =
+        event['message']?.toString() ?? event['failureReason']?.toString();
+    final shouldAutoRecover = _isRecoverableTransferFailure(event, rawMessage);
+
     setState(() {
-      staged.status = SendQueueStatus.failed;
-      staged.errorMessage =
-          event['message']?.toString() ?? event['failureReason']?.toString();
+      staged.status =
+          shouldAutoRecover ? SendQueueStatus.queued : SendQueueStatus.failed;
+      staged.errorMessage = shouldAutoRecover
+          ? 'Connection lost. Waiting to retry when ${_peerDisplayName(staged.targetDeviceId)} is available again.'
+          : rawMessage;
+      staged.autoRetryWhenPeerAvailable = shouldAutoRecover;
+      if (shouldAutoRecover) {
+        staged.transferId = null;
+        staged.operationId = null;
+        staged.bytesTransferred = 0;
+      }
     });
+    unawaited(_persistStagedQueue());
   }
 
-  _StagedSendFile? _findStagedFileByTransferId(String transferId) {
-    for (final staged in _stagedFiles) {
+  bool _isRecoverableTransferFailure(
+    Map<String, dynamic> event,
+    String? rawMessage,
+  ) {
+    final failureReason = event['failureReason']?.toString().toLowerCase();
+    final haystack = [
+      rawMessage?.toLowerCase() ?? '',
+      failureReason ?? '',
+    ].join(' ');
+
+    const terminalHints = <String>[
+      'peerrejected',
+      'capabilityunavailable',
+      'hashmismatch',
+      'policiedenied',
+      'unauthorized',
+      'invalidtransition',
+      'invalid request',
+      'notfound',
+      'permission denied',
+      'access denied',
+      'no such file',
+      'does not exist',
+      'missing file',
+    ];
+    for (final hint in terminalHints) {
+      if (haystack.contains(hint)) {
+        return false;
+      }
+    }
+
+    const recoverableHints = <String>[
+      'peerunreachable',
+      'timeout',
+      'timed out',
+      'no active session',
+      'reconnect',
+      'unreachable',
+      'connection lost',
+      'connection reset',
+      'broken pipe',
+      'socket',
+      'session closed',
+      'session expired',
+      'transport closed',
+      'offline',
+    ];
+    for (final hint in recoverableHints) {
+      if (haystack.contains(hint)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  Future<void> _resumeRecoverableQueue() async {
+    if (!await _queueMode.isLegacyLocalQueueMode()) {
+      return;
+    }
+    if (!mounted || _legacySendingFilePeerIds.isNotEmpty) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+
+    final recoverableFiles = _sendQueue.items.where((file) {
+      return file.status == SendQueueStatus.queued &&
+          file.autoRetryWhenPeerAvailable &&
+          file.targetDeviceId != null &&
+          file.targetDeviceId!.isNotEmpty;
+    }).toList(growable: false);
+
+    if (recoverableFiles.isEmpty) {
+      return;
+    }
+
+    if (!client.isConnected) {
+      return;
+    }
+
+    final resumableByPeer =
+        await _queueMode.groupRecoverableLegacyFilesByPeer(
+      files: recoverableFiles,
+      isPeerOnline: (deviceId) {
+        final peer = _fileCapablePeers.cast<Map<String, dynamic>?>().firstWhere(
+              (candidate) => candidate?['deviceId']?.toString() == deviceId,
+              orElse: () => null,
+            );
+        return peer != null && peer['presence']?.toString() == 'online';
+      },
+    );
+
+    for (final entry in resumableByPeer.entries) {
+      final deviceId = entry.key;
+      if (_legacySendingFilePeerIds.contains(deviceId)) {
+        continue;
+      }
+      if (!mounted) return;
+      setState(() => _legacySendingFilePeerIds.add(deviceId));
+      try {
+        await _resumeLegacyRecoverableQueue(client: client, deviceId: deviceId);
+      } finally {
+        if (mounted) {
+          setState(() => _legacySendingFilePeerIds.remove(deviceId));
+        }
+      }
+    }
+  }
+
+  Future<int> _resumeLegacyRecoverableQueue({
+    required JsonRpcRiftClient client,
+    required String deviceId,
+    List<SendQueueEntry>? files,
+  }) async {
+    final filesToSubmit = files ??
+        _sendQueue.eligibleForPeer(deviceId).where((file) {
+          return file.autoRetryWhenPeerAvailable;
+        }).toList(growable: false);
+    return _legacyQueueCoordinator.submitFilesToPeer(
+      client: client,
+      deviceId: deviceId,
+      files: filesToSubmit,
+      isMounted: () => mounted,
+      mutateUi: (mutation) {
+        if (!mounted) {
+          return;
+        }
+        setState(mutation);
+      },
+      persistQueue: _persistStagedQueue,
+      onSubmitted: (staged) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          staged.autoRetryWhenPeerAvailable = false;
+          _activeSection = _HistorySection.transferActivity;
+        });
+      },
+    );
+  }
+
+  SendQueueEntry? _findStagedFileByTransferId(String transferId) {
+    for (final staged in _sendQueue.items) {
       if (staged.transferId == transferId) {
         return staged;
       }
@@ -706,42 +957,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     required String successPrefix,
   }) async {
     final messenger = ScaffoldMessenger.of(context);
-    var added = 0;
-    var skipped = 0;
-    final stagedToAdd = <_StagedSendFile>[];
-    for (final request in requests) {
-      final localPath = request['localPath'];
-      if (localPath == null || localPath.isEmpty) {
-        skipped += 1;
-        continue;
-      }
-      if (_stagedFiles.any((file) => file.localPath == localPath)) {
-        skipped += 1;
-        continue;
-      }
-
-      final file = File(localPath);
-      if (!await file.exists()) {
-        skipped += 1;
-        continue;
-      }
-
-      stagedToAdd.add(
-        _StagedSendFile(
-          localPath: localPath,
-          fileName: request['fileName']?.isNotEmpty == true
-              ? request['fileName']!
-              : localPath.split(Platform.pathSeparator).last,
-          mediaType: request['mediaType']?.isNotEmpty == true
-              ? request['mediaType']!
-              : 'application/octet-stream',
-          byteSize: await file.length(),
-        ),
-      );
-      added += 1;
+    final result = await _sendQueue.enqueueRequests(requests);
+    if (!mounted) {
+      return;
     }
 
-    if (stagedToAdd.isEmpty) {
+    if (result.isEmpty) {
       messenger.showSnackBar(
         const SnackBar(
           content: Text('No new file was added to the send queue.'),
@@ -750,11 +971,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return;
     }
 
-    if (!mounted) {
-      return;
-    }
     setState(() {
-      _stagedFiles.addAll(stagedToAdd);
       if (switchToSendSection) {
         _activeSection = _HistorySection.send;
       }
@@ -763,8 +980,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       SnackBar(
         content: Text(
           [
-            '$successPrefix $added file(s) in the send queue.',
-            if (skipped > 0) 'Skipped $skipped duplicate/unavailable item(s).',
+            '$successPrefix ${result.added} file(s) in the send queue.',
+            if (result.skipped > 0)
+              'Skipped ${result.skipped} duplicate/unavailable item(s).',
             if (skippedUnreadableCount > 0)
               'Could not read $skippedUnreadableCount selected file(s).',
           ].join(' '),
@@ -776,50 +994,63 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   Future<void> _sendStagedFilesToPeer(Map<String, dynamic> peer) async {
     final deviceId = peer['deviceId']?.toString();
     if (deviceId == null || deviceId.isEmpty) return;
-    final queuedFiles = _stagedFiles
-        .where(
-          (file) =>
-              file.status == SendQueueStatus.queued ||
-              file.status == SendQueueStatus.failed,
-        )
-        .toList(growable: false);
+    final isLegacyMode = await _queueMode.isLegacyLocalQueueMode();
+    if (!mounted) {
+      return;
+    }
+    final client = context.read<JsonRpcRiftClient>();
+    final queuedFiles = _eligibleFilesForPeer(deviceId);
     if (queuedFiles.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No queued file is ready to send.')),
+        SnackBar(
+          content: Text(
+            'No queued file is ready to send to ${_peerDisplayName(deviceId)}.',
+          ),
+        ),
       );
       return;
     }
 
-    final client = context.read<JsonRpcRiftClient>();
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _sendingFilePeerIds.add(deviceId));
+    if (isLegacyMode) {
+      setState(() => _legacySendingFilePeerIds.add(deviceId));
+    }
 
     try {
-      var submitted = 0;
-      for (final staged in queuedFiles) {
-        if (!mounted) return;
-        if (await _submitStagedFileToPeer(
-          client: client,
-          staged: staged,
-          deviceId: deviceId,
-        )) {
-          submitted += 1;
-        }
-      }
+      final submitted = await _queueMode.dispatchToPeer(
+        client: client,
+        deviceId: deviceId,
+        isMounted: () => mounted,
+        mutateUi: (mutation) {
+          if (!mounted) {
+            return;
+          }
+          setState(mutation);
+        },
+        persistQueue: _persistStagedQueue,
+        onLegacySubmitted: (staged) {
+          if (!mounted) {
+            return;
+          }
+          setState(() {
+            staged.autoRetryWhenPeerAvailable = false;
+            _activeSection = _HistorySection.transferActivity;
+          });
+        },
+      );
       if (!mounted) return;
       if (submitted > 0) {
         setState(() => _activeSection = _HistorySection.transferActivity);
-      }
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            submitted == 0
-                ? 'No file was submitted to ${_peerDisplayName(deviceId)}.'
-                : 'Sending $submitted file(s) to ${_peerDisplayName(deviceId)}. Track progress in Transfer Activity.',
+      } else {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'No file was submitted to ${_peerDisplayName(deviceId)}.',
+            ),
           ),
-        ),
-      );
+        );
+      }
       await _refreshTransfers();
     } catch (e) {
       if (!mounted) return;
@@ -827,104 +1058,138 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
       );
     } finally {
-      if (mounted) {
-        setState(() => _sendingFilePeerIds.remove(deviceId));
+      if (mounted && isLegacyMode) {
+        setState(() => _legacySendingFilePeerIds.remove(deviceId));
       }
     }
   }
 
-  Future<bool> _submitStagedFileToPeer({
-    required JsonRpcRiftClient client,
-    required _StagedSendFile staged,
-    required String deviceId,
-  }) async {
-    if (!mounted) return false;
-    setState(() {
-      staged.status = SendQueueStatus.sending;
-      staged.errorMessage = null;
-      staged.targetDeviceId = deviceId;
-      staged.bytesTransferred = 0;
-    });
-    try {
-      final result = await client.offerFile(
-        targetDeviceId: deviceId,
-        localPath: staged.localPath,
-        fileName: staged.fileName,
-        mediaType: staged.mediaType,
+  bool _hasActiveOutgoingTransferForPeer(String deviceId) {
+    return _activeOutgoingTransfers.any(
+      (transfer) => transfer['peerDeviceId']?.toString() == deviceId,
+    );
+  }
+
+  List<SendQueueEntry> _eligibleFilesForPeer(String deviceId) {
+    return _sendQueue.items.where((file) {
+      return SendQueueTargeting.isEligibleForPeer(
+        status: file.status,
+        targetDeviceId: file.targetDeviceId,
+        peerDeviceId: deviceId,
       );
-      if (!mounted) return false;
-      setState(() {
-        staged.transferId = result['transferId']?.toString();
-        staged.operationId = result['operationId']?.toString();
-      });
-      return true;
-    } catch (error) {
-      if (!mounted) return false;
-      setState(() {
-        staged.status = SendQueueStatus.failed;
-        staged.errorMessage = JsonRpcRiftClient.formatDisplayError(error);
-      });
-      return false;
+    }).toList(growable: false);
+  }
+
+  SendQueuePeerSummary _peerQueueSummary(String deviceId) {
+    return SendQueueSummary.forPeer(
+      peerDeviceId: deviceId,
+      items: _sendQueue.items
+          .map(
+            (file) => SendQueueSummaryEntry(
+              status: file.status,
+              targetDeviceId: file.targetDeviceId,
+              isWaitingForReconnect: file.autoRetryWhenPeerAvailable,
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  Future<void> _removeStagedFile(SendQueueEntry file) async {
+    await _sendQueue.removeItem(file);
+    if (!mounted) {
+      return;
     }
+    setState(() {});
   }
 
-  void _removeStagedFile(_StagedSendFile file) {
-    setState(() {
-      _stagedFiles.remove(file);
-    });
+  Future<void> _clearFinishedStagedFiles() async {
+    final sentItems = _sendQueue.items
+        .where((file) => file.status == SendQueueStatus.sent)
+        .toList(growable: false);
+    for (final item in sentItems) {
+      await _sendQueue.removeItem(item);
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
   }
 
-  void _clearFinishedStagedFiles() {
-    setState(() {
-      _stagedFiles.removeWhere(
-        (file) => file.status == SendQueueStatus.sent,
-      );
-    });
-  }
-
-  Future<void> _retryFailedStagedFile(_StagedSendFile file) async {
+  Future<void> _retryFailedStagedFile(SendQueueEntry file) async {
     final messenger = ScaffoldMessenger.of(context);
-    final deviceId = file.targetDeviceId;
-    if (deviceId == null || deviceId.isEmpty) {
-      setState(() {
-        file.status = SendQueueStatus.queued;
-        file.errorMessage = null;
-      });
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'File moved back to queue. Choose a peer to send it again.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    final peerExists = _fileCapablePeers.any(
-      (candidate) => candidate['deviceId']?.toString() == deviceId,
-    );
-    if (!peerExists) {
-      setState(() {
-        file.status = SendQueueStatus.queued;
-        file.errorMessage = null;
-      });
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Peer is no longer available for file transfer. File moved back to queue.',
-          ),
-        ),
-      );
-      return;
-    }
-
     final client = context.read<JsonRpcRiftClient>();
-    final success = await _submitStagedFileToPeer(
+    final deviceId = file.targetDeviceId;
+    var handledByCallback = false;
+    final peerExists = deviceId != null &&
+        deviceId.isNotEmpty &&
+        _fileCapablePeers.any(
+          (candidate) => candidate['deviceId']?.toString() == deviceId,
+        );
+
+    final success = await _queueMode.retryFailedItem(
       client: client,
-      staged: file,
-      deviceId: deviceId,
+      file: file,
+      peerExists: peerExists,
+      isMounted: () => mounted,
+      mutateUi: (mutation) {
+        if (!mounted) {
+          return;
+        }
+        setState(mutation);
+      },
+      persistQueue: _persistStagedQueue,
+      onNeedsPeerSelection: () {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _activeSection = _HistorySection.send;
+        });
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'File moved back to queue. Choose a peer to send it again.',
+            ),
+          ),
+        );
+      },
+      onPeerUnavailable: (peerDeviceId) {
+        handledByCallback = true;
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          file.status = SendQueueStatus.failed;
+          file.errorMessage =
+              'Target device ${_peerDisplayName(peerDeviceId)} is no longer available for file transfer.';
+          file.autoRetryWhenPeerAvailable = false;
+          file.transferId = null;
+          file.operationId = null;
+          file.bytesTransferred = 0;
+        });
+        unawaited(_persistStagedQueue());
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              '${_peerDisplayName(peerDeviceId)} is no longer available for file transfer.',
+            ),
+          ),
+        );
+      },
+      onLegacySubmitted: (staged) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          staged.autoRetryWhenPeerAvailable = false;
+          _activeSection = _HistorySection.transferActivity;
+        });
+      },
     );
-    if (!mounted) return;
+    if (!mounted || handledByCallback || deviceId == null || deviceId.isEmpty) {
+      return;
+    }
     messenger.showSnackBar(
       SnackBar(
         content: Text(
@@ -934,6 +1199,29 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         ),
       ),
     );
+  }
+
+  bool _hasUnavailableTarget(SendQueueEntry file) {
+    final message = file.errorMessage?.toLowerCase() ?? '';
+    return file.status == SendQueueStatus.failed &&
+        message.contains('no longer available for file transfer');
+  }
+
+  void _chooseDeviceForStagedFile(SendQueueEntry file) {
+    unawaited(() async {
+      await _sendQueue.retargetForSelection(file);
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Choose a device below to send ${file.fileName} again.',
+          ),
+        ),
+      );
+    }());
   }
 
   Future<void> _openTransferDestination(
@@ -1068,14 +1356,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
             destinationPath: destinationPath,
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Saving ${offer['fileName'] ?? 'file'}\n'
-            'Saved to: $destinationPath',
-          ),
-        ),
-      );
+      setState(() {
+        _activeSection = _HistorySection.transferActivity;
+      });
       await _refreshFileOffers();
       await _refreshTransfers();
     } catch (e) {
@@ -1098,9 +1381,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
             message: 'User declined from history screen',
           );
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Rejected ${offer['fileName'] ?? 'file'}')),
-      );
       await _refreshFileOffers();
       await _refreshTransfers();
     } catch (e) {
@@ -1201,6 +1481,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   @override
   Widget build(BuildContext context) {
+    context.watch<SendQueueController>();
     final theme = Theme.of(context);
     final title = widget.displayName != null && widget.displayName!.isNotEmpty
         ? 'History - ${widget.displayName}'
@@ -1463,9 +1744,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildFileSendSection(ThemeData theme) {
     final peers = _fileCapablePeers;
-    final queuedCount = _stagedFiles
-        .where((file) => file.status != SendQueueStatus.sent)
-        .length;
     final activeOutgoingTransfers = _activeOutgoingTransfers;
     return _buildSectionCard(
       theme: theme,
@@ -1498,10 +1776,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                     ),
                     const SizedBox(width: 8),
                     OutlinedButton(
-                      onPressed: _stagedFiles.any(
+                      onPressed: _sendQueue.items.any(
                         (file) => file.status == SendQueueStatus.sent,
                       )
-                          ? _clearFinishedStagedFiles
+                          ? () => unawaited(_clearFinishedStagedFiles())
                           : null,
                       child: const Text('Clear Sent'),
                     ),
@@ -1512,8 +1790,19 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                 const SizedBox(height: 12),
                 ...peers.map((peer) {
                   final deviceId = peer['deviceId']?.toString();
+                  final showSendingSpinner = deviceId != null &&
+                      _legacySendingFilePeerIds.contains(deviceId);
                   final isSending = deviceId != null &&
-                      _sendingFilePeerIds.contains(deviceId);
+                      (showSendingSpinner ||
+                          _hasActiveOutgoingTransferForPeer(deviceId));
+                  final summary = deviceId == null || deviceId.isEmpty
+                      ? const SendQueuePeerSummary(
+                          eligibleCount: 0,
+                          unassignedCount: 0,
+                          waitingCount: 0,
+                          failedCount: 0,
+                        )
+                      : _peerQueueSummary(deviceId);
                   return Container(
                     margin: const EdgeInsets.only(top: 12),
                     padding: const EdgeInsets.all(12),
@@ -1545,27 +1834,34 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
                               ),
+                              const SizedBox(height: 4),
+                              Text(
+                                summary.detailLabel(),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                             ],
                           ),
                         ),
                         FilledButton.icon(
-                          onPressed: isSending || queuedCount == 0
+                          onPressed: isSending || summary.eligibleCount == 0
                               ? null
                               : () => _sendStagedFilesToPeer(peer),
-                          icon: isSending
+                          icon: showSendingSpinner
                               ? const SizedBox(
                                   width: 14,
                                   height: 14,
                                   child:
                                       CircularProgressIndicator(strokeWidth: 2),
                                 )
-                              : const Icon(Icons.upload_file),
+                              : Icon(
+                                  isSending ? Icons.sync : Icons.upload_file,
+                                ),
                           label: Text(
                             isSending
                                 ? 'Sending...'
-                                : queuedCount == 0
-                                    ? 'Queue Empty'
-                                    : 'Send All ($queuedCount)',
+                                : summary.actionLabel(),
                           ),
                         ),
                       ],
@@ -1634,7 +1930,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildStagedFilesList(ThemeData theme) {
     return SendQueuePanel(
-      items: _stagedFiles
+      items: _sendQueue.items
           .map(
             (file) => SendQueueItemData(
               fileName: file.fileName,
@@ -1642,12 +1938,19 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               byteSize: file.byteSize,
               bytesTransferred: file.bytesTransferred,
               status: file.status,
+              targetLabel: file.targetDeviceId == null ||
+                      file.targetDeviceId!.isEmpty
+                  ? null
+                  : _peerDisplayName(file.targetDeviceId),
               errorMessage: file.errorMessage,
+              isWaitingForReconnect: file.autoRetryWhenPeerAvailable,
+              canRetarget: _hasUnavailableTarget(file),
             ),
           )
           .toList(growable: false),
-      onRemove: (index) => _removeStagedFile(_stagedFiles[index]),
-      onRetry: (index) => _retryFailedStagedFile(_stagedFiles[index]),
+      onRemove: (index) => _removeStagedFile(_sendQueue.items[index]),
+      onRetry: (index) => _retryFailedStagedFile(_sendQueue.items[index]),
+      onRetarget: (index) => _chooseDeviceForStagedFile(_sendQueue.items[index]),
     );
   }
 
@@ -1944,24 +2247,4 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       ),
     );
   }
-}
-
-class _StagedSendFile {
-  _StagedSendFile({
-    required this.localPath,
-    required this.fileName,
-    required this.mediaType,
-    required this.byteSize,
-  });
-
-  final String localPath;
-  final String fileName;
-  final String mediaType;
-  final int byteSize;
-  String? transferId;
-  String? operationId;
-  String? targetDeviceId;
-  int bytesTransferred = 0;
-  String? errorMessage;
-  SendQueueStatus status = SendQueueStatus.queued;
 }

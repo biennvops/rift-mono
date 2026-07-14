@@ -3,6 +3,7 @@ import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 import 'package:provider/provider.dart';
 import 'background_sync_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/android_shell.dart';
 import '../src/platform/macos_notifications.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -16,12 +17,76 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
   bool _isProcessing = false;
+  bool _localNetworkPermissionPrechecked = false;
+  bool _localNetworkPermissionGranted = false;
+  bool _notificationPermissionPrechecked = false;
+  bool _notificationPermissionGranted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _preloadPermissionState();
+  }
+
+  Future<void> _preloadPermissionState() async {
+    final localNetworkGranted = await _precheckLocalNetworkPermission();
+    final status = AndroidShell.isSupported
+        ? await AndroidShell.getNotificationPermissionStatus()
+        : await MacOSNotifications.getStatus();
+    if (!mounted) return;
+    setState(() {
+      _localNetworkPermissionPrechecked = true;
+      _localNetworkPermissionGranted = localNetworkGranted;
+      _notificationPermissionPrechecked = true;
+      _notificationPermissionGranted = status == 'authorized';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _autoAdvanceFromPrechecks();
+      }
+    });
+  }
+
+  Future<bool> _precheckLocalNetworkPermission() async {
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      await client.startDiscovery();
+      return true;
+    } on json_rpc.RpcException catch (e) {
+      final data = e.data;
+      if (e.code == -32010 &&
+          data is Map &&
+          (data['policy']?.toString() == 'local_network')) {
+        return false;
+      }
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _autoAdvanceFromPrechecks() {
+    if (_currentPage == 0 &&
+        _localNetworkPermissionPrechecked &&
+        _localNetworkPermissionGranted) {
+      _nextPage();
+      return;
+    }
+    if (_currentPage == 1 &&
+        _notificationPermissionPrechecked &&
+        _notificationPermissionGranted) {
+      _nextPage();
+    }
+  }
 
   Future<void> _startDiscoveryThenNext() async {
     try {
       final client = context.read<JsonRpcRiftClient>();
       await client.startDiscovery();
       if (!mounted) return;
+      setState(() {
+        _localNetworkPermissionGranted = true;
+      });
       _nextPage();
     } on json_rpc.RpcException catch (e) {
       if (!mounted) return;
@@ -50,8 +115,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _requestNotificationsThenNext() async {
-    final granted = await MacOSNotifications.request();
+    if (_notificationPermissionGranted) {
+      _nextPage();
+      return;
+    }
+    final granted = AndroidShell.isSupported
+        ? await AndroidShell.requestNotificationPermission()
+        : await MacOSNotifications.request();
     if (!mounted) return;
+    if (granted) {
+      setState(() {
+        _notificationPermissionGranted = true;
+      });
+    }
     if (!granted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -154,6 +230,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 onPageChanged: (index) {
                   setState(() {
                     _currentPage = index;
+                  });
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _currentPage == index) {
+                      _autoAdvanceFromPrechecks();
+                    }
                   });
                 },
                 children: [

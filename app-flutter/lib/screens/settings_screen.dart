@@ -1,9 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants.dart';
 import 'event_log_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/android_shell.dart';
+import '../src/platform/macos_notifications.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -16,6 +20,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _deviceInfo;
   bool _isLoading = true;
   String? _error;
+  String _notificationPermissionStatus = 'unknown';
+  bool _clipboardNotificationsEnabled = false;
 
   @override
   void initState() {
@@ -33,9 +39,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
       final data = await client.getDeviceInfo();
+      final notificationStatus = await _loadNotificationPermissionStatus();
+      final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
         _deviceInfo = data as Map<String, dynamic>?;
+        _notificationPermissionStatus = notificationStatus;
+        _clipboardNotificationsEnabled =
+            prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
         _isLoading = false;
       });
     } catch (e) {
@@ -44,6 +55,70 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _error = JsonRpcRiftClient.formatDisplayError(e);
         _isLoading = false;
       });
+    }
+  }
+
+  Future<String> _loadNotificationPermissionStatus() async {
+    if (AndroidShell.isSupported) {
+      return AndroidShell.getNotificationPermissionStatus();
+    }
+    if (Platform.isMacOS) {
+      return MacOSNotifications.getStatus();
+    }
+    return 'unknown';
+  }
+
+  Future<void> _openNotificationSettings() async {
+    final theme = Theme.of(context);
+    final success = Platform.isAndroid
+        ? await AndroidShell.openNotificationSettings()
+        : false;
+    if (!mounted || success) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Unable to open notification settings on ${Platform.operatingSystem}.',
+          style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setClipboardNotificationsEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(AppPrefs.clipboardNotificationsEnabled, enabled);
+    if (!mounted) return;
+    setState(() {
+      _clipboardNotificationsEnabled = enabled;
+    });
+  }
+
+  bool get _canOpenNotificationSettings => Platform.isAndroid;
+
+  bool get _notificationsAuthorized =>
+      _notificationPermissionStatus == 'authorized';
+
+  IconData get _notificationPermissionIcon => _notificationsAuthorized
+      ? Icons.check_circle
+      : _notificationPermissionStatus == 'denied'
+          ? Icons.cancel
+          : Icons.info;
+
+  Color _notificationPermissionColor(ThemeData theme) =>
+      _notificationsAuthorized
+          ? theme.colorScheme.secondary
+          : _notificationPermissionStatus == 'denied'
+              ? theme.colorScheme.error
+              : theme.colorScheme.outline;
+
+  String get _notificationPermissionSubtitle {
+    switch (_notificationPermissionStatus) {
+      case 'authorized':
+        return 'System notifications enabled';
+      case 'denied':
+        return 'System notifications are off';
+      default:
+        return 'Notification status unavailable on this platform';
     }
   }
 
@@ -75,7 +150,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+          border: Border(
+              bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
         ),
         child: Row(
           children: [
@@ -90,7 +166,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Text(
                     title,
                     style: theme.textTheme.bodyLarge?.copyWith(
-                      color: isError ? theme.colorScheme.error : theme.colorScheme.onSurface,
+                      color: isError
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.onSurface,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -98,7 +176,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   Text(
                     subtitle,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isError ? theme.colorScheme.error.withValues(alpha: 0.8) : theme.colorScheme.onSurfaceVariant,
+                      color: isError
+                          ? theme.colorScheme.error.withValues(alpha: 0.8)
+                          : theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -136,18 +216,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_isLoading) {
       return Scaffold(
         backgroundColor: theme.colorScheme.surface,
-        appBar: AppBar(title: const Text('Settings', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.bold))),
+        appBar: AppBar(
+            title: const Text('Settings',
+                style: TextStyle(
+                    fontFamily: 'Inter', fontWeight: FontWeight.bold))),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
-    final displayName = _deviceInfo?['displayName']?.toString() ?? _deviceInfo?['deviceId']?.toString() ?? 'Unknown Device';
+    final displayName = _deviceInfo?['displayName']?.toString() ??
+        _deviceInfo?['deviceId']?.toString() ??
+        'Unknown Device';
     final deviceId = _deviceInfo?['deviceId']?.toString() ?? 'Unknown';
     final fingerprint = _deviceInfo?['fingerprint']?.toString() ?? 'Unknown';
     final implementationId =
         _deviceInfo?['implementationId']?.toString() ?? 'Unavailable';
     final protocolVersion =
         _deviceInfo?['protocolVersion']?.toString() ?? 'Unavailable';
+    final localNetworkSubtitle = Platform.isAndroid || Platform.isMacOS
+        ? 'Used during discovery and pairing'
+        : 'Managed by the local daemon';
+    final backgroundExecSubtitle = Platform.isAndroid
+        ? 'Rift uses a foreground service; some vendors may still restrict background work'
+        : 'Handled by the desktop session and local daemon';
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -172,7 +263,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Container(
               padding: const EdgeInsets.all(12),
               color: theme.colorScheme.errorContainer,
-              child: Text(_error!, style: TextStyle(color: theme.colorScheme.onErrorContainer)),
+              child: Text(_error!,
+                  style: TextStyle(color: theme.colorScheme.onErrorContainer)),
             ),
             const SizedBox(height: 24),
           ],
@@ -196,14 +288,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildListTile(
                   title: 'Theme',
                   subtitle: 'System default',
-                  trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
+                  trailing: Icon(Icons.chevron_right,
+                      color: theme.colorScheme.outline),
                   onTap: () {},
                 ),
               ],
             ),
           ),
           const SizedBox(height: 32),
-          
+
           // Identity Section
           _buildSectionHeader('Identity'),
           Container(
@@ -241,28 +334,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.check_circle,
                   color: theme.colorScheme.secondary,
                   title: 'Local Network',
-                  subtitle: 'Required for device discovery',
+                  subtitle: localNetworkSubtitle,
                 ),
                 _buildStatusRow(
-                  icon: Icons.cancel,
-                  color: theme.colorScheme.error,
+                  icon: _notificationPermissionIcon,
+                  color: _notificationPermissionColor(theme),
                   title: 'Notifications',
-                  subtitle: 'Pairing alerts disabled',
-                  trailing: ElevatedButton(
-                    onPressed: () {},
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.colorScheme.primary,
-                      foregroundColor: theme.colorScheme.onPrimary,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                    child: const Text('OPEN SETTINGS', style: TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.bold)),
-                  ),
+                  subtitle: _notificationPermissionSubtitle,
+                  trailing:
+                      !_notificationsAuthorized && _canOpenNotificationSettings
+                          ? ElevatedButton(
+                              onPressed: _openNotificationSettings,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.colorScheme.primary,
+                                foregroundColor: theme.colorScheme.onPrimary,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 8,
+                                ),
+                              ),
+                              child: const Text(
+                                'OPEN SETTINGS',
+                                style: TextStyle(
+                                  fontFamily: 'JetBrains Mono',
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            )
+                          : null,
                 ),
                 _buildStatusRow(
-                  icon: Icons.check_circle,
-                  color: theme.colorScheme.secondary,
+                  icon: Icons.info,
+                  color: theme.colorScheme.outline,
                   title: 'Background Exec',
-                  subtitle: 'Allowed to run in bg',
+                  subtitle: backgroundExecSubtitle,
+                ),
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    secondary: Icon(
+                      Icons.content_paste,
+                      color: theme.colorScheme.outline,
+                    ),
+                    title: const Text('Clipboard received notifications'),
+                    subtitle: Text(
+                      'Off by default. Show a system notification when automatic clipboard sync receives content.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    value: _clipboardNotificationsEnabled,
+                    onChanged: _setClipboardNotificationsEnabled,
+                  ),
                 ),
               ],
             ),
@@ -290,12 +415,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         Text(
                           'Android Clipboard Monitoring',
-                          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
+                          style: theme.textTheme.bodyLarge
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
                         Text(
                           'Rift uses the platform clipboard APIs and foreground service flow for clipboard syncing. Accessibility Service is not required.',
-                          style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -308,21 +435,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Linux Daemon Dependencies', style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold)),
+                        Text('Linux Daemon Dependencies',
+                            style: theme.textTheme.bodyLarge
+                                ?.copyWith(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
                         Row(
                           children: [
-                            Icon(Icons.done, size: 16, color: theme.colorScheme.secondary),
+                            Icon(Icons.done,
+                                size: 16, color: theme.colorScheme.secondary),
                             const SizedBox(width: 8),
-                            Text('avahi-daemon: running', style: theme.textTheme.labelMedium?.copyWith(fontFamily: 'JetBrains Mono', color: theme.colorScheme.secondary)),
+                            Text('avahi-daemon: running',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                    fontFamily: 'JetBrains Mono',
+                                    color: theme.colorScheme.secondary)),
                           ],
                         ),
                         const SizedBox(height: 4),
                         Row(
                           children: [
-                            Icon(Icons.done, size: 16, color: theme.colorScheme.secondary),
+                            Icon(Icons.done,
+                                size: 16, color: theme.colorScheme.secondary),
                             const SizedBox(width: 8),
-                            Text('appindicator: supported', style: theme.textTheme.labelMedium?.copyWith(fontFamily: 'JetBrains Mono', color: theme.colorScheme.secondary)),
+                            Text('appindicator: supported',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                    fontFamily: 'JetBrains Mono',
+                                    color: theme.colorScheme.secondary)),
                           ],
                         ),
                       ],
@@ -332,7 +469,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (!Platform.isAndroid && !Platform.isLinux) ...[
                   Padding(
                     padding: const EdgeInsets.all(16.0),
-                    child: Text('No platform-specific checks for ${Platform.operatingSystem} yet.', style: theme.textTheme.bodyMedium),
+                    child: Text(
+                        'No platform-specific checks for ${Platform.operatingSystem} yet.',
+                        style: theme.textTheme.bodyMedium),
                   ),
                 ],
               ],
@@ -351,7 +490,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   _buildListTile(
                     title: 'Background clipboard monitoring',
-                    subtitle: 'Uses Rift foreground service when background sync is active',
+                    subtitle:
+                        'Uses Rift foreground service when background sync is active',
                   ),
                 ],
               ),
@@ -363,12 +503,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           OutlinedButton.icon(
             onPressed: () {},
             icon: const Icon(Icons.folder),
-            label: const Text('MANAGE TRUST STORE', style: TextStyle(fontFamily: 'JetBrains Mono', fontWeight: FontWeight.bold)),
+            label: const Text('MANAGE TRUST STORE',
+                style: TextStyle(
+                    fontFamily: 'JetBrains Mono', fontWeight: FontWeight.bold)),
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.all(16),
               foregroundColor: theme.colorScheme.primary,
               side: BorderSide(color: theme.colorScheme.outlineVariant),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
               backgroundColor: theme.colorScheme.surfaceContainer,
             ),
           ),
@@ -393,7 +536,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildListTile(
                   title: 'Event log',
                   subtitle: 'Open the full local audit trail',
-                  trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
+                  trailing: Icon(Icons.chevron_right,
+                      color: theme.colorScheme.outline),
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(

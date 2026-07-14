@@ -33,6 +33,8 @@ public sealed class FileTransferService : IFileTransferService
     private readonly ConcurrentDictionary<string, IncomingTransferState> _incomingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _pendingTrustedReconnects = new(StringComparer.Ordinal);
 
+    public event EventHandler<FileTransferLifecycleEventArgs>? TransferUpdated;
+
     public FileTransferService(
         ITransport transport,
         ITrustStore trustStore,
@@ -401,11 +403,13 @@ public sealed class FileTransferService : IFileTransferService
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Reject");
         var rejectedTransfer = _outgoingTransfers.TryRemove(transferId, out var removedTransfer) ? removedTransfer : transfer;
         TryTransitionFailure(rejectedTransfer.OperationId, failureReason);
+        LogEvent(SecurityEventTypes.FileTransferRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, failureReason, rejectedTransfer.OperationId);
         try
         {
             await NotifyTransferFailedAsync(
                 rejectedTransfer.TransferId,
                 rejectedTransfer.OperationId,
+                "outgoing",
                 rejectedTransfer.TargetDeviceId,
                 rejectedTransfer.FileName,
                 rejectedTransfer.ByteSize,
@@ -531,6 +535,7 @@ public sealed class FileTransferService : IFileTransferService
         await NotifyTransferCompletedAsync(
             transfer.TransferId,
             transfer.OperationId,
+            "incoming",
             transfer.SourceDeviceId,
             transfer.FileName,
             transfer.ByteSize,
@@ -554,6 +559,7 @@ public sealed class FileTransferService : IFileTransferService
             await NotifyTransferFailedAsync(
                 transferToCancel.TransferId,
                 transferToCancel.OperationId,
+                "incoming",
                 transferToCancel.SourceDeviceId,
                 transferToCancel.FileName,
                 transferToCancel.ByteSize,
@@ -571,6 +577,7 @@ public sealed class FileTransferService : IFileTransferService
             await NotifyTransferFailedAsync(
                 transferToCancel.TransferId,
                 transferToCancel.OperationId,
+                "outgoing",
                 transferToCancel.TargetDeviceId,
                 transferToCancel.FileName,
                 transferToCancel.ByteSize,
@@ -650,6 +657,7 @@ public sealed class FileTransferService : IFileTransferService
             await NotifyTransferCompletedAsync(
                 transfer.TransferId,
                 transfer.OperationId,
+                "outgoing",
                 transfer.TargetDeviceId,
                 transfer.FileName,
                 transfer.ByteSize,
@@ -668,6 +676,7 @@ public sealed class FileTransferService : IFileTransferService
             await NotifyTransferFailedAsync(
                 transfer.TransferId,
                 transfer.OperationId,
+                "outgoing",
                 transfer.TargetDeviceId,
                 transfer.FileName,
                 transfer.ByteSize,
@@ -758,6 +767,19 @@ public sealed class FileTransferService : IFileTransferService
         string? failureReason,
         CancellationToken cancellationToken)
     {
+        RaiseTransferUpdated(new FileTransferLifecycleEventArgs
+        {
+            TransferId = transferId,
+            OperationId = operationId,
+            Direction = direction,
+            PeerDeviceId = peerDeviceId,
+            FileName = fileName,
+            ByteSize = byteSize,
+            BytesTransferred = bytesTransferred,
+            State = state,
+            FailureReason = failureReason
+        });
+
         if (_ipcNotificationService is null)
         {
             return;
@@ -791,12 +813,26 @@ public sealed class FileTransferService : IFileTransferService
     private async Task NotifyTransferCompletedAsync(
         string transferId,
         string operationId,
+        string direction,
         string peerDeviceId,
         string fileName,
         long byteSize,
         string? destinationPath,
         CancellationToken cancellationToken)
     {
+        RaiseTransferUpdated(new FileTransferLifecycleEventArgs
+        {
+            TransferId = transferId,
+            OperationId = operationId,
+            Direction = direction,
+            PeerDeviceId = peerDeviceId,
+            FileName = fileName,
+            ByteSize = byteSize,
+            BytesTransferred = byteSize,
+            State = "done",
+            DestinationPath = destinationPath
+        });
+
         if (_ipcNotificationService is null)
         {
             return;
@@ -826,6 +862,7 @@ public sealed class FileTransferService : IFileTransferService
     private async Task NotifyTransferFailedAsync(
         string transferId,
         string operationId,
+        string direction,
         string peerDeviceId,
         string fileName,
         long byteSize,
@@ -833,6 +870,19 @@ public sealed class FileTransferService : IFileTransferService
         string? message,
         CancellationToken cancellationToken)
     {
+        RaiseTransferUpdated(new FileTransferLifecycleEventArgs
+        {
+            TransferId = transferId,
+            OperationId = operationId,
+            Direction = direction,
+            PeerDeviceId = peerDeviceId,
+            FileName = fileName,
+            ByteSize = byteSize,
+            State = "failed",
+            FailureReason = failureReason,
+            Message = message
+        });
+
         if (_ipcNotificationService is null)
         {
             return;
@@ -1154,6 +1204,18 @@ public sealed class FileTransferService : IFileTransferService
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+    }
+
+    private void RaiseTransferUpdated(FileTransferLifecycleEventArgs args)
+    {
+        try
+        {
+            TransferUpdated?.Invoke(this, args);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Unhandled exception from file transfer lifecycle subscriber for {TransferId}.", args.TransferId);
+        }
     }
 
     private FileTransferInfo ToTransferInfo(OutgoingTransferState transfer)

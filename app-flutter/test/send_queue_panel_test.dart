@@ -7,6 +7,7 @@ void main() {
     List<SendQueueItemData> items, {
     void Function(int index)? onRemove,
     void Function(int index)? onRetry,
+    void Function(int index)? onRetarget,
   }) {
     return MaterialApp(
       home: Scaffold(
@@ -14,6 +15,7 @@ void main() {
           items: items,
           onRemove: onRemove ?? (_) {},
           onRetry: onRetry ?? (_) {},
+          onRetarget: onRetarget ?? (_) {},
         ),
       ),
     );
@@ -29,12 +31,14 @@ void main() {
             mediaType: 'text/plain',
             byteSize: 12,
             status: SendQueueStatus.queued,
+            targetLabel: 'Pixel 9 Pro',
           ),
           SendQueueItemData(
             fileName: 'demo-two.jpg',
             mediaType: 'image/jpeg',
             byteSize: 2048,
             status: SendQueueStatus.queued,
+            targetLabel: 'Windows Desktop 07',
           ),
         ],
       ),
@@ -43,6 +47,8 @@ void main() {
     expect(find.text('Send Queue'), findsOneWidget);
     expect(find.text('demo-one.txt'), findsOneWidget);
     expect(find.text('demo-two.jpg'), findsOneWidget);
+    expect(find.text('Target: Pixel 9 Pro'), findsOneWidget);
+    expect(find.text('Target: Windows Desktop 07'), findsOneWidget);
     expect(find.text('QUEUED'), findsNWidgets(2));
   });
 
@@ -74,5 +80,60 @@ void main() {
     await tester.pump();
 
     expect(retriedIndex, 0);
+  });
+
+  testWidgets('SendQueuePanel shows waiting label for reconnectable queued item',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      buildPanel(
+        const [
+          SendQueueItemData(
+            fileName: 'recoverable.txt',
+            mediaType: 'text/plain',
+            byteSize: 64,
+            status: SendQueueStatus.queued,
+            errorMessage: 'Connection lost. Waiting to retry when peer is available again.',
+            isWaitingForReconnect: true,
+          ),
+        ],
+      ),
+    );
+
+    expect(find.text('WAITING'), findsOneWidget);
+    expect(find.text('QUEUED'), findsNothing);
+    expect(find.textContaining('Waiting to retry'), findsOneWidget);
+  });
+
+  testWidgets('SendQueuePanel exposes Choose Device for unavailable target',
+      (WidgetTester tester) async {
+    var retargetedIndex = -1;
+
+    await tester.pumpWidget(
+      buildPanel(
+        const [
+          SendQueueItemData(
+            fileName: 'stuck.txt',
+            mediaType: 'text/plain',
+            byteSize: 128,
+            status: SendQueueStatus.failed,
+            targetLabel: 'Old Laptop',
+            errorMessage:
+                'Target device Old Laptop is no longer available for file transfer.',
+            canRetarget: true,
+          ),
+        ],
+        onRetarget: (index) {
+          retargetedIndex = index;
+        },
+      ),
+    );
+
+    expect(find.text('Choose Device'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+
+    await tester.tap(find.text('Choose Device'));
+    await tester.pump();
+
+    expect(retargetedIndex, 0);
   });
 }

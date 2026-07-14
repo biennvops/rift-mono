@@ -32,6 +32,18 @@ public sealed class DatabaseContextTests : IDisposable
         }
 
         Assert.Contains("TlsCertificatePfx", columnNames);
+
+        using var queueCommand = connection.CreateCommand();
+        queueCommand.CommandText = "PRAGMA table_info(SendQueueItems);";
+        using var queueReader = queueCommand.ExecuteReader();
+        var queueColumns = new List<string>();
+        while (queueReader.Read())
+        {
+            queueColumns.Add((string)queueReader["name"]);
+        }
+
+        Assert.Contains("QueueItemId", queueColumns);
+        Assert.Contains("Status", queueColumns);
     }
 
     [Fact]

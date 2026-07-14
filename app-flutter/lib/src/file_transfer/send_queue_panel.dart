@@ -18,7 +18,10 @@ class SendQueueItemData {
     required this.byteSize,
     required this.status,
     this.bytesTransferred = 0,
+    this.targetLabel,
     this.errorMessage,
+    this.isWaitingForReconnect = false,
+    this.canRetarget = false,
   });
 
   final String fileName;
@@ -26,7 +29,10 @@ class SendQueueItemData {
   final int byteSize;
   final int bytesTransferred;
   final SendQueueStatus status;
+  final String? targetLabel;
   final String? errorMessage;
+  final bool isWaitingForReconnect;
+  final bool canRetarget;
 }
 
 class SendQueuePanel extends StatelessWidget {
@@ -35,11 +41,13 @@ class SendQueuePanel extends StatelessWidget {
     required this.items,
     required this.onRemove,
     required this.onRetry,
+    required this.onRetarget,
   });
 
   final List<SendQueueItemData> items;
   final ValueChanged<int> onRemove;
   final ValueChanged<int> onRetry;
+  final ValueChanged<int> onRetarget;
 
   @override
   Widget build(BuildContext context) {
@@ -78,6 +86,7 @@ class SendQueuePanel extends StatelessWidget {
             item: items[index],
             onRemove: () => onRemove(index),
             onRetry: () => onRetry(index),
+            onRetarget: () => onRetarget(index),
           ),
       ],
     );
@@ -89,16 +98,20 @@ class _SendQueueTile extends StatelessWidget {
     required this.item,
     required this.onRemove,
     required this.onRetry,
+    required this.onRetarget,
   });
 
   final SendQueueItemData item;
   final VoidCallback onRemove;
   final VoidCallback onRetry;
+  final VoidCallback onRetarget;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final statusColor = _statusColor(theme, item.status);
+    final statusLabel =
+        item.isWaitingForReconnect ? 'WAITING' : item.status.label;
     final progress = item.byteSize <= 0
         ? 0.0
         : (item.bytesTransferred / item.byteSize).clamp(0.0, 1.0);
@@ -136,6 +149,17 @@ class _SendQueueTile extends StatelessWidget {
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
+                if (item.targetLabel != null &&
+                    item.targetLabel!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Target: ${item.targetLabel!}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
                 if (item.status == SendQueueStatus.sending) ...[
                   const SizedBox(height: 8),
                   LinearProgressIndicator(value: progress),
@@ -167,7 +191,7 @@ class _SendQueueTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
-                  item.status.label,
+                  statusLabel,
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: statusColor,
                     fontWeight: FontWeight.w700,
@@ -176,10 +200,21 @@ class _SendQueueTile extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               if (item.status == SendQueueStatus.failed)
-                TextButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Retry'),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (item.canRetarget)
+                      TextButton.icon(
+                        onPressed: onRetarget,
+                        icon: const Icon(Icons.devices, size: 16),
+                        label: const Text('Choose Device'),
+                      ),
+                    TextButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('Retry'),
+                    ),
+                  ],
                 )
               else
                 IconButton(

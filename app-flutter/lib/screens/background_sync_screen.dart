@@ -1,11 +1,24 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../main.dart'; // To access AppShell
+
+import '../main.dart';
 
 class BackgroundSyncScreen extends StatelessWidget {
-  const BackgroundSyncScreen({super.key});
+  final Future<void> Function(BuildContext context)? onFinish;
+
+  const BackgroundSyncScreen({
+    super.key,
+    this.onFinish,
+  });
 
   Future<void> _finishOnboarding(BuildContext context) async {
+    if (onFinish != null) {
+      await onFinish!(context);
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('has_completed_onboarding', true);
 
@@ -16,9 +29,77 @@ class BackgroundSyncScreen extends StatelessWidget {
     );
   }
 
+  List<({IconData icon, Color roleColor, String title, String body})>
+      _buildChecklist(ThemeData theme) {
+    if (Platform.isAndroid) {
+      return [
+        (
+          icon: Icons.check_circle,
+          roleColor: theme.colorScheme.secondary,
+          title: 'Clipboard sync stays inside platform clipboard APIs',
+          body:
+              'Rift uses the Android clipboard APIs and its foreground-service flow. It does not require Accessibility Service.',
+        ),
+        (
+          icon: Icons.info,
+          roleColor: theme.colorScheme.primary,
+          title: 'Background work can still vary by device vendor',
+          body:
+              'Some Android skins may pause background work aggressively. If sync feels delayed later, you can revisit device battery settings.',
+        ),
+        (
+          icon: Icons.check_circle,
+          roleColor: theme.colorScheme.secondary,
+          title: 'No extra setup is required to finish now',
+          body:
+              'You can complete onboarding immediately and adjust background behavior later only if your device needs it.',
+        ),
+      ];
+    }
+
+    return [
+      (
+        icon: Icons.check_circle,
+        roleColor: theme.colorScheme.secondary,
+        title: 'Desktop sync runs through the local daemon',
+        body:
+            'Rift keeps discovery, trust, clipboard, and file flows available through the desktop session and local daemon.',
+      ),
+      (
+        icon: Icons.check_circle,
+        roleColor: theme.colorScheme.secondary,
+        title: 'No mobile-style background exemption is required here',
+        body:
+            'Desktop targets do not need battery-optimization screens for normal local syncing.',
+      ),
+      (
+        icon: Icons.info,
+        roleColor: theme.colorScheme.primary,
+        title: 'You can review permissions later in Settings',
+        body:
+            'Notification status and platform-specific checks remain available in the app settings screen after setup.',
+      ),
+    ];
+  }
+
+  String _headline() {
+    if (Platform.isAndroid) {
+      return 'Background Sync Review';
+    }
+    return 'Setup Review';
+  }
+
+  String _intro() {
+    if (Platform.isAndroid) {
+      return 'Rift is ready to run with its daemon and foreground-service flow. This screen is just a final check so the user knows what is and is not being requested.';
+    }
+    return 'Rift is ready to finish setup on this desktop target. This last step summarizes what will keep running after onboarding ends.';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final checklist = _buildChecklist(theme);
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -43,112 +124,125 @@ class BackgroundSyncScreen extends StatelessWidget {
         child: Column(
           children: [
             Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Background Sync',
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontWeight: FontWeight.bold,
-                      ),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                children: [
+                  Text(
+                    _headline(),
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                      fontWeight: FontWeight.bold,
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Rift can keep background sync available with its own daemon and foreground service flow. Clipboard syncing does not require Android Accessibility permission.',
-                      style: theme.textTheme.bodyLarge?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _intro(),
+                    style: theme.textTheme.bodyLarge?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
-                    const SizedBox(height: 32),
-                    // Info Cards
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final isWide = constraints.maxWidth > 600;
-                        if (isWide) {
-                          return Row(
+                  ),
+                  const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerLow,
+                      border:
+                          Border.all(color: theme.colorScheme.outlineVariant),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.verified_user,
+                          color: theme.colorScheme.primary,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Expanded(child: _buildTracksCard(theme)),
-                              const SizedBox(width: 16),
-                              Expanded(child: _buildIgnoresCard(theme)),
+                              Text(
+                                'What this step means',
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Rift does not need a special in-app approval here. Finishing setup records that onboarding is complete and takes you into the main app.',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
                             ],
-                          );
-                        }
-                        return Column(
-                          children: [
-                            _buildTracksCard(theme),
-                            const SizedBox(height: 16),
-                            _buildIgnoresCard(theme),
-                          ],
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 32),
-                    // Warning Banner
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surface,
-                        border: Border.all(color: theme.colorScheme.outlineVariant),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.security, color: theme.colorScheme.outline),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Permission Model',
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color: theme.colorScheme.onSurface,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Rift reads clipboard changes through the platform clipboard APIs and its foreground service. It does not need Accessibility Service for normal clipboard sync.',
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: theme.colorScheme.surfaceContainerLow,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Text(
-                                    'No Accessibility permission required',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
                           ),
-                        ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ...checklist.map(
+                    (item) => Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _ChecklistCard(
+                        icon: item.icon,
+                        roleColor: item.roleColor,
+                        title: item.title,
+                        body: item.body,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface,
+                      border:
+                          Border.all(color: theme.colorScheme.outlineVariant),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.lock_outline,
+                            color: theme.colorScheme.outline),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Accessibility remains out of scope',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Rift is not asking for full-device observation or accessibility-style scraping for clipboard sync.',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            // Bottom Action Bar
             Container(
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: theme.colorScheme.surface,
-                border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+                border: Border(
+                  top: BorderSide(color: theme.colorScheme.outlineVariant),
+                ),
               ),
               child: SafeArea(
                 top: false,
@@ -162,30 +256,32 @@ class BackgroundSyncScreen extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                         onPressed: () => _finishOnboarding(context),
-                        child: const Text('Skip', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                        child: const Text(
+                          'Finish Later',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 16),
                     Expanded(
                       flex: 2,
-                      child: FilledButton(
+                      child: FilledButton.icon(
                         style: FilledButton.styleFrom(
                           backgroundColor: theme.colorScheme.primary,
                           foregroundColor: theme.colorScheme.onPrimary,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
                         onPressed: () => _finishOnboarding(context),
-                        child: const Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Flexible(
-                              child: Text(
-                                'Continue',
-                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
+                        icon: const Icon(Icons.arrow_forward),
+                        label: const Text(
+                          'Finish Setup',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
@@ -198,104 +294,59 @@ class BackgroundSyncScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildTracksCard(ThemeData theme) {
+class _ChecklistCard extends StatelessWidget {
+  final IconData icon;
+  final Color roleColor;
+  final String title;
+  final String body;
+
+  const _ChecklistCard({
+    required this.icon,
+    required this.roleColor,
+    required this.title,
+    required this.body,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainer,
         border: Border.all(color: theme.colorScheme.outlineVariant),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
+          Icon(icon, color: roleColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.onSurface,
+                  ),
                 ),
-                child: Icon(Icons.visibility, color: theme.colorScheme.primary),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'What Rift Tracks',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.colorScheme.onSurface,
-                  fontWeight: FontWeight.bold,
+                const SizedBox(height: 4),
+                Text(
+                  body,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Clipboard copy events detected through the platform clipboard API.', theme),
-          const SizedBox(height: 12),
-          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Foreground-service based background operation on Android.', theme),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildIgnoresCard(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainer,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.errorContainer.withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(Icons.visibility_off, color: theme.colorScheme.error),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'What Rift Ignores',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.colorScheme.onSurface,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          _buildListItem(Icons.cancel, theme.colorScheme.error, 'Other screen content or visual data.', theme),
-          const SizedBox(height: 12),
-          _buildListItem(Icons.cancel, theme.colorScheme.error, 'Keystrokes or input fields.', theme),
-          const SizedBox(height: 12),
-          _buildListItem(Icons.cancel, theme.colorScheme.error, 'Accessibility-style full device observation.', theme),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildListItem(IconData icon, Color iconColor, String text, ThemeData theme) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: iconColor, size: 20),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            text,
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+              ],
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
