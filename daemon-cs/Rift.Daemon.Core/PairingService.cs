@@ -13,6 +13,7 @@ public sealed class PairingService : IPairingService
     private readonly ITrustStore _trustStore;
     private readonly IIdentityManager _identityManager;
     private readonly ISecurityEventLog _securityEventLog;
+    private readonly ITransport? _transport;
     private readonly IPairingProtocolCoordinator? _pairingProtocolCoordinator;
     private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILogger<PairingService> _logger;
@@ -21,6 +22,7 @@ public sealed class PairingService : IPairingService
         ITrustStore trustStore,
         IIdentityManager identityManager,
         ISecurityEventLog securityEventLog,
+        ITransport? transport = null,
         IPairingProtocolCoordinator? pairingProtocolCoordinator = null,
         IIpcNotificationService? ipcNotificationService = null,
         ILogger<PairingService>? logger = null)
@@ -28,6 +30,7 @@ public sealed class PairingService : IPairingService
         _trustStore = trustStore;
         _identityManager = identityManager;
         _securityEventLog = securityEventLog;
+        _transport = transport;
         _pairingProtocolCoordinator = pairingProtocolCoordinator;
         _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<PairingService>.Instance;
@@ -53,8 +56,7 @@ public sealed class PairingService : IPairingService
 
         if (peer.State == TrustState.Revoked)
         {
-            _trustStore.DeletePeer(deviceId);
-            throw CreateRpcException(-32009, "Peer not found.");
+            throw CreateRpcException(-32008, "Peer is revoked and must be explicitly reset before pairing can start again.");
         }
 
         if (peer.State == TrustState.Blocked)
@@ -196,15 +198,17 @@ public sealed class PairingService : IPairingService
                     deviceId);
             }
         }
-        _trustStore.DeletePeer(deviceId);
-
         var revokedAt = DateTimeOffset.UtcNow;
+        _trustStore.RevokePeer(deviceId, reason);
+        if (_transport is not null)
+        {
+            await _transport.DisconnectPeerAsync(deviceId, CancellationToken.None);
+        }
+
         await LogEventAsync(SecurityEventTypes.TrustRemoved, deviceId, SecurityEventOutcome.Success, reason);
-        await NotifyTrustChangedAsync(deviceId, ToJsonState(peer.State), "removed", reason);
+        await NotifyTrustChangedAsync(deviceId, ToJsonState(peer.State), "revoked", reason);
         return new RevokeTrustResult
         {
-            Removed = true,
-            RemovedAt = revokedAt.ToString("O"),
             Revoked = true,
             RevokedAt = revokedAt.ToString("O")
         };

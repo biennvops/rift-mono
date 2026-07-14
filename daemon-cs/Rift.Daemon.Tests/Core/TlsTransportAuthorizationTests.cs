@@ -98,7 +98,7 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
-    public async Task ValidatePeerBeforeHandshakeAsync_RejectsRevokedPeerAndDeletesStoredRecord()
+    public async Task ValidatePeerBeforeHandshakeAsync_RejectsRevokedPeerWithoutDeletingStoredRecord()
     {
         var remoteIdentity = new IdentityManager();
         remoteIdentity.EnsureIdentityInitialized();
@@ -122,7 +122,10 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
 
         Assert.Contains("revoked", ex.Message, StringComparison.Ordinal);
         Assert.Contains(rejectionEvents, evt => evt.FailureReason == "Unauthorized");
-        Assert.Null(_trustStore.GetPeer(remoteIdentity.GetDeviceId()));
+        var storedPeer = _trustStore.GetPeer(remoteIdentity.GetDeviceId());
+        Assert.NotNull(storedPeer);
+        Assert.Equal(TrustState.Revoked, storedPeer!.State);
+        Assert.Equal("user revoked trust", storedPeer.RevocationEvidence);
     }
 
     [Fact]

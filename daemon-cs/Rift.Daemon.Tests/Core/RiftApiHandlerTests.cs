@@ -46,6 +46,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _trustStore,
             _identityManager,
             _securityEventLog,
+            _transport,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
         _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _operationService, pairingService);
@@ -149,6 +150,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _trustStore,
             _identityManager,
             _securityEventLog,
+            _transport,
             pairingCoordinator,
             logger: NullLogger<PairingService>.Instance);
         var handler = new RiftApiHandler(
@@ -474,7 +476,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task RevokeTrustAsync_DeletesPeerForForgetFlow()
+    public async Task RevokeTrustAsync_PersistsRevokedPeerAndDisconnectsActiveSession()
     {
         var deviceId = "rift-trusted-peer";
         _trustStore.SavePeer(new PeerIdentity
@@ -491,11 +493,14 @@ public sealed class RiftApiHandlerTests : IDisposable
         var peer = _trustStore.GetPeer(deviceId);
 
         Assert.True(result.Revoked);
-        Assert.Null(peer);
+        Assert.NotNull(peer);
+        Assert.Equal(TrustState.Revoked, peer!.State);
+        Assert.Equal("user-request", peer.RevocationEvidence);
+        Assert.Contains(deviceId, _transport.DisconnectedPeers);
     }
 
     [Fact]
-    public async Task RevokeTrustAsync_DeletesPeerEvenWhenNoOpenSessionExists()
+    public async Task RevokeTrustAsync_PersistsRevokedPeerEvenWhenNoOpenSessionExists()
     {
         var deviceId = "rift-trusted-peer-offline";
         _trustStore.SavePeer(new PeerIdentity
@@ -512,6 +517,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _trustStore,
             _identityManager,
             _securityEventLog,
+            transport: null,
             pairingProtocolCoordinator: new FakePairingProtocolCoordinator("rift-manual-peer")
             {
                 TrustRemoveException = new InvalidOperationException($"No open session exists for {deviceId}.")
@@ -522,7 +528,33 @@ public sealed class RiftApiHandlerTests : IDisposable
         var peer = _trustStore.GetPeer(deviceId);
 
         Assert.True(result.Revoked);
-        Assert.Null(peer);
+        Assert.NotNull(peer);
+        Assert.Equal(TrustState.Revoked, peer!.State);
+        Assert.Equal("user-request", peer.RevocationEvidence);
+    }
+
+    [Fact]
+    public async Task StartPairingAsync_RevokedPeerRequiresExplicitReset()
+    {
+        var deviceId = "rift-revoked-before-pairing";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            DisplayName = "Revoked Linux Box",
+            Platform = "linux",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Revoked,
+            RevocationEvidence = "user-request",
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() => _handler.StartPairingAsync(deviceId));
+        var peer = _trustStore.GetPeer(deviceId);
+
+        Assert.Equal(-32008, ex.ErrorCode);
+        Assert.Contains("explicitly reset", ex.Message, StringComparison.Ordinal);
+        Assert.NotNull(peer);
+        Assert.Equal(TrustState.Revoked, peer!.State);
     }
 
     [Fact]
@@ -627,6 +659,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public List<string> DisconnectedPeers { get; } = [];
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -644,7 +677,11 @@ public sealed class RiftApiHandlerTests : IDisposable
 
         public bool HasActiveSession(string peerDeviceId) => true;
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
-        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+        {
+            DisconnectedPeers.Add(peerDeviceId);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ThrowingPairingService : IPairingService
