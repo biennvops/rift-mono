@@ -29,6 +29,7 @@ void main() {
 
   setUpAll(() {
     registerFallbackValue(<String>[]);
+    registerFallbackValue(<String, Object?>{});
   });
 
   setUp(() {
@@ -71,6 +72,18 @@ void main() {
       (_) async => {
         'enabled': true,
         'blacklistedPackages': ['com.bank.example'],
+      },
+    );
+    when(
+      () => mockClient.notifyLocalNotificationEvent(
+        eventType: any(named: 'eventType'),
+        payload: any(named: 'payload'),
+      ),
+    ).thenAnswer(
+      (_) async => {
+        'notificationId': 'android:com.example.app_flutter:test:1',
+        'broadcastTo': ['rift-peer'],
+        'suppressed': false,
       },
     );
     when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
@@ -267,5 +280,21 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sent Android test notification.'), findsOneWidget);
+    final captured = verify(
+      () => mockClient.notifyLocalNotificationEvent(
+        eventType: 'posted',
+        payload: captureAny(named: 'payload'),
+      ),
+    ).captured.single as Map<String, Object?>;
+    expect(
+      captured['notificationId'] as String,
+      startsWith('android:com.example.app_flutter:test:'),
+    );
+    expect(captured['packageName'], 'com.example.app_flutter');
+    expect(captured['appName'], 'Rift');
+    expect(captured['title'], 'Rift test notification');
+    expect(captured['bodyPreview'], contains('Notification sync'));
+    expect(captured['isDismissible'], isTrue);
+    expect(captured['isOpenable'], isTrue);
   });
 }

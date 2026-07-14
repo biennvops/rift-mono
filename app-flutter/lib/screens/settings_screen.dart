@@ -19,6 +19,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const _androidTestNotificationPackage = 'com.example.app_flutter';
+  static const _androidTestNotificationAppName = 'Rift';
   Map<String, dynamic>? _deviceInfo;
   bool _isLoading = true;
   String? _error;
@@ -129,6 +131,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _showTestNotification() async {
     final success = await AndroidShell.showTestNotification();
+    if (success) {
+      final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+      final now = DateTime.now().toUtc();
+      try {
+        await client.notifyLocalNotificationEvent(
+          eventType: 'posted',
+          payload: <String, Object?>{
+            'notificationId':
+                'android:$_androidTestNotificationPackage:test:${now.microsecondsSinceEpoch}',
+            'packageName': _androidTestNotificationPackage,
+            'appName': _androidTestNotificationAppName,
+            'title': 'Rift test notification',
+            'bodyPreview':
+                'Android notifications are enabled. Notification sync still also requires notification access.',
+            'postedAt': now.toIso8601String(),
+            'isDismissible': true,
+            'isOpenable': true,
+          },
+        );
+      } catch (error) {
+        debugPrint(
+          '[Notification Sync] Failed to mirror Android test notification: $error',
+        );
+      }
+    }
     if (!mounted) {
       return;
     }
