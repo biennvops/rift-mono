@@ -319,6 +319,52 @@ public sealed class SendQueueServiceTests
         }
     }
 
+    [Fact]
+    public async Task SessionOnline_SerializesMultipleItemsForSamePeer()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var fileTransfer = new ConcurrencyTrackingFileTransferService();
+        var transport = new FakeTransport();
+        var service = new SendQueueService(_trustStore, null, fileTransfer, transport);
+
+        var firstPath = CreateTempFile("one");
+        var secondPath = CreateTempFile("two");
+        var thirdPath = CreateTempFile("three");
+        try
+        {
+            await service.EnqueueFileSendAsync(firstPath, "one.txt", "text/plain", "rift-peer", "picker", CancellationToken.None);
+            await service.EnqueueFileSendAsync(secondPath, "two.txt", "text/plain", "rift-peer", "picker", CancellationToken.None);
+            await service.EnqueueFileSendAsync(thirdPath, "three.txt", "text/plain", "rift-peer", "picker", CancellationToken.None);
+
+            // All three are dispatched immediately on EnqueueFileSendAsync.
+            // Drive an extra reconnect to confirm we still serialize.
+            transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+                "rift-peer",
+                isOnline: true,
+                selectedCapabilities: ["file.transfer"],
+                allowsProtectedTraffic: true));
+            await Task.Delay(100);
+
+            Assert.True(fileTransfer.MaxConcurrentCalls <= 1,
+                $"Per-peer dispatch must be serialized, but {fileTransfer.MaxConcurrentCalls} OfferFileAsync calls overlapped.");
+            Assert.True(fileTransfer.OfferCallCount >= 3,
+                $"Expected at least 3 OfferFileAsync calls, saw {fileTransfer.OfferCallCount}.");
+        }
+        finally
+        {
+            File.Delete(firstPath);
+            File.Delete(secondPath);
+            File.Delete(thirdPath);
+        }
+    }
+
     private static string CreateTempFile(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"rift-send-queue-{Guid.NewGuid():N}.txt");
@@ -391,6 +437,69 @@ public sealed class SendQueueServiceTests
         public void RaiseTransferUpdated(FileTransferLifecycleEventArgs args)
         {
             TransferUpdated?.Invoke(this, args);
+        }
+
+        public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() => throw new NotSupportedException();
+        public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw new NotSupportedException();
+        public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleChunkReceivedAsync(string deviceId, string transferId, int chunkIndex, long offset, int byteSize, string chunkSha256, string contentBase64, bool isLastChunk, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleCompleteReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, int chunkCount, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleCancelReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class ConcurrencyTrackingFileTransferService : IFileTransferService
+    {
+        public event EventHandler<FileTransferLifecycleEventArgs>? TransferUpdated;
+
+        private int _inFlight;
+        private int _maxInFlight;
+        private int _callCount;
+
+        public int MaxConcurrentCalls => _maxInFlight;
+        public int OfferCallCount => _callCount;
+
+        public Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName, string? mediaType, CancellationToken cancellationToken)
+        {
+            var current = Interlocked.Increment(ref _inFlight);
+            InterlockedMax(ref _maxInFlight, current);
+            return Task.Run(async () =>
+            {
+                // Give the dispatcher a chance to start another dispatch if
+                // it (incorrectly) does not await the previous call.
+                await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+                Interlocked.Decrement(ref _inFlight);
+                var n = Interlocked.Increment(ref _callCount);
+                return new OfferFileResult
+                {
+                    TransferId = $"transfer-{n}",
+                    OperationId = $"operation-{n}",
+                    TargetDeviceId = targetDeviceId,
+                    FileName = fileName ?? Path.GetFileName(localPath),
+                    ByteSize = new FileInfo(localPath).Length
+                };
+            });
+        }
+
+        public void RaiseTransferUpdated(FileTransferLifecycleEventArgs args)
+        {
+            TransferUpdated?.Invoke(this, args);
+        }
+
+        private static void InterlockedMax(ref int location, int value)
+        {
+            int snapshot;
+            do
+            {
+                snapshot = Volatile.Read(ref location);
+                if (value <= snapshot)
+                {
+                    return;
+                }
+            } while (Interlocked.CompareExchange(ref location, value, snapshot) != snapshot);
         }
 
         public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() => throw new NotSupportedException();

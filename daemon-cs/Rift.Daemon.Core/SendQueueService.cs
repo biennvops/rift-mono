@@ -40,6 +40,13 @@ public sealed class SendQueueService : ISendQueueService
         RestorePersistedItems();
     }
 
+    // Per-peer serialization for reconnect-driven dispatch. The transfer
+    // service handles chunking/sequencing for a single send, but multiple
+    // queue items for the same peer would otherwise race when the session
+    // comes back online. We keep a worker per peer that consumes from a
+    // queue and dispatches one item at a time.
+    private readonly ConcurrentDictionary<string, PeerDispatcher> _peerDispatchers = new(StringComparer.Ordinal);
+
     public async Task<EnqueueFileSendResult> EnqueueFileSendAsync(
         string localPath,
         string? fileName,
@@ -479,9 +486,94 @@ public sealed class SendQueueService : ISendQueueService
             }
         }
 
-        foreach (var queueItemId in queueItemIds)
+        if (queueItemIds.Count == 0)
         {
-            _ = Task.Run(() => TryDispatchItemAsync(queueItemId, CancellationToken.None));
+            return;
+        }
+
+        EnqueueForPeer(args.PeerDeviceId, queueItemIds);
+    }
+
+    private void EnqueueForPeer(string peerDeviceId, IReadOnlyList<string> queueItemIds)
+    {
+        var dispatcher = _peerDispatchers.GetOrAdd(
+            peerDeviceId,
+            static _ => new PeerDispatcher());
+
+        // Single background worker per peer. Sequential awaits on
+        // TryDispatchItemAsync inside the worker preserve the per-peer send
+        // order and prevent racing concurrent OfferFileAsync calls to the
+        // same session. Different peers run in parallel because each has its
+        // own dispatcher.
+        dispatcher.Enqueue(queueItemIds, TryDispatchItemAsync);
+    }
+
+    private sealed class PeerDispatcher
+    {
+        private readonly ConcurrentQueue<string> _queue = new();
+        private int _running;
+
+        public void Enqueue(
+            IReadOnlyList<string> queueItemIds,
+            Func<string, CancellationToken, Task> dispatch)
+        {
+            foreach (var id in queueItemIds)
+            {
+                _queue.Enqueue(id);
+            }
+
+            // Only one worker runs at a time. If another is already draining,
+            // the newly-enqueued ids will be picked up by the current loop
+            // (or by a follow-up worker kicked off after finally).
+            if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+            {
+                return;
+            }
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        while (_queue.TryDequeue(out var itemId))
+                        {
+                            try
+                            {
+                                await dispatch(itemId, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                            }
+                            catch (Exception)
+                            {
+                                // TryDispatchItemAsync already classifies
+                                // failures into waiting_for_peer / failed and
+                                // persists state. Don't let one bad item take
+                                // down the worker loop.
+                            }
+                        }
+
+                        // Clear the running flag and re-check the queue so a
+                        // concurrent Enqueue that landed between the last
+                        // TryDequeue and this CAS doesn't get stranded.
+                        Interlocked.Exchange(ref _running, 0);
+                        if (_queue.IsEmpty)
+                        {
+                            return;
+                        }
+
+                        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+                        {
+                            // Another worker already claimed the work.
+                            return;
+                        }
+                    }
+                }
+                catch
+                {
+                    Interlocked.Exchange(ref _running, 0);
+                    throw;
+                }
+            });
         }
     }
 
