@@ -302,9 +302,6 @@ std::string encode_notification_payload(const gchar* route,
         case FL_VALUE_TYPE_INT:
           append_pair(key, std::to_string(fl_value_get_int(entry_value)));
           break;
-        case FL_VALUE_TYPE_INT64:
-          append_pair(key, std::to_string(fl_value_get_int64(entry_value)));
-          break;
         case FL_VALUE_TYPE_FLOAT:
           append_pair(key, std::to_string(fl_value_get_float(entry_value)));
           break;
