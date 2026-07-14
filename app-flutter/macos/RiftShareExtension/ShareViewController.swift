@@ -20,10 +20,6 @@ final class ShareViewController: SLComposeServiceViewController {
     }
   }
 
-  override func configurationItems() -> [Any]! {
-    []
-  }
-
   private func collectSharedItems() async throws -> [[String: String]] {
     guard let inputItems = extensionContext?.inputItems as? [NSExtensionItem] else {
       return []
@@ -57,13 +53,27 @@ final class ShareViewController: SLComposeServiceViewController {
     inboxDirectory: URL
   ) async throws -> [String: String]? {
     let loaded = try await provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier)
-    guard let fileURL = loaded as? URL else {
+    // On macOS, NSItemProvider may hand back a URL, raw Data of a file URL,
+    // or a path string depending on the source app. Accept all three.
+    let fileURL: URL?
+    if let url = loaded as? URL {
+      fileURL = url
+    } else if let data = loaded as? Data,
+              let path = String(data: data, encoding: .utf8) {
+      fileURL = URL(fileURLWithPath: path)
+    } else if let path = loaded as? String {
+      fileURL = URL(fileURLWithPath: path)
+    } else {
+      fileURL = nil
+    }
+
+    guard let sourceURL = fileURL else {
       return nil
     }
 
-    let fileName = fileURL.lastPathComponent
+    let fileName = sourceURL.lastPathComponent
     let destination = uniqueDestination(in: inboxDirectory, preferredName: fileName)
-    try FileManager.default.copyItem(at: fileURL, to: destination)
+    try FileManager.default.copyItem(at: sourceURL, to: destination)
     return [
       "localPath": destination.path,
       "fileName": fileName,
