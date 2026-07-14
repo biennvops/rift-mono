@@ -3,21 +3,25 @@ import FlutterMacOS
 import window_manager
 
 class MainFlutterWindow: NSWindow {
-  override func awakeFromNib() {
-    let flutterViewController = FlutterViewController()
-    let windowFrame = self.frame
-    self.contentViewController = flutterViewController
-    self.setFrame(windowFrame, display: true)
+    override func awakeFromNib() {
+        let flutterViewController = FlutterViewController()
+        let windowFrame = frame
+        contentViewController = flutterViewController
+        setFrame(windowFrame, display: true)
 
-    RegisterGeneratedPlugins(registry: flutterViewController)
-    PermissionsBridge.register(with: flutterViewController.engine.binaryMessenger)
-    DesktopClipboardBridge.register(with: flutterViewController.engine.binaryMessenger)
+        RegisterGeneratedPlugins(registry: flutterViewController)
+        PermissionsBridge.register(with: flutterViewController.engine.binaryMessenger)
+        DesktopClipboardBridge.register(with: flutterViewController.engine.binaryMessenger)
+        SendFilesBridge.shared.register(
+            with: flutterViewController.engine.binaryMessenger,
+            window: self
+        )
 
-    super.awakeFromNib()
-  }
+        super.awakeFromNib()
+    }
 
-  override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
-    super.order(place, relativeTo: otherWin)
-    hiddenWindowAtLaunch()
-  }
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        super.order(place, relativeTo: otherWin)
+        hiddenWindowAtLaunch()
+    }
 }

@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';

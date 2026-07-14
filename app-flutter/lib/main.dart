@@ -25,6 +25,7 @@ import 'src/ipc/transport_factory.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/platform/android_shell.dart';
+import 'src/platform/macos_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -272,6 +273,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    if (Platform.isMacOS) {
+      MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
+    }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
 
     if (Platform.isAndroid) {
@@ -302,6 +306,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (arguments is Map) {
       _handleNotificationActionPayload(Map<String, dynamic>.from(arguments));
     }
+    return null;
+  }
+
+  Future<dynamic> _handleMacOSSendFilesMethodCall(MethodCall call) async {
+    if (call.method != MacOSSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = MacOSSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    _sharedSendRequestsNotifier.value = items;
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
     return null;
   }
 
@@ -932,7 +951,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           ),
         ),
       );
-      _maybeNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
+      _maybeNotify(
+          'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 
       await client.acceptFileOffer(
         transferId: transferId,

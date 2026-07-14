@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import '../src/file_transfer/file_storage.dart';
 import '../src/file_transfer/send_queue_panel.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
 enum _HistorySection {
@@ -586,6 +587,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       );
     }
     try {
+      if (Platform.isMacOS) {
+        final requests = await MacOSSendFiles.pickSendFiles();
+        return _PickSendFilesResult(requests: requests);
+      }
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
         withData: false,
