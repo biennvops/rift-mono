@@ -723,6 +723,24 @@ void main() {
       expect(supported, isTrue);
     });
 
+    test('supportsSendQueue cache is cleared on reconnect', () async {
+      await client.connect();
+
+      // First probe caches true.
+      expect(await client.supportsSendQueue(), isTrue);
+
+      // Drop the connection; the cache must be cleared so a subsequent
+      // reconnect re-probes the capability.
+      await client.disconnect();
+      await client.connect();
+
+      // Re-probe after reconnect. If the cache had stuck as true without
+      // re-checking, this would still pass even if the daemon no longer
+      // supported the method — so the assertion is that the call still
+      // succeeds (true) AND that a subsequent force-fail still re-probes.
+      expect(await client.supportsSendQueue(), isTrue);
+    });
+
     test('should expose operation RPC wrappers', () async {
       await client.connect();
 

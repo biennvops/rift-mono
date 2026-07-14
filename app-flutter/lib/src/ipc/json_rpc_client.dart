@@ -348,6 +348,10 @@ class JsonRpcRiftClient {
     }
 
     _isConnected = isConnected;
+    // Drop the cached capability probe on any connection transition so a
+    // daemon upgrade (or a mid-session feature enablement) can be
+    // re-detected on the next supportsSendQueue() call.
+    _supportsSendQueue = null;
     _connectionChangedController.add(isConnected);
   }
 
