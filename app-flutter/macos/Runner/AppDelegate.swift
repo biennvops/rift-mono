@@ -44,7 +44,6 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   override func application(_ sender: NSApplication, openFiles filenames: [String]) {
-    SharedTransferInbox.queueFiles(filenames)
     PermissionsBridge.dispatchOpenFiles(filenames)
     sender.reply(toOpenOrPrint: .success)
   }
