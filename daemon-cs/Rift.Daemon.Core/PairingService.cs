@@ -35,6 +35,8 @@ public sealed class PairingService : IPairingService
 
     public async Task<StartPairingResult> StartPairingAsync(string deviceId)
     {
+        var stateBeforeProtocolStart = _trustStore.GetPeer(deviceId)?.State;
+
         if (_pairingProtocolCoordinator is not null)
         {
             try
@@ -67,12 +69,23 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, $"Cannot start pairing from state '{peer.State}'.");
         }
 
+        var transitionedToPairingPending = false;
         if (peer.State == TrustState.Discovered && !_trustStore.TryTransition(deviceId, TrustState.PairingPending))
         {
             throw CreateRpcException(-32008, "Failed to transition peer into pairing_pending.");
         }
 
         if (peer.State == TrustState.Discovered)
+        {
+            transitionedToPairingPending = true;
+            peer.State = TrustState.PairingPending;
+        }
+        else if (stateBeforeProtocolStart == TrustState.Discovered && peer.State == TrustState.PairingPending)
+        {
+            transitionedToPairingPending = true;
+        }
+
+        if (transitionedToPairingPending)
         {
             await NotifyTrustChangedAsync(deviceId, "discovered", "pairing_pending", "Local pairing started.");
         }

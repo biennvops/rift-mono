@@ -77,6 +77,12 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
         state.MarkLocalApproved();
 
+        var existingPeer = _trustStore.GetPeer(deviceId);
+        if (existingPeer?.State == TrustState.Discovered && !_trustStore.TryTransition(deviceId, TrustState.PairingPending))
+        {
+            throw new InvalidOperationException($"Failed to transition peer {deviceId} into pairing_pending before sending pairing.start.");
+        }
+
         if (!_transport.HasActiveSession(deviceId) &&
             await WaitForActiveSessionAsync(deviceId, InitialSessionReuseWindow, cancellationToken))
         {

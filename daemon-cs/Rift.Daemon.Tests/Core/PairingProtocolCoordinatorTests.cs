@@ -637,6 +637,33 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyLocalPairingStarted_FromDiscovered_RemoteApproveAndComplete_TransitionsTrusted()
+    {
+        _transport.ActiveSessions.Add("rift-peer-local-start");
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-local-start",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-local-start");
+        await _coordinator.HandleMessageAsync("rift-peer-local-start", CreateEnvelope("rift-peer-local-start", "pairing.approve", new
+        {
+            approvedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
+        await _coordinator.HandleMessageAsync("rift-peer-local-start", CreateEnvelope("rift-peer-local-start", "pairing.complete", new
+        {
+            trustedDeviceId = "rift-peer-local-start",
+            persistedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
+
+        var peer = _trustStore.GetPeer("rift-peer-local-start");
+        Assert.Equal(TrustState.Trusted, peer!.State);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingStart_TransitionsPeerToPairingPending()
     {
         _trustStore.SavePeer(new PeerIdentity
