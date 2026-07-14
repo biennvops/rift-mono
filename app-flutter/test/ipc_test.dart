@@ -164,6 +164,11 @@ class MockTransport implements IpcTransport {
     'Enabled': true,
     'BlacklistedPackages': ['com.bank.example'],
   };
+  Map<String, dynamic> notifyLocalNotificationEventResult = {
+    'NotificationId': 'notif-1',
+    'BroadcastTo': ['rift-peer'],
+    'Suppressed': false,
+  };
   Map<String, dynamic> getOperationResult = {
     'OperationId': 'operation-1',
     'OperationType': 'clipboard.fetch',
@@ -305,6 +310,9 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.updateNotificationSyncPolicy':
           _sendResult(id, updateNotificationSyncPolicyResult);
+          break;
+        case 'rift.notifyLocalNotificationEvent':
+          _sendResult(id, notifyLocalNotificationEventResult);
           break;
       }
     });
@@ -893,6 +901,17 @@ void main() {
     test('should expose notification sync RPC wrappers', () async {
       await client.connect();
 
+      final localEventResult = await client.notifyLocalNotificationEvent(
+        eventType: 'posted',
+        payload: const {
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
       final listed = await client.listNotifications();
       final actionResult = await client.performNotificationAction(
         notificationId: 'notif-1',
@@ -903,6 +922,7 @@ void main() {
         blacklistedPackages: ['com.bank.example'],
       );
 
+      expect(localEventResult['notificationId'], 'notif-1');
       expect((listed['notifications'] as List).single['notificationId'],
           'notif-1');
       expect(listed['policy'], {
@@ -914,6 +934,23 @@ void main() {
         'enabled': true,
         'blacklistedPackages': ['com.bank.example'],
       });
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalNotificationEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
       expect(
         transport.requests
             .where(

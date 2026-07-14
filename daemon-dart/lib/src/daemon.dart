@@ -73,6 +73,21 @@ class _DiscoveredPeerRecord {
       .toList(growable: false);
 }
 
+class _NotificationSyncPolicy {
+  bool enabled;
+  List<String> blacklistedPackages;
+
+  _NotificationSyncPolicy({
+    this.enabled = true,
+    List<String>? blacklistedPackages,
+  }) : blacklistedPackages = List<String>.from(blacklistedPackages ?? const []);
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'blacklistedPackages': List<String>.from(blacklistedPackages),
+  };
+}
+
 int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
   final scoreCompare = _endpointScore(
     b.address,
@@ -353,6 +368,8 @@ class RiftDaemon {
   ClipboardProtocolHandler? _clipboardHandler;
   FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
+  final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
+  _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
@@ -563,6 +580,195 @@ class RiftDaemon {
         -32006,
         'sha256 does not match decoded content',
       );
+    }
+  }
+
+  List<String> _normalizeNotificationSyncBlacklist(Object? value) {
+    if (value == null) {
+      return const <String>[];
+    }
+    if (value is! List) {
+      throw ArgumentError.value(
+        value,
+        'blacklistedPackages',
+        'must be a list of strings',
+      );
+    }
+
+    final normalized = <String>{};
+    for (final entry in value) {
+      if (entry is! String) {
+        throw ArgumentError.value(
+          value,
+          'blacklistedPackages',
+          'must be a list of strings',
+        );
+      }
+      final trimmed = entry.trim();
+      if (trimmed.isNotEmpty) {
+        normalized.add(trimmed);
+      }
+    }
+    return normalized.toList(growable: false)..sort();
+  }
+
+  Future<Map<String, dynamic>> _updateNotificationSyncPolicy({
+    required bool enabled,
+    required List<String> blacklistedPackages,
+  }) async {
+    _notificationSyncPolicy = _NotificationSyncPolicy(
+      enabled: enabled,
+      blacklistedPackages: blacklistedPackages,
+    );
+    return _notificationSyncPolicy.toJson();
+  }
+
+  Map<String, dynamic> _listNotificationSyncState() {
+    final notifications =
+        _notificationSyncRecords.values.toList(growable: false)..sort((a, b) {
+          final aPostedAt = a['postedAt'] as String? ?? '';
+          final bPostedAt = b['postedAt'] as String? ?? '';
+          return bPostedAt.compareTo(aPostedAt);
+        });
+    return {
+      'notifications': notifications,
+      'policy': _notificationSyncPolicy.toJson(),
+    };
+  }
+
+  bool _isNotificationBlacklisted(String packageName) {
+    return _notificationSyncPolicy.blacklistedPackages.contains(packageName);
+  }
+
+  Future<List<String>> _broadcastNotificationSyncEnvelope({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) async {
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final ctx = _sessionManager!.getContext(peer.deviceId);
+        if (ctx == null || !ctx.hasCapability('notification.sync')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': messageType,
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': payload,
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[NotificationSync] Could not send $messageType to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return broadcastTo;
+  }
+
+  Future<Map<String, dynamic>> _handleLocalNotificationSyncEvent(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final eventType = RpcUtils.requireStringParam(params, 'eventType');
+    final notificationId = RpcUtils.requireStringParam(
+      params,
+      'notificationId',
+    );
+    final localDeviceId = _identityManager!.deviceId;
+
+    switch (eventType) {
+      case 'posted':
+      case 'updated':
+        final packageName = RpcUtils.requireStringParam(params, 'packageName');
+        final appName = RpcUtils.requireStringParam(params, 'appName');
+        final postedAt = RpcUtils.requireStringParam(params, 'postedAt');
+        final isDismissible = params['isDismissible'];
+        final isOpenable = params['isOpenable'];
+        if (isDismissible is! bool || isOpenable is! bool) {
+          throw ArgumentError.value(
+            params,
+            'isDismissible/isOpenable',
+            'must be booleans',
+          );
+        }
+
+        final record = <String, dynamic>{
+          'notificationId': notificationId,
+          'sourceDeviceId': localDeviceId,
+          'packageName': packageName,
+          'appName': appName,
+          if (params['title'] is String &&
+              (params['title'] as String).isNotEmpty)
+            'title': params['title'],
+          if (params['bodyPreview'] is String &&
+              (params['bodyPreview'] as String).isNotEmpty)
+            'bodyPreview': params['bodyPreview'],
+          'postedAt': postedAt,
+          'isDismissible': isDismissible,
+          'isOpenable': isOpenable,
+        };
+
+        _notificationSyncRecords[notificationId] = record;
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': eventType == 'posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+
+        var broadcastTo = const <String>[];
+        if (_notificationSyncPolicy.enabled &&
+            !_isNotificationBlacklisted(packageName)) {
+          broadcastTo = await _broadcastNotificationSyncEnvelope(
+            messageType: eventType == 'posted'
+                ? 'notification.posted'
+                : 'notification.updated',
+            payload: record,
+          );
+        }
+
+        return {
+          'notificationId': notificationId,
+          'broadcastTo': broadcastTo,
+          'suppressed':
+              !_notificationSyncPolicy.enabled ||
+              _isNotificationBlacklisted(packageName),
+        };
+      case 'removed':
+        _notificationSyncRecords.remove(notificationId);
+        final removedPayload = <String, dynamic>{
+          'notificationId': notificationId,
+          'sourceDeviceId': localDeviceId,
+          if (params['removedAt'] is String &&
+              (params['removedAt'] as String).isNotEmpty)
+            'removedAt': params['removedAt'],
+        };
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': removedPayload,
+        });
+
+        final broadcastTo = await _broadcastNotificationSyncEnvelope(
+          messageType: 'notification.removed',
+          payload: removedPayload,
+        );
+        return {'notificationId': notificationId, 'broadcastTo': broadcastTo};
+      default:
+        throw ArgumentError.value(
+          eventType,
+          'eventType',
+          'must be posted, updated, or removed',
+        );
     }
   }
 
@@ -941,6 +1147,25 @@ class RiftDaemon {
           'expiresInMs': expiresInMs,
           'broadcastTo': broadcastTo,
         };
+
+      case 'rift.notifyLocalNotificationEvent':
+        return _handleLocalNotificationSyncEvent(params);
+
+      case 'rift.listNotifications':
+        return _listNotificationSyncState();
+
+      case 'rift.updateNotificationSyncPolicy':
+        final enabled = params['enabled'];
+        if (enabled is! bool) {
+          throw ArgumentError.value(enabled, 'enabled', 'must be a boolean');
+        }
+        final blacklist = _normalizeNotificationSyncBlacklist(
+          params['blacklistedPackages'],
+        );
+        return _updateNotificationSyncPolicy(
+          enabled: enabled,
+          blacklistedPackages: blacklist,
+        );
 
       case 'rift.listClipboardOffers':
         _requireTransportServices();

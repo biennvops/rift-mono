@@ -813,6 +813,16 @@ class JsonRpcRiftClient {
     return _sendRequest('rift.listTrustedPeers');
   }
 
+  Future<dynamic> notifyLocalNotificationEvent({
+    required String eventType,
+    required Map<String, Object?> payload,
+  }) async {
+    return _sendRequest('rift.notifyLocalNotificationEvent', {
+      'eventType': eventType,
+      ...payload,
+    });
+  }
+
   Future<dynamic> listNotifications() async {
     return _sendRequest('rift.listNotifications');
   }

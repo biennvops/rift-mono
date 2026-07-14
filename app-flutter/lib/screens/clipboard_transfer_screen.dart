@@ -15,7 +15,6 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
-import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
 
 enum _HistorySection {
@@ -164,27 +163,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _notificationPostedSub = client.onNotificationPosted.listen((event) {
       if (mounted) {
         unawaited(_refreshNotifications());
-      }
-      final title = event['title']?.toString().trim();
-      final body = event['bodyPreview']?.toString().trim();
-      if (Platform.isMacOS) {
-        unawaited(
-          MacOSNotifications.show(
-            title: (title != null && title.isNotEmpty)
-                ? title
-                : event['appName']?.toString() ?? 'Notification',
-            body: [
-              _peerDisplayName(event['sourceDeviceId']?.toString()),
-              if (body != null && body.isNotEmpty) body,
-            ].join(' • '),
-            route: NotificationRoute.historyNotifications,
-            payload: <String, Object?>{
-              'route': NotificationRoute.historyNotifications,
-              'notificationId': event['notificationId']?.toString(),
-              'notificationAction': 'open',
-            },
-          ),
-        );
       }
     });
     _notificationUpdatedSub = client.onNotificationUpdated.listen((_) {

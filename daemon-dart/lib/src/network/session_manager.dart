@@ -208,6 +208,7 @@ class SessionManager {
   static final List<Capability> _defaultCapabilities = [
     Capability(name: 'clipboard.offer_fetch', version: 1),
     Capability(name: 'file.transfer', version: 1),
+    Capability(name: 'notification.sync', version: 1),
     Capability(name: 'presence.basic', version: 1),
     Capability(name: 'operation.lifecycle', version: 1),
     Capability(name: 'security.event_log', version: 1),
@@ -415,7 +416,9 @@ class SessionManager {
       peerDeviceId,
       Completer<void>.new,
     );
-    RiftLog.debug('[Session] Waiting for session establishment with $peerDeviceId');
+    RiftLog.debug(
+      '[Session] Waiting for session establishment with $peerDeviceId',
+    );
     await waiter.future.timeout(
       timeout,
       onTimeout: () => throw SessionException(
@@ -618,9 +621,7 @@ class SessionManager {
           'Unauthorized',
           'peer identity is blocked',
         );
-        throw SessionException(
-          'Unauthorized: peer identity is blocked',
-        );
+        throw SessionException('Unauthorized: peer identity is blocked');
       }
       ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
       final record = await _trustStore.getPeer(peerDeviceId);
@@ -639,7 +640,9 @@ class SessionManager {
     } else if (ctx.handshakeState == HandshakeState.established) {
       final localDeviceId = _identityManager.deviceId;
       if (localDeviceId.compareTo(peerDeviceId) > 0) {
-        RiftLog.info('[Session] Tie-break (we win): Rejecting inbound duplicate session.hello from $peerDeviceId.');
+        RiftLog.info(
+          '[Session] Tie-break (we win): Rejecting inbound duplicate session.hello from $peerDeviceId.',
+        );
         await _rejectSession(
           peerDeviceId,
           'ProtocolError',
@@ -649,7 +652,9 @@ class SessionManager {
           'ProtocolError: Duplicate connection rejected by tie-breaker for $peerDeviceId',
         );
       } else {
-        RiftLog.info('[Session] Tie-break (peer wins): Dropping existing outbound connection and accepting inbound from $peerDeviceId.');
+        RiftLog.info(
+          '[Session] Tie-break (peer wins): Dropping existing outbound connection and accepting inbound from $peerDeviceId.',
+        );
         _transport.disconnect(peerDeviceId);
         ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
         final record = await _trustStore.getPeer(peerDeviceId);
@@ -824,7 +829,9 @@ class SessionManager {
       );
     }
 
-    RiftLog.debug('[Session] Verified session.hello from $peerDeviceId; sending session.accept.');
+    RiftLog.debug(
+      '[Session] Verified session.hello from $peerDeviceId; sending session.accept.',
+    );
     await _sendSessionAccept(ctx);
 
     // Sequential (unidirectional) handshake: if we are the responder (no local hello in flight),
@@ -1068,7 +1075,9 @@ class SessionManager {
 
   Future<void> _startCapabilityNegotiation(SessionContext ctx) async {
     ctx.localAdvertisedCapabilities = _defaultCapabilities;
-    RiftLog.debug('[Session] Starting capability negotiation with ${ctx.peerDeviceId}');
+    RiftLog.debug(
+      '[Session] Starting capability negotiation with ${ctx.peerDeviceId}',
+    );
 
     ctx.capabilityNegotiationTimer?.cancel();
     ctx.capabilityNegotiationTimer = Timer(const Duration(seconds: 5), () {
@@ -1160,7 +1169,9 @@ class SessionManager {
     }
 
     ctx.peerAdvertisedCapabilities = peerCaps;
-    RiftLog.debug('[Session] Received capability.advertise from ${ctx.peerDeviceId}');
+    RiftLog.debug(
+      '[Session] Received capability.advertise from ${ctx.peerDeviceId}',
+    );
     for (final c in ctx.peerAdvertisedCapabilities) {
       if (c.name.length > 128 ||
           c.policyFlags.length > 16 ||
@@ -1210,7 +1221,9 @@ class SessionManager {
         ctx.peerDeviceId,
         Uint8List.fromList(utf8.encode(json.encode(reply))),
       );
-      RiftLog.debug('[Session] Sent capability.selected to ${ctx.peerDeviceId}');
+      RiftLog.debug(
+        '[Session] Sent capability.selected to ${ctx.peerDeviceId}',
+      );
       _markSessionReady(ctx, 'initiator selected capabilities');
 
       _startHeartbeatIfTrusted(ctx);
@@ -1303,7 +1316,9 @@ class SessionManager {
     ctx.capabilityNegotiated = true;
     final waiter = _establishmentWaiters.remove(ctx.peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
-      RiftLog.info('[Session] Session fully established with ${ctx.peerDeviceId}: $reason');
+      RiftLog.info(
+        '[Session] Session fully established with ${ctx.peerDeviceId}: $reason',
+      );
       waiter.complete();
     }
   }

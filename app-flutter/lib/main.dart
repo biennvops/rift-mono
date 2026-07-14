@@ -27,6 +27,7 @@ import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
+import 'src/platform/linux_notifications.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -183,6 +184,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
   StreamSubscription<bool>? _connectionChangedSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
@@ -193,6 +197,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final ValueNotifier<String?> _sharedClipboardTextNotifier =
       ValueNotifier<String?>(null);
   final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
+      <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> _pendingNotificationSyncEvents =
       <Map<String, dynamic>>[];
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
@@ -279,6 +285,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   Future<void> _bindPlatformNotificationActions() async {
     WindowsShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
+    LinuxNotifications.setMethodCallHandler(
+      _handlePlatformNotificationMethodCall,
+    );
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
@@ -308,6 +317,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
+        unawaited(_flushPendingNotificationSyncEvents());
         unawaited(_flushPendingSharedSendItems());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
@@ -328,12 +338,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   Future<dynamic> _handlePlatformNotificationMethodCall(MethodCall call) async {
-    if (call.method != 'notificationActivated') {
+    if (call.method == 'notificationActivated') {
+      final arguments = call.arguments;
+      if (arguments is Map) {
+        _handleNotificationActionPayload(Map<String, dynamic>.from(arguments));
+      }
       return null;
     }
-    final arguments = call.arguments;
-    if (arguments is Map) {
-      _handleNotificationActionPayload(Map<String, dynamic>.from(arguments));
+
+    if (call.method == 'notificationSyncEvent') {
+      final arguments = call.arguments;
+      if (arguments is Map) {
+        await _submitNativeNotificationSyncEvent(
+          Map<String, dynamic>.from(arguments),
+        );
+      }
     }
     return null;
   }
@@ -391,6 +410,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       }
     }
     _pendingExternalClipboardPayloads.add(Map<String, dynamic>.from(payload));
+  }
+
+  void _queuePendingNotificationSyncEvent(Map<String, dynamic> event) {
+    _pendingNotificationSyncEvents.add(Map<String, dynamic>.from(event));
   }
 
   Future<void> _submitExternalClipboardPayload(
@@ -453,6 +476,42 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
+  Future<void> _submitNativeNotificationSyncEvent(
+    Map<String, dynamic> event,
+  ) async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _queuePendingNotificationSyncEvent(event);
+      client.connect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[Notification Sync] Failed to reconnect for native event send: $error',
+        );
+      });
+      return;
+    }
+
+    final eventType = event['eventType']?.toString();
+    final notificationId = event['notificationId']?.toString();
+    if (eventType == null ||
+        eventType.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      return;
+    }
+
+    try {
+      await client.notifyLocalNotificationEvent(
+        eventType: eventType,
+        payload: Map<String, Object?>.from(event),
+      );
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to submit native notification event: $error',
+      );
+      _queuePendingNotificationSyncEvent(event);
+    }
+  }
+
   Future<void> _flushPendingExternalClipboardPayloads() async {
     if (_pendingExternalClipboardPayloads.isEmpty) {
       return;
@@ -467,6 +526,20 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
+  Future<void> _flushPendingNotificationSyncEvents() async {
+    if (_pendingNotificationSyncEvents.isEmpty) {
+      return;
+    }
+
+    final queued = List<Map<String, dynamic>>.from(
+      _pendingNotificationSyncEvents,
+    );
+    _pendingNotificationSyncEvents.clear();
+    for (final event in queued) {
+      await _submitNativeNotificationSyncEvent(event);
+    }
+  }
+
   void _handleNotificationActionPayload(Map<String, dynamic> payload) {
     final route = payload['route']?.toString();
     final notificationAction = payload['notificationAction']?.toString();
@@ -477,10 +550,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       final client = context.read<JsonRpcRiftClient>();
       if (client.isConnected) {
         unawaited(
-          client.performNotificationAction(
-            notificationId: notificationId,
-            action: notificationAction,
-          ).catchError((_) {}),
+          client
+              .performNotificationAction(
+                notificationId: notificationId,
+                action: notificationAction,
+              )
+              .catchError((_) {}),
         );
       }
     }
@@ -563,7 +638,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     // If anything still couldn't be enqueued (e.g., file disappeared), re-buffer
     // so we don't lose the user's intent — they'll see it once the daemon
     // recovers and can act on it.
-    if (result.skipped > 0 && !_pendingSharedSendItems.contains(pending.first)) {
+    if (result.skipped > 0 &&
+        !_pendingSharedSendItems.contains(pending.first)) {
       debugPrint(
         '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
       );
@@ -643,6 +719,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _fileFailedSub?.cancel();
     _clipboardOfferSub?.cancel();
     _clipboardExpiredSub?.cancel();
+    _notificationPostedSub?.cancel();
+    _notificationUpdatedSub?.cancel();
+    _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
@@ -775,6 +854,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
+        if (Platform.isLinux && route != null) {
+          await LinuxNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            destinationPath: destinationPath,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isMacOS) {
           await MacOSNotifications.show(
             title: title,
@@ -787,6 +876,33 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         // Best-effort: depends on user permission and runner support.
       }
     }());
+  }
+
+  void _showMirroredNotificationPreview(Map<String, dynamic> event) {
+    if (Platform.isAndroid) {
+      return;
+    }
+    final title = event['title']?.toString().trim();
+    final body = event['bodyPreview']?.toString().trim();
+    final appName = event['appName']?.toString().trim();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+
+    _maybeNotifyWithRoute(
+      title: (title != null && title.isNotEmpty)
+          ? title
+          : ((appName != null && appName.isNotEmpty)
+              ? appName
+              : 'Notification'),
+      body: [
+        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
+        if (body != null && body.isNotEmpty) body,
+      ].join(' • '),
+      route: NotificationRoute.historyNotifications,
+      payload: <String, Object?>{
+        'route': NotificationRoute.historyNotifications,
+        'notificationId': event['notificationId']?.toString(),
+      },
+    );
   }
 
   @override
@@ -920,6 +1036,20 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       // Intentionally left empty to avoid noisy notifications
     });
 
+    _notificationPostedSub = client.onNotificationPosted.listen((event) {
+      _showMirroredNotificationPreview(event);
+    });
+
+    _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
+      // History UI refreshes from its own stream binding; updates do not raise a
+      // second native popup to avoid noisy duplicates.
+    });
+
+    _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
+      // Native notifications are best-effort previews; removal only updates the
+      // in-app history state.
+    });
+
     _fileOfferSub = client.onFileOffer.listen((event) {
       final fileName = event['fileName']?.toString() ?? 'file';
       final sourceDeviceId =
@@ -1016,6 +1146,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _autoAcceptingTransferIds.remove(transferId);
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
