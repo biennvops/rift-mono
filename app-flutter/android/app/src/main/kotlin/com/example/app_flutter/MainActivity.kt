@@ -376,6 +376,7 @@ class MainActivity: FlutterActivity() {
             title = "Rift test notification",
             body = "Android notifications are enabled. Notification sync still also requires notification access.",
             route = "history.notifications",
+            destinationPath = null,
             payload = mapOf("testNotification" to true),
         )
     }
