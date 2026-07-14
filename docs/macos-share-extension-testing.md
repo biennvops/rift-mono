@@ -43,3 +43,13 @@ This is the practical test checklist for the current macOS share-extension flow.
 - Validate target signing/build end-to-end with `xcodebuild` on a real Mac.
 - Replace placeholder App Group / bundle identifiers with project-owned values.
 - Add macOS-native UI or logging around extension import failures if needed.
+- **Shared inbox cleanup.** The share extension copies payloads into
+  `<AppGroup>/SharedInbox/`, but nothing deletes them once the host app has
+  consumed them or after a queue item reaches `sent` / `failed` / `removed`.
+  Long-running installs will accumulate inbox files. Suggested next slice:
+  expose a `share.cleanupInbox` MethodChannel call from `SharedTransferInbox`
+  that takes a list of paths and unlinks them inside the App Group
+  container; have `SendQueueController` call it when an item transitions
+  to a terminal state (or at startup, with a list of paths from the
+  most recent `consumePendingItems` payload, so the cleanup is bounded
+  to files actually owned by Rift).
