@@ -113,7 +113,6 @@ void main() {
     required bool revealInFolder,
     FakeTransferJsonRpcClient? client,
     ValueNotifier<String?>? routeNotifier,
-    ValueNotifier<String?>? sharedClipboardTextNotifier,
   }) {
     return MaterialApp(
       home: Provider<JsonRpcRiftClient>.value(
@@ -121,7 +120,6 @@ void main() {
         child: ClipboardTransferScreen(
           revealCompletedTransfersInFolderOverride: revealInFolder,
           routeNotifier: routeNotifier,
-          sharedClipboardTextNotifier: sharedClipboardTextNotifier,
         ),
       ),
     );
