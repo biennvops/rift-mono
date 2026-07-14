@@ -156,6 +156,12 @@ Future<void> showFileInFolder(String path) async {
   }
 
   if (Platform.isWindows) {
+    if (path.contains(',')) {
+      final parent = File(path).parent.path;
+      await Process.run('explorer.exe', <String>[parent]);
+      return;
+    }
+
     await Process.run('explorer.exe', <String>['/select,$path']);
     return;
   }

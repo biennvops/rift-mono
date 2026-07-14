@@ -185,8 +185,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       ValueNotifier<String?>(null);
   final ValueNotifier<List<Map<String, String>>?> _sharedSendRequestsNotifier =
       ValueNotifier<List<Map<String, String>>?>(null);
-  final ValueNotifier<String?> _sharedClipboardTextNotifier =
-      ValueNotifier<String?>(null);
   final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
       <Map<String, dynamic>>[];
   String? _lastExternalClipboardFingerprint;
@@ -461,10 +459,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
-        final sharedText = payload['sharedText']?.toString();
-        if (sharedText != null && sharedText.isNotEmpty) {
-          _sharedClipboardTextNotifier.value = sharedText;
-        }
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:
@@ -913,6 +907,23 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         );
       }
 
+      final shouldAccept = await _confirmIncomingFileOffer(
+        fileName: fileName,
+        sourceDeviceId: sourceDeviceId,
+        destinationPath: destinationPath,
+      );
+      if (shouldAccept != true) {
+        await client.rejectFileOffer(
+          transferId: transferId,
+          failureReason: 'PolicyDenied',
+          message: 'User declined incoming file transfer.',
+        );
+        _scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text('Declined $fileName from $sourceDeviceId')),
+        );
+        return;
+      }
+
       _scaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(
           content: Text(
@@ -921,8 +932,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           ),
         ),
       );
-      _maybeNotify(
-          'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
+      _maybeNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 
       await client.acceptFileOffer(
         transferId: transferId,
@@ -934,19 +944,66 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         await client.rejectFileOffer(
           transferId: transferId,
           failureReason: 'PolicyDenied',
-          message: 'Automatic save to Downloads was unavailable.',
+          message: 'Incoming file transfer could not be confirmed.',
         );
       } catch (_) {
-        // Best-effort reject if auto-accept setup fails.
+        // Best-effort reject if incoming transfer setup fails.
       }
       _scaffoldMessengerKey.currentState?.showSnackBar(
         SnackBar(
-          content: Text('Could not auto-save incoming file: $error'),
+          content: Text('Could not receive incoming file: $error'),
         ),
       );
     } finally {
       _autoAcceptingTransferIds.remove(transferId);
     }
+  }
+
+  Future<bool> _confirmIncomingFileOffer({
+    required String fileName,
+    required String sourceDeviceId,
+    required String destinationPath,
+  }) async {
+    final dialogContext = _navigatorKey.currentContext;
+    if (dialogContext == null) {
+      return false;
+    }
+
+    final accepted = await showDialog<bool>(
+      context: dialogContext,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Accept incoming file?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$sourceDeviceId wants to send:'),
+              const SizedBox(height: 8),
+              Text(
+                fileName,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              Text('Save to: $destinationPath'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Decline'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Accept'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return accepted ?? false;
   }
 
   Future<void> _openCompletedTransferPath({
@@ -979,7 +1036,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
               key: _appShellKey,
               historyRouteNotifier: _historyRouteNotifier,
               sharedSendRequestsNotifier: _sharedSendRequestsNotifier,
-              sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
             )
           : const OnboardingScreen(),
     );
@@ -1065,13 +1121,11 @@ ThemeData _buildRiftTheme() {
 class AppShell extends StatefulWidget {
   final ValueNotifier<String?>? historyRouteNotifier;
   final ValueNotifier<List<Map<String, String>>?>? sharedSendRequestsNotifier;
-  final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
   const AppShell({
     super.key,
     this.historyRouteNotifier,
     this.sharedSendRequestsNotifier,
-    this.sharedClipboardTextNotifier,
   });
 
   @override
@@ -1086,7 +1140,6 @@ class _AppShellState extends State<AppShell> {
     ClipboardTransferScreen(
       routeNotifier: widget.historyRouteNotifier,
       sharedSendRequestsNotifier: widget.sharedSendRequestsNotifier,
-      sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
     ),
     const SecurityDashboardScreen(),
     const OperationsScreen(),

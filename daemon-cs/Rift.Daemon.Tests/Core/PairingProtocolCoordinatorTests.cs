@@ -705,6 +705,40 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_TruncatesOversizedRemoteDisplayName()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-long-name",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.PairingPending,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var oversizedDisplayName = new string('A', 512);
+
+        await _coordinator.HandleMessageAsync(
+            "rift-peer-long-name",
+            CreateEnvelope("rift-peer-long-name", "pairing.start", new
+            {
+                expiresInMs = 120000,
+                displayName = oversizedDisplayName
+            }),
+            CancellationToken.None);
+
+        var storedPeer = _trustStore.GetPeer("rift-peer-long-name");
+        Assert.NotNull(storedPeer);
+        Assert.NotNull(storedPeer!.DisplayName);
+        Assert.Equal(128, storedPeer.DisplayName!.Length);
+        Assert.Equal(oversizedDisplayName[..128], storedPeer.DisplayName);
+
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal(oversizedDisplayName[..128], notification.Parameters["displayName"]);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_WithLocalApproval_TransitionsTrusted()
     {
         _trustStore.SavePeer(new PeerIdentity

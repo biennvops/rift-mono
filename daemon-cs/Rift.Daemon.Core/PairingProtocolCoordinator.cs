@@ -14,6 +14,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     , IDisposable
 {
     private const int PairingExpiryMs = 120000;
+    private const int MaxRemoteDisplayNameLength = 128;
     // Android's Dart SecureServerSocket cannot provisionally accept arbitrary
     // self-signed client certificates on inbound TLS, so when pairing against
     // Android we prefer to wait longer for a peer-initiated authenticated
@@ -508,7 +509,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 : PairingExpiryMs;
             expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
             var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
-                ? displayNameElement.GetString()
+                ? NormalizeRemoteDisplayName(displayNameElement.GetString())
                 : null;
             if (!string.IsNullOrWhiteSpace(displayName))
             {
@@ -548,6 +549,18 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
         await LogEventAsync(SecurityEventTypes.PairingRejected, peerDeviceId, SecurityEventOutcome.Failure, "PeerRejected", CancellationToken.None);
         await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+    }
+
+    private static string? NormalizeRemoteDisplayName(string? displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return displayName;
+        }
+
+        return displayName.Length <= MaxRemoteDisplayNameLength
+            ? displayName
+            : displayName[..MaxRemoteDisplayNameLength];
     }
 
     private async Task HandlePairingCompleteAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)

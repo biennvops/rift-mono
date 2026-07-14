@@ -54,7 +54,7 @@ class SendQueuePanel extends StatelessWidget {
           border: Border.all(color: theme.colorScheme.outlineVariant),
         ),
         child: Text(
-          'Chua co file nao trong hang doi. Hay them file truoc khi gui.',
+          'No files are in the send queue yet. Add a file before sending.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),

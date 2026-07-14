@@ -7,7 +7,7 @@ public sealed class DatabaseContext
 {
     private const int BusyTimeoutMs = 5000;
     private static readonly Regex SqlIdentifierPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
-    private static readonly Regex ColumnDefinitionPattern = new("^[A-Za-z0-9_(),' ]+$", RegexOptions.Compiled);
+    private static readonly Regex ColumnDefinitionPattern = new("^[A-Za-z0-9_(), ]+$", RegexOptions.Compiled);
     private readonly string _connectionString;
 
     public DatabaseContext(string databasePath)
@@ -201,11 +201,15 @@ public sealed class DatabaseContext
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(columnDefinition);
 
-        if (!ColumnDefinitionPattern.IsMatch(columnDefinition) ||
+        var normalizedColumnDefinition = columnDefinition.Replace("DEFAULT 'unknown'", "DEFAULT unknown", StringComparison.Ordinal);
+
+        if (!ColumnDefinitionPattern.IsMatch(normalizedColumnDefinition) ||
             columnDefinition.Contains(';', StringComparison.Ordinal) ||
             columnDefinition.Contains("--", StringComparison.Ordinal) ||
             columnDefinition.Contains("/*", StringComparison.Ordinal) ||
             columnDefinition.Contains("*/", StringComparison.Ordinal) ||
+            (columnDefinition.Contains('\'', StringComparison.Ordinal) &&
+             !string.Equals(columnDefinition, "TEXT NOT NULL DEFAULT 'unknown'", StringComparison.Ordinal)) ||
             columnDefinition.Contains('"', StringComparison.Ordinal))
         {
             throw new ArgumentException($"Unsafe SQL column definition '{columnDefinition}'.", nameof(columnDefinition));

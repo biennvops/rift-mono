@@ -342,7 +342,14 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
             return;
           }
 
-          EmptyClipboard();
+          if (!EmptyClipboard()) {
+            LogClipboardMessage("EmptyClipboard failed for write.");
+            GlobalFree(memory);
+            CloseClipboard();
+            result->Success(flutter::EncodableValue(false));
+            return;
+          }
+
           applied = SetClipboardData(clipboard_format, memory) != nullptr;
           if (*content_type == "text/plain" || *content_type == "clipboard") {
             LogClipboardMessage(std::string("write text/plain payload (") +

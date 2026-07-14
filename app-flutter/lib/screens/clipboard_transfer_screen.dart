@@ -37,7 +37,6 @@ class ClipboardTransferScreen extends StatefulWidget {
   final bool? revealCompletedTransfersInFolderOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<List<Map<String, String>>?>? sharedSendRequestsNotifier;
-  final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
   const ClipboardTransferScreen({
     super.key,
@@ -47,7 +46,6 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.revealCompletedTransfersInFolderOverride,
     this.routeNotifier,
     this.sharedSendRequestsNotifier,
-    this.sharedClipboardTextNotifier,
   });
 
   @override
