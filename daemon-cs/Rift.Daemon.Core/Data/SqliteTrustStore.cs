@@ -14,9 +14,11 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO Peers (DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson)
-            VALUES ($deviceId, $publicKey, $state, $fingerprint, $lastTransition, $revocationEvidence, $trustedEndpointsJson)
+            INSERT INTO Peers (DeviceId, DisplayName, Platform, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson)
+            VALUES ($deviceId, $displayName, $platform, $publicKey, $state, $fingerprint, $lastTransition, $revocationEvidence, $trustedEndpointsJson)
             ON CONFLICT(DeviceId) DO UPDATE SET
+                DisplayName = excluded.DisplayName,
+                Platform = excluded.Platform,
                 Ed25519PublicKey = excluded.Ed25519PublicKey,
                 State = excluded.State,
                 CertificateFingerprint = excluded.CertificateFingerprint,
@@ -34,7 +36,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
+            SELECT DeviceId, DisplayName, Platform, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -55,7 +57,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
+            SELECT DeviceId, DisplayName, Platform, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             ORDER BY DeviceId;
             """;
@@ -78,7 +80,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         select.Transaction = transaction;
         select.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
+            SELECT DeviceId, DisplayName, Platform, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -112,7 +114,9 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         update.CommandText =
             """
             UPDATE Peers
-            SET State = $state,
+            SET DisplayName = $displayName,
+                Platform = $platform,
+                State = $state,
                 LastTransition = $lastTransition,
                 RevocationEvidence = $revocationEvidence,
                 CertificateFingerprint = $fingerprint,
@@ -135,7 +139,7 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         select.Transaction = transaction;
         select.CommandText =
             """
-            SELECT DeviceId, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
+            SELECT DeviceId, DisplayName, Platform, Ed25519PublicKey, State, CertificateFingerprint, LastTransition, RevocationEvidence, TrustedEndpointsJson
             FROM Peers
             WHERE DeviceId = $deviceId;
             """;
@@ -161,7 +165,9 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         update.CommandText =
             """
             UPDATE Peers
-            SET State = $state,
+            SET DisplayName = $displayName,
+                Platform = $platform,
+                State = $state,
                 LastTransition = $lastTransition,
                 RevocationEvidence = $revocationEvidence,
                 CertificateFingerprint = $fingerprint,
@@ -173,6 +179,15 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         update.ExecuteNonQuery();
 
         transaction.Commit();
+    }
+
+    public void DeletePeer(string deviceId)
+    {
+        using var connection = databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Peers WHERE DeviceId = $deviceId;";
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        command.ExecuteNonQuery();
     }
 
     private static bool IsValidTransition(TrustState currentState, TrustState newState)
@@ -196,6 +211,8 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         return new PeerIdentity
         {
             DeviceId = (string)reader["DeviceId"],
+            DisplayName = reader["DisplayName"] as string,
+            Platform = reader["Platform"] as string ?? "unknown",
             Ed25519PublicKey = reader["Ed25519PublicKey"] is DBNull ? null : (byte[])reader["Ed25519PublicKey"],
             State = Enum.Parse<TrustState>((string)reader["State"]),
             EcdsaCertificateFingerprint = reader["CertificateFingerprint"] as string,
@@ -208,6 +225,8 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
     private static void BindPeer(SqliteCommand command, PeerIdentity peer)
     {
         command.Parameters.AddWithValue("$deviceId", peer.DeviceId);
+        command.Parameters.AddWithValue("$displayName", (object?)peer.DisplayName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$platform", string.IsNullOrWhiteSpace(peer.Platform) ? "unknown" : peer.Platform);
         command.Parameters.AddWithValue("$publicKey", (object?)peer.Ed25519PublicKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$state", peer.State.ToString());
         command.Parameters.AddWithValue("$fingerprint", (object?)peer.EcdsaCertificateFingerprint ?? DBNull.Value);

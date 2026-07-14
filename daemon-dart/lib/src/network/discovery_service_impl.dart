@@ -141,14 +141,21 @@ class DiscoveryServiceImpl implements DiscoveryService {
   @override
   Future<void> startDiscovery() async {
     if (_discovery == null) {
-      _discovery = await nsd.startDiscovery('_rift._tcp');
-      _discovery!.addListener(() {
-        final snapshot = <DiscoveredPeer>[];
-        for (final service in _discovery!.services) {
-          snapshot.addAll(_peersFromNsdService(service));
-        }
-        _ingestSnapshot(snapshot);
-      });
+      try {
+        _discovery = await nsd.startDiscovery('_rift._tcp').timeout(const Duration(seconds: 10));
+      } catch (e) {
+        RiftLog.warn('NSD discovery failed or timed out: $e');
+        _discovery = null;
+      }
+      if (_discovery != null) {
+        _discovery!.addListener(() {
+          final snapshot = <DiscoveredPeer>[];
+          for (final service in _discovery!.services) {
+            snapshot.addAll(_peersFromNsdService(service));
+          }
+          _ingestSnapshot(snapshot);
+        });
+      }
     }
 
     if (_fallbackListener == null) {

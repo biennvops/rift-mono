@@ -5,7 +5,6 @@ import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
-import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 
@@ -181,7 +180,7 @@ void main() {
       await store.appendSecurityEvent(
         SecurityEventRecord(
           eventId: 'evt-2',
-          eventType: 'trust.revoked',
+          eventType: 'trust.removed',
           severity: 'warning',
           localDeviceId: 'rift-local',
           peerDeviceId: 'rift-peer-b',
@@ -412,7 +411,7 @@ void main() {
       store.dispose();
     });
 
-    test('Should forbid hard-delete for non-discovered peers (preserve negative-trust evidence)', () async {
+    test('Should allow hard-delete for forget flow peers', () async {
       final store = TrustStoreImpl(':memory:');
       await store.initialize();
 
@@ -425,10 +424,9 @@ void main() {
         ),
       );
 
-      expect(
-        () => store.deletePeer('rift-peer-no-delete'),
-        throwsA(isA<RiftAuthenticationFailedException>()),
-      );
+      await store.deletePeer('rift-peer-no-delete');
+      final loaded = await store.getPeer('rift-peer-no-delete');
+      expect(loaded, isNull);
 
       store.dispose();
     });

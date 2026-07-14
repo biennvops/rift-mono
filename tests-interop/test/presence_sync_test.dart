@@ -19,6 +19,8 @@ class FakeTrustStore implements TrustStore {
   @override
   Future<PeerRecord?> getPeer(String deviceId) async => null;
   @override
+  Future<List<PeerRecord>> getAllPeers() async => [];
+  @override
   Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
   @override
   Future<bool> transitionState(
@@ -119,6 +121,9 @@ class FakeTransport implements Transport {
 }
 
 class FakeIdentityManager implements IdentityManager {
+  @override
+  String get displayName => 'Fake Device';
+
   final String _deviceId;
   final SimpleKeyPair _keyPair;
   final Uint8List _testCertDer;

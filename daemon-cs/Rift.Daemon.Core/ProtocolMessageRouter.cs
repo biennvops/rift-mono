@@ -7,7 +7,8 @@ namespace Rift.Daemon.Core;
 public sealed class ProtocolMessageRouter(
     IPairingProtocolCoordinator pairingProtocolCoordinator,
     IPresenceService presenceService,
-    IClipboardService clipboardService) : IProtocolMessageRouter
+    IClipboardService clipboardService,
+    IFileTransferService fileTransferService) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
@@ -27,6 +28,17 @@ public sealed class ProtocolMessageRouter(
 
         if (messageType.StartsWith("pairing.", StringComparison.Ordinal))
         {
+            await pairingProtocolCoordinator.HandleMessageAsync(peerDeviceId, payload, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "trust.remove", StringComparison.Ordinal))
+        {
+            if (!session.AllowsProtectedTraffic)
+            {
+                throw new UnauthorizedAccessException($"Session for '{session.PeerDeviceId}' is not authorized for protected traffic.");
+            }
+
             await pairingProtocolCoordinator.HandleMessageAsync(peerDeviceId, payload, cancellationToken);
             return;
         }
@@ -102,6 +114,97 @@ public sealed class ProtocolMessageRouter(
                 : [];
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.offer", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleOfferReceivedAsync(new ReceivedFileOffer
+            {
+                DeviceId = peerDeviceId,
+                PayloadSourceDeviceId = filePayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
+                TransferId = filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                FileName = filePayload.GetProperty("fileName").GetString() ?? string.Empty,
+                MediaType = filePayload.GetProperty("mediaType").GetString() ?? "application/octet-stream",
+                ByteSize = filePayload.GetProperty("byteSize").GetInt64(),
+                Sha256 = filePayload.GetProperty("sha256").GetString() ?? string.Empty,
+                ChunkSize = filePayload.GetProperty("chunkSize").GetInt32(),
+                ChunkCount = filePayload.GetProperty("chunkCount").GetInt32(),
+                ExpiresInMs = filePayload.GetProperty("expiresInMs").GetInt64(),
+                RequiredCapability = filePayload.GetProperty("requiredCapability").GetString() ?? string.Empty
+            }, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.accept", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleAcceptReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("receivingDeviceId").GetString() ?? string.Empty,
+                filePayload.TryGetProperty("chunkSize", out var chunkSizeElement) ? chunkSizeElement.GetInt32() : null,
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.reject", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleRejectReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("failureReason").GetString() ?? string.Empty,
+                filePayload.TryGetProperty("message", out var rejectMessageElement) ? rejectMessageElement.GetString() : null,
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.chunk", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleChunkReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("chunkIndex").GetInt32(),
+                filePayload.GetProperty("offset").GetInt64(),
+                filePayload.GetProperty("byteSize").GetInt32(),
+                filePayload.GetProperty("chunkSha256").GetString() ?? string.Empty,
+                filePayload.GetProperty("contentBase64").GetString() ?? string.Empty,
+                filePayload.GetProperty("isLastChunk").GetBoolean(),
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.complete", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleCompleteReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("byteSize").GetInt64(),
+                filePayload.GetProperty("sha256").GetString() ?? string.Empty,
+                filePayload.GetProperty("chunkCount").GetInt32(),
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.cancel", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleCancelReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("failureReason").GetString() ?? string.Empty,
+                filePayload.TryGetProperty("message", out var cancelMessageElement) ? cancelMessageElement.GetString() : null,
+                cancellationToken);
             return;
         }
 

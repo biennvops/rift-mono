@@ -17,11 +17,14 @@ import '../core/rpc_utils.dart';
 
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
+  static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
+
   final TrustStore trustStore;
   final SessionManager sessionManager;
   final IdentityManager identityManager;
   final Map<String, Timer> _pairingTimeouts = {};
   final Set<String> _outboundPairings = {};
+  static const int _pairingTimeoutSeconds = 30;
   StreamSubscription<ProtocolMessage>? _messageSubscription;
   StreamSubscription<String>? _disconnectSubscription;
 
@@ -36,16 +39,33 @@ class PairingManager {
     required this.onIpcEvent,
     this.onPeerTrusted,
   }) {
-    _messageSubscription = sessionManager.onMessage.listen(_handleNetworkMessage);
-    _disconnectSubscription = sessionManager.onPeerDisconnected.listen(_handlePeerDisconnected);
+    _messageSubscription = sessionManager.onMessage.listen(
+      _handleNetworkMessage,
+    );
+    _disconnectSubscription = sessionManager.onPeerDisconnected.listen(
+      _handlePeerDisconnected,
+    );
   }
 
   void _handlePeerDisconnected(String peerDeviceId) async {
     try {
+      await Future<void>.delayed(_disconnectGracePeriod);
+      final ctx = sessionManager.getContext(peerDeviceId);
+      if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+        RiftLog.info(
+          '[Pairing] Ignoring transient disconnect for $peerDeviceId because an authenticated replacement session is already established',
+        );
+        return;
+      }
+
       _cancelTimeoutTimer(peerDeviceId);
       final record = await trustStore.getPeer(peerDeviceId);
       if (record != null && record.state == TrustState.pairingPending) {
-        await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, TrustState.discovered);
+        await trustStore.transitionState(
+          peerDeviceId,
+          TrustState.pairingPending,
+          TrustState.discovered,
+        );
       }
     } catch (e, stackTrace) {
       // Best-effort cleanup only, but log for observability.
@@ -79,7 +99,6 @@ class PairingManager {
         await _rejectPairing(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
       case 'rift.unpair':
-        // Handle trust revocation (revoked)
         await _unpair(
           RpcUtils.requireStringParam(params, 'deviceId'),
           reason: RpcUtils.requireStringParam(params, 'reason'),
@@ -89,7 +108,9 @@ class PairingManager {
         await _unblockPeer(RpcUtils.requireStringParam(params, 'deviceId'));
         break;
       case 'rift.resetRevokedPeer':
-        await _resetRevokedPeer(RpcUtils.requireStringParam(params, 'deviceId'));
+        await _resetRevokedPeer(
+          RpcUtils.requireStringParam(params, 'deviceId'),
+        );
         break;
     }
   }
@@ -98,15 +119,25 @@ class PairingManager {
   Future<void> _startPairing(String peerDeviceId) async {
     RiftLog.debug('[Pairing] Sending pairing.start to $peerDeviceId');
     final record = await trustStore.getPeer(peerDeviceId);
-    if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
-    if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
-      throw const RiftUnauthorizedException('Peer is blocked or revoked');
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
     }
-    
-    // Transition state to pairingPending
-    await trustStore.transitionState(peerDeviceId, record.state, TrustState.pairingPending);
+    if (record.state == TrustState.revoked) {
+      await trustStore.deletePeer(peerDeviceId);
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    if (record.state == TrustState.blocked) {
+      throw const RiftUnauthorizedException('Peer is blocked');
+    }
 
-    // Start 120s timeout countdown
+    // Transition state to pairingPending
+    await trustStore.transitionState(
+      peerDeviceId,
+      record.state,
+      TrustState.pairingPending,
+    );
+
+    // Start the local timeout countdown using the advertised outbound expiry.
     _startTimeoutTimer(peerDeviceId);
     _outboundPairings.add(peerDeviceId);
 
@@ -123,20 +154,32 @@ class PairingManager {
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
         'payload': {
-          'expiresInMs': 120000,
-          'displayName': 'Rift Device', // TODO: Retrieve from system settings later
-        }
+          'expiresInMs': _pairingTimeoutSeconds * 1000,
+          'displayName': identityManager.displayName,
+        },
       });
       RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
       _cancelTimeoutTimer(peerDeviceId);
-      await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
-      RiftLog.warn('[Pairing] pairing.start failed with StateError for $peerDeviceId');
+      await trustStore.transitionState(
+        peerDeviceId,
+        TrustState.pairingPending,
+        record.state,
+      );
+      RiftLog.warn(
+        '[Pairing] pairing.start failed with StateError for $peerDeviceId',
+      );
       rethrow;
     } on SocketException {
       _cancelTimeoutTimer(peerDeviceId);
-      await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, record.state);
-      RiftLog.warn('[Pairing] pairing.start failed with SocketException for $peerDeviceId');
+      await trustStore.transitionState(
+        peerDeviceId,
+        TrustState.pairingPending,
+        record.state,
+      );
+      RiftLog.warn(
+        '[Pairing] pairing.start failed with SocketException for $peerDeviceId',
+      );
       rethrow;
     } on SessionException {
       _cancelTimeoutTimer(peerDeviceId);
@@ -153,16 +196,21 @@ class PairingManager {
   }
 
   /// Called by Flutter App when User clicks "Approve"
-  Future<void> _approvePairing(String peerDeviceId, String expectedFingerprint) async {
+  Future<void> _approvePairing(
+    String peerDeviceId,
+    String expectedFingerprint,
+  ) async {
     RiftLog.debug('[Pairing] Approving pairing with $peerDeviceId');
     _cancelTimeoutTimer(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
-    if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
-    
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+
     // SECURITY: Cross-check Fingerprint derived directly from TLS Cert stored in DB
     // Prevents UI Spoofing (CVE-2025-xxxx mitigation class)
     final derivedFingerprint = _deriveFingerprint(record.certDer);
-    
+
     if (derivedFingerprint != expectedFingerprint) {
       // Reject immediately if spoofing is detected
       await _rejectPairing(peerDeviceId);
@@ -181,9 +229,7 @@ class PairingManager {
         'type': 'pairing.approve',
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
-        'payload': {
-          'approvedAt': now.toIso8601String(),
-        }
+        'payload': {'approvedAt': now.toIso8601String()},
       });
 
       await sessionManager.sendMessage(peerDeviceId, {
@@ -195,7 +241,7 @@ class PairingManager {
         'payload': {
           'trustedDeviceId': identityManager.deviceId,
           'persistedAt': now.toIso8601String(),
-        }
+        },
       });
     } catch (e) {
       final currentRecord = await trustStore.getPeer(peerDeviceId);
@@ -222,7 +268,7 @@ class PairingManager {
         'deviceId': peerDeviceId,
         'fingerprint': expectedFingerprint,
         'persistedAt': now.toIso8601String(),
-      }
+      },
     });
   }
 
@@ -232,10 +278,14 @@ class PairingManager {
     _cancelTimeoutTimer(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) return;
-    
+
     if (record.state == TrustState.pairingPending) {
       // Revert to discovered state
-      await trustStore.transitionState(peerDeviceId, record.state, TrustState.discovered);
+      await trustStore.transitionState(
+        peerDeviceId,
+        record.state,
+        TrustState.discovered,
+      );
     }
 
     try {
@@ -248,7 +298,7 @@ class PairingManager {
         'payload': {
           'failureReason': 'PolicyDenied',
           'message': 'User rejected pairing',
-        }
+        },
       });
     } on StateError {
       // Ignore state errors when rejecting (session may already be gone)
@@ -256,17 +306,23 @@ class PairingManager {
       // Ignore network errors when rejecting
     }
   }
-  
+
   Future<void> _unblockPeer(String peerDeviceId) async {
     final record = await trustStore.getPeer(peerDeviceId);
-    if (record == null) throw const RiftNotFoundException('Peer not found in TrustStore');
+    if (record == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
     if (record.state != TrustState.blocked) {
       throw RiftInvalidTransitionException(
         'Invalid state transition from ${record.state.name} to discovered.',
       );
     }
 
-    await trustStore.transitionState(peerDeviceId, TrustState.blocked, TrustState.discovered);
+    await trustStore.transitionState(
+      peerDeviceId,
+      TrustState.blocked,
+      TrustState.discovered,
+    );
 
     onIpcEvent({
       'jsonrpc': '2.0',
@@ -276,7 +332,7 @@ class PairingManager {
         'previousState': TrustState.blocked.toJson(),
         'newState': TrustState.discovered.toJson(),
         'reason': 'Peer unblocked by user',
-      }
+      },
     });
   }
 
@@ -285,22 +341,59 @@ class PairingManager {
     // Issue 2 fix: throw NotFound so the IPC layer returns -32009 instead of
     // silently reporting success when the peer does not exist in the trust store.
     if (record == null) {
-      throw RiftNotFoundException('Peer not found in TrustStore: $peerDeviceId');
+      throw RiftNotFoundException(
+        'Peer not found in TrustStore: $peerDeviceId',
+      );
     }
-    // Transition to revoked
-    await trustStore.transitionState(peerDeviceId, record.state, TrustState.revoked);
+    final removedAt = DateTime.now().toUtc();
+    await _notifyPeerTrustRemoved(
+      peerDeviceId,
+      removedAt: removedAt,
+      reason: reason,
+    );
+    await trustStore.deletePeer(peerDeviceId);
     sessionManager.disconnectPeer(peerDeviceId);
-    
+
     onIpcEvent({
       'jsonrpc': '2.0',
       'method': 'rift.onTrustChanged',
       'params': {
         'deviceId': peerDeviceId,
         'previousState': record.state.toJson(),
-        'newState': TrustState.revoked.toJson(),
+        'newState': 'removed',
         'reason': reason,
-      }
+      },
     });
+  }
+
+  Future<void> _notifyPeerTrustRemoved(
+    String peerDeviceId, {
+    required DateTime removedAt,
+    required String reason,
+  }) async {
+    try {
+      await sessionManager.sendMessage(peerDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'trust.remove',
+        'sourceDeviceId': identityManager.deviceId,
+        'destinationDeviceId': peerDeviceId,
+        'payload': {
+          'removedDeviceId': peerDeviceId,
+          'reason': reason,
+          'removedAt': removedAt.toIso8601String(),
+        },
+      });
+    } catch (error, stackTrace) {
+      RiftLog.warn(
+        '[Pairing] Failed to send advisory trust.remove to $peerDeviceId: $error',
+      );
+      RiftLog.error(
+        '[Pairing] trust.remove send failure',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<void> _resetRevokedPeer(String peerDeviceId) async {
@@ -314,11 +407,7 @@ class PairingManager {
       );
     }
 
-    await trustStore.transitionState(
-      peerDeviceId,
-      TrustState.revoked,
-      TrustState.discovered,
-    );
+    await trustStore.deletePeer(peerDeviceId);
 
     onIpcEvent({
       'jsonrpc': '2.0',
@@ -326,9 +415,9 @@ class PairingManager {
       'params': {
         'deviceId': peerDeviceId,
         'previousState': TrustState.revoked.toJson(),
-        'newState': TrustState.discovered.toJson(),
-        'reason': 'Peer reset from revoked by user',
-      }
+        'newState': 'removed',
+        'reason': 'Legacy revoked peer removed by user',
+      },
     });
   }
 
@@ -359,9 +448,13 @@ class PairingManager {
           sessionManager.disconnectPeer(peerDeviceId);
           return;
         }
-        
-        // If blocked or revoked, silently drop the packet
-        if (record.state == TrustState.blocked || record.state == TrustState.revoked) {
+
+        if (record.state == TrustState.revoked) {
+          await trustStore.deletePeer(peerDeviceId);
+        }
+
+        // If blocked, silently drop the packet
+        if (record.state == TrustState.blocked) {
           return;
         }
 
@@ -380,15 +473,18 @@ class PairingManager {
             TrustState.pairingPending,
           );
         }
-        
-        _startTimeoutTimer(peerDeviceId);
-        
+
         // Issue 4 fix: use the peer's actual expiresInMs rather than a hard-coded 30 000.
         // Clamp to [1 000, 300 000] to guard against pathological values from untrusted peers.
         final rawExpiry = payload['expiresInMs'] as int;
         final clampedExpiry = rawExpiry.clamp(1000, 300000);
+        _startTimeoutTimer(
+          peerDeviceId,
+          timeout: Duration(milliseconds: clampedExpiry),
+        );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final displayName = payload['displayName'] as String? ?? 'Unknown Device';
+        final displayName =
+            payload['displayName'] as String? ?? 'Unknown Device';
 
         // Emit event to UI to show popup
         onIpcEvent({
@@ -399,7 +495,7 @@ class PairingManager {
             'fingerprint': derivedFingerprint,
             'displayName': displayName,
             'expiresInMs': clampedExpiry,
-          }
+          },
         });
         break;
 
@@ -426,7 +522,7 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'approvedAt': approvePayload['approvedAt'],
-          }
+          },
         });
 
         final record = await trustStore.getPeer(peerDeviceId);
@@ -447,11 +543,15 @@ class PairingManager {
         _outboundPairings.remove(peerDeviceId);
         final record = await trustStore.getPeer(peerDeviceId);
         if (record?.state == TrustState.pairingPending) {
-           await trustStore.transitionState(peerDeviceId, TrustState.pairingPending, TrustState.discovered);
-           // Optionally emit event to notify UI of rejection
+          await trustStore.transitionState(
+            peerDeviceId,
+            TrustState.pairingPending,
+            TrustState.discovered,
+          );
+          // Optionally emit event to notify UI of rejection
         }
         break;
-        
+
       case 'pairing.complete':
         final record = await trustStore.getPeer(peerDeviceId);
         if (record == null) {
@@ -492,16 +592,61 @@ class PairingManager {
               'deviceId': peerDeviceId,
               'fingerprint': _deriveFingerprint(record.certDer),
               'persistedAt': now.toIso8601String(),
-            }
+            },
           });
         }
+        break;
+
+      case 'trust.remove':
+        final payload = msg.payload['payload'];
+        if (payload is! Map<String, dynamic> ||
+            payload['removedDeviceId'] is! String ||
+            payload['reason'] is! String ||
+            payload['removedAt'] is! String ||
+            payload.containsKey('fingerprint')) {
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
+
+        final removedDeviceId = payload['removedDeviceId'] as String;
+        if (removedDeviceId != identityManager.deviceId) {
+          RiftLog.warn(
+            '[Pairing] Ignoring trust.remove from $peerDeviceId targeting $removedDeviceId',
+          );
+          return;
+        }
+
+        final record = await trustStore.getPeer(peerDeviceId);
+        if (record == null || record.state != TrustState.trusted) {
+          RiftLog.warn(
+            '[Pairing] Ignoring trust.remove from non-trusted peer $peerDeviceId',
+          );
+          sessionManager.disconnectPeer(peerDeviceId);
+          return;
+        }
+
+        await trustStore.deletePeer(peerDeviceId);
+        sessionManager.disconnectPeer(peerDeviceId);
+        onIpcEvent({
+          'jsonrpc': '2.0',
+          'method': 'rift.onTrustChanged',
+          'params': {
+            'deviceId': peerDeviceId,
+            'previousState': TrustState.trusted.toJson(),
+            'newState': 'removed',
+            'reason': payload['reason'],
+          },
+        });
         break;
     }
   }
 
-  Future<void> _ensurePeerInTrustStore(String peerDeviceId, Uint8List? certDer) async {
+  Future<void> _ensurePeerInTrustStore(
+    String peerDeviceId,
+    Uint8List? certDer,
+  ) async {
     if (certDer == null) return;
-    
+
     var record = await trustStore.getPeer(peerDeviceId);
     if (record == null) {
       record = PeerRecord(
@@ -513,11 +658,24 @@ class PairingManager {
       );
       await trustStore.upsertPeer(record);
     } else {
-      // Trusted, blocked, and revoked peers keep their pinned certificate until
-      // an explicit re-pair / trust-state reset occurs.
+      // Trusted and blocked peers keep their pinned certificate until an
+      // explicit local action changes trust.
       if (record.state == TrustState.trusted ||
-          record.state == TrustState.blocked ||
-          record.state == TrustState.revoked) {
+          record.state == TrustState.blocked) {
+        return;
+      }
+
+      if (record.state == TrustState.revoked) {
+        await trustStore.deletePeer(peerDeviceId);
+        final replacement = PeerRecord(
+          deviceId: peerDeviceId,
+          displayName: record.displayName,
+          certDer: certDer,
+          state: TrustState.discovered,
+          pairedAt: null,
+          updatedAt: DateTime.now().toUtc(),
+        );
+        await trustStore.upsertPeer(replacement);
         return;
       }
 
@@ -535,11 +693,14 @@ class PairingManager {
     }
   }
 
-  void _startTimeoutTimer(String peerDeviceId) {
+  void _startTimeoutTimer(String peerDeviceId, {Duration? timeout}) {
     _cancelTimeoutTimer(peerDeviceId);
-    _pairingTimeouts[peerDeviceId] = Timer(const Duration(seconds: 120), () {
-      _rejectPairing(peerDeviceId); // Auto reject after 120 seconds
-    });
+    _pairingTimeouts[peerDeviceId] = Timer(
+      timeout ?? const Duration(seconds: _pairingTimeoutSeconds),
+      () {
+        _rejectPairing(peerDeviceId);
+      },
+    );
   }
 
   void _cancelTimeoutTimer(String peerDeviceId, {bool clearOutbound = true}) {
@@ -560,14 +721,20 @@ class PairingManager {
     await _disconnectSubscription?.cancel();
   }
 
-
   String _deriveFingerprint(Uint8List certDer) {
-    final peerPublicKey = RiftCertDecoder.extractEd25519PublicKeyFromDer(certDer);
+    final peerPublicKey = RiftCertDecoder.extractEd25519PublicKeyFromDer(
+      certDer,
+    );
     final hash = sha256.convert(peerPublicKey).bytes;
     // Protocol Section 3.2: Base32(SHA-256(Ed25519)), uppercase, truncated to 32 chars, hyphenated groups of 4
-    final base32Str = Base32Utils.encode(Uint8List.fromList(hash)).toUpperCase().replaceAll('=', '');
+    final base32Str = Base32Utils.encode(
+      Uint8List.fromList(hash),
+    ).toUpperCase().replaceAll('=', '');
     final truncated = base32Str.substring(0, 32);
-    final hyphenated = truncated.replaceAllMapped(RegExp(r'.{4}'), (m) => '${m.group(0)}-');
+    final hyphenated = truncated.replaceAllMapped(
+      RegExp(r'.{4}'),
+      (m) => '${m.group(0)}-',
+    );
     return hyphenated.substring(0, 39); // Remove trailing hyphen
   }
 }

@@ -53,6 +53,8 @@ public sealed class DatabaseContext
 
             CREATE TABLE IF NOT EXISTS Peers (
                 DeviceId TEXT NOT NULL PRIMARY KEY,
+                DisplayName TEXT NULL,
+                Platform TEXT NOT NULL DEFAULT 'unknown',
                 Ed25519PublicKey BLOB NULL,
                 State TEXT NOT NULL,
                 CertificateFingerprint TEXT NULL,
@@ -90,6 +92,8 @@ public sealed class DatabaseContext
 
         EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
         EnsureLocalIdentitySecretColumnsNullable(connection);
+        EnsureColumnExists(connection, "Peers", "DisplayName", "TEXT NULL");
+        EnsureColumnExists(connection, "Peers", "Platform", "TEXT NOT NULL DEFAULT 'unknown'");
         EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
     }
 
@@ -197,13 +201,16 @@ public sealed class DatabaseContext
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(columnDefinition);
 
-        if (!ColumnDefinitionPattern.IsMatch(columnDefinition) ||
+        var normalizedColumnDefinition = columnDefinition.Replace("DEFAULT 'unknown'", "DEFAULT unknown", StringComparison.Ordinal);
+
+        if (!ColumnDefinitionPattern.IsMatch(normalizedColumnDefinition) ||
             columnDefinition.Contains(';', StringComparison.Ordinal) ||
             columnDefinition.Contains("--", StringComparison.Ordinal) ||
             columnDefinition.Contains("/*", StringComparison.Ordinal) ||
             columnDefinition.Contains("*/", StringComparison.Ordinal) ||
-            columnDefinition.Contains('"', StringComparison.Ordinal) ||
-            columnDefinition.Contains('\'', StringComparison.Ordinal))
+            (columnDefinition.Contains('\'', StringComparison.Ordinal) &&
+             !string.Equals(columnDefinition, "TEXT NOT NULL DEFAULT 'unknown'", StringComparison.Ordinal)) ||
+            columnDefinition.Contains('"', StringComparison.Ordinal))
         {
             throw new ArgumentException($"Unsafe SQL column definition '{columnDefinition}'.", nameof(columnDefinition));
         }

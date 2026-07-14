@@ -10,8 +10,10 @@ import 'package:test/test.dart';
 
 class _FakeReconnectTransport implements Transport {
   final Map<(String, int), Object> endpointResults = {};
-  final List<({String host, int port, String? expectedDeviceId})> connectCalls =
-      [];
+  final List<
+    ({String host, int port, String? expectedDeviceId, bool forceFreshSession})
+  >
+  connectCalls = [];
 
   @override
   Future<String> connectTo(
@@ -24,6 +26,7 @@ class _FakeReconnectTransport implements Transport {
       host: host,
       port: port,
       expectedDeviceId: expectedDeviceId,
+      forceFreshSession: forceFreshSession,
     ));
     final result = endpointResults[(host, port)];
     if (result is Exception) {
@@ -89,8 +92,10 @@ void main() {
         transport: transport,
         getContext: (_) => null,
         sendSessionHello: (peerDeviceId) async => sentHello.add(peerDeviceId),
-        waitForSessionEstablished: (peerDeviceId) async => waited.add(peerDeviceId),
-        persistTrustedEndpoint: (peerDeviceId, source) async => persisted.add((peerDeviceId, source)),
+        waitForSessionEstablished: (peerDeviceId) async =>
+            waited.add(peerDeviceId),
+        persistTrustedEndpoint: (peerDeviceId, source) async =>
+            persisted.add((peerDeviceId, source)),
       );
 
       expect(result, 'rift-peer-a');
@@ -98,11 +103,14 @@ void main() {
       expect(waited, ['rift-peer-a']);
       expect(persisted, [('rift-peer-a', 'trusted-reconnect')]);
       expect(transport.connectCalls, hasLength(1));
+      expect(transport.connectCalls.single.forceFreshSession, isTrue);
     });
 
     test('falls back to second endpoint when first endpoint fails', () async {
       final transport = _FakeReconnectTransport()
-        ..endpointResults[('10.53.38.177', 9140)] = HandshakeException('bad tls')
+        ..endpointResults[('10.53.38.177', 9140)] = HandshakeException(
+          'bad tls',
+        )
         ..endpointResults[('10.53.38.178', 9140)] = 'rift-peer-b';
       final persisted = <(String, String)>[];
 
@@ -128,16 +136,14 @@ void main() {
         getContext: (_) => null,
         sendSessionHello: (_) async {},
         waitForSessionEstablished: (_) async {},
-        persistTrustedEndpoint: (peerDeviceId, source) async => persisted.add((peerDeviceId, source)),
+        persistTrustedEndpoint: (peerDeviceId, source) async =>
+            persisted.add((peerDeviceId, source)),
       );
 
       expect(result, 'rift-peer-b');
       expect(
         transport.connectCalls.map((call) => (call.host, call.port)).toList(),
-        [
-          ('10.53.38.177', 9140),
-          ('10.53.38.178', 9140),
-        ],
+        [('10.53.38.177', 9140), ('10.53.38.178', 9140)],
       );
       expect(persisted.single, ('rift-peer-b', 'trusted-reconnect'));
     });
@@ -159,10 +165,8 @@ void main() {
           ),
         ],
         transport: transport,
-        getContext: (peerDeviceId) => SessionContext(
-          peerDeviceId: peerDeviceId,
-          isInitiator: true,
-        ),
+        getContext: (peerDeviceId) =>
+            SessionContext(peerDeviceId: peerDeviceId, isInitiator: true),
         sendSessionHello: (peerDeviceId) async => sentHello.add(peerDeviceId),
         waitForSessionEstablished: (_) async {},
         persistTrustedEndpoint: (_, source) async {},
@@ -206,37 +210,40 @@ void main() {
       expect(pending, isEmpty);
     });
 
-    test('cleans up pending entry after failure so future attempts can retry', () async {
-      final pending = <String, Future<String>>{};
-      var startCount = 0;
+    test(
+      'cleans up pending entry after failure so future attempts can retry',
+      () async {
+        final pending = <String, Future<String>>{};
+        var startCount = 0;
 
-      await expectLater(
-        joinSingleFlightOperation<String>(
+        await expectLater(
+          joinSingleFlightOperation<String>(
+            key: 'rift-peer-b',
+            pendingOperations: pending,
+            startOperation: () {
+              startCount += 1;
+              throw const HandshakeException('boom');
+            },
+          ),
+          throwsA(isA<HandshakeException>()),
+        );
+
+        expect(startCount, 1);
+        expect(pending, isEmpty);
+
+        final result = await joinSingleFlightOperation<String>(
           key: 'rift-peer-b',
           pendingOperations: pending,
-          startOperation: () {
+          startOperation: () async {
             startCount += 1;
-            throw const HandshakeException('boom');
+            return 'rift-peer-b';
           },
-        ),
-        throwsA(isA<HandshakeException>()),
-      );
+        );
 
-      expect(startCount, 1);
-      expect(pending, isEmpty);
-
-      final result = await joinSingleFlightOperation<String>(
-        key: 'rift-peer-b',
-        pendingOperations: pending,
-        startOperation: () async {
-          startCount += 1;
-          return 'rift-peer-b';
-        },
-      );
-
-      expect(result, 'rift-peer-b');
-      expect(startCount, 2);
-      expect(pending, isEmpty);
-    });
+        expect(result, 'rift-peer-b');
+        expect(startCount, 2);
+        expect(pending, isEmpty);
+      },
+    );
   });
 }

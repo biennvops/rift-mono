@@ -24,6 +24,7 @@ import 'package:daemon_dart/src/pairing/pairing_manager.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
+import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
 import 'package:daemon_dart/src/operation/operation_manager.dart';
 import 'package:daemon_dart/src/operation/operation_models.dart';
 import 'package:path/path.dart' as p;
@@ -33,13 +34,14 @@ const int _clipboardFetchTimeoutSeconds = 15;
 
 class _OperationFetchWaiter {
   final Future<ClipboardFetchResponse> future;
-  final Future<void> Function(String failureReason, int errorCode, String message)
-      fail;
+  final Future<void> Function(
+    String failureReason,
+    int errorCode,
+    String message,
+  )
+  fail;
 
-  const _OperationFetchWaiter({
-    required this.future,
-    required this.fail,
-  });
+  const _OperationFetchWaiter({required this.future, required this.fail});
 }
 
 class _DiscoveredPeerRecord {
@@ -243,8 +245,7 @@ Future<String> reconnectTrustedPeerViaEndpoints({
   required Transport transport,
   required SessionContext? Function(String peerDeviceId) getContext,
   required Future<void> Function(String peerDeviceId) sendSessionHello,
-  required Future<void> Function(String peerDeviceId)
-  waitForSessionEstablished,
+  required Future<void> Function(String peerDeviceId) waitForSessionEstablished,
   required Future<void> Function(String peerDeviceId, String source)
   persistTrustedEndpoint,
   Duration timeout = const Duration(seconds: 3),
@@ -268,6 +269,7 @@ Future<String> reconnectTrustedPeerViaEndpoints({
             endpoint.address,
             endpoint.port,
             expectedDeviceId: peerDeviceId,
+            forceFreshSession: true,
           )
           .timeout(timeout);
 
@@ -317,6 +319,24 @@ Future<T> joinSingleFlightOperation<T>({
   }
 }
 
+@visibleForTesting
+Future<bool> allowPeerHandshake({
+  required TrustStore trustStore,
+  required String peerDeviceId,
+}) async {
+  final record = await trustStore.getPeer(peerDeviceId);
+  if (record == null) {
+    return true;
+  }
+
+  if (record.state == TrustState.revoked) {
+    await trustStore.deletePeer(peerDeviceId);
+    return false;
+  }
+
+  return record.state != TrustState.blocked;
+}
+
 /// The root orchestrator for the Rift Android Daemon.
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
@@ -331,12 +351,13 @@ class RiftDaemon {
   PairingManager? _pairingManager;
   ClipboardEngine? _clipboardEngine;
   ClipboardProtocolHandler? _clipboardHandler;
+  FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
-  final Map<String, Future<Map<String, dynamic>>> _pendingEndpointStartPairings =
-      {};
+  final Map<String, Future<Map<String, dynamic>>>
+  _pendingEndpointStartPairings = {};
   final Map<String, Future<String>> _pendingTrustedReconnects = {};
   final Map<String, TrustedPeerEndpoint> _pendingTrustedEndpointHints = {};
   bool _isDiscovering = false;
@@ -379,12 +400,10 @@ class RiftDaemon {
         _transport!,
         _identityManager!,
         _trustStore!,
-        peerAllowanceResolver: (peerDeviceId) async {
-          final record = await _trustStore!.getPeer(peerDeviceId);
-          return record == null ||
-              (record.state != TrustState.blocked &&
-                  record.state != TrustState.revoked);
-        },
+        peerAllowanceResolver: (peerDeviceId) => allowPeerHandshake(
+          trustStore: _trustStore!,
+          peerDeviceId: peerDeviceId,
+        ),
       );
 
       _sessionManager!.onTrustedSessionReady.listen((ctx) {
@@ -420,6 +439,13 @@ class RiftDaemon {
         _identityManager!.deviceId,
       );
       _operationManager = OperationManager();
+      _fileTransferService = FileTransferService(
+        sessionManager: _sessionManager!,
+        trustStore: _trustStore!,
+        operationManager: _operationManager!,
+        localDeviceId: _identityManager!.deviceId,
+        storagePath: storagePath,
+      );
 
       _clipboardEngine!.onOfferAdded.listen((offer) {
         onIpcEvent?.call({
@@ -437,6 +463,38 @@ class RiftDaemon {
         });
       });
 
+      _fileTransferService!.onFileOffer.listen((offer) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileOffer',
+          'params': offer,
+        });
+      });
+
+      _fileTransferService!.onTransferProgress.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferProgress',
+          'params': event,
+        });
+      });
+
+      _fileTransferService!.onTransferCompleted.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferCompleted',
+          'params': event,
+        });
+      });
+
+      _fileTransferService!.onTransferFailed.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onFileTransferFailed',
+          'params': event,
+        });
+      });
+
       _operationManager!.onTransition.listen((event) {
         final operation = _operationManager!.getOperation(event.operationId);
         onIpcEvent?.call({
@@ -449,7 +507,8 @@ class RiftDaemon {
             eventType: 'operation.transitioned',
             severity: 'info',
             peerDeviceId: operation.destinationDeviceId,
-            outcome: event.nextState == OperationState.failed ||
+            outcome:
+                event.nextState == OperationState.failed ||
                     event.nextState == OperationState.expired
                 ? 'failure'
                 : 'success',
@@ -470,8 +529,10 @@ class RiftDaemon {
         ),
       );
       await _discoveryService!.startAdvertising();
-      await _discoveryService!.startDiscovery();
-      _isDiscovering = true;
+      if (await _shouldAutoStartDiscovery()) {
+        await _discoveryService!.startDiscovery();
+        _isDiscovering = true;
+      }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
     // explicit connect/handshake when the UI selects a discovered peer.
@@ -509,6 +570,7 @@ class RiftDaemon {
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
+    await _fileTransferService?.dispose();
     _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
@@ -517,6 +579,22 @@ class RiftDaemon {
     await _sessionManager?.dispose();
     _trustStore?.dispose();
     await _identityManager?.dispose();
+  }
+
+  Future<bool> _shouldAutoStartDiscovery() async {
+    final trustStore = _trustStore;
+    if (trustStore == null) {
+      return true;
+    }
+
+    for (final state in const [TrustState.trusted]) {
+      final peers = await trustStore.getPeersByState(state);
+      if (peers.isNotEmpty) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   Map<String, dynamic> getDeviceInfo() {
@@ -529,6 +607,8 @@ class RiftDaemon {
 
     return {
       'deviceId': identityManager.deviceId,
+      'displayName': identityManager.displayName,
+      'platform': _localPlatform(),
       'fingerprint': _formatFingerprint(identityManager.getDeviceFingerprint()),
       'implementationId': RiftConstants.implementationId,
       'protocolVersion': RiftConstants.protocolVersion,
@@ -541,13 +621,14 @@ class RiftDaemon {
     final sessionManager = _sessionManager;
     if (trustStore == null) return [];
 
-    // ipc.md: listTrustedPeers is a trust-management surface.
-    // Include all non-discovered peers (pairing_pending, trusted, blocked, revoked).
+    // Device-list surface:
+    // - trusted peers stay visible
+    // - blocked peers stay visible
+    // - pairing_pending stays visible
     final peers = <PeerRecord>[
       ...await trustStore.getPeersByState(TrustState.pairingPending),
       ...await trustStore.getPeersByState(TrustState.trusted),
       ...await trustStore.getPeersByState(TrustState.blocked),
-      ...await trustStore.getPeersByState(TrustState.revoked),
     ];
 
     return peers.map((peer) {
@@ -558,6 +639,7 @@ class RiftDaemon {
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
+        'platform': _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -586,6 +668,7 @@ class RiftDaemon {
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
+        'platform': _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -606,17 +689,26 @@ class RiftDaemon {
       final peer = entry.value.primaryPeer;
       if (peer == null) continue;
       final hintedDeviceId = entry.key;
-      
+
       // Filter out our own device ID
-      if (_identityManager != null && hintedDeviceId == _identityManager!.deviceId) continue;
+      if (_identityManager != null &&
+          hintedDeviceId == _identityManager!.deviceId) {
+        continue;
+      }
 
       final trustState = trustStore != null
           ? (await trustStore.getPeer(hintedDeviceId))?.state.toJson() ??
                 'discovered'
           : 'discovered';
+      final knownPeer = trustStore != null
+          ? await trustStore.getPeer(hintedDeviceId)
+          : null;
 
       results.add({
         'deviceId': hintedDeviceId,
+        if (knownPeer?.displayName != null)
+          'displayName': knownPeer!.displayName,
+        'platform': _platformFromDisplayName(knownPeer?.displayName),
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
@@ -639,6 +731,42 @@ class RiftDaemon {
     }
 
     return results;
+  }
+
+  String _localPlatform() {
+    if (Platform.isAndroid) {
+      return 'android';
+    }
+    if (Platform.isWindows) {
+      return 'windows';
+    }
+    if (Platform.isMacOS) {
+      return 'macos';
+    }
+    if (Platform.isLinux) {
+      return 'linux';
+    }
+    return 'unknown';
+  }
+
+  String _platformFromDisplayName(String? displayName) {
+    if (displayName == null || displayName.isEmpty) {
+      return 'unknown';
+    }
+
+    if (displayName.startsWith('Android ')) {
+      return 'android';
+    }
+    if (displayName.startsWith('Windows ')) {
+      return 'windows';
+    }
+    if (displayName.startsWith('macOS ')) {
+      return 'macos';
+    }
+    if (displayName.startsWith('Linux ')) {
+      return 'linux';
+    }
+    return 'unknown';
   }
 
   Future<Map<String, dynamic>> queryEventLog({
@@ -751,7 +879,10 @@ class RiftDaemon {
         final contentType = RpcUtils.requireStringParam(params, 'contentType');
         final byteSize = RpcUtils.requireIntParam(params, 'byteSize');
         final sha256 = RpcUtils.requireStringParam(params, 'sha256');
-        final contentBase64 = RpcUtils.requireStringParam(params, 'contentBase64');
+        final contentBase64 = RpcUtils.requireStringParam(
+          params,
+          'contentBase64',
+        );
         const expiresInMs = 120000; // 2 minutes per spec default
 
         if (byteSize < 0) {
@@ -760,7 +891,10 @@ class RiftDaemon {
 
         // Guard: 32 MiB max
         if (byteSize > 32 * 1024 * 1024) {
-          throw const RiftException(-32007, 'Content exceeds maximum payload size');
+          throw const RiftException(
+            -32007,
+            'Content exceeds maximum payload size',
+          );
         }
 
         _validateClipboardChangePayload(
@@ -780,8 +914,10 @@ class RiftDaemon {
           contentBase64: contentBase64,
         );
         final offerPayload = offer.toJson();
-        
-        final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+
+        final trustedPeers = await _trustStore!.getPeersByState(
+          TrustState.trusted,
+        );
         final broadcastTo = <String>[];
         for (final peer in trustedPeers) {
           try {
@@ -795,7 +931,9 @@ class RiftDaemon {
             });
             broadcastTo.add(peer.deviceId);
           } catch (e) {
-            RiftLog.warn('[Clipboard] Could not send offer to ${peer.deviceId}: $e');
+            RiftLog.warn(
+              '[Clipboard] Could not send offer to ${peer.deviceId}: $e',
+            );
           }
         }
         return {
@@ -820,6 +958,80 @@ class RiftDaemon {
         }).toList();
         return {'offers': allOffers};
 
+      case 'rift.offerFile':
+        _requireTransportServices();
+        final targetDeviceId = RpcUtils.requireStringParam(
+          params,
+          'targetDeviceId',
+        );
+        final localPath = RpcUtils.requireStringParam(params, 'localPath');
+        await _ensureTrustedSessionForPeer(targetDeviceId);
+        final result = await _fileTransferService!.offerFile(
+          targetDeviceId: targetDeviceId,
+          localPath: localPath,
+          fileName: params['fileName'] as String?,
+          mediaType: params['mediaType'] as String?,
+        );
+        return result.toJson();
+
+      case 'rift.listIncomingFileOffers':
+        _requireTransportServices();
+        return {'offers': _fileTransferService!.listIncomingFileOffers()};
+
+      case 'rift.acceptFileOffer':
+        _requireTransportServices();
+        final transferId = RpcUtils.requireStringParam(params, 'transferId');
+        final destinationPath = RpcUtils.requireStringParam(
+          params,
+          'destinationPath',
+        );
+        final offer = _fileTransferService!
+            .listIncomingFileOffers()
+            .cast<Map<String, dynamic>>()
+            .firstWhere(
+              (candidate) => candidate['transferId'] == transferId,
+              orElse: () => <String, dynamic>{},
+            );
+        final sourceDeviceId = offer['sourceDeviceId'] as String?;
+        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) {
+          await _ensureTrustedSessionForPeer(sourceDeviceId);
+        }
+        final result = await _fileTransferService!.acceptFileOffer(
+          transferId: transferId,
+          destinationPath: destinationPath,
+          overwrite: params['overwrite'] as bool? ?? false,
+        );
+        return result.toJson();
+
+      case 'rift.rejectFileOffer':
+        _requireTransportServices();
+        final transferId = RpcUtils.requireStringParam(params, 'transferId');
+        final failureReason = RpcUtils.requireStringParam(
+          params,
+          'failureReason',
+        );
+        final offer = _fileTransferService!
+            .listIncomingFileOffers()
+            .cast<Map<String, dynamic>>()
+            .firstWhere(
+              (candidate) => candidate['transferId'] == transferId,
+              orElse: () => <String, dynamic>{},
+            );
+        final sourceDeviceId = offer['sourceDeviceId'] as String?;
+        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) {
+          await _ensureTrustedSessionForPeer(sourceDeviceId);
+        }
+        final result = await _fileTransferService!.rejectFileOffer(
+          transferId: transferId,
+          failureReason: failureReason,
+          message: params['message'] as String?,
+        );
+        return result.toJson();
+
+      case 'rift.listFileTransfers':
+        _requireTransportServices();
+        return {'transfers': _fileTransferService!.listFileTransfers()};
+
       case 'rift.fetchClipboardContent':
         _requireTransportServices();
         // Spec: only needs offerId - daemon looks up the source peer internally
@@ -837,12 +1049,18 @@ class RiftDaemon {
           sourceDeviceId: _identityManager!.deviceId,
           destinationDeviceId: offer.sourceDeviceId,
         );
-        _operationManager!.transitionOperation(operationId, OperationState.pending);
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.pending,
+        );
 
         final fetchWait = _awaitClipboardFetchResult(offerId, operationId);
         try {
           await _ensureTrustedSessionForPeer(offer.sourceDeviceId);
-          await _clipboardHandler!.sendFetchRequest(offer.sourceDeviceId, offerId);
+          await _clipboardHandler!.sendFetchRequest(
+            offer.sourceDeviceId,
+            offerId,
+          );
           _operationManager!.transitionOperation(
             operationId,
             OperationState.dispatched,
@@ -935,8 +1153,12 @@ class RiftDaemon {
           return await pendingEndpointPairing;
         }
 
-        final endpointFuture =
-            _startPairingByEndpointRpc(address, port, method, params);
+        final endpointFuture = _startPairingByEndpointRpc(
+          address,
+          port,
+          method,
+          params,
+        );
         _pendingEndpointStartPairings[endpointKey] = endpointFuture;
         try {
           return await endpointFuture;
@@ -986,6 +1208,8 @@ class RiftDaemon {
           },
         });
         return {
+          'removed': true,
+          'removedAt': DateTime.now().toUtc().toIso8601String(),
           'revoked': true,
           'revokedAt': DateTime.now().toUtc().toIso8601String(),
         };
@@ -1053,7 +1277,8 @@ class RiftDaemon {
     String operationId,
   ) {
     final completer = Completer<ClipboardFetchResponse>();
-    completer.future.ignore(); // Prevent unhandled exception if cancelled before await
+    completer.future
+        .ignore(); // Prevent unhandled exception if cancelled before await
     late final StreamSubscription<ClipboardFetchResponse> responseSub;
     late final StreamSubscription<ClipboardFetchReject> rejectSub;
     Timer? timeoutTimer;
@@ -1088,11 +1313,7 @@ class RiftDaemon {
       await responseSub.cancel();
       await rejectSub.cancel();
       if (error != null) {
-        completeFailure(
-          error,
-          failureReason: failureReason,
-          expired: expired,
-        );
+        completeFailure(error, failureReason: failureReason, expired: expired);
         return;
       }
 
@@ -1104,7 +1325,10 @@ class RiftDaemon {
     responseSub = _clipboardHandler!.onFetchResponse.listen((response) {
       if (response.offerId != offerId) return;
       try {
-        _operationManager!.transitionOperation(operationId, OperationState.active);
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.active,
+        );
       } on RiftInvalidTransitionException {
         // Duplicate network delivery should not crash the daemon.
       }
@@ -1115,7 +1339,10 @@ class RiftDaemon {
     rejectSub = _clipboardHandler!.onFetchReject.listen((reject) {
       if (reject.offerId != offerId) return;
       try {
-        _operationManager!.transitionOperation(operationId, OperationState.active);
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.active,
+        );
       } on RiftInvalidTransitionException {
         // Duplicate network delivery should not crash the daemon.
       }
@@ -1240,10 +1467,10 @@ class RiftDaemon {
         final newState = params['newState']?.toString();
         final previousState = params['previousState']?.toString();
         final reason = params['reason']?.toString();
-        if (newState == 'revoked') {
+        if (newState == 'removed') {
           unawaited(
             _recordSecurityEvent(
-              eventType: 'trust.revoked',
+              eventType: 'trust.removed',
               severity: 'warning',
               peerDeviceId: params['deviceId']?.toString(),
               outcome: 'success',
@@ -1592,7 +1819,9 @@ class RiftDaemon {
     final activeEndpoint = _transport?.getPeerSocketEndpoint(peerDeviceId);
     if (activeEndpoint != null && record.trustedEndpoints.isNotEmpty) {
       final existingEndpoint = record.trustedEndpoints.first;
-      final portToUse = activeEndpoint.isServer ? existingEndpoint.port : activeEndpoint.port;
+      final portToUse = activeEndpoint.isServer
+          ? existingEndpoint.port
+          : activeEndpoint.port;
       return TrustedPeerEndpoint(
         address: activeEndpoint.address,
         port: portToUse,
@@ -1650,6 +1879,7 @@ class RiftDaemon {
   Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
     final trustStore = _trustStore;
     final sessionManager = _sessionManager;
+    final transport = _transport;
     if (trustStore == null || sessionManager == null) {
       throw const RiftIdentityNotInitializedException(
         'Daemon services not initialized',
@@ -1666,11 +1896,27 @@ class RiftDaemon {
 
     final ctx = sessionManager.getContext(peerDeviceId);
     if (ctx != null && ctx.handshakeState == HandshakeState.established) {
-      return peerDeviceId;
+      if (transport?.getPeerSocketEndpoint(peerDeviceId) == null) {
+        RiftLog.warn(
+          '[Reconnect] Session context for peerDeviceId=$peerDeviceId was established '
+          'but no active transport socket remained. Reconnecting.',
+        );
+        sessionManager.disconnectPeer(peerDeviceId);
+      } else {
+        return peerDeviceId;
+      }
     }
     if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
-      await sessionManager.waitForSessionEstablished(peerDeviceId);
-      return peerDeviceId;
+      if (transport?.getPeerSocketEndpoint(peerDeviceId) == null) {
+        RiftLog.warn(
+          '[Reconnect] In-flight handshake for peerDeviceId=$peerDeviceId had no active '
+          'transport socket. Restarting reconnect.',
+        );
+        sessionManager.disconnectPeer(peerDeviceId);
+      } else {
+        await sessionManager.waitForSessionEstablished(peerDeviceId);
+        return peerDeviceId;
+      }
     }
 
     return joinSingleFlightOperation(
@@ -1720,7 +1966,8 @@ class RiftDaemon {
     }
 
     final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
-    if (discoveredPeerRecord != null && discoveredPeerRecord.orderedPeers.isNotEmpty) {
+    if (discoveredPeerRecord != null &&
+        discoveredPeerRecord.orderedPeers.isNotEmpty) {
       final resolvedPeerDeviceId = await _openSessionForPairing(peerDeviceId);
       await _persistTrustedEndpointIfAvailable(
         resolvedPeerDeviceId,
@@ -1742,7 +1989,8 @@ class RiftDaemon {
 
   Future<String> _openSessionForPairing(String peerDeviceId) async {
     final discoveredPeerRecord = _discoveredPeers[peerDeviceId];
-    final hasDiscovered = discoveredPeerRecord != null &&
+    final hasDiscovered =
+        discoveredPeerRecord != null &&
         discoveredPeerRecord.orderedPeers.isNotEmpty;
 
     if (hasDiscovered) {
@@ -1830,7 +2078,9 @@ class RiftDaemon {
         'Failed to establish a secure session with $peerDeviceId across all endpoints.',
       );
     } else {
-      throw const RiftNotFoundException('Peer not found in discovery cache or trusted endpoints');
+      throw const RiftNotFoundException(
+        'Peer not found in discovery cache or trusted endpoints',
+      );
     }
   }
 
@@ -1963,10 +2213,7 @@ class RiftDaemon {
 
     await _pairingManager!.handleIpcCommand({
       'method': method,
-      'params': {
-        ...params,
-        'deviceId': resolvedPeerDeviceId,
-      },
+      'params': {...params, 'deviceId': resolvedPeerDeviceId},
     });
     RiftLog.info(
       '[Pairing] Manual endpoint $address:$port completed '
@@ -1990,16 +2237,20 @@ class RiftDaemon {
 
   Future<void> _pingEndpointRpc(String address, int port) async {
     try {
-      RiftLog.debug('[Discovery] Reverse pinging explicit endpoint $address:$port');
+      RiftLog.debug(
+        '[Discovery] Reverse pinging explicit endpoint $address:$port',
+      );
       final transport = _transport;
       final sessionManager = _sessionManager;
       if (transport == null || sessionManager == null) return;
-      
-      // Establish a full session to force Linux to recognize us and persist us 
+
+      // Establish a full session to force Linux to recognize us and persist us
       // in its TrustStore. Linux will drop us if we don't send session.hello.
       final resolvedPeerIdentity = await transport.connectTo(address, port);
       await sessionManager.sendSessionHello(resolvedPeerIdentity);
-      RiftLog.debug('[Discovery] Reverse ping session established successfully');
+      RiftLog.debug(
+        '[Discovery] Reverse ping session established successfully',
+      );
     } catch (e) {
       RiftLog.debug('[Discovery] Reverse ping to $address:$port failed: $e');
     }

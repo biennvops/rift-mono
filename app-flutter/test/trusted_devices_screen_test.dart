@@ -20,13 +20,17 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
   bool rejectCalled = false;
+  int startDiscoveryCallCount = 0;
+  int stopDiscoveryCallCount = 0;
   String? manualPairAddress;
   int? manualPairPort;
   int listTrustedPeersCallCount = 0;
+  bool isDiscovering = true;
   List<Map<String, dynamic>> trustedPeers = [
     {
       'deviceId': 'rift-trusted',
       'displayName': 'Windows Laptop',
+      'platform': 'windows',
       'trustState': 'trusted',
       'presence': 'online',
       'capabilities': ['presence.basic'],
@@ -43,6 +47,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Map<String, dynamic> deviceInfo = {
     'deviceId': 'rift-local-device',
     'displayName': 'Local Device',
+    'platform': 'linux',
   };
 
   @override
@@ -58,12 +63,32 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
   @override
   Future<dynamic> getDeviceInfo() async => deviceInfo;
   @override
   Future<dynamic> listDiscoveredPeers() async => {
         'peers': discoveredPeers,
-        'isDiscovering': true,
+        'isDiscovering': isDiscovering,
       };
   @override
   Future<dynamic> listTrustedPeers() async {
@@ -72,9 +97,19 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 
   @override
-  Future<dynamic> startDiscovery() async => {'started': true};
+  Future<dynamic> startDiscovery() async {
+    startDiscoveryCallCount += 1;
+    isDiscovering = true;
+    return {'started': true};
+  }
+
   @override
-  Future<dynamic> stopDiscovery() async => {'stopped': true};
+  Future<dynamic> stopDiscovery() async {
+    stopDiscoveryCallCount += 1;
+    isDiscovering = false;
+    return {'stopped': true};
+  }
+
   @override
   Future<dynamic> unblockPeer(String deviceId) async {
     unblockCalled = true;
@@ -132,7 +167,30 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Windows Laptop'), findsOneWidget);
+    expect(find.text('Local Device'), findsOneWidget);
+    expect(find.text('This device'), findsOneWidget);
     expect(find.text('Manage'), findsOneWidget);
+    expect(find.text('Stop Adding'), findsOneWidget);
+  });
+
+  testWidgets(
+      'TrustedDevicesScreen auto-starts discovery when trusted peers exist but discovery is offline',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..isDiscovering = false
+      ..discoveredPeers = const [];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const TrustedDevicesScreen(),
+      ),
+    ));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(client.startDiscoveryCallCount, 1);
+    expect(find.text('Stop Adding'), findsOneWidget);
   });
 
   testWidgets('TrustedDevicesScreen supports manual Pair by IP flow',
@@ -160,19 +218,10 @@ void main() {
     expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
   });
 
-
-  testWidgets('TrustedDevicesScreen can reset a revoked peer',
+  testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
-    client.trustedPeers = [
-      {
-        'deviceId': 'rift-revoked',
-        'displayName': 'Former Peer',
-        'trustState': 'revoked',
-        'presence': 'offline',
-        'capabilities': <String>[],
-      }
-    ];
+    client.trustedPeers = const [];
     client.discoveredPeers = const [];
 
     await tester.pumpWidget(
@@ -185,13 +234,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Reset').first);
-    await tester.pumpAndSettle();
-    expect(find.text('Reset revoked peer?'), findsOneWidget);
-
-    await tester.tap(find.text('Reset').last);
-    await tester.pumpAndSettle();
-    expect(client.resetRevokedCalled, isTrue);
+    expect(find.text('Former Peer'), findsNothing);
+    expect(find.text('Reset'), findsNothing);
   });
 
   testWidgets('TrustedDevicesScreen can cancel a pairing pending peer',
@@ -201,6 +245,7 @@ void main() {
       {
         'deviceId': 'rift-pending',
         'displayName': 'Pending Peer',
+        'platform': 'android',
         'trustState': 'pairing_pending',
         'presence': 'offline',
         'capabilities': <String>[],
@@ -225,6 +270,7 @@ void main() {
     await tester.tap(find.text('Cancel pairing'));
     await tester.pumpAndSettle();
     expect(client.rejectCalled, isTrue);
+    expect(find.text('PENDING'), findsOneWidget);
   });
 
   testWidgets(
@@ -235,6 +281,7 @@ void main() {
       {
         'deviceId': 'rift-shared',
         'displayName': 'Linux Box',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -244,6 +291,7 @@ void main() {
       {
         'deviceId': 'rift-shared',
         'displayName': 'Linux Box',
+        'platform': 'linux',
         'address': '192.168.1.20',
         'port': 9140,
         'trustState': 'discovered',
@@ -251,6 +299,7 @@ void main() {
       {
         'deviceId': 'rift-pending',
         'displayName': 'Pending Box',
+        'platform': 'android',
         'address': '192.168.1.21',
         'port': 9141,
         'trustState': 'pairing_pending',
@@ -281,6 +330,7 @@ void main() {
       {
         'deviceId': 'rift-transition',
         'displayName': 'Phone',
+        'platform': 'android',
         'address': '192.168.1.50',
         'port': 11112,
         'trustState': 'discovered',
@@ -304,6 +354,7 @@ void main() {
       {
         'deviceId': 'rift-transition',
         'displayName': 'Phone',
+        'platform': 'android',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -327,63 +378,6 @@ void main() {
   });
 
   testWidgets(
-      'TrustedDevicesScreen shows peer as discoverable again after revoked peer is reset',
-      (WidgetTester tester) async {
-    final client = FakeJsonRpcRiftClient();
-    client.trustedPeers = [
-      {
-        'deviceId': 'rift-resettable',
-        'displayName': 'Tablet',
-        'trustState': 'revoked',
-        'presence': 'offline',
-        'capabilities': <String>[],
-      }
-    ];
-    client.discoveredPeers = const [];
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: const TrustedDevicesScreen(),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Reset').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Reset').last);
-    await tester.pumpAndSettle();
-
-    expect(client.resetRevokedCalled, isTrue);
-
-    client.trustedPeers = const [];
-    client.discoveredPeers = [
-      {
-        'deviceId': 'rift-resettable',
-        'displayName': 'Tablet',
-        'address': '192.168.1.55',
-        'port': 11112,
-        'trustState': 'discovered',
-      }
-    ];
-
-    await client.emitTrustChanged({
-      'deviceId': 'rift-resettable',
-      'previousState': 'revoked',
-      'newState': 'discovered',
-      'reason': 'trust.reset',
-    });
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(find.text('Tablet'), findsOneWidget);
-    expect(find.text('DISCOVERED'), findsOneWidget);
-    expect(find.text('Verify'), findsOneWidget);
-  });
-
-  testWidgets(
       'TrustedDevicesScreen shows presence indicators and capability badges',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -391,6 +385,7 @@ void main() {
       {
         'deviceId': 'rift-capable',
         'displayName': 'Linux Workstation',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': [
@@ -415,6 +410,7 @@ void main() {
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
     expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.byIcon(Icons.terminal), findsWidgets);
   });
 
   testWidgets(
@@ -425,6 +421,7 @@ void main() {
       {
         'deviceId': 'rift-refresh',
         'displayName': 'Desk Node',
+        'platform': 'windows',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -448,6 +445,7 @@ void main() {
       {
         'deviceId': 'rift-refresh',
         'displayName': 'Desk Node',
+        'platform': 'windows',
         'trustState': 'trusted',
         'presence': 'offline',
         'capabilities': ['presence.basic'],
@@ -470,6 +468,7 @@ void main() {
       {
         'deviceId': 'rift-covered',
         'displayName': 'Covered Peer',
+        'platform': 'linux',
         'trustState': 'trusted',
         'presence': 'online',
         'capabilities': ['presence.basic'],
@@ -501,5 +500,71 @@ void main() {
 
     expect(find.text('Covered route'), findsOneWidget);
     expect(client.listTrustedPeersCallCount, equals(callsBeforeCover));
+  });
+
+  testWidgets('TrustedDevicesScreen chooses icons from platform field',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-android',
+        'displayName': 'Pixel',
+        'platform': 'android',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['presence.basic'],
+      },
+      {
+        'deviceId': 'rift-linux',
+        'displayName': 'Linux Box',
+        'platform': 'linux',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-windows',
+        'displayName': 'Windows Box',
+        'platform': 'windows',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-macos',
+        'displayName': 'Mac Box',
+        'platform': 'macos',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+      {
+        'deviceId': 'rift-mystery',
+        'displayName': 'Mystery Box',
+        'platform': 'unknown',
+        'trustState': 'trusted',
+        'presence': 'offline',
+        'capabilities': <String>[],
+      },
+    ];
+    client.discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.smartphone), findsOneWidget);
+    expect(find.byIcon(Icons.laptop_windows), findsAtLeastNWidgets(1));
+    expect(find.byIcon(Icons.laptop_mac), findsOneWidget);
+    expect(find.byIcon(Icons.terminal), findsAtLeastNWidgets(1));
+    await tester.scrollUntilVisible(find.text('Mystery Box'), 200);
+    await tester.pumpAndSettle();
+    expect(find.byIcon(Icons.devices), findsOneWidget);
   });
 }

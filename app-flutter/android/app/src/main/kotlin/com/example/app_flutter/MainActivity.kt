@@ -1,55 +1,171 @@
 package com.example.app_flutter
 
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.database.Cursor
+import android.net.Uri
+import android.os.Bundle
 import android.os.Build
+import android.os.Environment
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import android.util.Log
-import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity: FlutterActivity() {
-    private val CHANNEL = "com.biennvops.rift/clipboard"
-    private val TAG = "RiftMainActivity"
-    private var channel: MethodChannel? = null
+    companion object {
+        private const val notificationChannelId = "rift.events"
+        private const val notificationChannelName = "Rift activity"
+        private const val notificationIntentRouteKey = "rift.notification.route"
+        private const val notificationIntentDestinationPathKey = "rift.notification.destinationPath"
+        private const val notificationIntentPayloadPrefix = "rift.notification.payload."
+        private const val shareSendRoute = "history.send"
+        private const val shareClipboardRoute = "history.clipboard"
+        @JvmStatic
+        var isClipboardRelayReady: Boolean = false
+    }
+
+    private val clipboardChannelName = "com.biennvops.rift/clipboard"
+    private val shellChannelName = "rift/android/shell"
+    private val tag = "RiftMainActivity"
+    private var clipboardChannel: MethodChannel? = null
+    private var shellChannel: MethodChannel? = null
+    private var pendingLaunchAction: Map<String, Any?>? = null
 
     private val clipboardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val text = intent?.getStringExtra("text")
-            if (text != null) {
-                Log.i(TAG, "Received clipboard broadcast length=${text.length}")
-                channel?.invokeMethod("onClipboardChanged", mapOf("text" to text))
-            } else {
-                Log.i(TAG, "Received clipboard broadcast with null text")
+            val contentType = intent?.getStringExtra("contentType")
+            val contentBase64 = intent?.getStringExtra("contentBase64")
+            when {
+                text != null -> {
+                    Log.i(tag, "Received clipboard broadcast length=${text.length}")
+                    clipboardChannel?.invokeMethod("onClipboardChanged", mapOf("text" to text))
+                }
+                contentType != null && contentBase64 != null -> {
+                    Log.i(
+                        tag,
+                        "Received clipboard broadcast contentType=$contentType base64Length=${contentBase64.length}",
+                    )
+                    clipboardChannel?.invokeMethod(
+                        "onClipboardChanged",
+                        mapOf(
+                            "contentType" to contentType,
+                            "contentBase64" to contentBase64,
+                        ),
+                    )
+                }
+                else -> {
+                    Log.i(tag, "Received clipboard broadcast with no supported payload")
+                }
             }
         }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        Log.i(TAG, "configureFlutterEngine")
-        channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
-        
-        channel?.setMethodCallHandler { call, result ->
+        Log.i(tag, "configureFlutterEngine")
+        createNotificationChannel()
+        isClipboardRelayReady = true
+        clipboardChannel =
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, clipboardChannelName)
+
+        clipboardChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> {
-                    Log.i(TAG, "startService requested from Flutter")
-                    val serviceIntent = Intent(this, ClipboardForegroundService::class.java)
-                    ContextCompat.startForegroundService(this, serviceIntent)
+                    Log.i(tag, "startService requested from Flutter (stubbed)")
                     result.success(true)
                 }
                 "stopService" -> {
-                    Log.i(TAG, "stopService requested from Flutter")
-                    val serviceIntent = Intent(this, ClipboardForegroundService::class.java)
-                    stopService(serviceIntent)
+                    Log.i(tag, "stopService requested from Flutter (stubbed)")
                     result.success(true)
+                }
+                "setClipboardContent" -> {
+                    val args = call.arguments as? Map<*, *>
+                    val contentType = args?.get("contentType") as? String
+                    val contentBase64 = args?.get("contentBase64") as? String
+                    if (contentType == null || contentBase64 == null) {
+                        result.error("invalid_args", "contentType and contentBase64 are required", null)
+                    } else {
+                        val clipboard =
+                            getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val applied = AndroidClipboardCodec.applyClipboardPayload(
+                            this,
+                            clipboard,
+                            contentType,
+                            contentBase64,
+                        )
+                        result.success(applied)
+                    }
+                }
+                "getCurrentClipboardPayload" -> {
+                    val clipboard =
+                        getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    result.success(AndroidClipboardCodec.encodePrimaryClip(this, clipboard))
                 }
                 else -> result.notImplemented()
             }
         }
+
+        shellChannel =
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, shellChannelName)
+        shellChannel?.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "consumeLaunchAction" -> {
+                        val action = pendingLaunchAction
+                        pendingLaunchAction = null
+                        result.success(action)
+                    }
+                    "getPublicDownloadsDirectory" -> {
+                        result.success(getPublicDownloadsDirectory())
+                    }
+                    "showNotification" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val title = args?.get("title") as? String
+                        val body = args?.get("body") as? String
+                        val route = args?.get("route") as? String
+                        val destinationPath = args?.get("destinationPath") as? String
+                        val payload = args?.get("payload") as? Map<*, *>
+                        if (title.isNullOrBlank() || body.isNullOrBlank() || route.isNullOrBlank()) {
+                            result.error("invalid_args", "title, body, and route are required", null)
+                        } else {
+                            result.success(
+                                showNotification(
+                                    title = title,
+                                    body = body,
+                                    route = route,
+                                    destinationPath = destinationPath,
+                                    payload = payload,
+                                )
+                            )
+                        }
+                    }
+                    "openFile" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val path = args?.get("path") as? String
+                        if (path.isNullOrBlank()) {
+                            result.error("invalid_args", "path is required", null)
+                        } else {
+                            result.success(openFile(path))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        handleLaunchIntent(intent)
         
         val filter = IntentFilter("com.example.app_flutter.CLIPBOARD_CHANGED")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -57,32 +173,351 @@ class MainActivity: FlutterActivity() {
         } else {
             registerReceiver(clipboardReceiver, filter)
         }
-        Log.i(TAG, "Clipboard broadcast receiver registered")
+        Log.i(tag, "Clipboard broadcast receiver registered")
     }
 
     override fun onStart() {
         super.onStart()
-        Log.i(TAG, "onStart")
+        Log.i(tag, "onStart")
     }
 
     override fun onResume() {
         super.onResume()
-        Log.i(TAG, "onResume")
+        Log.i(tag, "onResume")
+        deliverPendingLaunchActionIfPossible()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleLaunchIntent(intent)
     }
 
     override fun onPause() {
-        Log.i(TAG, "onPause")
+        Log.i(tag, "onPause")
         super.onPause()
     }
 
     override fun onStop() {
-        Log.i(TAG, "onStop")
+        Log.i(tag, "onStop")
         super.onStop()
     }
 
     override fun onDestroy() {
-        Log.i(TAG, "onDestroy")
+        Log.i(tag, "onDestroy")
+        isClipboardRelayReady = false
         unregisterReceiver(clipboardReceiver)
         super.onDestroy()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            notificationChannelId,
+            notificationChannelName,
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "Rift pairing, clipboard, and file activity"
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun showNotification(
+        title: String,
+        body: String,
+        route: String,
+        destinationPath: String?,
+        payload: Map<*, *>?,
+    ): Boolean {
+        val intent =
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(notificationIntentRouteKey, route)
+                if (!destinationPath.isNullOrBlank()) {
+                    putExtra(notificationIntentDestinationPathKey, destinationPath)
+                }
+                payload?.forEach { (key, value) ->
+                    val stringKey = key as? String ?: return@forEach
+                    when (value) {
+                        is String -> putExtra("$notificationIntentPayloadPrefix$stringKey", value)
+                        is Int -> putExtra("$notificationIntentPayloadPrefix$stringKey", value)
+                        is Long -> putExtra("$notificationIntentPayloadPrefix$stringKey", value)
+                        is Boolean -> putExtra("$notificationIntentPayloadPrefix$stringKey", value)
+                        is Double -> putExtra("$notificationIntentPayloadPrefix$stringKey", value)
+                    }
+                }
+            }
+        val pendingIntent =
+            PendingIntent.getActivity(
+                this,
+                route.hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        val notification =
+            NotificationCompat.Builder(this, notificationChannelId)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setContentIntent(pendingIntent)
+                .build()
+
+        return try {
+            NotificationManagerCompat.from(this).notify(
+                (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                notification,
+            )
+            true
+        } catch (e: SecurityException) {
+            Log.w(tag, "Notification permission denied", e)
+            false
+        }
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        val action = extractNotificationAction(intent) ?: return
+        val destinationPath = action["destinationPath"] as? String
+        val openDestination = action["openDestination"] as? Boolean ?: false
+        if (openDestination && !destinationPath.isNullOrBlank() && openFile(destinationPath)) {
+            return
+        }
+        pendingLaunchAction = action
+        deliverPendingLaunchActionIfPossible()
+    }
+
+    private fun handleLaunchIntent(intent: Intent?) {
+        if (handleShareIntent(intent)) {
+            return
+        }
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleShareIntent(intent: Intent?): Boolean {
+        val action = intent?.action ?: return false
+        val type = intent.type
+        val items =
+            when (action) {
+                Intent.ACTION_SEND -> buildSharedItemsFromSendIntent(intent, type)
+                Intent.ACTION_SEND_MULTIPLE -> buildSharedItemsFromSendMultipleIntent(intent, type)
+                else -> null
+            } ?: return false
+
+        if (items.isEmpty()) {
+            return false
+        }
+
+        pendingLaunchAction = if (items.size == 1 && items.first().containsKey("sharedText")) {
+            mapOf(
+                "route" to shareClipboardRoute,
+                "sharedText" to items.first().getValue("sharedText"),
+            )
+        } else {
+            mapOf(
+                "route" to shareSendRoute,
+                "items" to items,
+            )
+        }
+        deliverPendingLaunchActionIfPossible()
+        return true
+    }
+
+    private fun buildSharedItemsFromSendIntent(
+        intent: Intent,
+        mimeType: String?,
+    ): List<Map<String, String>>? {
+        val streamUri =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+            }
+        if (streamUri != null) {
+            return listOfNotNull(importSharedUri(streamUri, mimeType))
+        }
+
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        if (!text.isNullOrBlank()) {
+            return listOf(mapOf("sharedText" to text))
+        }
+
+        return null
+    }
+
+    private fun buildSharedItemsFromSendMultipleIntent(
+        intent: Intent,
+        mimeType: String?,
+    ): List<Map<String, String>>? {
+        val uris =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+            } ?: return null
+
+        return uris.mapNotNull { uri -> importSharedUri(uri, mimeType) }
+    }
+
+    private fun importSharedUri(uri: Uri, fallbackMimeType: String?): Map<String, String>? {
+        return try {
+            val shareDir = File(cacheDir, "shared-imports").apply {
+                mkdirs()
+            }
+            val metadata = querySharedMetadata(uri)
+            val resolvedMimeType =
+                contentResolver.getType(uri)
+                    ?: fallbackMimeType
+                    ?: metadata.second?.let { fileName ->
+                        val ext = MimeTypeMap.getFileExtensionFromUrl(fileName)
+                        if (ext.isNullOrBlank()) {
+                            null
+                        } else {
+                            MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase())
+                        }
+                    }
+                    ?: "application/octet-stream"
+            val displayName =
+                metadata.first?.takeIf { it.isNotBlank() }
+                    ?: "shared-${System.currentTimeMillis()}"
+            val safeName = displayName.replace(Regex("[<>:\"/\\\\|?*]"), "_")
+            val targetFile = File(shareDir, "${System.currentTimeMillis()}_$safeName")
+            contentResolver.openInputStream(uri)?.use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            } ?: return null
+
+            mapOf(
+                "localPath" to targetFile.absolutePath,
+                "fileName" to displayName,
+                "mediaType" to resolvedMimeType,
+            )
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to import shared Uri: $uri", e)
+            null
+        }
+    }
+    private fun querySharedMetadata(uri: Uri): Pair<String?, String?> {
+        var displayName: String? = null
+        var extensionSource: String? = null
+        val cursor: Cursor? =
+            contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex >= 0 && it.moveToFirst()) {
+                displayName = it.getString(nameIndex)
+                extensionSource = displayName
+            }
+        }
+        if (displayName == null) {
+            val pathSegment = uri.lastPathSegment
+            if (!pathSegment.isNullOrBlank()) {
+                displayName = pathSegment.substringAfterLast('/')
+                extensionSource = displayName
+            }
+        }
+        return Pair(displayName, extensionSource)
+    }
+
+    private fun extractNotificationAction(intent: Intent?): Map<String, Any?>? {
+        val route = intent?.getStringExtra(notificationIntentRouteKey) ?: return null
+        val action = mutableMapOf<String, Any?>("route" to route)
+        intent.getStringExtra(notificationIntentDestinationPathKey)?.let {
+            action["destinationPath"] = it
+        }
+        val extras = intent.extras ?: Bundle.EMPTY
+        for (key in extras.keySet()) {
+            if (!key.startsWith(notificationIntentPayloadPrefix)) {
+                continue
+            }
+            val payloadKey = key.removePrefix(notificationIntentPayloadPrefix)
+            action[payloadKey] = extras.get(key)
+        }
+        return action
+    }
+
+    private fun deliverPendingLaunchActionIfPossible() {
+        val action = pendingLaunchAction ?: return
+        shellChannel?.invokeMethod("notificationActivated", action)
+        pendingLaunchAction = null
+    }
+
+    private fun openFile(path: String): Boolean {
+        val file = File(path)
+        if (!file.exists() || !file.isFile) {
+            Log.w(tag, "Requested file does not exist: $path")
+            return false
+        }
+
+        val uri = try {
+            FileProvider.getUriForFile(
+                this,
+                "${applicationContext.packageName}.clipboard.fileprovider",
+                file,
+            )
+        } catch (e: IllegalArgumentException) {
+            Log.e(tag, "Failed to create content Uri for $path", e)
+            return false
+        }
+
+        val mimeType = resolveMimeType(file, uri)
+        val intent =
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+
+        return try {
+            startActivity(Intent.createChooser(intent, file.name))
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.w(tag, "No activity could open file mimeType=$mimeType path=$path", e)
+            false
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to launch open-file intent for $path", e)
+            false
+        }
+    }
+
+    private fun getPublicDownloadsDirectory(): String? {
+        return try {
+            val downloadsDir =
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val riftDir = File(downloadsDir, "Rift")
+            if (!riftDir.exists() && !riftDir.mkdirs()) {
+                Log.w(tag, "Failed to create public Downloads/Rift directory at ${riftDir.absolutePath}")
+                return null
+            }
+            riftDir.absolutePath
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to resolve public Downloads/Rift directory", e)
+            null
+        }
+    }
+
+    private fun resolveMimeType(file: File, uri: Uri): String {
+        val contentResolverType = contentResolver.getType(uri)
+        if (!contentResolverType.isNullOrBlank()) {
+            return contentResolverType
+        }
+
+        val extension = file.extension.lowercase()
+        if (extension.isNotEmpty()) {
+            val fromExtension = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+            if (!fromExtension.isNullOrBlank()) {
+                return fromExtension
+            }
+        }
+
+        return "*/*"
     }
 }

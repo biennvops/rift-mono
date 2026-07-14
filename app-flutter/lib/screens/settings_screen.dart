@@ -16,7 +16,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Map<String, dynamic>? _deviceInfo;
   bool _isLoading = true;
   String? _error;
-  bool _isAccessibilityEnabled = false;
 
   @override
   void initState() {
@@ -284,31 +283,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 if (Platform.isAndroid) ...[
                   Container(
-                    color: theme.colorScheme.errorContainer.withValues(alpha: 0.2),
+                    color: theme.colorScheme.surfaceContainer,
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Android Accessibility Service',
-                              style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                            Switch(
-                              value: _isAccessibilityEnabled,
-                              onChanged: (val) {
-                                setState(() => _isAccessibilityEnabled = val);
-                              },
-                              activeThumbColor: theme.colorScheme.primary,
-                            ),
-                          ],
+                        Text(
+                          'Android Clipboard Monitoring',
+                          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Warning: Enabling accessibility services may expose sensitive clipboard data to the Rift daemon. Only enable if automatic synchronization fails.',
-                          style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error),
+                          'Rift uses the platform clipboard APIs and foreground service flow for clipboard syncing. Accessibility Service is not required.',
+                          style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -364,14 +351,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   _buildListTile(
                     title: 'Background clipboard monitoring',
-                    subtitle: 'Optional Accessibility Service integration',
-                    trailing: Switch(
-                      value: _isAccessibilityEnabled,
-                      onChanged: (val) {
-                        setState(() => _isAccessibilityEnabled = val);
-                      },
-                      activeThumbColor: theme.colorScheme.primary,
-                    ),
+                    subtitle: 'Uses Rift foreground service when background sync is active',
                   ),
                 ],
               ),

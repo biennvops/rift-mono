@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:collection';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -32,9 +33,12 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
   StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
   int _nextSyntheticId = 1000000;
+  int _nextBootstrapRequestId = -1;
   String? _daemonDeviceId;
   int? _daemonAdvertisedPort;
   String? _daemonFingerprintPrefix;
+  final Map<Object, Completer<Map<String, dynamic>>> _bootstrapRequests =
+      HashMap<Object, Completer<Map<String, dynamic>>>();
 
   @override
   Future<StreamChannel<String>> connect() async {
@@ -54,7 +58,8 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     // `_uiReceive`, and report `rpcPort` inside the `rift.daemonReady` message.
     final token = ServicesBinding.rootIsolateToken;
     if (token == null) {
-      throw StateError('RootIsolateToken is null; cannot start Android daemon isolate');
+      throw StateError(
+          'RootIsolateToken is null; cannot start Android daemon isolate');
     }
 
     _daemonIsolate = await Isolate.spawn(
@@ -96,13 +101,39 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _uiSub = _uiReceive!.listen((message) {
       // Isolate error listener delivers [error, stack] as a List.
       if (message is List && message.length >= 2) {
-        final err = StateError('Daemon isolate error: ${message[0]}\n${message[1]}');
+        final err =
+            StateError('Daemon isolate error: ${message[0]}\n${message[1]}');
         _incoming?.addError(err);
         if (!ready.isCompleted) ready.completeError(err);
         return;
       }
 
       if (message is Map) {
+        final responseId = message['id'];
+        if (responseId != null &&
+            _bootstrapRequests.containsKey(responseId) &&
+            message['jsonrpc'] == '2.0') {
+          final completer = _bootstrapRequests.remove(responseId)!;
+          if (message['error'] is Map) {
+            final error = Map<String, dynamic>.from(message['error'] as Map);
+            completer.completeError(
+              StateError(
+                'Daemon bootstrap RPC failed: ${error['message'] ?? error}',
+              ),
+            );
+          } else {
+            final result = message['result'];
+            if (result is Map<String, dynamic>) {
+              completer.complete(result);
+            } else if (result is Map) {
+              completer.complete(Map<String, dynamic>.from(result));
+            } else {
+              completer.complete({'value': result});
+            }
+          }
+          return;
+        }
+
         if (message['jsonrpc'] == '2.0' &&
             message['method'] == 'rift.daemonReady') {
           final params = message['params'];
@@ -112,19 +143,19 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
             final deviceId = params['deviceId'];
             final advertisedPort = params['advertisedPort'];
             _daemonDeviceId = deviceId is String ? deviceId : null;
-            _daemonAdvertisedPort = advertisedPort is int ? advertisedPort : null;
-            _daemonFingerprintPrefix =
-                params['fingerprintPrefix'] is String
-                    ? params['fingerprintPrefix'] as String
-                    : null;
+            _daemonAdvertisedPort =
+                advertisedPort is int ? advertisedPort : null;
+            _daemonFingerprintPrefix = params['fingerprintPrefix'] is String
+                ? params['fingerprintPrefix'] as String
+                : null;
             if (!ready.isCompleted) ready.complete(port);
             unawaited(() async {
               try {
                 await _ensureDiscoveryBridge();
               } catch (error) {
-              final err =
-                  StateError('Android discovery bootstrap failed: $error');
-              _incoming?.addError(err);
+                final err =
+                    StateError('Android discovery bootstrap failed: $error');
+                _incoming?.addError(err);
               }
             }());
           }
@@ -133,7 +164,8 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
         _incoming?.add(jsonEncode(message));
 
-        if (message['jsonrpc'] == '2.0' && message['method'] == 'rift.daemonError') {
+        if (message['jsonrpc'] == '2.0' &&
+            message['method'] == 'rift.daemonError') {
           final params = message['params'];
           final err = StateError('Daemon error: ${params['error']}');
           _incoming?.addError(err);
@@ -152,7 +184,8 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     // Wait for rift.daemonReady to learn rpcPort (nsd init can be slow).
     await ready.future.timeout(
       const Duration(seconds: 30),
-      onTimeout: () => throw TimeoutException('Timed out waiting for rift.daemonReady/rpcPort'),
+      onTimeout: () => throw TimeoutException(
+          'Timed out waiting for rift.daemonReady/rpcPort'),
     );
 
     // Outgoing: JSON string -> Map.
@@ -202,11 +235,11 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       }));
       _syncDiscoverySnapshotToDaemon();
     });
-    
+
     _reverseTcpPingSub = bridge.onReverseTcpPingRequested.listen((peer) {
       final port = _rpcPort;
       if (port == null) return;
-      // Send a ping command to the daemon isolate to establish a TCP connection 
+      // Send a ping command to the daemon isolate to establish a TCP connection
       // with the Linux machine. This completely bypasses the Hotspot UDP block!
       port.send({
         'jsonrpc': '2.0',
@@ -239,6 +272,42 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     );
     await bridge.ensureAdvertising();
     await _attachDiscoveryBridge(bridge);
+    if (await _shouldAutoStartDiscovery()) {
+      await bridge.startDiscovery();
+      _syncDiscoverySnapshotToDaemon();
+    }
+  }
+
+  Future<bool> _shouldAutoStartDiscovery() async {
+    final trusted = await _invokeDaemonBootstrapRpc('rift.listTrustedPeers');
+    return (trusted['peers'] as List?)?.isNotEmpty == true;
+  }
+
+  Future<Map<String, dynamic>> _invokeDaemonBootstrapRpc(
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
+    final port = _rpcPort;
+    if (port == null) {
+      throw StateError(
+          'Daemon bootstrap RPC requested before rpcPort was ready');
+    }
+
+    final id = 'transport-bootstrap-${_nextBootstrapRequestId--}';
+    final completer = Completer<Map<String, dynamic>>();
+    _bootstrapRequests[id] = completer;
+    port.send({
+      'jsonrpc': '2.0',
+      'id': id,
+      'method': method,
+      if (params != null) 'params': params,
+    });
+
+    try {
+      return await completer.future.timeout(const Duration(seconds: 10));
+    } finally {
+      _bootstrapRequests.remove(id);
+    }
   }
 
   Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {

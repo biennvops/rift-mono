@@ -16,17 +16,6 @@ class BackgroundSyncScreen extends StatelessWidget {
     );
   }
 
-  void _openAccessibilitySettings(BuildContext context) {
-    // Usually would use a platform channel or url_launcher here to open settings
-    // For now, we mock it and finish onboarding
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Opening Accessibility Settings...')),
-    );
-    Future.delayed(const Duration(seconds: 1), () {
-      if (context.mounted) _finishOnboarding(context);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -68,7 +57,7 @@ class BackgroundSyncScreen extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      'To sync clipboard events automatically across your devices without opening the app, Rift requires Accessibility Service permission.',
+                      'Rift can keep background sync available with its own daemon and foreground service flow. Clipboard syncing does not require Android Accessibility permission.',
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -116,7 +105,7 @@ class BackgroundSyncScreen extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Security Commitment',
+                                  'Permission Model',
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     color: theme.colorScheme.onSurface,
                                     fontWeight: FontWeight.bold,
@@ -124,7 +113,7 @@ class BackgroundSyncScreen extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  'This permission is strictly used for clipboard detection. Rift is designed to be fully transparent. You can revoke this permission at any time in your device settings.',
+                                  'Rift reads clipboard changes through the platform clipboard APIs and its foreground service. It does not need Accessibility Service for normal clipboard sync.',
                                   style: theme.textTheme.bodyMedium?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -137,7 +126,7 @@ class BackgroundSyncScreen extends StatelessWidget {
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: Text(
-                                    'android.permission.BIND_ACCESSIBILITY_SERVICE',
+                                    'No Accessibility permission required',
                                     style: theme.textTheme.labelSmall?.copyWith(
                                       color: theme.colorScheme.outline,
                                       fontFamily: 'monospace',
@@ -185,19 +174,17 @@ class BackgroundSyncScreen extends StatelessWidget {
                           foregroundColor: theme.colorScheme.onPrimary,
                           padding: const EdgeInsets.symmetric(vertical: 16),
                         ),
-                        onPressed: () => _openAccessibilitySettings(context),
+                        onPressed: () => _finishOnboarding(context),
                         child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Flexible(
                               child: Text(
-                                'Open Settings',
+                                'Continue',
                                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            SizedBox(width: 8),
-                            Icon(Icons.open_in_new, size: 20),
                           ],
                         ),
                       ),
@@ -244,9 +231,9 @@ class BackgroundSyncScreen extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Clipboard copy events to trigger sync.', theme),
+          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Clipboard copy events detected through the platform clipboard API.', theme),
           const SizedBox(height: 12),
-          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Text copied specifically to the system clipboard.', theme),
+          _buildListItem(Icons.check_circle, theme.colorScheme.secondary, 'Foreground-service based background operation on Android.', theme),
         ],
       ),
     );
@@ -288,7 +275,7 @@ class BackgroundSyncScreen extends StatelessWidget {
           const SizedBox(height: 12),
           _buildListItem(Icons.cancel, theme.colorScheme.error, 'Keystrokes or input fields.', theme),
           const SizedBox(height: 12),
-          _buildListItem(Icons.cancel, theme.colorScheme.error, 'App usage history or browsing data.', theme),
+          _buildListItem(Icons.cancel, theme.colorScheme.error, 'Accessibility-style full device observation.', theme),
         ],
       ),
     );

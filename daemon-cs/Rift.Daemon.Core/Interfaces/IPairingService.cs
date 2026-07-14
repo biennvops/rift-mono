@@ -21,6 +21,8 @@ public sealed class RejectPairingResult
 
 public sealed class RevokeTrustResult
 {
+    public bool Removed { get; init; }
+    public string RemovedAt { get; init; } = string.Empty;
     public bool Revoked { get; init; }
     public string RevokedAt { get; init; } = string.Empty;
 }

@@ -244,6 +244,8 @@ class AndroidRootDiscoveryBridge {
         } else {
           debugPrint('[mDNS Debug] Ignored self peer.');
         }
+      } else if (service.name == _instanceId) {
+        debugPrint('[mDNS Debug] Ignored own broadcast service: ${service.name}');
       } else {
         debugPrint(
             '[mDNS Debug] Failed to parse peer from service: ${service.name}');

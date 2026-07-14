@@ -90,6 +90,8 @@ Returns the local device's identity information.
 ```json
 {
   "deviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+  "displayName": "Windows Desktop 07",
+  "platform": "windows",
   "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ",
   "implementationId": "riftd-cs/0.1.0",
   "protocolVersion": "0.1-draft",
@@ -101,6 +103,12 @@ Returns the local device's identity information.
   ]
 }
 ```
+
+`displayName` is daemon-generated and stable for the local identity. In v0.1-draft
+it is derived from the current platform, a coarse device type, and a stable
+two-digit identifier, for example `Windows Desktop 07` or `Android Phone 12`.
+`platform` is a canonical lowercase OS identifier: `android`, `windows`,
+`macos`, `linux`, or `unknown`.
 
 **Errors:** `-32012` if identity is not yet initialized.
 
@@ -120,6 +128,7 @@ Returns all peers currently visible via mDNS-SD discovery, including their trust
     {
       "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
       "instanceId": "rift-instance-id-from-mdns",
+      "platform": "unknown",
       "address": "192.168.1.42",
       "port": 9735,
       "trustState": "discovered",
@@ -172,7 +181,7 @@ Initiates the pairing flow with a discovered peer.
 }
 ```
 
-**Errors:** `-32009` if peer not found, `-32004` if peer is blocked or revoked.
+**Errors:** `-32009` if peer not found, `-32004` if peer is blocked.
 
 #### `rift.startPairingByEndpoint`
 
@@ -205,7 +214,7 @@ protected operations without calling `rift.startPairingByEndpoint` again.
 ```
 
 **Errors:** `-32000` if the endpoint is not reachable on the local network,
-`-32004` if the resolved peer is blocked or revoked.
+`-32004` if the resolved peer is blocked.
 
 #### `rift.approvePairing`
 
@@ -238,8 +247,13 @@ Rejects an incoming or outgoing pairing.
 
 #### `rift.listTrustedPeers`
 
-Returns all non-discovered peers in the trust store with their current state
-(`pairing_pending`, `trusted`, `blocked`, `revoked`).
+Returns the peers that should remain visible in the device-management list:
+`pairing_pending`, `trusted`, and `blocked`.
+
+Revoked peers are intentionally excluded from this list. Revocation behaves
+like forgetting the device from the visible list while still retaining durable
+negative-trust evidence internally so future connections from that identity are
+rejected.
 
 **Params:** none.
 
@@ -251,6 +265,7 @@ Returns all non-discovered peers in the trust store with their current state
     {
       "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
       "displayName": "Pixel 9",
+      "platform": "android",
       "trustState": "trusted",
       "pairedAt": "2026-05-15T14:30:00Z",
       "lastSeenAt": "2026-05-30T09:45:00Z",
@@ -269,19 +284,23 @@ Returns all peers in the trust store for a given `trustState`.
 
 | Field        | Type   | Required | Description                                                               |
 | ------------ | ------ | -------- | ------------------------------------------------------------------------- |
-| `trustState` | string | Yes      | One of: `discovered`, `pairing_pending`, `trusted`, `blocked`, `revoked`. |
+| `trustState` | string | Yes      | One of: `discovered`, `pairing_pending`, `trusted`, `blocked`. |
 
 **Result:** same shape as `rift.listTrustedPeers`.
 
 #### `rift.revokeTrust`
 
-Revokes trust for a peer. Deletes key material, terminates sessions, permanently rejects future connections from the revoked Ed25519 key.
+Revokes a peer's trust. Terminates active trust, removes the peer from the
+visible trusted-device list, and retains durable negative-trust evidence so
+future connections from that identity are rejected until the revoked record is
+explicitly cleared. The RPC method name is retained for compatibility with
+older clients.
 
 **Params:**
 
 | Field      | Type             | Required | Description                         |
 | ---------- | ---------------- | -------- | ----------------------------------- |
-| `deviceId` | device ID string | Yes      | The peer to revoke                  |
+| `deviceId` | device ID string | Yes      | The peer to forget                  |
 | `reason`   | string           | Yes      | Human-readable reason for audit log |
 
 **Result:** `{ "revoked": true, "revokedAt": "2026-05-30T10:05:00Z" }`
@@ -352,7 +371,7 @@ Returns active clipboard offers from peers.
     {
       "offerId": "018f2f9a-8b7c-4a4b-9c0d-555555555555",
       "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
-      "contentType": "text/plain",
+      "contentType": "image/png",
       "byteSize": 42,
       "sha256": "abc123...",
       "expiresAt": "2026-05-30T10:02:00Z"
@@ -360,6 +379,9 @@ Returns active clipboard offers from peers.
   ]
 }
 ```
+
+Implementations MUST support `text/plain`. They MAY additionally surface binary
+clipboard content types such as `image/png`.
 
 #### `rift.fetchClipboardContent`
 
@@ -391,7 +413,83 @@ The daemon performs hash verification before returning the content. The `verifie
 
 **Errors:** `-32002` if offer expired, `-32000` if source peer unreachable, `-32006` if hash mismatch.
 
-### 4.6 Presence
+### 4.6 File Transfer
+
+The file transfer IPC methods correspond to the optional peer capability
+`file.transfer`. Implementations that do not support or negotiate this
+capability MAY return `-32601` or `-32003`.
+
+#### `rift.offerFile`
+
+Offers a local file to a trusted peer.
+
+**Params:**
+
+| Field            | Type               | Required | Description                        |
+| ---------------- | ------------------ | -------- | ---------------------------------- |
+| `targetDeviceId` | device ID string   | Yes      | The destination peer               |
+| `localPath`      | string             | Yes      | Local source path on this device   |
+| `fileName`       | string             | No       | Override name shown to the peer    |
+| `mediaType`      | string             | No       | MIME type; default is implementation-defined |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "operationId": "018f2f9a-8b7c-4a4b-9c0d-999999999999",
+  "targetDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+  "fileName": "example.png",
+  "byteSize": 1024,
+  "chunkSize": 262144,
+  "chunkCount": 1
+}
+```
+
+#### `rift.acceptFileOffer`
+
+Accepts an incoming file offer and selects the destination path locally.
+
+**Params:**
+
+| Field             | Type          | Required | Description                         |
+| ----------------- | ------------- | -------- | ----------------------------------- |
+| `transferId`      | UUIDv4 string | Yes      | The offered transfer                |
+| `destinationPath` | string        | Yes      | Receiver-local output path          |
+| `overwrite`       | boolean       | No       | Whether to replace an existing file |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaabbbb",
+  "destinationPath": "/tmp/example.png"
+}
+```
+
+#### `rift.rejectFileOffer`
+
+Rejects an incoming file offer.
+
+**Params:**
+
+| Field           | Type          | Required | Description                  |
+| --------------- | ------------- | -------- | ---------------------------- |
+| `transferId`    | UUIDv4 string | Yes      | The offered transfer         |
+| `failureReason` | string        | Yes      | Closed-vocabulary failure    |
+| `message`       | string        | No       | Optional local diagnostic    |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "rejected": true
+}
+```
+
+### 4.7 Presence
 
 #### `rift.getPeerPresence`
 
@@ -416,7 +514,7 @@ Returns presence information for a specific trusted peer.
 
 **Errors:** `-32009` if peer not found, `-32004` if peer not trusted.
 
-### 4.7 Operations
+### 4.8 Operations
 
 #### `rift.listOperations`
 
@@ -478,7 +576,7 @@ Returns details for a single operation, including its transition history.
 
 **Errors:** `-32009` if operation not found.
 
-### 4.8 Event Log
+### 4.9 Event Log
 
 #### `rift.queryEventLog`
 
@@ -528,6 +626,7 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |
 | `rift.onClipboardOffer`      | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }`  | New clipboard offer from a peer      |
 | `rift.onClipboardExpired`    | `{ "offerId" }`                                                                        | Clipboard offer expired              |
+| `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
 | `rift.onPresenceUpdate`      | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }`                              | Peer presence changed                |
 | `rift.onOperationTransition` | `{ "operationId", "operationType", "previousState", "nextState", "failureReason?" }`   | Operation state changed              |
 | `rift.onSecurityEvent`       | `{ "eventId", "eventType", "severity", "peerDeviceId?", "outcome", "failureReason?" }` | Security event logged                |

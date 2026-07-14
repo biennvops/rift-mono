@@ -8,25 +8,27 @@ class SecurityDashboardScreen extends StatefulWidget {
   const SecurityDashboardScreen({super.key});
 
   @override
-  State<SecurityDashboardScreen> createState() => _SecurityDashboardScreenState();
+  State<SecurityDashboardScreen> createState() =>
+      _SecurityDashboardScreenState();
 }
 
 class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   bool _isLoading = true;
   String? _error;
-  
+
   int _trustedCount = 0;
   int _blockedCount = 0;
-  int _revokedCount = 0;
+  int _pendingCount = 0;
   int _discoveredCount = 0;
-  
+
   List<Map<String, dynamic>> _recentEvents = [];
   Map<String, dynamic>? _criticalAlert;
-  
+
   StreamSubscription<Map<String, dynamic>>? _securitySub;
   StreamSubscription<Map<String, dynamic>>? _trustSub;
   StreamSubscription<Map<String, dynamic>>? _peerDiscoveredSub;
   StreamSubscription<Map<String, dynamic>>? _peerLostSub;
+  StreamSubscription<bool>? _connectionSub;
   bool _isReloading = false;
   bool _reloadQueued = false;
   int _loadGeneration = 0;
@@ -46,6 +48,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     _trustSub?.cancel();
     _peerDiscoveredSub?.cancel();
     _peerLostSub?.cancel();
+    _connectionSub?.cancel();
     super.dispose();
   }
 
@@ -66,6 +69,16 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     _peerLostSub = client.onPeerLost.listen((event) {
       if (!mounted) return;
       _scheduleReload();
+    });
+    _connectionSub = client.onConnectionChanged.listen((isConnected) {
+      if (!mounted) return;
+      if (isConnected) {
+        _scheduleReload();
+        return;
+      }
+      setState(() {
+        _error = 'Daemon not connected.';
+      });
     });
   }
 
@@ -90,9 +103,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   bool _isErrorEvent(Map<String, dynamic> event) {
     final severity = event['severity']?.toString() ?? '';
     final outcome = event['outcome']?.toString() ?? '';
-    return severity == 'error' ||
-        outcome == 'failure' ||
-        outcome == 'denied';
+    return severity == 'error' || outcome == 'failure' || outcome == 'denied';
   }
 
   Future<void> _loadData() async {
@@ -101,39 +112,60 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     _isReloading = true;
     setState(() => _isLoading = true);
     final client = context.read<JsonRpcRiftClient>();
-    
+
     try {
+      if (!client.isConnected) {
+        try {
+          await client.connect();
+        } catch (_) {
+          // Surface the formatted connection error below if reconnect did not succeed.
+        }
+      }
+
+      if (!client.isConnected) {
+        if (mounted && generation == _loadGeneration) {
+          setState(() {
+            _error = 'Daemon not connected.';
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
       final peersResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
       final eventsResult = await client.queryEventLog(limit: 3);
-      
+
       final peers = List<Map<String, dynamic>>.from(
-        (peersResult['peers'] as List? ?? const <dynamic>[]).map((e) => Map<String, dynamic>.from(e as Map)),
+        (peersResult['peers'] as List? ?? const <dynamic>[])
+            .map((e) => Map<String, dynamic>.from(e as Map)),
       );
-      
+
       final discovered = List<Map<String, dynamic>>.from(
-        (discoveredResult['peers'] as List? ?? const <dynamic>[]).map((e) => Map<String, dynamic>.from(e as Map)),
+        (discoveredResult['peers'] as List? ?? const <dynamic>[])
+            .map((e) => Map<String, dynamic>.from(e as Map)),
       );
-      
+
       final events = List<Map<String, dynamic>>.from(
-        (eventsResult['events'] as List? ?? const <dynamic>[]).map((e) => Map<String, dynamic>.from(e as Map)),
+        (eventsResult['events'] as List? ?? const <dynamic>[])
+            .map((e) => Map<String, dynamic>.from(e as Map)),
       );
 
       int trusted = 0;
       int blocked = 0;
-      int revoked = 0;
-      
+      int pending = 0;
+
       for (final p in peers) {
         final state = p['trustState']?.toString() ?? 'unknown';
         if (state == 'trusted') {
           trusted++;
         } else if (state == 'blocked') {
           blocked++;
-        } else if (state == 'revoked') {
-          revoked++;
+        } else if (state == 'pairing_pending') {
+          pending++;
         }
       }
-      
+
       // Look for a critical alert in recent events (e.g. auth.failed with critical severity)
       // If none, we leave it null.
       Map<String, dynamic>? alert;
@@ -148,7 +180,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
         setState(() {
           _trustedCount = trusted;
           _blockedCount = blocked;
-          _revokedCount = revoked;
+          _pendingCount = pending;
           _discoveredCount = discovered.length;
           _recentEvents = events;
           _criticalAlert = alert;
@@ -251,13 +283,17 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
       color = theme.colorScheme.onErrorContainer;
       bgColor = theme.colorScheme.errorContainer;
       icon = _isSecurityEvent(event) ? Icons.gpp_bad : Icons.error_outline;
-      title = _isSecurityEvent(event) ? 'Security Event: $peer' : 'Error: $eventType';
+      title = _isSecurityEvent(event)
+          ? 'Security Event: $peer'
+          : 'Error: $eventType';
       if (reason != null) subtitle = reason;
     } else if (_isSecurityEvent(event)) {
       color = theme.colorScheme.onSecondaryContainer;
       bgColor = theme.colorScheme.secondaryContainer;
       icon = Icons.gpp_good;
-      title = eventType.startsWith('auth') ? 'Auth Event: $peer' : 'Trust Updated: $peer';
+      title = eventType.startsWith('auth')
+          ? 'Auth Event: $peer'
+          : 'Trust Updated: $peer';
       if (reason != null) subtitle = reason;
     } else {
       color = theme.colorScheme.onSurfaceVariant;
@@ -360,14 +396,14 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  
                   if (_criticalAlert != null) ...[
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.error,
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: theme.colorScheme.onErrorContainer),
+                        border: Border.all(
+                            color: theme.colorScheme.onErrorContainer),
                       ),
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -387,9 +423,12 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  _criticalAlert!['failureReason']?.toString() ?? 'Security incident detected',
+                                  _criticalAlert!['failureReason']
+                                          ?.toString() ??
+                                      'Security incident detected',
                                   style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onError.withAlpha(230),
+                                    color: theme.colorScheme.onError
+                                        .withAlpha(230),
                                   ),
                                 ),
                                 const SizedBox(height: 12),
@@ -397,14 +436,24 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                                   children: [
                                     ElevatedButton(
                                       onPressed: () {
-                                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EventLogScreen()));
+                                        Navigator.of(context).push(
+                                            MaterialPageRoute(
+                                                builder: (_) =>
+                                                    const EventLogScreen()));
                                       },
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor: theme.colorScheme.onError,
-                                        foregroundColor: theme.colorScheme.error,
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        backgroundColor:
+                                            theme.colorScheme.onError,
+                                        foregroundColor:
+                                            theme.colorScheme.error,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 8),
                                       ),
-                                      child: const Text('REVIEW LOGS', style: TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.w600)),
+                                      child: const Text('REVIEW LOGS',
+                                          style: TextStyle(
+                                              fontFamily: 'JetBrains Mono',
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600)),
                                     ),
                                     const SizedBox(width: 8),
                                     OutlinedButton(
@@ -412,11 +461,18 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                                         setState(() => _criticalAlert = null);
                                       },
                                       style: OutlinedButton.styleFrom(
-                                        foregroundColor: theme.colorScheme.onError,
-                                        side: BorderSide(color: theme.colorScheme.onError),
-                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        foregroundColor:
+                                            theme.colorScheme.onError,
+                                        side: BorderSide(
+                                            color: theme.colorScheme.onError),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 8),
                                       ),
-                                      child: const Text('DISMISS', style: TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.w600)),
+                                      child: const Text('DISMISS',
+                                          style: TextStyle(
+                                              fontFamily: 'JetBrains Mono',
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600)),
                                     ),
                                   ],
                                 ),
@@ -428,16 +484,16 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     ),
                     const SizedBox(height: 24),
                   ],
-
                   if (_error != null) ...[
                     Container(
                       padding: const EdgeInsets.all(12),
                       color: theme.colorScheme.errorContainer,
-                      child: Text(_error!, style: TextStyle(color: theme.colorScheme.onErrorContainer)),
+                      child: Text(_error!,
+                          style: TextStyle(
+                              color: theme.colorScheme.onErrorContainer)),
                     ),
                     const SizedBox(height: 24),
                   ],
-
                   GridView.count(
                     crossAxisCount: 2,
                     shrinkWrap: true,
@@ -464,11 +520,11 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                       ),
                       _buildBentoCard(
                         context: context,
-                        label: 'REVOKED',
-                        icon: Icons.history_toggle_off,
-                        count: _revokedCount,
-                        color: theme.colorScheme.onSurfaceVariant,
-                        labelColor: theme.colorScheme.onSurfaceVariant,
+                        label: 'PENDING',
+                        icon: Icons.hourglass_top,
+                        count: _pendingCount,
+                        color: Colors.amber.shade700,
+                        labelColor: Colors.amber.shade700,
                       ),
                       _buildBentoCard(
                         context: context,
@@ -480,7 +536,6 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 32),
                   Text(
                     'Recent Events',
@@ -490,32 +545,37 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
                   if (_recentEvents.isEmpty)
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.all(32.0),
                         child: Text(
                           'No recent events',
-                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                          style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant),
                         ),
                       ),
                     )
                   else
                     ..._recentEvents.map((e) => _buildEventItem(e)),
-
                   const SizedBox(height: 16),
                   OutlinedButton(
                     onPressed: () {
-                      Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EventLogScreen()));
+                      Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => const EventLogScreen()));
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: theme.colorScheme.primary,
                       side: BorderSide(color: theme.colorScheme.primary),
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8)),
                     ),
-                    child: const Text('VIEW FULL LOG', style: TextStyle(fontFamily: 'JetBrains Mono', letterSpacing: 1.0, fontWeight: FontWeight.bold)),
+                    child: const Text('VIEW FULL LOG',
+                        style: TextStyle(
+                            fontFamily: 'JetBrains Mono',
+                            letterSpacing: 1.0,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

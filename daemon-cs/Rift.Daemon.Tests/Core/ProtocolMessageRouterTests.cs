@@ -19,6 +19,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly PresenceService _presenceService;
     private readonly PairingProtocolCoordinator _pairingCoordinator;
     private readonly ClipboardService _clipboardService;
+    private readonly FileTransferService _fileTransferService;
     private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
     private readonly FakeTransport _pairingTransport;
@@ -45,7 +46,17 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _identityManager,
             _securityEventLog,
             logger: NullLogger<PairingProtocolCoordinator>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService);
+        _fileTransferService = new FileTransferService(
+            _clipboardTransport,
+            _trustStore,
+            discoveryCoordinator,
+            _presenceService,
+            _identityManager,
+            _securityEventLog,
+            _operationService,
+            null,
+            NullLogger<FileTransferService>.Instance);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService);
     }
 
     [Fact]
@@ -142,6 +153,30 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
         Assert.Contains("sourceDeviceId", ex.Message, StringComparison.Ordinal);
         Assert.Equal(TrustState.Discovered, peer!.State);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_TrustRemove_RoutesToPairingCoordinatorForTrustedPeer()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-trust-remove",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _router.HandleMessageAsync(
+            CreateSession("rift-peer-trust-remove", ["presence.basic"], allowsProtectedTraffic: true),
+            CreateEnvelope("rift-peer-trust-remove", "trust.remove", new
+            {
+                removedDeviceId = _identityManager.GetDeviceId(),
+                reason = "Peer removed this device",
+                removedAt = "2026-07-14T08:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_trustStore.GetPeer("rift-peer-trust-remove"));
     }
 
     [Fact]
@@ -245,6 +280,94 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
         var ex = await Assert.ThrowsAsync<ClipboardFailureException>(() => fetchTask);
         Assert.Equal("Unauthorized", ex.FailureReason);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_FileOffer_RoutesToFileTransferService()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-file-offer",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-file-offer", "online", null, ["file.transfer"]);
+
+        await _router.HandleMessageAsync(
+            CreateSession("rift-peer-file-offer", ["file.transfer", "presence.basic", "operation.lifecycle", "security.event_log"]),
+            CreateEnvelope("rift-peer-file-offer", "file.offer", new
+            {
+                transferId = "transfer-offer-1",
+                fileName = "demo.txt",
+                mediaType = "text/plain",
+                byteSize = 5,
+                sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+                chunkSize = 262144,
+                chunkCount = 1,
+                expiresInMs = 120000,
+                sourceDeviceId = "rift-peer-file-offer",
+                requiredCapability = "file.transfer"
+            }),
+            CancellationToken.None);
+
+        var offers = await _fileTransferService.ListIncomingFileOffersAsync();
+        Assert.Contains(offers.Offers, offer =>
+            offer.TransferId == "transfer-offer-1" &&
+            offer.SourceDeviceId == "rift-peer-file-offer" &&
+            offer.FileName == "demo.txt");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_FileAccept_StartsOutgoingChunkSend()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-file-accept",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer-file-accept", "online", null, ["file.transfer"]);
+
+        var tempFile = Path.Combine(Path.GetTempPath(), $"rift-file-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(tempFile, "hello");
+        try
+        {
+            var offer = await _fileTransferService.OfferFileAsync(
+                "rift-peer-file-accept",
+                tempFile,
+                "demo.txt",
+                "text/plain",
+                CancellationToken.None);
+
+            await _router.HandleMessageAsync(
+                CreateSession("rift-peer-file-accept", ["file.transfer", "presence.basic", "operation.lifecycle", "security.event_log"]),
+                CreateEnvelope("rift-peer-file-accept", "file.accept", new
+                {
+                    transferId = offer.TransferId,
+                    receivingDeviceId = "rift-peer-file-accept",
+                    chunkSize = 262144
+                }),
+                CancellationToken.None);
+
+            await WaitForConditionAsync(
+                () => _clipboardTransport.SentMessages.Any(sent =>
+                    sent.PeerDeviceId == "rift-peer-file-accept" &&
+                    sent.Type == "file.chunk"),
+                TimeSpan.FromSeconds(1));
+
+            Assert.Contains(_clipboardTransport.SentMessages, sent =>
+                sent.PeerDeviceId == "rift-peer-file-accept" &&
+                sent.Type == "file.complete");
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
     }
 
     [Fact]

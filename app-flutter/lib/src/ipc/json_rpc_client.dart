@@ -56,13 +56,31 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired =>
       _clipboardExpiredController.stream;
 
+  late final _fileOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onFileOffer => _fileOfferController.stream;
+
+  late final _fileTransferProgressController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      _fileTransferProgressController.stream;
+
+  late final _fileTransferCompletedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      _fileTransferCompletedController.stream;
+
+  late final _fileTransferFailedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onFileTransferFailed =>
+      _fileTransferFailedController.stream;
+
   late final _operationTransitionController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onOperationTransition =>
       _operationTransitionController.stream;
 
-  late final _connectionChangedController =
-      StreamController<bool>.broadcast();
+  late final _connectionChangedController = StreamController<bool>.broadcast();
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
 
   Map<String, dynamic>? _asMap(json_rpc.Parameters params) {
@@ -105,6 +123,7 @@ class JsonRpcRiftClient {
     'Peers': 'peers',
     'TrustState': 'trustState',
     'DisplayName': 'displayName',
+    'Platform': 'platform',
     'Address': 'address',
     'Port': 'port',
     'TxtRecord': 'txtRecord',
@@ -125,6 +144,8 @@ class JsonRpcRiftClient {
     'LastSeenAt': 'lastSeenAt',
     'TrustedDeviceId': 'trustedDeviceId',
     'PersistedAt': 'persistedAt',
+    'Removed': 'removed',
+    'RemovedAt': 'removedAt',
     'RevokedAt': 'revokedAt',
     'Revoked': 'revoked',
     'Rejected': 'rejected',
@@ -157,6 +178,15 @@ class JsonRpcRiftClient {
     'ContentType': 'contentType',
     'ByteSize': 'byteSize',
     'Sha256': 'sha256',
+    'TransferId': 'transferId',
+    'FileName': 'fileName',
+    'MediaType': 'mediaType',
+    'ChunkSize': 'chunkSize',
+    'ChunkCount': 'chunkCount',
+    'DestinationPath': 'destinationPath',
+    'Direction': 'direction',
+    'BytesTransferred': 'bytesTransferred',
+    'Transfers': 'transfers',
     'ExpiresAt': 'expiresAt',
     'ContentBase64': 'contentBase64',
     'Verified': 'verified',
@@ -248,8 +278,9 @@ class JsonRpcRiftClient {
     if (withoutJsonRpc.contains('Peer not found')) {
       return 'This device is no longer available.';
     }
-    if (withoutJsonRpc.contains('blocked or revoked')) {
-      return 'This device cannot be paired until its trust state is reset.';
+    if (withoutJsonRpc.contains('Peer is blocked') ||
+        withoutJsonRpc.contains('peer identity is blocked')) {
+      return 'This device is blocked and cannot be paired until it is unblocked.';
     }
     if (withoutJsonRpc.contains('No pending pairing exists')) {
       return 'There is no pending pairing request for this device.';
@@ -259,6 +290,9 @@ class JsonRpcRiftClient {
     }
     if (withoutJsonRpc.contains('Connection failed. Tried:')) {
       return 'Could not connect to the local daemon.';
+    }
+    if (withoutJsonRpc.contains('Failed to reconnect trusted peer')) {
+      return 'Could not reconnect to this trusted device. Make sure it is online and reachable on the same local network, then try again.';
     }
 
     return withoutJsonRpc;
@@ -295,6 +329,26 @@ class JsonRpcRiftClient {
 
   Future<void> connect() async {
     if (_isConnected) return;
+    final pending = _connectFuture;
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _connectImpl();
+    _connectFuture = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_connectFuture, future)) {
+        _connectFuture = null;
+      }
+    }
+  }
+
+  Future<void> _connectImpl() async {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _isReconnecting = false;
 
     _log.info('Connecting to daemon...');
     try {
@@ -400,6 +454,64 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['offerId'],
         );
       });
+      _client!.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onFileOffer',
+          _asMap(params),
+          _fileOfferController,
+          requiredStringKeys: const [
+            'transferId',
+            'sourceDeviceId',
+            'fileName',
+            'mediaType',
+            'sha256',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onFileTransferProgress',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onFileTransferProgress',
+          _asMap(params),
+          _fileTransferProgressController,
+          requiredStringKeys: const [
+            'transferId',
+            'operationId',
+            'peerDeviceId',
+            'fileName',
+            'state',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onFileTransferCompleted',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onFileTransferCompleted',
+          _asMap(params),
+          _fileTransferCompletedController,
+          requiredStringKeys: const [
+            'transferId',
+            'operationId',
+            'peerDeviceId',
+            'fileName',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onFileTransferFailed',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onFileTransferFailed',
+          _asMap(params),
+          _fileTransferFailedController,
+          requiredStringKeys: const [
+            'transferId',
+            'operationId',
+            'peerDeviceId',
+            'fileName',
+            'failureReason',
+          ],
+        );
+      });
       _client!.registerMethod('rift.onOperationTransition',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -435,15 +547,13 @@ class JsonRpcRiftClient {
 
   int _reconnectAttempts = 0;
   Timer? _reconnectTimer;
+  Future<void>? _connectFuture;
 
   StreamController<String>? _outController;
 
   bool _isReconnecting = false;
 
   Future<void> _handleDisconnect() async {
-    if (_isReconnecting) return;
-    _isReconnecting = true;
-
     _setConnectionState(false);
     _client = null;
 
@@ -457,27 +567,44 @@ class JsonRpcRiftClient {
       _log.warning('Error during disconnect: $e');
     }
 
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_isConnected || _isReconnecting) {
+      return;
+    }
+
     // Exponential Backoff Reconnect (infinite retries, capped delay)
+    _isReconnecting = true;
     final delaySeconds = (1 << _reconnectAttempts).clamp(1, 5);
     final delay = Duration(seconds: delaySeconds);
-    
+
     _log.info(
         'Reconnecting in ${delay.inSeconds} seconds (Attempt ${_reconnectAttempts + 1})...');
+    _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
       _reconnectAttempts++;
       connect().catchError((e) {
         _log.severe('Reconnect failed: $e');
       }).whenComplete(() {
+        final shouldRetry = !_isConnected;
         _isReconnecting = false;
+        if (shouldRetry) {
+          _scheduleReconnect();
+        }
       });
     });
   }
 
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _reconnectAttempts = 0;
     _setConnectionState(false);
     _isReconnecting = false;
+    _connectFuture = null;
     await _client?.close();
     _client = null;
     await _outController?.close();
@@ -496,6 +623,10 @@ class JsonRpcRiftClient {
     await _securityEventController.close();
     await _clipboardOfferController.close();
     await _clipboardExpiredController.close();
+    await _fileOfferController.close();
+    await _fileTransferProgressController.close();
+    await _fileTransferCompletedController.close();
+    await _fileTransferFailedController.close();
     await _connectionChangedController.close();
   }
 
@@ -572,7 +703,11 @@ class JsonRpcRiftClient {
     if (!_isConnected || _client == null) {
       throw StateError('Not connected to daemon');
     }
-    final r = await _client!.sendRequest('rift.startDiscovery');
+    final r = await _client!.sendRequest('rift.startDiscovery').timeout(
+          const Duration(seconds: 15),
+          onTimeout: () =>
+              throw TimeoutException('Discovery request timed out'),
+        );
     return _canonicalizeResult(r);
   }
 
@@ -594,8 +729,8 @@ class JsonRpcRiftClient {
       return pending;
     }
 
-    final future = _client!
-        .sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
+    final future =
+        _client!.sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
       _canonicalizeResult,
     );
     _pendingStartPairings[deviceId] = future;
@@ -619,11 +754,10 @@ class JsonRpcRiftClient {
       return pending;
     }
 
-    final future = _client!
-        .sendRequest('rift.startPairingByEndpoint', {
-          'address': address,
-          'port': port,
-        }).then(_canonicalizeResult);
+    final future = _client!.sendRequest('rift.startPairingByEndpoint', {
+      'address': address,
+      'port': port,
+    }).then(_canonicalizeResult);
     _pendingEndpointPairings[key] = future;
     try {
       return await future;
@@ -717,6 +851,80 @@ class JsonRpcRiftClient {
       'rift.fetchClipboardContent',
       {'offerId': offerId},
     );
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> offerFile({
+    required String targetDeviceId,
+    required String localPath,
+    String? fileName,
+    String? mediaType,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final params = <String, dynamic>{
+      'targetDeviceId': targetDeviceId,
+      'localPath': localPath,
+    };
+    if (fileName != null && fileName.isNotEmpty) {
+      params['fileName'] = fileName;
+    }
+    if (mediaType != null && mediaType.isNotEmpty) {
+      params['mediaType'] = mediaType;
+    }
+    final r = await _client!.sendRequest('rift.offerFile', params);
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> listIncomingFileOffers() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.listIncomingFileOffers');
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> acceptFileOffer({
+    required String transferId,
+    required String destinationPath,
+    bool overwrite = false,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.acceptFileOffer', {
+      'transferId': transferId,
+      'destinationPath': destinationPath,
+      'overwrite': overwrite,
+    });
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> rejectFileOffer({
+    required String transferId,
+    required String failureReason,
+    String? message,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final params = <String, dynamic>{
+      'transferId': transferId,
+      'failureReason': failureReason,
+    };
+    if (message != null && message.isNotEmpty) {
+      params['message'] = message;
+    }
+    final r = await _client!.sendRequest('rift.rejectFileOffer', params);
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> listFileTransfers() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.listFileTransfers');
     return _canonicalizeResult(r);
   }
 

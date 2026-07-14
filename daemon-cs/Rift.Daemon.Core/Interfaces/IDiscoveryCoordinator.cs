@@ -10,6 +10,9 @@ public sealed class DiscoveredPeerInfo
 {
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? DeviceId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? DisplayName { get; init; }
+    public string Platform { get; init; } = "unknown";
     public string InstanceId { get; init; } = string.Empty;
     public string Address { get; init; } = string.Empty;
     public int Port { get; init; }

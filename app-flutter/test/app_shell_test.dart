@@ -33,8 +33,25 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onTrustChanged => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onPairingComplete =>
-      const Stream<Map<String, dynamic>>.empty();
+  Stream<Map<String, dynamic>> get onPairingComplete => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onPeerDiscovered =>
@@ -67,12 +84,6 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   }) async {
     return {'operations': [], 'total': 0};
   }
-
-  @override
-  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
-
-  @override
-  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
@@ -150,6 +161,14 @@ void main() {
     when(() => mockClient.onClipboardOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onClipboardExpired)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileOffer)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferProgress)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferCompleted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferFailed)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
         .thenAnswer((_) => Stream.value(true));

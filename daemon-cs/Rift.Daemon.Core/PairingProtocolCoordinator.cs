@@ -14,6 +14,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     , IDisposable
 {
     private const int PairingExpiryMs = 120000;
+    private const int MaxRemoteDisplayNameLength = 128;
     // Android's Dart SecureServerSocket cannot provisionally accept arbitrary
     // self-signed client certificates on inbound TLS, so when pairing against
     // Android we prefer to wait longer for a peer-initiated authenticated
@@ -22,6 +23,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private static readonly TimeSpan ActiveSessionFallbackWindow = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan DuplicateOutboundRetryDelay = TimeSpan.FromMilliseconds(1250);
     private static readonly TimeSpan ManualEndpointRetryDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan PairingDisconnectGracePeriod = TimeSpan.FromMilliseconds(1500);
 
     private readonly ITransport _transport;
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
@@ -171,9 +173,12 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         try
         {
             _logger.LogInformation("Sending pairing.start to peer {DeviceId}.", deviceId);
+
+
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
-                expiresInMs = PairingExpiryMs
+                expiresInMs = PairingExpiryMs,
+                displayName = _identityManager.GetDisplayName()
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
@@ -389,13 +394,25 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }, cancellationToken);
     }
 
+    public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+    {
+        return SendProtocolMessageAsync(deviceId, "trust.remove", new
+        {
+            removedDeviceId = deviceId,
+            reason,
+            removedAt = _timeProvider.GetUtcNow().ToString("O")
+        }, cancellationToken);
+    }
+
     public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
         await PruneExpiredSessionsAsync(cancellationToken);
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
         var messageType = root.GetProperty("type").GetString();
-        if (string.IsNullOrWhiteSpace(messageType) || !messageType.StartsWith("pairing.", StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(messageType) ||
+            (!messageType.StartsWith("pairing.", StringComparison.Ordinal) &&
+             !string.Equals(messageType, "trust.remove", StringComparison.Ordinal)))
         {
             return;
         }
@@ -416,7 +433,41 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             case "pairing.complete":
                 await HandlePairingCompleteAsync(peerDeviceId, payloadElement, cancellationToken);
                 break;
+            case "trust.remove":
+                await HandleTrustRemoveAsync(peerDeviceId, payloadElement, cancellationToken);
+                break;
         }
+    }
+
+    private async Task HandleTrustRemoveAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var removedDeviceId = payload.GetProperty("removedDeviceId").GetString();
+        if (!string.Equals(removedDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Ignoring trust.remove from peer {DeviceId} that targeted {RemovedDeviceId}.",
+                peerDeviceId,
+                removedDeviceId);
+            return;
+        }
+
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        if (peer is null || peer.State != TrustState.Trusted)
+        {
+            _logger.LogWarning(
+                "Ignoring trust.remove from non-trusted or unknown peer {DeviceId}.",
+                peerDeviceId);
+            return;
+        }
+
+        var reason = payload.TryGetProperty("reason", out var reasonElement) && reasonElement.ValueKind == JsonValueKind.String
+            ? reasonElement.GetString()
+            : "Peer removed trust.";
+        _trustStore.DeletePeer(peerDeviceId);
+        _pairingStates.TryRemove(peerDeviceId, out _);
+        await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken);
+        await LogEventAsync(SecurityEventTypes.TrustRemoved, peerDeviceId, SecurityEventOutcome.Success, reason, cancellationToken);
+        await NotifyTrustChangedAsync(peerDeviceId, "trusted", "removed", reason ?? "Peer removed trust.", cancellationToken);
     }
 
     private async Task HandlePairingStartAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
@@ -458,8 +509,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 : PairingExpiryMs;
             expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
             var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
-                ? displayNameElement.GetString()
+                ? NormalizeRemoteDisplayName(displayNameElement.GetString())
                 : null;
+            if (!string.IsNullOrWhiteSpace(displayName))
+            {
+                peer.DisplayName = displayName;
+                peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+                _trustStore.SavePeer(peer);
+            }
 
             await NotifyPairingRequestAsync(
                 peerDeviceId,
@@ -492,6 +549,18 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
         await LogEventAsync(SecurityEventTypes.PairingRejected, peerDeviceId, SecurityEventOutcome.Failure, "PeerRejected", CancellationToken.None);
         await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+    }
+
+    private static string? NormalizeRemoteDisplayName(string? displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return displayName;
+        }
+
+        return displayName.Length <= MaxRemoteDisplayNameLength
+            ? displayName
+            : displayName[..MaxRemoteDisplayNameLength];
     }
 
     private async Task HandlePairingCompleteAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
@@ -737,6 +806,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
 
     private async Task HandlePeerDisconnectedAsync(string peerDeviceId)
     {
+        if (await WaitForActiveSessionAsync(peerDeviceId, PairingDisconnectGracePeriod, CancellationToken.None).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Observed a transient pairing disconnect for peer {DeviceId}; an authenticated replacement session became active before pairing was reverted.",
+                peerDeviceId);
+            return;
+        }
+
         _pairingStates.TryRemove(peerDeviceId, out _);
 
         var peer = _trustStore.GetPeer(peerDeviceId);

@@ -28,7 +28,7 @@ Frame size limits are state-dependent. Before Ed25519 Proof of Possession (Secti
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "SHOULD NOT", and "MAY" are to be interpreted as described in RFC 2119 and RFC 8174 when written in uppercase.
 
-`Device` means one Rift-capable endpoint. `Peer` means another device observed or contacted by the local daemon. `Device identity` means the long-term Ed25519 keypair and values derived from its public key. `TLS identity` means the ECDSA P-256 keypair and self-signed certificate used for mutual TLS. `Trust store` means durable local state recording trusted, blocked, or revoked peer identities.
+`Device` means one Rift-capable endpoint. `Peer` means another device observed or contacted by the local daemon. `Device identity` means the long-term Ed25519 keypair and values derived from its public key. `TLS identity` means the ECDSA P-256 keypair and self-signed certificate used for mutual TLS. `Trust store` means durable local state recording discovered, pending, trusted, or blocked peer identities.
 
 `Operation` is the protocol-level term for a cross-device action flowing through the lifecycle in Section 10. Earlier project documents use `Intent`; implementations SHOULD avoid unqualified `Intent` names on Android to prevent confusion with `android.content.Intent`.
 
@@ -40,7 +40,7 @@ Private keys MUST be generated and stored by the daemon. Private keys MUST NOT l
 
 ### 3.1 Ed25519 Device Identity
 
-Each device has one long-term Ed25519 keypair representing its protocol identity. The Ed25519 public key is the root of trust for device ID derivation, human-verifiable pairing fingerprints, trust store lookup, post-handshake identity verification, revocation, and permanent rejection of revoked identities.
+Each device has one long-term Ed25519 keypair representing its protocol identity. The Ed25519 public key is the root of trust for device ID derivation, human-verifiable pairing fingerprints, trust store lookup, post-handshake identity verification, trust decisions, and block-list enforcement.
 
 In v0.1-draft, the device ID is derived as:
 
@@ -155,7 +155,7 @@ For pairing candidates, the TLS layer MAY provisionally accept a self-signed pee
 
 Immediately after TLS establishment, each peer MUST extract the Ed25519 public key from the custom certificate extension and derive the expected device ID and fingerprint inputs from that key.
 
-For trusted peers, the extracted Ed25519 public key MUST match the trust store entry for the claimed peer. For untrusted discovered peers, the extracted key MAY be used to create a pairing candidate but MUST NOT grant access to protected operations until pairing completes. For blocked or revoked peers, the session MUST be rejected.
+For trusted peers, the extracted Ed25519 public key MUST match the trust store entry for the claimed peer. For untrusted discovered peers, the extracted key MAY be used to create a pairing candidate but MUST NOT grant access to protected operations until pairing completes. For blocked peers, the session MUST be rejected.
 
 Extracting the Ed25519 public key from the certificate extension is necessary but not sufficient. The TLS handshake proves possession of the ECDSA P-256 private key only. To prevent identity misbinding — where an attacker embeds another device's Ed25519 public key in their own certificate — each peer MUST also complete Ed25519 Proof of Possession as defined in Section 5.3 before the session is considered authenticated.
 
@@ -312,25 +312,66 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
 
+In v0.1-draft, clipboard payload bytes are the exact raw bytes represented by
+`contentBase64` before Base64 encoding. The `byteSize` and `sha256` values
+always refer to those raw bytes.
+
+Implementations MUST support `text/plain`. Implementations MAY additionally
+support binary clipboard content types such as `image/png`. If a receiver does
+not support the offered `contentType`, it MUST ignore the offer locally and
+MUST NOT fail the session.
+
 The `offerSequence` field is a strictly increasing per-peer monotonic sequence number. Each device MUST increment `offerSequence` for every new `clipboard.offer` it sends within a session. The receiver MUST maintain a high-water mark of the highest `offerSequence` seen from each peer. An incoming `clipboard.offer` with an `offerSequence` less than or equal to the current high-water mark for that peer MUST be silently discarded and logged as a `warning` security event of type `clipboard.offer_replay`. This provides defense-in-depth against application-layer replay or reordering of clipboard offers beyond the transport-layer protections provided by TLS.
 
-### 7.6 Operation Messages
+### 7.6 File Transfer Messages
+
+The `file.transfer` capability is an optional authenticated extension in
+v0.1-draft. Peers that do not advertise or select `file.transfer` remain fully
+conformant for the clipboard-first MVP.
+
+`file.offer` payload fields: `transferId`, `fileName` string, `mediaType`
+string, `byteSize` non-negative integer, `sha256` file hash, `chunkSize`
+positive integer, `chunkCount` positive integer, `expiresInMs` duration,
+`sourceDeviceId` device ID, `requiredCapability` string.
+
+`file.accept` payload fields: `transferId`, `receivingDeviceId` device ID,
+optional `chunkSize` positive integer, `destinationToken` optional string.
+
+`file.reject` payload fields: `transferId`, `failureReason`, optional `message`
+string.
+
+`file.chunk` payload fields: `transferId`, `chunkIndex` non-negative integer,
+`offset` non-negative integer, `byteSize` non-negative integer, `chunkSha256`
+hash, `contentBase64` string, `isLastChunk` boolean.
+
+`file.complete` payload fields: `transferId`, `byteSize` non-negative integer,
+`sha256` file hash, `chunkCount` positive integer.
+
+`file.cancel` payload fields: `transferId`, `failureReason`, optional `message`
+string.
+
+File transfer content MUST remain on the authenticated peer session. Receivers
+MUST verify chunk bounds and integrity before accepting a chunk, and MUST
+verify total byte count and whole-file SHA-256 before committing the received
+file as complete.
+
+### 7.7 Operation Messages
 
 `operation.transition` payload fields: `operationId`, `operationType` string, `previousState` operation state, `nextState` operation state, optional `failureReason`, optional `details` object.
 
-### 7.7 Trust Messages
+### 7.8 Trust Messages
 
-`trust.revoke` payload fields: `revokedDeviceId` device ID, `reason` string, `revokedAt` RFC 3339 timestamp.
+`trust.remove` payload fields: `removedDeviceId` device ID, `reason` string, `removedAt` RFC 3339 timestamp.
 
-Revocation messages are advisory. Local revocation state is authoritative and MUST NOT depend on receiving a peer's `trust.revoke`.
+Removal messages are advisory. Local trust state is authoritative and MUST NOT depend on receiving a peer's `trust.remove`.
 
-### 7.8 Error Messages
+### 7.9 Error Messages
 
 `error` payload fields: `failureReason`, optional `refMessageId`, optional `message` string, optional `details` object.
 
 ## 8. Trust State Machine
 
-Trust is local state. Each daemon independently decides whether a peer is discovered, pending pairing, trusted, blocked, or revoked. Implementations MUST persist trust state durably before relying on it for protected operations.
+Trust is local state. Each daemon independently decides whether a peer is discovered, pending pairing, trusted, or blocked. Implementations MUST persist trust state durably before relying on it for protected operations.
 
 | From              | To                | Trigger                                                | Requirements                                                                                        |
 | ----------------- | ----------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
@@ -338,13 +379,10 @@ Trust is local state. Each daemon independently decides whether a peer is discov
 | `pairing_pending` | `trusted`         | Pairing completion                                     | Identity verification passed, matching fingerprint confirmed on both sides, durable trust persisted |
 | `pairing_pending` | `discovered`      | Reject, timeout, or failed verification                | No trusted entry persisted; failure logged                                                          |
 | `trusted`         | `blocked`         | Local block                                            | Active sessions terminated; block recorded                                                          |
-| `trusted`         | `revoked`         | Local revocation                                       | Active trust removed; negative-trust evidence retained                                              |
+| `trusted`         | removed           | Local forget / remove                                  | Active trust removed; peer will reappear as a fresh discovered device if seen again                 |
 | `blocked`         | `discovered`      | Explicit local unblock                                 | Prior block evidence remains auditable                                                              |
-| `revoked`         | `discovered`      | Explicit local reset followed by full new pairing flow | Silent re-trust forbidden                                                                           |
 
 Only `trusted` peers may perform protected operations. `discovered` and `pairing_pending` peers may exchange only the minimum messages required for authentication and pairing.
-
-Revocation MUST keep a durable negative-trust record keyed by the Ed25519 public key and derived device ID. Deleting active trust MUST NOT delete the evidence needed to reject the identity later. Re-establishing trust with a revoked identity requires an explicit local reset followed by a full new pairing flow.
 
 Pairing occurs over mutual TLS. There is no separate custom key exchange outside TLS; ephemeral key agreement is provided by the TLS handshake. Both peers MUST complete Ed25519 Proof of Possession (Section 5.3) as part of session establishment before pairing messages are exchanged.
 
@@ -392,11 +430,17 @@ The following capabilities are REQUIRED for a conformant v0.1-draft session:
 | Name                    | Version | Minimum | Description                                              |
 | ----------------------- | ------- | ------- | -------------------------------------------------------- |
 | `clipboard.offer_fetch` | 1       | 1       | Clipboard metadata offer and authenticated content fetch |
+| `file.transfer`         | 1       | 1       | Optional authenticated file offer and chunk transfer     |
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
 | `security.event_log`    | 1       | 1       | Security event logging for audit                         |
 
-All four capabilities MUST be present in the selected set for a v0.1-draft session to proceed to protected operations. If any required capability is absent after negotiation, the session MAY remain open for diagnostic purposes but MUST NOT permit clipboard, presence, or operation messages.
+The required capability set for a clipboard-first v0.1-draft session is
+`clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and
+`security.event_log`. The optional `file.transfer` capability MAY be selected
+independently. If any required capability is absent after negotiation, the
+session MAY remain open for diagnostic purposes but MUST NOT permit clipboard,
+presence, or operation messages.
 
 ### 9.4 Version Mismatch and Forward Compatibility
 
@@ -424,7 +468,12 @@ Duplicate reports for the same terminal state are idempotent. Conflicting termin
 
 Clipboard continuity uses metadata-only offers and authenticated fetch. A device MUST NOT eagerly push clipboard content to all peers.
 
-Offers contain metadata only: `offerId`, `contentType`, `byteSize`, `sha256`, `expiresInMs`, `sourceDeviceId`, and `requiredCapability`. Fetch responses include `contentBase64`, `byteSize`, and `sha256`. Receivers MUST verify byte size and SHA-256 before accepting content.
+Offers contain metadata only: `offerId`, `contentType`, `byteSize`, `sha256`,
+`expiresInMs`, `sourceDeviceId`, and `requiredCapability`. Fetch responses
+include `contentBase64`, `byteSize`, and `sha256`. Receivers MUST verify byte
+size and SHA-256 before accepting content. In v0.1-draft, `text/plain` is the
+required interoperable clipboard format and binary formats such as `image/png`
+are optional extensions on the same authenticated fetch path.
 
 Expiry is measured from local receipt time using monotonic timers. Wall-clock timestamps are audit-only. Expired, rejected, unauthorized, payload-too-large, or mismatched-hash fetches MUST fail with typed failure reasons and produce security event log entries. Clipboard event log entries MUST record metadata only, never clipboard content.
 
@@ -452,11 +501,11 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `pairing.completed`          | Pairing succeeded; trust persisted                                       |
 | `pairing.rejected`           | Pairing rejected by either side                                          |
 | `trust.transitioned`         | Trust state changed (any transition from Section 8)                      |
-| `trust.revoked`              | Peer trust revoked; sessions terminated                                  |
+| `trust.removed`              | Peer trust removed locally; sessions terminated                          |
 | `auth.failed`                | Authentication or identity verification failed                           |
 | `auth.identity_proof_failed` | Ed25519 Proof of Possession verification failed (Section 5.3)            |
 | `connection.established`     | Mutual TLS session established with a peer                               |
-| `connection.rejected`        | TLS session rejected (untrusted, blocked, or revoked peer)               |
+| `connection.rejected`        | TLS session rejected (untrusted or blocked peer)                         |
 | `connection.lost`            | TLS session lost unexpectedly                                            |
 | `certificate.rotated`        | Peer certificate changed while Ed25519 identity unchanged                |
 | `capability.negotiated`      | Capability set computed for a session                                    |
@@ -476,7 +525,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `info`     | Normal protocol events: connection established, pairing completed, capability negotiated, clipboard offered/fetched      |
 | `warning`  | Non-fatal anomalies: certificate rotation, capability version downgrade, offer expiry                                    |
 | `error`    | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed                              |
-| `critical` | Security violations: authentication failure, identity mismatch, revoked peer reconnection attempt, malformed certificate |
+| `critical` | Security violations: authentication failure, identity mismatch, malformed certificate |
 
 ### 13.3 Outcome Values
 
@@ -772,7 +821,7 @@ For all classes 1–9, the parser MUST fail closed without crashing, leaking mem
   "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "payload": {
     "failureReason": "Unauthorized",
-    "message": "peer identity is revoked"
+    "message": "peer identity is blocked"
   }
 }
 ```

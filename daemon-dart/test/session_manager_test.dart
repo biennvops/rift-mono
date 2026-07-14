@@ -79,6 +79,7 @@ class FakeTrustStore implements TrustStore {
   @override Future<void> initialize() async {}
   @override Future<void> upsertPeer(PeerRecord record) async {}
   @override Future<PeerRecord?> getPeer(String deviceId) async => null;
+  @override Future<List<PeerRecord>> getAllPeers() async => [];
   @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
   @override Future<void> deletePeer(String deviceId) async {}
@@ -90,6 +91,7 @@ class FakeTrustStore implements TrustStore {
 
 class FakeIdentityManager implements IdentityManager {
   @override String get deviceId => 'rift-local';
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => Uint8List(32);
   @override String get tlsCertificatePem => '';
@@ -167,7 +169,7 @@ void main() {
       expect(transport.isDisconnected, isTrue);
     });
 
-    test('Blocked or revoked peer is rejected during session.hello bootstrap', () async {
+    test('Blocked peer is rejected during session.hello bootstrap', () async {
       allowPeer = false;
 
       transport.simulateIncomingMessage('rift-peer', testCertDer, pubKeyBytes, {
@@ -228,6 +230,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -260,6 +263,7 @@ void main() {
           'implementationId': 'riftd-peer/0.1.0',
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},
@@ -510,6 +514,7 @@ void main() {
           'identityVerified': true,
           'capabilities': const [
             {'name': 'clipboard.offer_fetch', 'version': 1},
+            {'name': 'file.transfer', 'version': 1},
             {'name': 'presence.basic', 'version': 1},
             {'name': 'operation.lifecycle', 'version': 1},
             {'name': 'security.event_log', 'version': 1},

@@ -14,8 +14,9 @@ class MockTransport implements IpcTransport {
   bool isConnected = false;
   int connectionAttempts = 0;
   bool shouldFailConnect = false;
+  int failConnectAttempts = 0;
   String listTrustedPeersJson =
-      '{"Peers":[{"DeviceId":"rift-peer","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
+      '{"Peers":[{"DeviceId":"rift-peer","Platform":"windows","TrustState":"pairingpending","Presence":"offline","Capabilities":[]}]}';
   Map<String, dynamic> startPairingResult = {
     'Fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     'PeerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
@@ -45,6 +46,55 @@ class MockTransport implements IpcTransport {
     'Sha256':
         '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     'Verified': true,
+  };
+  Map<String, dynamic> offerFileResult = {
+    'TransferId': 'transfer-1',
+    'OperationId': 'operation-file-1',
+    'TargetDeviceId': 'rift-peer',
+    'FileName': 'demo.txt',
+    'ByteSize': 12,
+    'ChunkSize': 262144,
+    'ChunkCount': 1,
+  };
+  Map<String, dynamic> listIncomingFileOffersResult = {
+    'Offers': [
+      {
+        'TransferId': 'transfer-incoming',
+        'SourceDeviceId': 'rift-peer',
+        'FileName': 'photo.jpg',
+        'MediaType': 'image/jpeg',
+        'ByteSize': 1234,
+        'Sha256': 'def456',
+        'ChunkSize': 262144,
+        'ChunkCount': 1,
+        'ExpiresAt': '2026-06-30T02:05:00Z',
+      }
+    ]
+  };
+  Map<String, dynamic> acceptFileOfferResult = {
+    'TransferId': 'transfer-incoming',
+    'OperationId': 'operation-file-2',
+    'DestinationPath': 'C:/tmp/photo.jpg',
+  };
+  Map<String, dynamic> rejectFileOfferResult = {
+    'TransferId': 'transfer-incoming',
+    'Rejected': true,
+  };
+  Map<String, dynamic> listFileTransfersResult = {
+    'Transfers': [
+      {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'Direction': 'incoming',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'BytesTransferred': 12,
+        'State': 'Done',
+        'DestinationPath': 'C:/tmp/demo.txt',
+      }
+    ]
   };
   Map<String, dynamic> listOperationsResult = {
     'Operations': [
@@ -108,10 +158,13 @@ class MockTransport implements IpcTransport {
   @override
   Future<StreamChannel<String>> connect() async {
     connectionAttempts++;
-    if (shouldFailConnect) {
+    if (shouldFailConnect || failConnectAttempts > 0) {
+      if (failConnectAttempts > 0) {
+        failConnectAttempts -= 1;
+      }
       throw Exception('Mock connection failure');
     }
-    
+
     isConnected = true;
     _daemonToApp = StreamController<String>();
     _appToDaemon = StreamController<String>();
@@ -125,6 +178,7 @@ class MockTransport implements IpcTransport {
         case 'rift.getDeviceInfo':
           _sendResult(id, {
             'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'platform': 'windows',
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
@@ -141,7 +195,8 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.approvePairing':
           _sendResult(id, {
-            'TrustedDeviceId': (decoded['params'] as Map<String, dynamic>)['deviceId'],
+            'TrustedDeviceId':
+                (decoded['params'] as Map<String, dynamic>)['deviceId'],
             'PersistedAt': '2026-06-24T02:00:00Z',
           });
           break;
@@ -156,6 +211,21 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.fetchClipboardContent':
           _sendResult(id, fetchClipboardContentResult);
+          break;
+        case 'rift.offerFile':
+          _sendResult(id, offerFileResult);
+          break;
+        case 'rift.listIncomingFileOffers':
+          _sendResult(id, listIncomingFileOffersResult);
+          break;
+        case 'rift.acceptFileOffer':
+          _sendResult(id, acceptFileOfferResult);
+          break;
+        case 'rift.rejectFileOffer':
+          _sendResult(id, rejectFileOfferResult);
+          break;
+        case 'rift.listFileTransfers':
+          _sendResult(id, listFileTransfersResult);
           break;
         case 'rift.listOperations':
           _sendResult(id, listOperationsResult);
@@ -208,6 +278,7 @@ void main() {
           result,
           equals({
             'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'platform': 'windows',
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
@@ -217,7 +288,8 @@ void main() {
           }));
     });
 
-    test('should canonicalize C# trust state enum values to IPC format', () async {
+    test('should canonicalize C# trust state enum values to IPC format',
+        () async {
       await client.connect();
 
       final result = await client.listTrustedPeers();
@@ -227,6 +299,7 @@ void main() {
           'peers': [
             {
               'deviceId': 'rift-peer',
+              'platform': 'windows',
               'trustState': 'pairing_pending',
               'presence': 'offline',
               'capabilities': <dynamic>[],
@@ -252,6 +325,17 @@ void main() {
         ),
         equals('Daemon not connected.'),
       );
+
+      expect(
+        JsonRpcRiftClient.formatDisplayError(
+          Exception(
+            "JSON-RPC error -32000: Failed to reconnect trusted peer 'rift-nyvhp4uu4axifolkhwvzgoskuytlozui' using discovery endpoints. Peer closed connection before sending session.hello.",
+          ),
+        ),
+        equals(
+          'Could not reconnect to this trusted device. Make sure it is online and reachable on the same local network, then try again.',
+        ),
+      );
     });
 
     test('should attempt reconnection on unexpected disconnect', () {
@@ -259,43 +343,75 @@ void main() {
         // Connect synchronously within the fake async zone
         client.connect();
         async.flushMicrotasks();
-        
+
         expect(client.isConnected, isTrue);
-        
+
         int initialAttempts = transport.connectionAttempts;
-        
+
         // Trigger disconnect
         transport.triggerDisconnect();
         async.flushMicrotasks(); // Wait for onDone to propagate
-        
-        // json_rpc_2 might use futures that we need to yield to. 
+
+        // json_rpc_2 might use futures that we need to yield to.
         // Advance time by 2 seconds to trigger the exponential backoff timer (first wait is 1s)
         async.elapse(const Duration(seconds: 2));
         async.flushMicrotasks();
-        
+
         // Should have attempted to reconnect at least once
         expect(transport.connectionAttempts, greaterThan(initialAttempts));
-        
+
         // Verify reconnect counter reset logic
         // It successfully reconnected, so attempts should be reset to 0.
         // A second disconnect should trigger attempt 1 again (waiting 1 second).
         int attemptsAfterFirstReconnect = transport.connectionAttempts;
         transport.triggerDisconnect();
         async.flushMicrotasks();
-        
-        async.elapse(const Duration(seconds: 1)); // First backoff is 1s (1 << 0)
+
+        async
+            .elapse(const Duration(seconds: 1)); // First backoff is 1s (1 << 0)
         async.flushMicrotasks();
-        
+
         // It should have attempted exactly 1 more time
-        expect(transport.connectionAttempts, equals(attemptsAfterFirstReconnect + 1));
-        
+        expect(transport.connectionAttempts,
+            equals(attemptsAfterFirstReconnect + 1));
+
         // Manually disconnect to avoid tearDown hanging outside fakeAsync
         client.disconnect();
         async.flushMicrotasks();
       });
     });
 
-    test('should deliver incoming pairing request notification with canonicalized fields', () async {
+    test('should keep retrying reconnect after a failed reconnect attempt', () {
+      fakeAsync((async) {
+        client.connect();
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isTrue);
+
+        transport.failConnectAttempts = 1;
+        final initialAttempts = transport.connectionAttempts;
+
+        transport.triggerDisconnect();
+        async.flushMicrotasks();
+
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+        expect(client.isConnected, isFalse);
+
+        async.elapse(const Duration(seconds: 2));
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isTrue);
+        expect(transport.connectionAttempts, greaterThan(initialAttempts + 1));
+
+        client.disconnect();
+        async.flushMicrotasks();
+      });
+    });
+
+    test(
+        'should deliver incoming pairing request notification with canonicalized fields',
+        () async {
       await client.connect();
 
       final eventFuture = client.onPairingRequest.first;
@@ -315,7 +431,8 @@ void main() {
       });
     });
 
-    test('should deliver clipboard notifications with canonicalized fields', () async {
+    test('should deliver clipboard notifications with canonicalized fields',
+        () async {
       await client.connect();
 
       final offerFuture = client.onClipboardOffer.first;
@@ -343,6 +460,92 @@ void main() {
       });
       expect(await expiredFuture, {
         'offerId': 'offer-1',
+      });
+    });
+
+    test('should deliver file transfer notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final offerFuture = client.onFileOffer.first;
+      final progressFuture = client.onFileTransferProgress.first;
+      final completedFuture = client.onFileTransferCompleted.first;
+      final failedFuture = client.onFileTransferFailed.first;
+
+      transport.emitNotification('rift.onFileOffer', {
+        'TransferId': 'transfer-1',
+        'SourceDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'Sha256': 'abc123',
+        'ChunkSize': 262144,
+        'ChunkCount': 1,
+        'ExpiresAt': '2026-06-30T02:10:00Z',
+      });
+      transport.emitNotification('rift.onFileTransferProgress', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'BytesTransferred': 6,
+        'State': 'Active',
+      });
+      transport.emitNotification('rift.onFileTransferCompleted', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'ByteSize': 12,
+        'DestinationPath': 'C:/tmp/demo.txt',
+      });
+      transport.emitNotification('rift.onFileTransferFailed', {
+        'TransferId': 'transfer-2',
+        'OperationId': 'operation-file-2',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'bad.bin',
+        'ByteSize': 8,
+        'FailureReason': 'ConnectionLost',
+      });
+
+      expect(await offerFuture, {
+        'transferId': 'transfer-1',
+        'sourceDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'sha256': 'abc123',
+        'chunkSize': 262144,
+        'chunkCount': 1,
+        'expiresAt': '2026-06-30T02:10:00Z',
+      });
+      expect(await progressFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'bytesTransferred': 6,
+        'state': 'Active',
+      });
+      expect(await completedFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'byteSize': 12,
+        'destinationPath': 'C:/tmp/demo.txt',
+      });
+      expect(await failedFuture, {
+        'transferId': 'transfer-2',
+        'operationId': 'operation-file-2',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'bad.bin',
+        'byteSize': 8,
+        'failureReason': 'ConnectionLost',
       });
     });
 
@@ -387,7 +590,8 @@ void main() {
 
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.notifyClipboardChange')
+            .where(
+                (request) => request['method'] == 'rift.notifyClipboardChange')
             .single['params'],
         {
           'contentType': 'text/plain',
@@ -399,10 +603,39 @@ void main() {
       );
       expect(
         transport.requests
-            .where((request) => request['method'] == 'rift.fetchClipboardContent')
+            .where(
+                (request) => request['method'] == 'rift.fetchClipboardContent')
             .single['params'],
         {'offerId': 'offer-remote'},
       );
+    });
+
+    test('should expose file transfer RPC wrappers', () async {
+      await client.connect();
+
+      final offerResult = await client.offerFile(
+        targetDeviceId: 'rift-peer',
+        localPath: 'C:/tmp/demo.txt',
+        fileName: 'demo.txt',
+        mediaType: 'text/plain',
+      );
+      final incomingOffers = await client.listIncomingFileOffers();
+      final acceptResult = await client.acceptFileOffer(
+        transferId: 'transfer-incoming',
+        destinationPath: 'C:/tmp/photo.jpg',
+      );
+      final rejectResult = await client.rejectFileOffer(
+        transferId: 'transfer-incoming',
+        failureReason: 'PolicyDenied',
+        message: 'User declined',
+      );
+      final transfers = await client.listFileTransfers();
+
+      expect(offerResult['transferId'], 'transfer-1');
+      expect(incomingOffers['offers'], hasLength(1));
+      expect(acceptResult['destinationPath'], 'C:/tmp/photo.jpg');
+      expect(rejectResult['rejected'], isTrue);
+      expect(transfers['transfers'], hasLength(1));
     });
 
     test('should expose operation RPC wrappers', () async {
@@ -475,8 +708,7 @@ void main() {
       });
     });
 
-    test(
-        'should preserve failureReason on operation transition notifications',
+    test('should preserve failureReason on operation transition notifications',
         () async {
       await client.connect();
 
@@ -499,7 +731,8 @@ void main() {
       });
     });
 
-    test('Linux to Android style flow: approve sends correct IPC request and receives completion events',
+    test(
+        'Linux to Android style flow: approve sends correct IPC request and receives completion events',
         () async {
       await client.connect();
 
@@ -548,7 +781,8 @@ void main() {
           'PEER-1111-2222-3333-4444-5555-6666-7777-8888');
     });
 
-    test('Android to Linux style flow: startPairing returns fingerprints and daemon can close pending flow',
+    test(
+        'Android to Linux style flow: startPairing returns fingerprints and daemon can close pending flow',
         () async {
       await client.connect();
 

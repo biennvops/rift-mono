@@ -15,6 +15,7 @@ class FakeTrustStore implements TrustStore {
   @override Future<void> initialize() async {}
   @override Future<void> upsertPeer(PeerRecord record) async {}
   @override Future<PeerRecord?> getPeer(String deviceId) async => null;
+  @override Future<List<PeerRecord>> getAllPeers() async => [];
   @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
   @override Future<void> deletePeer(String deviceId) async {}
@@ -102,6 +103,7 @@ class FakeIdentityManager implements IdentityManager {
   }
 
   @override String get deviceId => _deviceId;
+  @override String get displayName => 'Android Phone 01';
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => _pubKey;
   @override String get tlsCertificatePem => '';
@@ -315,6 +317,7 @@ void main() {
         ctx1.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',
@@ -324,6 +327,7 @@ void main() {
         ctx2.negotiatedCapabilities.map((c) => c.name),
         containsAll(<String>[
           'clipboard.offer_fetch',
+          'file.transfer',
           'presence.basic',
           'operation.lifecycle',
           'security.event_log',

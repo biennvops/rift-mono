@@ -15,6 +15,8 @@ public enum TrustState
 public class PeerIdentity
 {
     public string DeviceId { get; init; } = string.Empty;
+    public string? DisplayName { get; set; }
+    public string Platform { get; set; } = "unknown";
     public byte[]? Ed25519PublicKey { get; set; }
     public TrustState State { get; set; }
 
@@ -64,4 +66,9 @@ public interface ITrustStore
     /// Rejects future connection attempts and retains negative-trust evidence.
     /// </summary>
     void RevokePeer(string deviceId, string revocationEvidence);
+
+    /// <summary>
+    /// Completely removes a peer from the local database.
+    /// </summary>
+    void DeletePeer(string deviceId);
 }

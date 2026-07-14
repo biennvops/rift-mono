@@ -195,6 +195,7 @@ public class SessionBootstrap
 
         var capabilities = new[] {
             new { name = "clipboard.offer_fetch", version = 1 },
+            new { name = "file.transfer", version = 1 },
             new { name = "presence.basic", version = 1 },
             new { name = "operation.lifecycle", version = 1 },
             new { name = "security.event_log", version = 1 }

@@ -79,6 +79,18 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyLocalTrustRemovedAsync_SendsTrustRemoveMessage()
+    {
+        await _coordinator.NotifyLocalTrustRemovedAsync("rift-peer-removed", "User removed trusted device");
+
+        var message = Assert.Single(_transport.SentMessages);
+        Assert.Equal("rift-peer-removed", message.PeerDeviceId);
+        Assert.Equal("trust.remove", message.Type);
+        Assert.Equal("rift-peer-removed", message.Payload.GetProperty("removedDeviceId").GetString());
+        Assert.Equal("User removed trusted device", message.Payload.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public async Task NotifyLocalPairingStarted_WhenConnectFails_ThrowsHelpfulError()
     {
         _transport.ConnectException = new InvalidOperationException("tls rejected");
@@ -105,6 +117,33 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         Assert.Contains("Failed to establish a secure session", ex.Message);
         Assert.Contains("rift-peer-connect-fail", ex.Message);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_TrustRemove_RemovesTrustedPeerAndNotifiesUi()
+    {
+        var peerDeviceId = "rift-peer-removed";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(peerDeviceId, CreateEnvelope(peerDeviceId, "trust.remove", new
+        {
+            removedDeviceId = _identityManager.GetDeviceId(),
+            reason = "Peer removed this device",
+            removedAt = _timeProvider.GetUtcNow().ToString("O")
+        }), CancellationToken.None);
+
+        Assert.Null(_trustStore.GetPeer(peerDeviceId));
+        Assert.Contains(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onTrustChanged" &&
+                Equals(notification.Parameters["deviceId"], peerDeviceId) &&
+                Equals(notification.Parameters["newState"], "removed"));
     }
 
     [Fact]
@@ -666,6 +705,40 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_TruncatesOversizedRemoteDisplayName()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-long-name",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.PairingPending,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        var oversizedDisplayName = new string('A', 512);
+
+        await _coordinator.HandleMessageAsync(
+            "rift-peer-long-name",
+            CreateEnvelope("rift-peer-long-name", "pairing.start", new
+            {
+                expiresInMs = 120000,
+                displayName = oversizedDisplayName
+            }),
+            CancellationToken.None);
+
+        var storedPeer = _trustStore.GetPeer("rift-peer-long-name");
+        Assert.NotNull(storedPeer);
+        Assert.NotNull(storedPeer!.DisplayName);
+        Assert.Equal(128, storedPeer.DisplayName!.Length);
+        Assert.Equal(oversizedDisplayName[..128], storedPeer.DisplayName);
+
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal(oversizedDisplayName[..128], notification.Parameters["displayName"]);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_WithLocalApproval_TransitionsTrusted()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -709,7 +782,9 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         _transport.RaiseSessionStateChanged("rift-peer-disconnected", isOnline: false);
 
         await WaitForConditionAsync(() =>
-            _trustStore.GetPeer("rift-peer-disconnected")?.State == TrustState.Discovered);
+            _trustStore.GetPeer("rift-peer-disconnected")?.State == TrustState.Discovered,
+            attempts: 40,
+            delayMs: 100);
 
         var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
         {
@@ -719,6 +794,45 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         });
 
         Assert.Contains(events, evt => evt.FailureReason == "PeerUnreachable");
+    }
+
+    [Fact]
+    public async Task SessionStateChanged_OfflineDuringPairing_PreservesPendingStateWhenReplacementSessionAppearsQuickly()
+    {
+        _transport.ActiveSessions.Add("rift-peer-transient-disconnect");
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-transient-disconnect",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.PairingPending,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-transient-disconnect");
+
+        _transport.ActiveSessions.Remove("rift-peer-transient-disconnect");
+        _transport.RaiseSessionStateChanged("rift-peer-transient-disconnect", isOnline: false);
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(200);
+            _transport.ActiveSessions.Add("rift-peer-transient-disconnect");
+            _transport.RaiseSessionStateChanged("rift-peer-transient-disconnect", isOnline: true);
+        });
+
+        await Task.Delay(1800);
+
+        var peer = _trustStore.GetPeer("rift-peer-transient-disconnect");
+        Assert.Equal(TrustState.PairingPending, peer!.State);
+
+        var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.PairingRejected],
+            PeerDeviceId = "rift-peer-transient-disconnect",
+            Limit = 10
+        });
+
+        Assert.DoesNotContain(events, evt => evt.FailureReason == "PeerUnreachable");
     }
 
     [Fact]

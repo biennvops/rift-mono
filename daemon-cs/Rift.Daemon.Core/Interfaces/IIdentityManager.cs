@@ -36,6 +36,11 @@ public interface IIdentityManager
     string GetFingerprint();
 
     /// <summary>
+    /// Gets the generated local device display name exposed to the UI and peers.
+    /// </summary>
+    string GetDisplayName();
+
+    /// <summary>
     /// Verifies an Ed25519 signature using the given public key.
     /// </summary>
     bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature);

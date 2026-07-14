@@ -244,6 +244,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         public System.Security.Cryptography.X509Certificates.X509Certificate2 GetTlsCertificate() => throw new NotImplementedException();
         public byte[] SignEd25519(byte[] data) => throw new NotImplementedException();
         public string GetFingerprint() => "local-fingerprint";
+        public string GetDisplayName() => "Windows Desktop 01";
         public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature) => throw new NotImplementedException();
     }
 }

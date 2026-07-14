@@ -17,6 +17,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
 
   String? _localDeviceId;
+  Map<String, dynamic>? _localDeviceInfo;
   bool _isDiscovering = false;
   bool _isTogglingDiscovery = false;
   List<dynamic> _trustedPeers = [];
@@ -24,6 +25,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   String? _error;
   bool _isLoadingData = false;
   bool _reloadQueued = false;
+  bool _autoDiscoveryAttempted = false;
 
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
@@ -105,8 +107,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
 
     setState(() {
       // Upsert into discovered list.
-      final existing = _discoveredPeers
-          .indexWhere((p) => p is Map && (p['deviceId']?.toString() == deviceId || (instanceId != null && p['instanceId']?.toString() == instanceId)));
+      final existing = _discoveredPeers.indexWhere((p) =>
+          p is Map &&
+          (p['deviceId']?.toString() == deviceId ||
+              (instanceId != null &&
+                  p['instanceId']?.toString() == instanceId)));
       if (existing >= 0) {
         final merged =
             Map<String, dynamic>.from(_discoveredPeers[existing] as Map);
@@ -124,20 +129,31 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   void _handlePeerLost(Map<String, dynamic> event) {
     final deviceId = event['deviceId']?.toString();
     final instanceId = event['instanceId']?.toString();
-    if ((deviceId == null || deviceId.isEmpty) && (instanceId == null || instanceId.isEmpty)) return;
-    if (!mounted) return;
+    if ((deviceId == null || deviceId.isEmpty) &&
+        (instanceId == null || instanceId.isEmpty)) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
 
     setState(() {
-      _discoveredPeers = _discoveredPeers
-          .where((p) {
-            if (p is! Map) return true;
-            final pDeviceId = p['deviceId']?.toString();
-            final pInstanceId = p['instanceId']?.toString();
-            if (deviceId != null && deviceId.isNotEmpty && pDeviceId == deviceId) return false;
-            if (instanceId != null && instanceId.isNotEmpty && pInstanceId == instanceId) return false;
-            return true;
-          })
-          .toList(growable: false);
+      _discoveredPeers = _discoveredPeers.where((p) {
+        if (p is! Map) {
+          return true;
+        }
+        final pDeviceId = p['deviceId']?.toString();
+        final pInstanceId = p['instanceId']?.toString();
+        if (deviceId != null && deviceId.isNotEmpty && pDeviceId == deviceId) {
+          return false;
+        }
+        if (instanceId != null &&
+            instanceId.isNotEmpty &&
+            pInstanceId == instanceId) {
+          return false;
+        }
+        return true;
+      }).toList(growable: false);
     });
 
     _scheduleFullReloadThrottled();
@@ -171,9 +187,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     // prevent the UI from feeling stale.
     setState(() {
       // Remove from discovered if it is no longer discovered/pairing_pending.
-      if (newState == 'trusted' ||
-          newState == 'blocked' ||
-          newState == 'revoked') {
+      if (newState == 'trusted' || newState == 'blocked') {
         _discoveredPeers = _discoveredPeers
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
             .toList(growable: false);
@@ -240,6 +254,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         setState(() {
           _trustedPeers = [];
           _discoveredPeers = [];
+          _localDeviceInfo = null;
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
@@ -263,11 +278,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (mounted) {
         setState(() {
           _localDeviceId = localDeviceId;
+          _localDeviceInfo = Map<String, dynamic>.from(deviceInfo);
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
           _isDiscovering = isDiscovering;
           _error = null;
         });
+      }
+      if (trustedPeers.isEmpty) {
+        _autoDiscoveryAttempted = false;
+      } else if (!isDiscovering) {
+        unawaited(_ensureTrustedPeerDiscovery(client));
       }
     } catch (e) {
       if (mounted) {
@@ -312,7 +333,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     const hiddenTrustStates = {
       'trusted',
       'blocked',
-      'revoked',
       'pairing_pending',
     };
 
@@ -320,9 +340,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       if (peer is! Map) return false;
       final deviceId = peer['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return false;
-      
+
       if (_isSelfDevice(deviceId)) return false;
-      
+
       if (trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
@@ -331,6 +351,29 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       }
       return true;
     }).toList(growable: false);
+  }
+
+  Future<void> _ensureTrustedPeerDiscovery(JsonRpcRiftClient client) async {
+    if (_autoDiscoveryAttempted ||
+        _trustedPeers.isEmpty ||
+        _isDiscovering ||
+        _isTogglingDiscovery) {
+      return;
+    }
+
+    _autoDiscoveryAttempted = true;
+    try {
+      await client.startDiscovery();
+      if (mounted) {
+        setState(() {
+          _isDiscovering = true;
+          _error = null;
+        });
+      }
+      _scheduleReload();
+    } catch (_) {
+      _autoDiscoveryAttempted = false;
+    }
   }
 
   Future<void> _toggleDiscovery() async {
@@ -348,7 +391,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Daemon is still starting. Try discovery again in a moment.'),
+            content: Text(
+                'Daemon is still starting. Try discovery again in a moment.'),
           ),
         );
         return;
@@ -364,6 +408,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           _isDiscovering = nextDiscovering;
           _error = null;
         });
+      }
+      if (!nextDiscovering) {
+        _autoDiscoveryAttempted = true;
       }
       await _loadData();
     } catch (e) {
@@ -398,7 +445,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               final portText = portController.text.trim();
               final parsedPort = int.tryParse(portText);
               final parsedAddress = InternetAddress.tryParse(address);
-              if (parsedAddress == null || parsedAddress.type != InternetAddressType.IPv4) {
+              if (parsedAddress == null ||
+                  parsedAddress.type != InternetAddressType.IPv4) {
                 setDialogState(() {
                   validationError = 'Enter a valid IPv4 address.';
                 });
@@ -410,7 +458,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 });
                 return;
               }
-              Navigator.of(dialogContext).pop((address: address, port: parsedPort));
+              Navigator.of(dialogContext)
+                  .pop((address: address, port: parsedPort));
             }
 
             return AlertDialog(
@@ -442,7 +491,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                       const SizedBox(height: 12),
                       Text(
                         validationError!,
-                        style: TextStyle(color: Theme.of(context).colorScheme.error),
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error),
                       ),
                     ],
                   ],
@@ -491,8 +541,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         return 'Pairing pending';
       case 'blocked':
         return 'Blocked';
-      case 'revoked':
-        return 'Revoked';
       case 'trusted':
         return 'Trusted';
       default:
@@ -537,9 +585,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     if (trustState == 'trusted') {
       bgColor = theme.colorScheme.secondaryContainer;
       fgColor = theme.colorScheme.onSecondaryContainer;
-      borderColor = theme.colorScheme.secondary; // equivalent to secondary-fixed for border
+      borderColor = theme
+          .colorScheme.secondary; // equivalent to secondary-fixed for border
       icon = Icons.verified_user;
-    } else if (trustState == 'blocked' || trustState == 'revoked') {
+    } else if (trustState == 'blocked') {
       bgColor = theme.colorScheme.errorContainer;
       fgColor = theme.colorScheme.onErrorContainer;
       borderColor = theme.colorScheme.error;
@@ -563,19 +612,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         children: [
           Icon(icon, size: 14, color: fgColor),
           const SizedBox(width: 4),
-          Text(label, style: theme.textTheme.labelSmall?.copyWith(color: fgColor)),
+          Text(label,
+              style: theme.textTheme.labelSmall?.copyWith(color: fgColor)),
         ],
       ),
     );
   }
 
-  Widget _buildPresenceIndicator(bool isOnline, ThemeData theme, String trustState) {
-    if (trustState == 'blocked' || trustState == 'revoked') {
+  Widget _buildPresenceIndicator(
+      bool isOnline, ThemeData theme, String trustState) {
+    if (trustState == 'blocked') {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               color: theme.colorScheme.errorContainer,
               shape: BoxShape.circle,
@@ -583,24 +635,69 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             ),
           ),
           const SizedBox(width: 4),
-          Text('OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.error)),
+          Text('OFFLINE',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.error)),
         ],
       );
     }
-    
+
+    if (trustState == 'pairing_pending') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: Colors.amber,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text('PENDING',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: Colors.amber.shade800)),
+        ],
+      );
+    }
+
+    if (trustState == 'discovered') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: Colors.amber,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text('NEARBY',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: Colors.amber.shade800)),
+        ],
+      );
+    }
+
     if (isOnline) {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 8, height: 8,
+            width: 8,
+            height: 8,
             decoration: BoxDecoration(
               color: theme.colorScheme.secondary,
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 4),
-          Text('ONLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary)),
+          Text('ONLINE',
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.colorScheme.secondary)),
         ],
       );
     }
@@ -609,7 +706,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 8, height: 8,
+          width: 8,
+          height: 8,
           decoration: BoxDecoration(
             color: Colors.transparent,
             shape: BoxShape.circle,
@@ -617,7 +715,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         ),
         const SizedBox(width: 4),
-        Text('OFFLINE', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline)),
+        Text('OFFLINE',
+            style: theme.textTheme.labelSmall
+                ?.copyWith(color: theme.colorScheme.outline)),
       ],
     );
   }
@@ -631,17 +731,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
     final String shortId =
         deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = peer['displayName'] ??
-        (deviceIdStr.isNotEmpty ? shortId : 'Unknown Device');
+    final String rawDisplayName = peer['displayName']?.toString() ?? '';
+    final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
+    final String titleText = rawDisplayName.isNotEmpty
+        ? rawDisplayName
+        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
 
     // Màn A Design uses surface-container-lowest for Trusted, surface-container-low for Discovered, and surface-container for Blocked
     Color cardBg;
     Color cardBorder = theme.colorScheme.outlineVariant;
     double opacity = 1.0;
-    
+
     if (trustState == 'trusted') {
       cardBg = theme.colorScheme.surface;
-    } else if (trustState == 'blocked' || trustState == 'revoked') {
+    } else if (trustState == 'blocked') {
       cardBg = theme.colorScheme.surfaceContainer;
       cardBorder = theme.colorScheme.errorContainer;
       opacity = 0.6;
@@ -669,20 +772,36 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 Expanded(
                   child: Row(
                     children: [
-                      Icon(
-                        peer['platform'] == 'android' ? Icons.smartphone : Icons.desktop_windows, 
-                        color: theme.colorScheme.outline
-                      ),
+                      Icon(_platformIcon(peerPlatform),
+                          color: theme.colorScheme.outline),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          titleText,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.headlineMedium?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            decoration: (trustState == 'blocked' || trustState == 'revoked') ? TextDecoration.lineThrough : null,
-                            decorationColor: theme.colorScheme.error,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              titleText,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.headlineMedium?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                                decoration: trustState == 'blocked'
+                                    ? TextDecoration.lineThrough
+                                    : null,
+                                decorationColor: theme.colorScheme.error,
+                              ),
+                            ),
+                            if (deviceIdStr.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                deviceIdStr,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  fontFamily: 'JetBrains Mono',
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ],
@@ -706,14 +825,120 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     );
   }
 
-  Widget _buildActionBtn(String trustState, bool isTrusted, Map<String, dynamic> peer, String titleText, ThemeData theme) {
-    if (trustState == 'blocked' || trustState == 'revoked') {
-      final label = trustState == 'blocked' ? 'Unblock' : 'Reset';
-      final icon = trustState == 'blocked' ? Icons.lock_open : Icons.restore;
+  Widget _buildLocalDeviceCard() {
+    final theme = Theme.of(context);
+    final localDeviceInfo = _localDeviceInfo;
+    if (localDeviceInfo == null) {
+      return const SizedBox.shrink();
+    }
+
+    final deviceId = localDeviceInfo['deviceId']?.toString() ?? '';
+    final displayName = localDeviceInfo['displayName']?.toString();
+    final platform =
+        localDeviceInfo['platform']?.toString() ?? _localPlatform();
+    final titleText = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : (deviceId.isNotEmpty ? deviceId : 'This Device');
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: theme.colorScheme.primary),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(_platformIcon(platform),
+              color: theme.colorScheme.onPrimaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titleText,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'This device',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onPrimaryContainer,
+                  ),
+                ),
+                if (deviceId.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    deviceId,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer.withValues(
+                        alpha: 0.82,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData _platformIcon(String? platform) {
+    switch (platform?.toLowerCase()) {
+      case 'android':
+      case 'ios':
+        return Icons.smartphone;
+      case 'windows':
+        return Icons.laptop_windows;
+      case 'macos':
+        return Icons.laptop_mac;
+      case 'linux':
+        return Icons.terminal;
+      default:
+        return Icons.devices;
+    }
+  }
+
+  String _localPlatform() {
+    if (Platform.isAndroid) {
+      return 'android';
+    }
+    if (Platform.isIOS) {
+      return 'ios';
+    }
+    if (Platform.isWindows) {
+      return 'windows';
+    }
+    if (Platform.isMacOS) {
+      return 'macos';
+    }
+    if (Platform.isLinux) {
+      return 'linux';
+    }
+    return 'unknown';
+  }
+
+  Widget _buildActionBtn(String trustState, bool isTrusted,
+      Map<String, dynamic> peer, String titleText, ThemeData theme) {
+    if (trustState == 'blocked') {
+      final label = 'Unblock';
+      final icon = Icons.lock_open;
       final color = theme.colorScheme.error;
 
       return InkWell(
-        onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+        onTap: () => _handlePeerAction(
+            peer: peer,
+            isTrusted: isTrusted,
+            trustState: trustState,
+            titleText: titleText),
         borderRadius: BorderRadius.circular(4),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -722,25 +947,33 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             children: [
               Icon(icon, size: 18, color: color),
               const SizedBox(width: 4),
-              Text(label, style: theme.textTheme.labelSmall?.copyWith(color: color)),
+              Text(label,
+                  style: theme.textTheme.labelSmall?.copyWith(color: color)),
             ],
           ),
         ),
       );
     }
-    
+
     if (trustState == 'trusted') {
       return InkWell(
-        onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+        onTap: () => _handlePeerAction(
+            peer: peer,
+            isTrusted: isTrusted,
+            trustState: trustState,
+            titleText: titleText),
         borderRadius: BorderRadius.circular(4),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.more_horiz, size: 18, color: theme.colorScheme.primary),
+              Icon(Icons.more_horiz,
+                  size: 18, color: theme.colorScheme.primary),
               const SizedBox(width: 4),
-              Text('Manage', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+              Text('Manage',
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: theme.colorScheme.primary)),
             ],
           ),
         ),
@@ -778,10 +1011,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         ),
       );
     }
-    
+
     // Discovered state -> Verify/Pair
     return InkWell(
-      onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
+      onTap: () => _handlePeerAction(
+          peer: peer,
+          isTrusted: isTrusted,
+          trustState: trustState,
+          titleText: titleText),
       borderRadius: BorderRadius.circular(4),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -794,7 +1031,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           children: [
             Icon(Icons.fingerprint, size: 16, color: theme.colorScheme.primary),
             const SizedBox(width: 4),
-            Text('Verify', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary)),
+            Text('Verify',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.colorScheme.primary)),
           ],
         ),
       ),
@@ -815,13 +1054,37 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     if (deviceId != null && _isSelfDevice(deviceId)) {
       return;
     }
-
     try {
+      if (deviceId != null) {
+        if (trustState == 'blocked') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Unblock device?',
+            message: 'This will return $titleText to discovered state.',
+            confirmLabel: 'Unblock',
+          );
+          if (confirmed) {
+            await client.unblockPeer(deviceId);
+            await _loadData();
+          }
+          return;
+        } else if (trustState == 'pairing_pending') {
+          final confirmed = await _confirmTrustAction(
+            title: 'Cancel pairing?',
+            message: 'This will drop the pending trust flow for $titleText.',
+            confirmLabel: 'Cancel pairing',
+          );
+          if (confirmed) {
+            await client.rejectPairing(deviceId);
+            await _loadData();
+          }
+          return;
+        }
+      }
+
       if (!isTrusted) {
         if (deviceId == null && (address == null || port == null)) {
           return;
         }
-        final client = context.read<JsonRpcRiftClient>();
         if (deviceId != null) {
           assert(
             !_isSelfDevice(deviceId),
@@ -844,31 +1107,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         );
         await _loadData();
         return;
-      }
-
-      if (deviceId == null) return;
-
-      if (trustState == 'blocked') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Unblock device?',
-          message: 'This will return $titleText to discovered state.',
-          confirmLabel: 'Unblock',
-        );
-        if (!confirmed) return;
-        await client.unblockPeer(deviceId);
-      } else if (trustState == 'revoked') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Reset revoked peer?',
-          message:
-              'This will clear the revoked state for $titleText and return it to discovered devices.',
-          confirmLabel: 'Reset',
-        );
-        if (!confirmed) return;
-        await client.resetRevokedPeer(deviceId);
-      } else if (trustState == 'trusted') {
+      } else {
         final isOnline = peer['presence'] == 'online';
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
+        final detailResult =
+            await Navigator.of(context).push<Map<String, dynamic>>(
+          MaterialPageRoute<Map<String, dynamic>>(
             builder: (_) => DeviceDetailScreen(
               peer: peer,
               isOnline: isOnline,
@@ -876,21 +1119,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         );
         await _loadData();
-      } else if (trustState == 'pairing_pending') {
-        final confirmed = await _confirmTrustAction(
-          title: 'Cancel pairing?',
-          message: 'This will drop the pending trust flow for $titleText.',
-          confirmLabel: 'Cancel pairing',
-        );
-        if (!confirmed) return;
-        if (trustState == 'pairing_pending') {
-          await client.rejectPairing(deviceId);
-        } else {
-          await client.revokeTrust(
-              deviceId, 'User revoked trust from device manager');
+        if (!mounted || detailResult == null) {
+          return;
+        }
+
+        if (detailResult['action'] == 'forgotten' && deviceId != null) {
+          final forgottenDisplayName =
+              detailResult['displayName']?.toString() ?? titleText;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '$forgottenDisplayName da duoc xoa khoi danh sach da tin cay. Khi thiet bi xuat hien lai, ban co the pair tu dau.',
+              ),
+            ),
+          );
         }
       }
-      await _loadData();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -932,48 +1176,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         ),
         const SizedBox(height: 8),
         Text(
-          'Mở Rift trên thiết bị khác cùng mạng LAN để bắt đầu.',
+          'Mở Rift trên thiết bị khác để bắt đầu.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
           textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 32),
-        ElevatedButton.icon(
-          onPressed: (_isDiscovering || _isTogglingDiscovery) ? null : _toggleDiscovery,
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
-            ),
-            elevation: 1,
-            side: const BorderSide(color: Colors.transparent),
-          ).copyWith(
-            backgroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) {
-                return theme.colorScheme.surfaceContainerHighest;
-              }
-              return theme.colorScheme.primary;
-            }),
-            foregroundColor: WidgetStateProperty.resolveWith((states) {
-              if (states.contains(WidgetState.disabled)) {
-                return theme.colorScheme.onSurfaceVariant;
-              }
-              return theme.colorScheme.onPrimary;
-            }),
-          ),
-          icon: _isTogglingDiscovery 
-            ? SizedBox(
-                width: 18, height: 18, 
-                child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.onSurfaceVariant)
-              ) 
-            : const Icon(Icons.refresh, size: 18),
-          label: Text(
-            'Tìm Thiết Bị',
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: (_isDiscovering || _isTogglingDiscovery) ? theme.colorScheme.onSurfaceVariant : theme.colorScheme.onPrimary,
-            ),
-          ),
         ),
         const SizedBox(height: 32),
         Container(
@@ -996,7 +1203,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
               ),
               const SizedBox(width: 8),
               Text(
-                'mDNS Listening on port 5353',
+                'Sẵn sàng kết nối qua Wi-Fi',
                 style: theme.textTheme.labelSmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -1011,6 +1218,19 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasTrustedPeers = _trustedPeers.any(
+      (peer) => peer is Map && peer['trustState']?.toString() == 'trusted',
+    );
+    final discoveryLabel = _isDiscovering
+        ? (hasTrustedPeers ? 'Stop Adding' : 'Stop Discovery')
+        : (hasTrustedPeers ? 'Add Devices' : 'Discover Devices');
+    final discoveryIcon = _isTogglingDiscovery
+        ? null
+        : Icon(
+            _isDiscovering
+                ? Icons.search_off
+                : (hasTrustedPeers ? Icons.person_add_alt_1 : Icons.search),
+          );
     return Scaffold(
       body: _error != null && _trustedPeers.isEmpty && _discoveredPeers.isEmpty
           ? Center(
@@ -1028,17 +1248,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                 ]))
           : RefreshIndicator(
               onRefresh: _loadData,
-              child: (_trustedPeers.isEmpty && (!_isDiscovering || _discoveredPeers.isEmpty))
+              child: (_trustedPeers.isEmpty &&
+                      (!_isDiscovering || _discoveredPeers.isEmpty))
                   ? LayoutBuilder(
                       builder: (context, constraints) => SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         child: ConstrainedBox(
-                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                          child: Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                              child: _buildEmptyState(theme),
-                            ),
+                          constraints:
+                              BoxConstraints(minHeight: constraints.maxHeight),
+                          child: Column(
+                            children: [
+                              const SizedBox(height: 16),
+                              _buildLocalDeviceCard(),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16.0),
+                                child: _buildEmptyState(theme),
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -1047,8 +1274,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                       physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       children: [
-                        if (_trustedPeers.isNotEmpty) ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
-                        if (_isDiscovering && _discoveredPeers.isNotEmpty) ..._discoveredPeers.map((p) => _buildPeerCard(p, false)),
+                        if (_localDeviceInfo != null) _buildLocalDeviceCard(),
+                        if (_trustedPeers.isNotEmpty)
+                          ..._trustedPeers.map((p) => _buildPeerCard(p, true)),
+                        if (_isDiscovering && _discoveredPeers.isNotEmpty)
+                          ..._discoveredPeers
+                              .map((p) => _buildPeerCard(p, false)),
                         const SizedBox(height: 80), // Fab spacing
                       ],
                     ),
@@ -1063,7 +1294,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             backgroundColor: theme.colorScheme.secondaryContainer,
             foregroundColor: theme.colorScheme.onSecondaryContainer,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             icon: const Icon(Icons.router),
             label: Text(
               'Pair by IP',
@@ -1079,14 +1311,19 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             backgroundColor: theme.colorScheme.primaryContainer,
             foregroundColor: theme.colorScheme.onPrimaryContainer,
             elevation: 0,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            icon: _isTogglingDiscovery 
-              ? SizedBox(
-                  width: 24, height: 24, 
-                  child: CircularProgressIndicator(strokeWidth: 2, color: theme.colorScheme.onPrimaryContainer)
-                )
-              : Icon(_isDiscovering ? Icons.search_off : Icons.search),
-            label: Text(_isDiscovering ? 'Stop Discovery' : 'Discover Devices', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            icon: _isTogglingDiscovery
+                ? SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.onPrimaryContainer))
+                : discoveryIcon,
+            label: Text(discoveryLabel,
+                style: theme.textTheme.labelMedium
+                    ?.copyWith(color: theme.colorScheme.onPrimaryContainer)),
           ),
         ],
       ),

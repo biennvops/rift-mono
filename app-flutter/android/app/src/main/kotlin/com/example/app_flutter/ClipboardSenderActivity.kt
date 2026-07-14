@@ -5,47 +5,88 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 
 class ClipboardSenderActivity : Activity() {
+    companion object {
+        private const val notificationIntentRouteKey = "rift.notification.route"
+        private const val notificationIntentPayloadPrefix = "rift.notification.payload."
+        private const val clipboardSendRoute = "clipboard.send"
+    }
+
     private var hasHandled = false
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Log.i("RiftTile", "ClipboardSenderActivity onCreate")
+        overridePendingTransition(0, 0)
+    }
+
+    override fun onResume() {
+        super.onResume()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        
-        if (hasFocus && !hasHandled) {
-            hasHandled = true
-            Log.i("RiftTile", "Activity gained focus, reading clipboard...")
-            
-            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = clipboard.primaryClip
+        if (hasFocus) {
+            handler.postDelayed({
+                handleClipboardOnce("windowFocus")
+            }, 180)
+        }
+    }
 
-            if (clip != null && clip.itemCount > 0) {
-                val text = clip.getItemAt(0).coerceToText(this)?.toString()
-                if (!text.isNullOrEmpty()) {
-                    Log.i("RiftTile", "Broadcasting clipboard text length=${text.length}")
-                    val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
-                    intent.setPackage(packageName)
-                    intent.putExtra("text", text)
-                    sendBroadcast(intent)
-                    
-                    Toast.makeText(this, "Sent to Rift", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
-                }
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
+    private fun handleClipboardOnce(source: String) {
+        if (hasHandled) {
+            return
+        }
+
+        hasHandled = true
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val payload = AndroidClipboardCodec.encodePrimaryClip(this, clipboard)
+
+        if (payload != null) {
+            if (MainActivity.isClipboardRelayReady) {
+                val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
+                intent.setPackage(packageName)
+                payload.forEach { (key, value) -> intent.putExtra(key, value) }
+                sendBroadcast(intent)
             } else {
-                Log.w("RiftTile", "Clipboard primary clip is null")
-                Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                val launchIntent = Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(notificationIntentRouteKey, clipboardSendRoute)
+                    payload.forEach { (key, value) ->
+                        putExtra("$notificationIntentPayloadPrefix$key", value)
+                    }
+                }
+                startActivity(launchIntent)
             }
 
-            // Close the activity immediately after reading
-            finish()
+            val message = when (payload["contentType"]) {
+                "image/png" -> "Image sent to Rift"
+                "text/plain" -> "Text sent to Rift"
+                else -> "Sent to Rift"
+            }
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        } else {
+            Log.w("RiftTile", "Clipboard payload is empty or unsupported")
+            Toast.makeText(this, "Clipboard is empty or unsupported", Toast.LENGTH_SHORT).show()
         }
+
+        closeSenderSurface()
+    }
+
+    private fun closeSenderSurface() {
+        finish()
+        overridePendingTransition(0, 0)
     }
 }

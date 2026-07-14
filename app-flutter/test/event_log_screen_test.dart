@@ -123,16 +123,16 @@ void main() {
 
     await client.emitSecurityEvent({
       'eventId': 'evt-live',
-      'eventType': 'trust.revoked',
+      'eventType': 'trust.removed',
       'severity': 'warning',
       'peerDeviceId': 'rift-peer-live',
       'timestamp': '2026-06-23T12:02:00Z',
       'outcome': 'success',
-      'failureReason': 'User revoked trust',
+      'failureReason': 'User removed trust',
     });
     await tester.pump();
 
-    expect(find.text('trust.revoked'), findsOneWidget);
-    expect(find.text('User revoked trust'), findsOneWidget);
+    expect(find.text('trust.removed'), findsOneWidget);
+    expect(find.text('User removed trust'), findsOneWidget);
   });
 }

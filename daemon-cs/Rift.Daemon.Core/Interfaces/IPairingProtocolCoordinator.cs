@@ -10,5 +10,7 @@ public interface IPairingProtocolCoordinator
 
     Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default);
 
+    Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default);
+
     Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken);
 }
