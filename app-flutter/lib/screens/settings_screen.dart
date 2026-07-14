@@ -23,6 +23,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   String? _error;
   String _notificationPermissionStatus = 'unknown';
+  String _notificationAccessStatus = 'unknown';
   bool _clipboardNotificationsEnabled = false;
   bool _notificationSyncEnabled = true;
   final TextEditingController _notificationBlacklistController =
@@ -51,11 +52,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
       final data = await client.getDeviceInfo();
       final notificationStatus = await _loadNotificationPermissionStatus();
+      final notificationAccessStatus = await _loadNotificationAccessStatus();
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
         _deviceInfo = data as Map<String, dynamic>?;
         _notificationPermissionStatus = notificationStatus;
+        _notificationAccessStatus = notificationAccessStatus;
         _clipboardNotificationsEnabled =
             prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
         _notificationSyncEnabled =
@@ -85,9 +88,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return 'unknown';
   }
 
+  Future<String> _loadNotificationAccessStatus() async {
+    if (AndroidShell.isSupported) {
+      return AndroidShell.getNotificationListenerAccessStatus();
+    }
+    return 'unknown';
+  }
+
   Future<void> _openNotificationSettings() async {
     final theme = Theme.of(context);
-    final success = Platform.isAndroid
+    final success = AndroidShell.isSupported
         ? await AndroidShell.openNotificationSettings()
         : false;
     if (!mounted || success) return;
@@ -96,6 +106,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
         content: Text(
           'Unable to open notification settings on ${Platform.operatingSystem}.',
           style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openNotificationAccessSettings() async {
+    final theme = Theme.of(context);
+    final success = AndroidShell.isSupported
+        ? await AndroidShell.openNotificationListenerSettings()
+        : false;
+    if (!mounted || success) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Unable to open Android notification access settings.',
+          style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showTestNotification() async {
+    final success = await AndroidShell.showTestNotification();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Sent Android test notification.'
+              : 'Unable to send test notification. Enable app notifications first.',
         ),
       ),
     );
@@ -150,10 +192,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  bool get _canOpenNotificationSettings => Platform.isAndroid;
+  bool get _canOpenNotificationSettings => AndroidShell.isSupported;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
+
+  bool get _notificationAccessAuthorized =>
+      _notificationAccessStatus == 'authorized';
 
   IconData get _notificationPermissionIcon => _notificationsAuthorized
       ? Icons.check_circle
@@ -161,10 +206,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ? Icons.cancel
           : Icons.info;
 
+  IconData get _notificationAccessIcon => _notificationAccessAuthorized
+      ? Icons.check_circle
+      : _notificationAccessStatus == 'denied'
+          ? Icons.cancel
+          : Icons.info;
+
   Color _notificationPermissionColor(ThemeData theme) =>
       _notificationsAuthorized
           ? theme.colorScheme.secondary
           : _notificationPermissionStatus == 'denied'
+              ? theme.colorScheme.error
+              : theme.colorScheme.outline;
+
+  Color _notificationAccessColor(ThemeData theme) =>
+      _notificationAccessAuthorized
+          ? theme.colorScheme.secondary
+          : _notificationAccessStatus == 'denied'
               ? theme.colorScheme.error
               : theme.colorScheme.outline;
 
@@ -176,6 +234,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'System notifications are off';
       default:
         return 'Notification status unavailable on this platform';
+    }
+  }
+
+  String get _notificationAccessSubtitle {
+    if (!AndroidShell.isSupported) {
+      return 'Notification access is only required on Android';
+    }
+
+    switch (_notificationAccessStatus) {
+      case 'authorized':
+        return 'Android notification access enabled for sync';
+      case 'denied':
+        return 'Android notification access is off';
+      default:
+        return 'Notification access status unavailable';
     }
   }
 
@@ -421,6 +494,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             )
                           : null,
                 ),
+                if (AndroidShell.isSupported)
+                  _buildStatusRow(
+                    icon: _notificationAccessIcon,
+                    color: _notificationAccessColor(theme),
+                    title: 'Notification access',
+                    subtitle: _notificationAccessSubtitle,
+                    trailing: !_notificationAccessAuthorized
+                        ? ElevatedButton(
+                            onPressed: _openNotificationAccessSettings,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: theme.colorScheme.primary,
+                              foregroundColor: theme.colorScheme.onPrimary,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                            ),
+                            child: const Text(
+                              'OPEN SETTINGS',
+                              style: TextStyle(
+                                fontFamily: 'JetBrains Mono',
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          )
+                        : null,
+                  ),
                 _buildStatusRow(
                   icon: Icons.info,
                   color: theme.colorScheme.outline,
@@ -456,7 +557,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     title: const Text('Android notification sync'),
                     subtitle: Text(
-                      'On by default. Mirror Android notifications to trusted desktop devices only.',
+                      _notificationAccessAuthorized
+                          ? 'On by default. Mirror Android notifications to trusted desktop devices only.'
+                          : 'On by default, but Android notification access must be enabled before sync can work.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -487,6 +590,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
+                if (AndroidShell.isSupported)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showTestNotification,
+                        icon: const Icon(Icons.notifications_active_outlined),
+                        label: const Text('Test notification'),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

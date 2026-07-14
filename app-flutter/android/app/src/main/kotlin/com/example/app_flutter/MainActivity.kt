@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -180,6 +181,15 @@ class MainActivity: FlutterActivity() {
                     "openNotificationSettings" -> {
                         result.success(openNotificationSettings())
                     }
+                    "getNotificationListenerAccessStatus" -> {
+                        result.success(getNotificationListenerAccessStatus())
+                    }
+                    "openNotificationListenerSettings" -> {
+                        result.success(openNotificationListenerSettings())
+                    }
+                    "showTestNotification" -> {
+                        result.success(showTestNotification())
+                    }
                     "openFile" -> {
                         val args = call.arguments as? Map<*, *>
                         val path = args?.get("path") as? String
@@ -334,6 +344,40 @@ class MainActivity: FlutterActivity() {
             Log.w(tag, "Unable to open notification settings", e)
             false
         }
+    }
+
+    private fun getNotificationListenerAccessStatus(): String {
+        val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(this)
+        return if (enabledPackages.contains(packageName)) "authorized" else "denied"
+    }
+
+    private fun openNotificationListenerSettings(): Boolean {
+        val intent =
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                putExtra(":settings:fragment_args_key", ComponentName(this@MainActivity, RiftNotificationListenerService::class.java).flattenToString())
+            }
+
+        return try {
+            startActivity(intent)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.w(tag, "Unable to open notification listener settings", e)
+            false
+        }
+    }
+
+    private fun showTestNotification(): Boolean {
+        if (getNotificationPermissionStatus() != "authorized") {
+            return false
+        }
+
+        return showNotification(
+            title = "Rift test notification",
+            body = "Android notifications are enabled. Notification sync still also requires notification access.",
+            route = "history.notifications",
+            payload = mapOf("testNotification" to true),
+        )
     }
 
     private fun showNotification(

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/platform/android_shell.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 
@@ -32,6 +33,7 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    AndroidShell.debugIsAndroidOverride = true;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
     isConnected = true;
@@ -39,9 +41,14 @@ void main() {
         .setMockMethodCallHandler(androidShellChannel, (call) async {
       switch (call.method) {
         case 'getNotificationPermissionStatus':
-          return 'unknown';
+          return 'authorized';
+        case 'getNotificationListenerAccessStatus':
+          return 'denied';
         case 'openNotificationSettings':
-          return false;
+        case 'openNotificationListenerSettings':
+          return true;
+        case 'showTestNotification':
+          return true;
       }
       return null;
     });
@@ -72,6 +79,7 @@ void main() {
   });
 
   tearDown(() {
+    AndroidShell.debugIsAndroidOverride = null;
     connectionChangedController.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
@@ -100,13 +108,9 @@ void main() {
     expect(find.text('IDENTITY'), findsOneWidget);
     expect(find.text('PERMISSIONS'), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.text('Notification status unavailable on this platform'),
-      200,
-    );
-    expect(
-      find.text('Notification status unavailable on this platform'),
-      findsOneWidget,
-    );
+        find.text('System notifications enabled'), 200);
+    expect(find.text('System notifications enabled'), findsOneWidget);
+    expect(find.text('Android notification access is off'), findsOneWidget);
     // Info from mock should be visible
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
@@ -236,4 +240,32 @@ void main() {
     );
   });
 
+  testWidgets('SettingsScreen exposes Android notification actions',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.dragUntilVisible(
+      find.text('Notification access'),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+
+    expect(find.text('Notification access'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Test notification'),
+        findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test notification'));
+    await tester.pump();
+
+    expect(find.text('Sent Android test notification.'), findsOneWidget);
+  });
 }
