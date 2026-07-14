@@ -147,7 +147,6 @@ public sealed class FileTransferService : IFileTransferService
         {
             await SendProtectedMessageAsync(targetDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
             _operationService.TransitionOperation(operationId, OperationState.Dispatched);
-            LogEvent(SecurityEventTypes.FileOffered, targetDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null, operationId);
         }
         catch (Exception ex) when (ex is FileTransferFailureException or InvalidOperationException or UnauthorizedAccessException)
         {
@@ -317,7 +316,7 @@ public sealed class FileTransferService : IFileTransferService
         };
 
         await SendProtectedMessageAsync(offer.SourceDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
-        LogEvent(SecurityEventTypes.FileTransferRejected, offer.SourceDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Denied, failureReason, null);
+        LogEvent(SecurityEventTypes.PolicyDenied, offer.SourceDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Denied, failureReason, null);
 
         return new RejectFileOfferResult
         {
@@ -373,7 +372,6 @@ public sealed class FileTransferService : IFileTransferService
             ExpiresAt = _timeProvider.GetUtcNow().AddMilliseconds(offer.ExpiresInMs)
         };
 
-        LogEvent(SecurityEventTypes.FileOffered, offer.DeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null, null);
         await NotifyFileOfferAsync(_remoteOffers[offer.TransferId], cancellationToken).ConfigureAwait(false);
     }
 
@@ -387,6 +385,7 @@ public sealed class FileTransferService : IFileTransferService
             throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was not found.");
         }
 
+        EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Accept");
         transfer.AcceptedChunkSize = chunkSize.HasValue ? NormalizeChunkSize(chunkSize.Value) : transfer.ChunkSize;
         transfer.SendTask ??= Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
         return Task.CompletedTask;
@@ -399,17 +398,25 @@ public sealed class FileTransferService : IFileTransferService
             return;
         }
 
-        TryTransitionFailure(transfer.OperationId, failureReason);
-        LogEvent(SecurityEventTypes.FileTransferRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, failureReason, transfer.OperationId);
-        await NotifyTransferFailedAsync(
-            transfer.TransferId,
-            transfer.OperationId,
-            transfer.TargetDeviceId,
-            transfer.FileName,
-            transfer.ByteSize,
-            failureReason,
-            message,
-            cancellationToken).ConfigureAwait(false);
+        EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Reject");
+        var rejectedTransfer = _outgoingTransfers.TryRemove(transferId, out var removedTransfer) ? removedTransfer : transfer;
+        TryTransitionFailure(rejectedTransfer.OperationId, failureReason);
+        try
+        {
+            await NotifyTransferFailedAsync(
+                rejectedTransfer.TransferId,
+                rejectedTransfer.OperationId,
+                rejectedTransfer.TargetDeviceId,
+                rejectedTransfer.FileName,
+                rejectedTransfer.ByteSize,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            rejectedTransfer.SendCancellation.Dispose();
+        }
     }
 
     public async Task HandleChunkReceivedAsync(
@@ -521,7 +528,6 @@ public sealed class FileTransferService : IFileTransferService
         _incomingTransfers.TryRemove(transferId, out _);
 
         _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
-        LogEvent(SecurityEventTypes.FileTransferCompleted, transfer.SourceDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null, transfer.OperationId);
         await NotifyTransferCompletedAsync(
             transfer.TransferId,
             transfer.OperationId,
@@ -539,35 +545,39 @@ public sealed class FileTransferService : IFileTransferService
         string? message,
         CancellationToken cancellationToken)
     {
-        if (_incomingTransfers.TryRemove(transferId, out var incoming))
+        if (_incomingTransfers.TryGetValue(transferId, out var incoming))
         {
-            CleanupStagingDirectory(incoming.StagingDirectory);
-            TryTransitionFailure(incoming.OperationId, failureReason);
+            EnsureIncomingTransferPeerMatches(incoming, deviceId, "Cancel");
+            var transferToCancel = _incomingTransfers.TryRemove(transferId, out var removedIncoming) ? removedIncoming : incoming;
+            CleanupStagingDirectory(transferToCancel.StagingDirectory);
+            TryTransitionFailure(transferToCancel.OperationId, failureReason);
             await NotifyTransferFailedAsync(
-                incoming.TransferId,
-                incoming.OperationId,
-                incoming.SourceDeviceId,
-                incoming.FileName,
-                incoming.ByteSize,
+                transferToCancel.TransferId,
+                transferToCancel.OperationId,
+                transferToCancel.SourceDeviceId,
+                transferToCancel.FileName,
+                transferToCancel.ByteSize,
                 failureReason,
                 message,
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (_outgoingTransfers.TryRemove(transferId, out var outgoing))
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
         {
-            outgoing.SendCancellation.Cancel();
-            TryTransitionFailure(outgoing.OperationId, failureReason);
+            EnsureOutgoingTransferPeerMatches(outgoing, deviceId, "Cancel");
+            var transferToCancel = _outgoingTransfers.TryRemove(transferId, out var removedOutgoing) ? removedOutgoing : outgoing;
+            transferToCancel.SendCancellation.Cancel();
+            TryTransitionFailure(transferToCancel.OperationId, failureReason);
             await NotifyTransferFailedAsync(
-                outgoing.TransferId,
-                outgoing.OperationId,
-                outgoing.TargetDeviceId,
-                outgoing.FileName,
-                outgoing.ByteSize,
+                transferToCancel.TransferId,
+                transferToCancel.OperationId,
+                transferToCancel.TargetDeviceId,
+                transferToCancel.FileName,
+                transferToCancel.ByteSize,
                 failureReason,
                 message,
                 cancellationToken).ConfigureAwait(false);
-            outgoing.SendCancellation.Dispose();
+            transferToCancel.SendCancellation.Dispose();
         }
     }
 
@@ -637,7 +647,6 @@ public sealed class FileTransferService : IFileTransferService
 
             await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), sendCancellationToken).ConfigureAwait(false);
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
-            LogEvent(SecurityEventTypes.FileTransferCompleted, transfer.TargetDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Success, null, transfer.OperationId);
             await NotifyTransferCompletedAsync(
                 transfer.TransferId,
                 transfer.OperationId,
@@ -655,7 +664,7 @@ public sealed class FileTransferService : IFileTransferService
         {
             _logger.LogWarning(ex, "File transfer {TransferId} failed while sending.", transfer.TransferId);
             TryTransitionFailure(transfer.OperationId, "ConnectionLost");
-            LogEvent(SecurityEventTypes.FileTransferFailed, transfer.TargetDeviceId, SecurityEventSeverity.Error, SecurityEventOutcome.Failure, "ConnectionLost", transfer.OperationId);
+            LogEvent(SecurityEventTypes.ConnectionLost, transfer.TargetDeviceId, SecurityEventSeverity.Error, SecurityEventOutcome.Failure, "ConnectionLost", transfer.OperationId);
             await NotifyTransferFailedAsync(
                 transfer.TransferId,
                 transfer.OperationId,
@@ -924,6 +933,28 @@ public sealed class FileTransferService : IFileTransferService
         throw new FileTransferFailureException("Unauthorized", -32004, $"{messageType} payload identity did not match the authenticated peer identity.");
     }
 
+    private void EnsureOutgoingTransferPeerMatches(OutgoingTransferState transfer, string deviceId, string action)
+    {
+        if (string.Equals(transfer.TargetDeviceId, deviceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized", transfer.OperationId);
+        throw new FileTransferFailureException("Unauthorized", -32004, $"{action} sender did not match outgoing transfer target device.");
+    }
+
+    private void EnsureIncomingTransferPeerMatches(IncomingTransferState transfer, string deviceId, string action)
+    {
+        if (string.Equals(transfer.SourceDeviceId, deviceId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        LogEvent(SecurityEventTypes.AuthFailed, deviceId, SecurityEventSeverity.Critical, SecurityEventOutcome.Denied, "Unauthorized", transfer.OperationId);
+        throw new FileTransferFailureException("Unauthorized", -32004, $"{action} sender did not match incoming transfer source device.");
+    }
+
     private Task PruneExpiredOffersAsync()
     {
         var now = _timeProvider.GetUtcNow();
@@ -936,7 +967,7 @@ public sealed class FileTransferService : IFileTransferService
 
             if (_remoteOffers.TryRemove(entry.Key, out var removed))
             {
-                LogEvent(SecurityEventTypes.FileTransferExpired, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired", null);
+                LogEvent(SecurityEventTypes.PolicyDenied, removed.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "OfferExpired", null);
             }
         }
 
