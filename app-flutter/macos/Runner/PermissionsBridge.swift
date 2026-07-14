@@ -2,18 +2,43 @@ import Foundation
 import Cocoa
 import CryptoKit
 import FlutterMacOS
+import UniformTypeIdentifiers
 import UserNotifications
 
 final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
   static let channelName = "rift.permissions"
   private static let shared = PermissionsBridge()
   private static var channel: FlutterMethodChannel?
+  private static var pendingAction: [String: Any]?
 
   static func register(with messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(name: channelName, binaryMessenger: messenger)
     Self.channel = channel
     channel.setMethodCallHandler(Self.shared.handle)
     UNUserNotificationCenter.current().delegate = Self.shared
+    Self.flushPendingActionIfNeeded()
+  }
+
+  static func dispatchOpenFiles(_ paths: [String]) {
+    SharedTransferInbox.queueFiles(paths)
+    guard let payload = SharedTransferInbox.consumePendingPayload() else {
+      return
+    }
+    dispatchPayload(payload)
+  }
+
+  static func dispatchRoute(_ route: String) {
+    dispatchPayload(["route": route])
+  }
+
+  private static func flushPendingActionIfNeeded() {
+    guard let payload = pendingAction, let channel = channel else {
+      return
+    }
+    pendingAction = nil
+    DispatchQueue.main.async {
+      channel.invokeMethod("notificationActivated", arguments: payload)
+    }
   }
 
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -24,8 +49,20 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       requestNotification(result: result)
     case "notification.show":
       showNotification(args: call.arguments, result: result)
+    case "share.consumePendingItems":
+      result(SharedTransferInbox.consumePendingPayload())
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private static func dispatchPayload(_ payload: [String: Any]) {
+    if let channel = Self.channel {
+      DispatchQueue.main.async {
+        channel.invokeMethod("notificationActivated", arguments: payload)
+      }
+    } else {
+      Self.pendingAction = payload
     }
   }
 

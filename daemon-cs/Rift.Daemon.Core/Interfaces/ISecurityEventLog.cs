@@ -34,6 +34,7 @@ public static class SecurityEventTypes
     public const string CertificateRotated = "certificate.rotated";
     public const string CapabilityNegotiated = "capability.negotiated";
     public const string OperationTransitioned = "operation.transitioned";
+    public const string FileTransferRejected = "file_transfer.rejected";
     public const string ClipboardOffered = "clipboard.offered";
     public const string ClipboardFetched = "clipboard.fetched";
     public const string ClipboardExpired = "clipboard.expired";

@@ -170,18 +170,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }
     if (!mounted) return;
 
-    final reason = event['reason']?.toString();
-    final previous = event['previousState']?.toString();
-
-    // Quick UI feedback for state transitions (helps triage).
-    if (reason != null && reason.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text(
-                'Trust changed: $newState${previous != null ? ' (from $previous)' : ''} - $reason')),
-      );
-    }
-
     // We can't fully materialize trusted peer details from the event alone,
     // so do a throttled full reload. Still, update minimal local state to
     // prevent the UI from feeling stale.

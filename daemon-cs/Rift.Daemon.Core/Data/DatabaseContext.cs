@@ -76,6 +76,23 @@ public sealed class DatabaseContext
                 DetailsJson TEXT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS SendQueueItems (
+                QueueItemId TEXT NOT NULL PRIMARY KEY,
+                Status TEXT NOT NULL,
+                TargetDeviceId TEXT NULL,
+                LocalPath TEXT NOT NULL,
+                FileName TEXT NOT NULL,
+                MediaType TEXT NOT NULL,
+                ByteSize INTEGER NOT NULL,
+                CurrentOperationId TEXT NULL,
+                LastTransferId TEXT NULL,
+                FailureReason TEXT NULL,
+                FailureMessage TEXT NULL,
+                CreatedAt TEXT NOT NULL,
+                UpdatedAt TEXT NOT NULL,
+                Origin TEXT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS IX_SecurityEvents_Timestamp
             ON SecurityEvents (Timestamp DESC);
 
@@ -87,6 +104,9 @@ public sealed class DatabaseContext
 
             CREATE INDEX IF NOT EXISTS IX_SecurityEvents_PeerDeviceId_Timestamp
             ON SecurityEvents (PeerDeviceId, Timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS IX_SendQueueItems_UpdatedAt
+            ON SendQueueItems (UpdatedAt DESC);
             """;
         command.ExecuteNonQuery();
 

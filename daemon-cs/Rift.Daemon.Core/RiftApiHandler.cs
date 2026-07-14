@@ -11,11 +11,12 @@ public class RiftApiHandler : IRiftApi
     private readonly IDiscoveryCoordinator _discoveryCoordinator;
     private readonly IClipboardService _clipboardService;
     private readonly IFileTransferService _fileTransferService;
+    private readonly ISendQueueService _sendQueueService;
     private readonly IOperationService _operationService;
     private readonly IPairingService _pairingService;
 
     public RiftApiHandler()
-        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedOperationService(), new UnsupportedPairingService())
+        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService())
     {
     }
 
@@ -24,6 +25,7 @@ public class RiftApiHandler : IRiftApi
         IDiscoveryCoordinator discoveryCoordinator,
         IClipboardService clipboardService,
         IFileTransferService fileTransferService,
+        ISendQueueService sendQueueService,
         IOperationService operationService,
         IPairingService pairingService)
     {
@@ -31,6 +33,7 @@ public class RiftApiHandler : IRiftApi
         _discoveryCoordinator = discoveryCoordinator;
         _clipboardService = clipboardService;
         _fileTransferService = fileTransferService;
+        _sendQueueService = sendQueueService;
         _operationService = operationService;
         _pairingService = pairingService;
     }
@@ -131,6 +134,75 @@ public class RiftApiHandler : IRiftApi
             return await _fileTransferService.OfferFileAsync(targetDeviceId, localPath, fileName, mediaType, CancellationToken.None);
         }
         catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.enqueueFileSend")]
+    public async Task<EnqueueFileSendResult> EnqueueFileSendAsync(string localPath, string? fileName = null, string? mediaType = null, string? targetDeviceId = null, string? origin = null)
+    {
+        try
+        {
+            return await _sendQueueService.EnqueueFileSendAsync(localPath, fileName, mediaType, targetDeviceId, origin, CancellationToken.None);
+        }
+        catch (SendQueueFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.listSendQueue")]
+    public Task<ListSendQueueResult> ListSendQueueAsync() =>
+        _sendQueueService.ListSendQueueAsync(CancellationToken.None);
+
+    [JsonRpcMethod("rift.getSendQueueItem")]
+    public async Task<SendQueueItemInfo> GetSendQueueItemAsync(string queueItemId)
+    {
+        try
+        {
+            return await _sendQueueService.GetSendQueueItemAsync(queueItemId, CancellationToken.None);
+        }
+        catch (SendQueueFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.assignSendQueueTarget")]
+    public async Task<SendQueueItemInfo> AssignSendQueueTargetAsync(string queueItemId, string targetDeviceId)
+    {
+        try
+        {
+            return await _sendQueueService.AssignSendQueueTargetAsync(queueItemId, targetDeviceId, CancellationToken.None);
+        }
+        catch (SendQueueFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.retrySendQueueItem")]
+    public async Task<SendQueueItemInfo> RetrySendQueueItemAsync(string queueItemId)
+    {
+        try
+        {
+            return await _sendQueueService.RetrySendQueueItemAsync(queueItemId, CancellationToken.None);
+        }
+        catch (SendQueueFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.removeSendQueueItem")]
+    public async Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId)
+    {
+        try
+        {
+            return await _sendQueueService.RemoveSendQueueItemAsync(queueItemId, CancellationToken.None);
+        }
+        catch (SendQueueFailureException ex)
         {
             throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
         }
@@ -347,6 +419,12 @@ public class RiftApiHandler : IRiftApi
 
     private sealed class UnsupportedFileTransferService : IFileTransferService
     {
+        public event EventHandler<FileTransferLifecycleEventArgs>? TransferUpdated
+        {
+            add { }
+            remove { }
+        }
+
         public Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName, string? mediaType, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() => throw CreateNotConfiguredException();
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
@@ -362,6 +440,24 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("File transfer services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedSendQueueService : ISendQueueService
+    {
+        public Task<EnqueueFileSendResult> EnqueueFileSendAsync(string localPath, string? fileName, string? mediaType, string? targetDeviceId, string? origin, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ListSendQueueResult> ListSendQueueAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<SendQueueItemInfo> GetSendQueueItemAsync(string queueItemId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<SendQueueItemInfo> AssignSendQueueTargetAsync(string queueItemId, string targetDeviceId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<SendQueueItemInfo> RetrySendQueueItemAsync(string queueItemId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Send queue services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };

@@ -1,6 +1,6 @@
 import 'dart:async';
-
 import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
+import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +13,9 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   FakeTransferJsonRpcClient({
     List<Map<String, dynamic>>? transfers,
     List<Map<String, dynamic>>? clipboardOffers,
+    this.sendQueueSupported = false,
+    List<Map<String, dynamic>>? queueItems,
+    bool isConnected = true,
   })  : transfers = transfers ??
             const [
               {
@@ -30,15 +33,38 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
               },
             ],
         clipboardOffers = clipboardOffers ?? const <Map<String, dynamic>>[],
+        queueItems = queueItems ?? <Map<String, dynamic>>[],
+        _isConnected = isConnected,
         super(FakeTransport());
 
+  final _trustChangedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
+  final bool sendQueueSupported;
+  final List<Map<String, dynamic>> queueItems;
   final List<Map<String, Object>> clipboardNotifications =
       <Map<String, Object>>[];
+  List<Map<String, dynamic>> trustedPeers = [
+    {
+      'deviceId': 'rift-peer-1',
+      'displayName': 'Pixel 9 Pro',
+      'platform': 'android',
+      'trustState': 'trusted',
+      'presence': 'online',
+      'capabilities': ['file.transfer'],
+    },
+  ];
+  final List<Map<String, String>> offeredFiles = <Map<String, String>>[];
+  final List<Object> offerFileFailures = <Object>[];
+  final List<Map<String, String>> assignedQueueTargets = <Map<String, String>>[];
+  final List<String> retriedQueueItems = <String>[];
+  final List<String> removedQueueItems = <String>[];
+  bool _isConnected;
 
   @override
-  bool get isConnected => true;
+  bool get isConnected => _isConnected;
 
   @override
   Stream<Map<String, dynamic>> get onClipboardOffer =>
@@ -66,7 +92,10 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onTrustChanged =>
-      const Stream<Map<String, dynamic>>.empty();
+      _trustChangedController.stream;
+
+  @override
+  Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
 
   @override
   Future<dynamic> listClipboardOffers() async => {'offers': clipboardOffers};
@@ -76,16 +105,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> listTrustedPeers() async => {
-        'peers': [
-          {
-            'deviceId': 'rift-peer-1',
-            'displayName': 'Pixel 9 Pro',
-            'platform': 'android',
-            'trustState': 'trusted',
-            'presence': 'online',
-            'capabilities': ['file.transfer'],
-          },
-        ],
+        'peers': trustedPeers,
       };
 
   @override
@@ -106,20 +126,105 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
     });
     return const <String, Object>{'ok': true};
   }
+
+  @override
+  Future<dynamic> offerFile({
+    required String targetDeviceId,
+    required String localPath,
+    String? fileName,
+    String? mediaType,
+  }) async {
+    offeredFiles.add({
+      'targetDeviceId': targetDeviceId,
+      'localPath': localPath,
+      'fileName': fileName ?? '',
+      'mediaType': mediaType ?? '',
+    });
+    if (offerFileFailures.isNotEmpty) {
+      throw offerFileFailures.removeAt(0);
+    }
+    return {
+      'transferId': 'transfer-${offeredFiles.length}',
+      'operationId': 'operation-${offeredFiles.length}',
+    };
+  }
+
+  @override
+  Future<bool> supportsSendQueue() async => sendQueueSupported;
+
+  @override
+  Future<dynamic> listSendQueue() async => {'items': queueItems};
+
+  @override
+  Future<dynamic> assignSendQueueTarget({
+    required String queueItemId,
+    required String targetDeviceId,
+  }) async {
+    assignedQueueTargets.add({
+      'queueItemId': queueItemId,
+      'targetDeviceId': targetDeviceId,
+    });
+    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    item['targetDeviceId'] = targetDeviceId;
+    item['status'] = 'dispatching';
+    return item;
+  }
+
+  @override
+  Future<dynamic> retrySendQueueItem(String queueItemId) async {
+    retriedQueueItems.add(queueItemId);
+    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    item['status'] = 'dispatching';
+    return item;
+  }
+
+  @override
+  Future<dynamic> removeSendQueueItem(String queueItemId) async {
+    removedQueueItems.add(queueItemId);
+    queueItems.removeWhere((entry) => entry['queueItemId'] == queueItemId);
+    return {
+      'queueItemId': queueItemId,
+      'removed': true,
+    };
+  }
+
+  Future<void> emitConnectionChanged(bool value) async {
+    _isConnected = value;
+    _connectionChangedController.add(value);
+  }
+
+  Future<void> emitTrustChanged(Map<String, dynamic> value) async {
+    _trustChangedController.add(value);
+  }
 }
 
 void main() {
   Widget buildScreen({
     required bool revealInFolder,
     FakeTransferJsonRpcClient? client,
+    Future<List<Map<String, String>>> Function()? pickSendFilesOverride,
     ValueNotifier<String?>? routeNotifier,
+    ValueNotifier<String?>? sharedClipboardTextNotifier,
+    bool preferDaemonOnlyOverride = true,
   }) {
     return MaterialApp(
-      home: Provider<JsonRpcRiftClient>.value(
-        value: client ?? FakeTransferJsonRpcClient(),
+      home: MultiProvider(
+        providers: [
+          Provider<JsonRpcRiftClient>.value(
+            value: client ?? FakeTransferJsonRpcClient(),
+          ),
+          ChangeNotifierProvider<SendQueueController>(
+            create: (context) => SendQueueController(
+              context.read<JsonRpcRiftClient>(),
+              preferDaemonOnlyOverride,
+            ),
+          ),
+        ],
         child: ClipboardTransferScreen(
           revealCompletedTransfersInFolderOverride: revealInFolder,
+          pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
+          sharedClipboardTextNotifier: sharedClipboardTextNotifier,
         ),
       ),
     );
@@ -327,4 +432,137 @@ void main() {
     expect(find.text('Pixel 9 Pro'), findsOneWidget);
     expect(find.textContaining('Text'), findsWidgets);
   });
+
+  testWidgets('send flow uses daemon queue actions when supported',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'waiting_for_target',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Send Unassigned'));
+    await tester.pumpAndSettle();
+
+    expect(client.offeredFiles, isEmpty);
+    expect(client.assignedQueueTargets, hasLength(1));
+    expect(client.assignedQueueTargets.single['targetDeviceId'], 'rift-peer-1');
+  });
+
+  testWidgets(
+      'desktop daemon-first reconnect restores visible queue after app opens',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      isConnected: false,
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'waiting_for_peer',
+          'targetDeviceId': 'rift-peer-1',
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': 'PeerUnreachable',
+          'failureMessage': 'offline',
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+    expect(find.text('demo-1.txt'), findsNothing);
+
+    await client.emitConnectionChanged(true);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('demo-1.txt'), findsOneWidget);
+    expect(find.textContaining('Target: Pixel 9 Pro'), findsOneWidget);
+  });
+
+  testWidgets('Clear Sent removes sent daemon-backed queue items',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'sent',
+          'targetDeviceId': 'rift-peer-1',
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': 'transfer-1',
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+    expect(find.text('demo-1.txt'), findsOneWidget);
+
+    await tester.tap(find.text('Clear Sent'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(client.removedQueueItems, ['queue-1']);
+    expect(find.text('demo-1.txt'), findsNothing);
+  });
+
 }

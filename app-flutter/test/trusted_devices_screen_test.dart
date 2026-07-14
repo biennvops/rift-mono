@@ -215,7 +215,7 @@ void main() {
 
     expect(client.manualPairAddress, '10.53.38.174');
     expect(client.manualPairPort, 9140);
-    expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
+    expect(find.text('Pairing with rift-manual-peer'), findsOneWidget);
   });
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',

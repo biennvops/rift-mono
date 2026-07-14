@@ -22,6 +22,7 @@ public static class DaemonHostConfiguration
         services.AddSingleton<ILocalIdentityStore, SqliteLocalIdentityStore>();
         services.AddSingleton<ITrustStore, SqliteTrustStore>();
         services.AddSingleton<ISecurityEventLog, SqliteSecurityEventLog>();
+        services.AddSingleton<ISendQueueStore, SqliteSendQueueStore>();
         services.AddSingleton<IIdentityManager, IdentityManager>();
         services.AddSingleton<IDiscoveryCoordinator, DiscoveryCoordinator>();
         services.AddSingleton<IDaemonInfoService, DaemonInfoService>();
@@ -30,6 +31,12 @@ public static class DaemonHostConfiguration
         services.AddSingleton<IOperationService, OperationService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
         services.AddSingleton<IFileTransferService, FileTransferService>();
+        services.AddSingleton<ISendQueueService>(provider => new SendQueueService(
+            provider.GetRequiredService<ITrustStore>(),
+            provider.GetService<IIpcNotificationService>(),
+            provider.GetRequiredService<IFileTransferService>(),
+            provider.GetRequiredService<ITransport>(),
+            provider.GetRequiredService<ISendQueueStore>()));
         services.AddSingleton<IPairingProtocolCoordinator, PairingProtocolCoordinator>();
         services.AddSingleton<IProtocolMessageRouter, ProtocolMessageRouter>();
         services.AddSingleton<IPairingService, PairingService>();

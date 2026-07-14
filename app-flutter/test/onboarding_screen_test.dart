@@ -1,0 +1,120 @@
+import 'dart:async';
+
+import 'package:app_flutter/screens/onboarding_screen.dart';
+import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+
+import 'test_utils/fake_transport.dart';
+
+class FakeOnboardingClient extends JsonRpcRiftClient {
+  FakeOnboardingClient({
+    this.localNetworkGranted = true,
+  }) : super(FakeTransport());
+
+  bool localNetworkGranted;
+  int startDiscoveryCallCount = 0;
+
+  @override
+  bool get isConnected => true;
+
+  @override
+  Stream<Map<String, dynamic>> get onPeerDiscovered => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPeerLost => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onTrustChanged => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPairingRequest => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onPairingComplete => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onSecurityEvent => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onOperationTransition =>
+      const Stream.empty();
+
+  @override
+  Stream<bool> get onConnectionChanged => const Stream.empty();
+
+  @override
+  Future<dynamic> startDiscovery() async {
+    startDiscoveryCallCount += 1;
+    if (!localNetworkGranted) {
+      throw Exception('local network denied');
+    }
+    return {'started': true};
+  }
+}
+
+void main() {
+  Widget buildTestApp(FakeOnboardingClient client) {
+    return MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const OnboardingScreen(),
+      ),
+    );
+  }
+
+  testWidgets(
+      'OnboardingScreen auto-skips local network page when discovery already works',
+      (WidgetTester tester) async {
+    final client = FakeOnboardingClient(localNetworkGranted: true);
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pump();
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+
+    expect(client.startDiscoveryCallCount, 1);
+    expect(find.widgetWithText(FilledButton, 'Enable Alerts'), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Grant Permission'),
+      findsNothing,
+    );
+  });
+
+  testWidgets(
+      'OnboardingScreen keeps local network page when discovery precheck fails',
+      (WidgetTester tester) async {
+    final client = FakeOnboardingClient(localNetworkGranted: false);
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pump();
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+
+    expect(client.startDiscoveryCallCount, 1);
+    expect(
+      find.widgetWithText(FilledButton, 'Grant Permission'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(FilledButton, 'Enable Alerts'), findsNothing);
+  });
+}

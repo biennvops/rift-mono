@@ -42,4 +42,15 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
     return true
   }
+
+  override func application(_ sender: NSApplication, openFiles filenames: [String]) {
+    PermissionsBridge.dispatchOpenFiles(filenames)
+    sender.reply(toOpenOrPrint: .success)
+  }
+
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    for url in urls where url.scheme == "rift" {
+      PermissionsBridge.dispatchRoute(url.host ?? url.absoluteString.replacingOccurrences(of: "rift://", with: ""))
+    }
+  }
 }
