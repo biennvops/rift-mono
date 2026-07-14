@@ -38,13 +38,25 @@ object NotificationSyncRelay {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         val existingRaw = prefs.getString(pendingEventsKey, null) ?: return
         val entries = JSONArray(existingRaw)
-        val target = mapToJsonObject(payload).toString()
+        val target = eventSignature(payload["eventType"], payload["notificationId"], eventTimestamp(payload))
+        if (target == null) {
+            return
+        }
         val remaining = JSONArray()
         var removed = false
         for (index in 0 until entries.length()) {
             val item = entries.optJSONObject(index) ?: continue
-            val serialized = item.toString()
-            if (!removed && serialized == target) {
+            val signature = eventSignature(
+                item.opt("eventType"),
+                item.opt("notificationId"),
+                eventTimestamp(item),
+            )
+            // Match on the identifying fields (eventType, notificationId, timestamp)
+            // rather than full JSON equality: the broadcast payload is rebuilt from
+            // Intent extras and its key order/type coercion may differ from the
+            // stored entry, which would otherwise leave the event un-acknowledged
+            // and cause a duplicate re-delivery on the next drain.
+            if (!removed && signature == target) {
                 removed = true
                 continue
             }
@@ -126,5 +138,19 @@ object NotificationSyncRelay {
             result[key] = obj.opt(key)
         }
         return result
+    }
+
+    // A posted/updated event carries `postedAt`; a removed event carries `removedAt`.
+    // Either disambiguates repeated events for the same notification id.
+    private fun eventTimestamp(payload: Map<String, Any?>): Any? =
+        payload["postedAt"] ?: payload["removedAt"]
+
+    private fun eventTimestamp(obj: JSONObject): Any? =
+        obj.opt("postedAt") ?: obj.opt("removedAt")
+
+    private fun eventSignature(eventType: Any?, notificationId: Any?, timestamp: Any?): String? {
+        val type = (eventType as? String)?.takeIf { it.isNotEmpty() } ?: return null
+        val id = (notificationId as? String)?.takeIf { it.isNotEmpty() } ?: return null
+        return "$type\n$id\n${(timestamp as? String).orEmpty()}"
     }
 }
