@@ -372,9 +372,41 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return null;
     }
 
-    _sharedSendRequestsNotifier.value = items;
+    unawaited(_enqueueSharedSendItems(items));
     _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
     return null;
+  }
+
+  Future<bool?> _confirmIncomingFileOffer({
+    required String fileName,
+    required String sourceDeviceId,
+    required String destinationPath,
+  }) async {
+    final context = _navigatorKey.currentContext;
+    if (context == null || !mounted) {
+      return true;
+    }
+
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Accept file transfer?'),
+        content: Text(
+          'Receive $fileName from $sourceDeviceId?\n\n'
+          'Destination:\n$destinationPath',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Accept'),
+          ),
+        ],
+      ),
+    );
   }
 
   String? _externalClipboardFingerprint(Map<String, dynamic> payload) {

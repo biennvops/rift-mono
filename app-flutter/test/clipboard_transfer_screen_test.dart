@@ -613,4 +613,49 @@ void main() {
     expect(client.removedQueueItems, ['queue-1']);
     expect(find.text('demo-1.txt'), findsNothing);
   });
+
+  testWidgets('Send tab keeps daemon-backed queued files visible without peers',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'waiting_for_target',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    )..trustedPeers = const <Map<String, dynamic>>[];
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('demo-1.txt'), findsOneWidget);
+    expect(find.text('Add Files'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'No trusted peer currently advertises file.transfer.',
+      ),
+      findsOneWidget,
+    );
+  });
 }

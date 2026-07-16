@@ -32,7 +32,7 @@ target 'Runner' do
   flutter_install_all_macos_pods File.dirname(File.realpath(__FILE__))
 
   target 'RiftShareExtension' do
-    inherit! :search_paths
+    # Keep the share extension free of app-only Flutter pods.
   end
 
   target 'RunnerTests' do

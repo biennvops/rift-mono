@@ -114,12 +114,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openNotificationAccessSettings() async {
-    final theme = Theme.of(context);
     final success = AndroidShell.isSupported
         ? await AndroidShell.openNotificationListenerSettings()
         : false;
     if (!mounted || success) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final theme = Theme.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
       SnackBar(
         content: Text(
           'Unable to open Android notification access settings.',
@@ -130,9 +131,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showTestNotification() async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     final success = await AndroidShell.showTestNotification();
     if (success) {
-      final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
       final now = DateTime.now().toUtc();
       try {
         await client.notifyLocalNotificationEvent(

@@ -1968,122 +1968,125 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           'Hai bên đều có thể chủ động gửi. Mục này chỉ hiện peer đang trusted và có capability file.transfer.',
       isLoading: _isRefreshingPeers,
       onRefresh: _refreshTrustedPeers,
-      child: peers.isEmpty
-          ? Text(
-              'No trusted peer currently advertises file.transfer.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+      child: Column(
+        children: [
+          if (activeOutgoingTransfers.isNotEmpty) ...[
+            _buildOutgoingTransferBanner(theme, activeOutgoingTransfers),
+            const SizedBox(height: 12),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _addFilesToSendQueue,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Files'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _sendQueue.items.any(
+                  (file) => file.status == SendQueueStatus.sent,
+                )
+                    ? () => unawaited(_clearFinishedStagedFiles())
+                    : null,
+                child: const Text('Clear Sent'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildStagedFilesList(theme),
+          const SizedBox(height: 12),
+          if (peers.isEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'No trusted peer currently advertises file.transfer. Staged files will remain in the queue until a compatible peer is available.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             )
-          : Column(
-              children: [
-                if (activeOutgoingTransfers.isNotEmpty) ...[
-                  _buildOutgoingTransferBanner(theme, activeOutgoingTransfers),
-                  const SizedBox(height: 12),
-                ],
-                Row(
+          else
+            ...peers.map((peer) {
+              final deviceId = peer['deviceId']?.toString();
+              final showSendingSpinner = deviceId != null &&
+                  _legacySendingFilePeerIds.contains(deviceId);
+              final isSending = deviceId != null &&
+                  (showSendingSpinner ||
+                      _hasActiveOutgoingTransferForPeer(deviceId));
+              final summary = deviceId == null || deviceId.isEmpty
+                  ? const SendQueuePeerSummary(
+                      eligibleCount: 0,
+                      unassignedCount: 0,
+                      waitingCount: 0,
+                      failedCount: 0,
+                    )
+                  : _peerQueueSummary(deviceId);
+              return Container(
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
                   children: [
+                    Icon(
+                      _platformIcon(peer['platform']?.toString()),
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _addFilesToSendQueue,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add Files'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _peerDisplayName(deviceId),
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            peer['platform']?.toString().toUpperCase() ??
+                                'DEVICE',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            summary.detailLabel(),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: _sendQueue.items.any(
-                        (file) => file.status == SendQueueStatus.sent,
-                      )
-                          ? () => unawaited(_clearFinishedStagedFiles())
-                          : null,
-                      child: const Text('Clear Sent'),
+                    FilledButton.icon(
+                      onPressed: isSending || summary.eligibleCount == 0
+                          ? null
+                          : () => _sendStagedFilesToPeer(peer),
+                      icon: showSendingSpinner
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              isSending ? Icons.sync : Icons.upload_file,
+                            ),
+                      label: Text(
+                        isSending ? 'Sending...' : summary.actionLabel(),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _buildStagedFilesList(theme),
-                const SizedBox(height: 12),
-                ...peers.map((peer) {
-                  final deviceId = peer['deviceId']?.toString();
-                  final showSendingSpinner = deviceId != null &&
-                      _legacySendingFilePeerIds.contains(deviceId);
-                  final isSending = deviceId != null &&
-                      (showSendingSpinner ||
-                          _hasActiveOutgoingTransferForPeer(deviceId));
-                  final summary = deviceId == null || deviceId.isEmpty
-                      ? const SendQueuePeerSummary(
-                          eligibleCount: 0,
-                          unassignedCount: 0,
-                          waitingCount: 0,
-                          failedCount: 0,
-                        )
-                      : _peerQueueSummary(deviceId);
-                  return Container(
-                    margin: const EdgeInsets.only(top: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _platformIcon(peer['platform']?.toString()),
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _peerDisplayName(deviceId),
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                              Text(
-                                peer['platform']?.toString().toUpperCase() ??
-                                    'DEVICE',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                summary.detailLabel(),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        FilledButton.icon(
-                          onPressed: isSending || summary.eligibleCount == 0
-                              ? null
-                              : () => _sendStagedFilesToPeer(peer),
-                          icon: showSendingSpinner
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : Icon(
-                                  isSending ? Icons.sync : Icons.upload_file,
-                                ),
-                          label: Text(
-                            isSending ? 'Sending...' : summary.actionLabel(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
+              );
+            }),
+        ],
+      ),
     );
   }
 
