@@ -98,6 +98,71 @@ class SendQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _mergeDaemonEntries(Iterable<SendQueueEntry> entries) {
+    var changed = false;
+    for (final entry in entries) {
+      final queueItemId = entry.queueItemId;
+      final existingIndex = _items.indexWhere((candidate) {
+        if (queueItemId != null &&
+            candidate.queueItemId != null &&
+            candidate.queueItemId == queueItemId) {
+          return true;
+        }
+        return candidate.localPath == entry.localPath;
+      });
+
+      if (existingIndex >= 0) {
+        _items[existingIndex] = entry;
+      } else {
+        _items.add(entry);
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> _hydrateMissingDaemonItems(
+    Iterable<String> queueItemIds,
+  ) async {
+    final client = _client;
+    if (client == null) {
+      return;
+    }
+
+    final missingIds = queueItemIds.where((queueItemId) {
+      return !_items.any((item) => item.queueItemId == queueItemId);
+    }).toList(growable: false);
+    if (missingIds.isEmpty) {
+      return;
+    }
+
+    final recovered = <SendQueueEntry>[];
+    for (final queueItemId in missingIds) {
+      try {
+        final payload = await client.getSendQueueItem(queueItemId);
+        if (payload is! Map) {
+          continue;
+        }
+        final entry = SendQueueEntry.fromDaemonQueueMap(
+          Map<String, dynamic>.from(payload),
+        );
+        if (entry != null) {
+          recovered.add(entry);
+        }
+      } catch (_) {
+        // Best effort: the enqueue already succeeded, so avoid surfacing a
+        // second error if the follow-up read is briefly stale.
+      }
+    }
+
+    if (recovered.isNotEmpty) {
+      _mergeDaemonEntries(recovered);
+    }
+  }
+
   Future<bool> supportsDaemonQueue() async {
     await ensureRestored();
     return _canUseDaemonQueue();
@@ -389,6 +454,7 @@ class SendQueueController extends ChangeNotifier {
         if (await _canUseDaemonQueue()) {
           var added = 0;
           var skipped = 0;
+          final enqueuedQueueItemIds = <String>[];
           for (final request in requests) {
             final localPath = request['localPath'];
             if (localPath == null || localPath.isEmpty) {
@@ -396,17 +462,24 @@ class SendQueueController extends ChangeNotifier {
               continue;
             }
             try {
-              await client.enqueueFileSend(
+              final response = await client.enqueueFileSend(
                 localPath: localPath,
                 fileName: request['fileName'],
                 mediaType: request['mediaType'],
               );
+              if (response is Map) {
+                final queueItemId = response['queueItemId']?.toString();
+                if (queueItemId != null && queueItemId.isNotEmpty) {
+                  enqueuedQueueItemIds.add(queueItemId);
+                }
+              }
               added += 1;
             } catch (_) {
               skipped += 1;
             }
           }
           await _refreshFromDaemonQueue();
+          await _hydrateMissingDaemonItems(enqueuedQueueItemIds);
           return SendQueueEnqueueResult(added: added, skipped: skipped);
         }
       } catch (error) {

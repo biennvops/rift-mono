@@ -16,11 +16,13 @@ class _FakeQueueClient extends JsonRpcRiftClient {
   _FakeQueueClient({
     this.sendQueueSupported = true,
     List<Map<String, dynamic>>? queueItems,
+    this.hideItemsFromList = false,
   })  : _queueItems = queueItems ?? <Map<String, dynamic>>[],
         super(FakeTransport());
 
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> _queueItems;
+  final bool hideItemsFromList;
   final StreamController<Map<String, dynamic>> _sendQueueChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _sendQueueItemUpdatedController =
@@ -54,7 +56,17 @@ class _FakeQueueClient extends JsonRpcRiftClient {
     if (!sendQueueSupported) {
       throw Exception('JSON-RPC error -32601: Method not found');
     }
-    return {'items': _queueItems};
+    return {
+      'items': hideItemsFromList ? <Map<String, dynamic>>[] : _queueItems,
+    };
+  }
+
+  @override
+  Future<dynamic> getSendQueueItem(String queueItemId) async {
+    if (!sendQueueSupported) {
+      throw Exception('JSON-RPC error -32601: Method not found');
+    }
+    return _findQueueItem(queueItemId);
   }
 
   @override
@@ -321,6 +333,36 @@ void main() {
 
     expect(result.added, 1);
     expect(controller.items, hasLength(1));
+    expect(controller.items.single.fileName, 'demo.txt');
+  });
+
+  test('controller hydrates enqueued daemon item when listSendQueue is stale',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('rift-queue-stale');
+    final file = File('${tempDir.path}/demo.txt');
+    await file.writeAsString('hello');
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final client = _FakeQueueClient(
+      sendQueueSupported: true,
+      hideItemsFromList: true,
+    );
+    final controller = SendQueueController(client);
+    final result = await controller.enqueueRequests([
+      {
+        'localPath': file.path,
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+      },
+    ]);
+
+    expect(result.added, 1);
+    expect(controller.items, hasLength(1));
+    expect(controller.items.single.queueItemId, 'queue-1');
     expect(controller.items.single.fileName, 'demo.txt');
   });
 
