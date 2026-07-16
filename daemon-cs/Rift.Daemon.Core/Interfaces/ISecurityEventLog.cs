@@ -39,6 +39,9 @@ public static class SecurityEventTypes
     public const string ClipboardFetched = "clipboard.fetched";
     public const string ClipboardExpired = "clipboard.expired";
     public const string ClipboardOfferReplay = "clipboard.offer_replay";
+    public const string NotificationSynced = "notification.synced";
+    public const string NotificationRemoved = "notification.removed";
+    public const string NotificationActioned = "notification.actioned";
     public const string MessageMalformed = "message.malformed";
     public const string CertificateMalformed = "certificate.malformed";
     public const string PolicyDenied = "policy.denied";

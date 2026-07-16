@@ -13,7 +13,8 @@ class OnboardingScreen extends StatefulWidget {
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
+class _OnboardingScreenState extends State<OnboardingScreen>
+    with WidgetsBindingObserver {
   final PageController _pageController = PageController();
   int _currentPage = 0;
   bool _isProcessing = false;
@@ -21,24 +22,42 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _localNetworkPermissionGranted = false;
   bool _notificationPermissionPrechecked = false;
   bool _notificationPermissionGranted = false;
+  bool _notificationAccessPrechecked = false;
+  bool _notificationAccessGranted = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _preloadPermissionState();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshNotificationState();
+    }
   }
 
   Future<void> _preloadPermissionState() async {
     final localNetworkGranted = await _precheckLocalNetworkPermission();
-    final status = AndroidShell.isSupported
-        ? await AndroidShell.getNotificationPermissionStatus()
-        : await MacOSNotifications.getStatus();
+    final notificationStatus = await _loadNotificationPermissionStatus();
+    final notificationAccessStatus = await _loadNotificationAccessStatus();
     if (!mounted) return;
     setState(() {
       _localNetworkPermissionPrechecked = true;
       _localNetworkPermissionGranted = localNetworkGranted;
       _notificationPermissionPrechecked = true;
-      _notificationPermissionGranted = status == 'authorized';
+      _notificationPermissionGranted = notificationStatus == 'authorized';
+      _notificationAccessPrechecked = true;
+      _notificationAccessGranted = notificationAccessStatus == 'authorized';
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -65,6 +84,34 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  Future<String> _loadNotificationPermissionStatus() async {
+    return AndroidShell.isSupported
+        ? AndroidShell.getNotificationPermissionStatus()
+        : MacOSNotifications.getStatus();
+  }
+
+  Future<String> _loadNotificationAccessStatus() async {
+    if (AndroidShell.isSupported) {
+      return AndroidShell.getNotificationListenerAccessStatus();
+    }
+    return 'authorized';
+  }
+
+  Future<void> _refreshNotificationState() async {
+    final notificationStatus = await _loadNotificationPermissionStatus();
+    final notificationAccessStatus = await _loadNotificationAccessStatus();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _notificationPermissionPrechecked = true;
+      _notificationPermissionGranted = notificationStatus == 'authorized';
+      _notificationAccessPrechecked = true;
+      _notificationAccessGranted = notificationAccessStatus == 'authorized';
+    });
+    _autoAdvanceFromPrechecks();
+  }
+
   void _autoAdvanceFromPrechecks() {
     if (_currentPage == 0 &&
         _localNetworkPermissionPrechecked &&
@@ -74,7 +121,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
     if (_currentPage == 1 &&
         _notificationPermissionPrechecked &&
-        _notificationPermissionGranted) {
+        _notificationPermissionGranted &&
+        _notificationAccessPrechecked &&
+        _notificationAccessGranted) {
       _nextPage();
     }
   }
@@ -115,13 +164,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _requestNotificationsThenNext() async {
-    if (_notificationPermissionGranted) {
+    if (_notificationPermissionGranted && _notificationAccessGranted) {
       _nextPage();
       return;
     }
-    final granted = AndroidShell.isSupported
-        ? await AndroidShell.requestNotificationPermission()
-        : await MacOSNotifications.request();
+    var granted = _notificationPermissionGranted;
+    if (!granted) {
+      granted = AndroidShell.isSupported
+          ? await AndroidShell.requestNotificationPermission()
+          : await MacOSNotifications.request();
+    }
     if (!mounted) return;
     if (granted) {
       setState(() {
@@ -136,6 +188,32 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           ),
         ),
       );
+      _nextPage();
+      return;
+    }
+
+    if (AndroidShell.isSupported && !_notificationAccessGranted) {
+      final opened = await AndroidShell.openNotificationListenerSettings();
+      if (!mounted) return;
+      if (!opened) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Unable to open Android notification access settings. You can enable it later in Settings.',
+            ),
+          ),
+        );
+        _nextPage();
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Enable Rift notification access in the Android settings screen, then return to continue.',
+          ),
+        ),
+      );
+      return;
     }
     _nextPage();
   }
@@ -265,10 +343,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         .withValues(alpha: 0.3),
                     iconColor: theme.colorScheme.secondary,
                     title: 'Alerts & Logs',
-                    description:
-                        'Enable push notifications to receive real-time alerts on unauthorized access attempts and device sync status.',
+                    description: AndroidShell.isSupported
+                        ? 'Enable Android notifications and notification access so Rift can show alerts and mirror Android notifications to your trusted desktop devices.'
+                        : 'Enable push notifications to receive real-time alerts on unauthorized access attempts and device sync status.',
                     actions: [
-                      _buildPrimaryButton('Enable Alerts', theme,
+                      _buildPrimaryButton(
+                          AndroidShell.isSupported
+                              ? 'Enable Alerts & Sync'
+                              : 'Enable Alerts',
+                          theme,
                           _requestNotificationsThenNext),
                       const SizedBox(height: 8),
                       _buildOutlinedButton('Skip for Now', theme, _nextPage),

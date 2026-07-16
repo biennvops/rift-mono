@@ -13,6 +13,8 @@
 namespace {
 
 constexpr char kDesktopClipboardChannel[] = "rift/desktop/clipboard";
+constexpr char kLinuxNotificationsChannel[] = "rift/linux/notifications";
+constexpr char kLinuxNotificationActionName[] = "notificationActivated";
 std::string g_last_logged_clipboard_fingerprint;
 
 std::string fingerprint_clipboard_payload(const char* content_type,
@@ -257,11 +259,102 @@ void register_desktop_clipboard_channel(FlView* view) {
       g_object_unref);
 }
 
+std::string encode_notification_payload(const gchar* route,
+                                        const gchar* destination_path,
+                                        FlValue* payload) {
+  std::string encoded;
+  auto append_pair = [&encoded](const std::string& key,
+                                const std::string& value) {
+    g_autofree gchar* escaped_key = g_uri_escape_string(key.c_str(), nullptr, TRUE);
+    g_autofree gchar* escaped_value =
+        g_uri_escape_string(value.c_str(), nullptr, TRUE);
+    if (!encoded.empty()) {
+      encoded.push_back('&');
+    }
+    encoded.append(escaped_key);
+    encoded.push_back('=');
+    encoded.append(escaped_value);
+  };
+
+  if (route != nullptr && *route != '\0') {
+    append_pair("route", route);
+  }
+  if (destination_path != nullptr && *destination_path != '\0') {
+    append_pair("destinationPath", destination_path);
+  }
+  if (payload != nullptr && fl_value_get_type(payload) == FL_VALUE_TYPE_MAP) {
+    for (size_t i = 0; i < fl_value_get_length(payload); ++i) {
+      FlValue* key_value = fl_value_get_map_key(payload, i);
+      FlValue* entry_value = fl_value_get_map_value(payload, i);
+      if (key_value == nullptr || entry_value == nullptr ||
+          fl_value_get_type(key_value) != FL_VALUE_TYPE_STRING) {
+        continue;
+      }
+
+      const gchar* key = fl_value_get_string(key_value);
+      switch (fl_value_get_type(entry_value)) {
+        case FL_VALUE_TYPE_STRING:
+          append_pair(key, fl_value_get_string(entry_value));
+          break;
+        case FL_VALUE_TYPE_BOOL:
+          append_pair(key, fl_value_get_bool(entry_value) ? "true" : "false");
+          break;
+        case FL_VALUE_TYPE_INT:
+          append_pair(key, std::to_string(fl_value_get_int(entry_value)));
+          break;
+        case FL_VALUE_TYPE_FLOAT:
+          append_pair(key, std::to_string(fl_value_get_float(entry_value)));
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  return encoded;
+}
+
+FlValue* decode_notification_payload(const gchar* encoded) {
+  g_autoptr(FlValue) payload = fl_value_new_map();
+  if (encoded == nullptr || *encoded == '\0') {
+    return fl_value_ref(payload);
+  }
+
+  g_auto(GStrv) pairs = g_strsplit(encoded, "&", -1);
+  for (gint i = 0; pairs[i] != nullptr; ++i) {
+    if (pairs[i][0] == '\0') {
+      continue;
+    }
+    g_auto(GStrv) kv = g_strsplit(pairs[i], "=", 2);
+    if (kv[0] == nullptr || kv[1] == nullptr) {
+      continue;
+    }
+
+    g_autofree gchar* key = g_uri_unescape_string(kv[0], nullptr);
+    g_autofree gchar* value = g_uri_unescape_string(kv[1], nullptr);
+    if (key == nullptr || value == nullptr) {
+      continue;
+    }
+
+    if (g_strcmp0(value, "true") == 0) {
+      fl_value_set_string_take(payload, key, fl_value_new_bool(TRUE));
+    } else if (g_strcmp0(value, "false") == 0) {
+      fl_value_set_string_take(payload, key, fl_value_new_bool(FALSE));
+    } else {
+      fl_value_set_string_take(payload, key, fl_value_new_string(value));
+    }
+  }
+
+  return fl_value_ref(payload);
+}
+
 }  // namespace
 
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* linux_notifications_channel;
+  gchar* pending_notification_payload;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -269,6 +362,113 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+static void dispatch_linux_notification_payload(MyApplication* self,
+                                                const gchar* encoded_payload) {
+  if (self->linux_notifications_channel == nullptr) {
+    g_free(self->pending_notification_payload);
+    self->pending_notification_payload = g_strdup(encoded_payload);
+    return;
+  }
+
+  g_autoptr(FlValue) payload = decode_notification_payload(encoded_payload);
+  fl_method_channel_invoke_method(
+      self->linux_notifications_channel,
+      "notificationActivated",
+      payload,
+      nullptr,
+      nullptr,
+      nullptr);
+}
+
+static void notification_activated_action(GSimpleAction* action,
+                                          GVariant* parameter,
+                                          gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* encoded_payload =
+      parameter == nullptr ? "" : g_variant_get_string(parameter, nullptr);
+  dispatch_linux_notification_payload(self, encoded_payload);
+  g_application_activate(G_APPLICATION(self));
+}
+
+static FlMethodResponse* show_linux_notification(MyApplication* self,
+                                                 FlValue* args) {
+  if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "invalid_args", "title, body, and route are required.", nullptr));
+  }
+
+  FlValue* title_value = fl_value_lookup_string(args, "title");
+  FlValue* body_value = fl_value_lookup_string(args, "body");
+  FlValue* route_value = fl_value_lookup_string(args, "route");
+  FlValue* destination_path_value =
+      fl_value_lookup_string(args, "destinationPath");
+  FlValue* payload_value = fl_value_lookup_string(args, "payload");
+  if (title_value == nullptr || body_value == nullptr || route_value == nullptr ||
+      fl_value_get_type(title_value) != FL_VALUE_TYPE_STRING ||
+      fl_value_get_type(body_value) != FL_VALUE_TYPE_STRING ||
+      fl_value_get_type(route_value) != FL_VALUE_TYPE_STRING) {
+    return FL_METHOD_RESPONSE(fl_method_error_response_new(
+        "invalid_args", "title, body, and route are required.", nullptr));
+  }
+
+  const gchar* title = fl_value_get_string(title_value);
+  const gchar* body = fl_value_get_string(body_value);
+  const gchar* route = fl_value_get_string(route_value);
+  const gchar* destination_path =
+      destination_path_value != nullptr &&
+              fl_value_get_type(destination_path_value) == FL_VALUE_TYPE_STRING
+          ? fl_value_get_string(destination_path_value)
+          : nullptr;
+
+  std::string encoded_payload =
+      encode_notification_payload(route, destination_path, payload_value);
+
+  g_autoptr(GNotification) notification = g_notification_new(title);
+  g_notification_set_body(notification, body);
+  g_notification_set_default_action_and_target_value(
+      notification,
+      "app.notificationActivated",
+      g_variant_new_string(encoded_payload.c_str()));
+  g_autofree gchar* notification_id = g_uuid_string_random();
+  g_application_send_notification(
+      G_APPLICATION(self), notification_id, notification);
+
+  return FL_METHOD_RESPONSE(
+      fl_method_success_response_new(fl_value_new_bool(TRUE)));
+}
+
+static void linux_notifications_method_call_cb(FlMethodChannel* channel,
+                                               FlMethodCall* method_call,
+                                               gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+  g_autoptr(FlMethodResponse) response = nullptr;
+
+  if (strcmp(method, "showNotification") == 0) {
+    response = show_linux_notification(self, fl_method_call_get_args(method_call));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+
+  fl_method_call_respond(method_call, response, nullptr);
+}
+
+static void register_linux_notifications_channel(MyApplication* self,
+                                                 FlView* view) {
+  FlEngine* engine = fl_view_get_engine(view);
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  FlMethodChannel* channel = fl_method_channel_new(
+      messenger, kLinuxNotificationsChannel, FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      channel, linux_notifications_method_call_cb, self, nullptr);
+  self->linux_notifications_channel = FL_METHOD_CHANNEL(g_object_ref(channel));
+  if (self->pending_notification_payload != nullptr) {
+    dispatch_linux_notification_payload(self, self->pending_notification_payload);
+    g_clear_pointer(&self->pending_notification_payload, g_free);
+  }
 }
 
 // Implements GApplication::activate.
@@ -327,6 +527,7 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   register_desktop_clipboard_channel(view);
+  register_linux_notifications_channel(self, view);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -354,11 +555,17 @@ static gboolean my_application_local_command_line(GApplication* application,
 
 // Implements GApplication::startup.
 static void my_application_startup(GApplication* application) {
-  // MyApplication* self = MY_APPLICATION(object);
-
-  // Perform any actions required at application startup.
+  MyApplication* self = MY_APPLICATION(application);
 
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+
+  GSimpleAction* action = g_simple_action_new(
+      kLinuxNotificationActionName, G_VARIANT_TYPE_STRING);
+  g_signal_connect(action,
+                   "activate",
+                   G_CALLBACK(notification_activated_action),
+                   self);
+  g_action_map_add_action(G_ACTION_MAP(application), G_ACTION(action));
 }
 
 // Implements GApplication::shutdown.
@@ -374,6 +581,8 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->linux_notifications_channel);
+  g_clear_pointer(&self->pending_notification_payload, g_free);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
@@ -386,7 +595,10 @@ static void my_application_class_init(MyApplicationClass* klass) {
   G_OBJECT_CLASS(klass)->dispose = my_application_dispose;
 }
 
-static void my_application_init(MyApplication* self) {}
+static void my_application_init(MyApplication* self) {
+  self->linux_notifications_channel = nullptr;
+  self->pending_notification_payload = nullptr;
+}
 
 MyApplication* my_application_new() {
   // Set the program name to the application ID, which helps various systems

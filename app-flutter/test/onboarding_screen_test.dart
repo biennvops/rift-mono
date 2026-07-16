@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:app_flutter/screens/onboarding_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -75,6 +77,32 @@ class FakeOnboardingClient extends JsonRpcRiftClient {
 }
 
 void main() {
+  const androidShellChannel = MethodChannel('rift/android/shell');
+
+  setUp(() {
+    AndroidShell.debugIsAndroidOverride = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidShellChannel, (call) async {
+      switch (call.method) {
+        case 'getNotificationPermissionStatus':
+          return 'authorized';
+        case 'getNotificationListenerAccessStatus':
+          return 'authorized';
+        case 'requestNotificationPermission':
+          return true;
+        case 'openNotificationListenerSettings':
+          return true;
+      }
+      return null;
+    });
+  });
+
+  tearDown(() {
+    AndroidShell.debugIsAndroidOverride = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidShellChannel, null);
+  });
+
   Widget buildTestApp(FakeOnboardingClient client) {
     return MaterialApp(
       home: Provider<JsonRpcRiftClient>.value(
@@ -94,7 +122,8 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 1));
 
     expect(client.startDiscoveryCallCount, 1);
-    expect(find.widgetWithText(FilledButton, 'Enable Alerts'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Allow Unrestricted'),
+        findsOneWidget);
     expect(
       find.widgetWithText(FilledButton, 'Grant Permission'),
       findsNothing,
@@ -115,6 +144,36 @@ void main() {
       find.widgetWithText(FilledButton, 'Grant Permission'),
       findsOneWidget,
     );
-    expect(find.widgetWithText(FilledButton, 'Enable Alerts'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Enable Alerts & Sync'),
+        findsNothing);
+  });
+
+  testWidgets(
+      'OnboardingScreen keeps alerts page when notification access is missing',
+      (WidgetTester tester) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidShellChannel, (call) async {
+      switch (call.method) {
+        case 'getNotificationPermissionStatus':
+          return 'authorized';
+        case 'getNotificationListenerAccessStatus':
+          return 'denied';
+        case 'requestNotificationPermission':
+          return true;
+        case 'openNotificationListenerSettings':
+          return true;
+      }
+      return null;
+    });
+
+    final client = FakeOnboardingClient(localNetworkGranted: true);
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pump();
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+
+    expect(find.widgetWithText(FilledButton, 'Enable Alerts & Sync'),
+        findsOneWidget);
+    expect(find.textContaining('mirror Android notifications'), findsOneWidget);
   });
 }

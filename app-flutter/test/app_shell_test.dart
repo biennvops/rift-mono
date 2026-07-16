@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
+import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/platform/macos_notifications.dart';
@@ -139,6 +140,8 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 
 void main() {
   late MockJsonRpcClient mockClient;
+  late StreamController<bool> connectionChangedController;
+  late bool isConnected;
 
   Widget buildRiftApp(JsonRpcRiftClient client) {
     return MultiProvider(
@@ -166,9 +169,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     MacOSNotifications.debugIsMacOSOverride = null;
     mockClient = MockJsonRpcClient();
+    connectionChangedController = StreamController<bool>.broadcast();
+    isConnected = true;
 
     // Default mock behavior
-    when(() => mockClient.isConnected).thenReturn(true);
+    when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
     when(() => mockClient.onPairingRequest)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onSecurityEvent)
@@ -193,6 +198,14 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onClipboardExpired)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationPosted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationRemoved)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationActionResult)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
@@ -206,7 +219,7 @@ void main() {
     when(() => mockClient.onSendQueueItemUpdated)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
-        .thenAnswer((_) => Stream.value(true));
+        .thenAnswer((_) => connectionChangedController.stream);
     when(() => mockClient.onOperationTransition)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.listOperations(
@@ -247,9 +260,21 @@ void main() {
         'isDiscovering': true,
       },
     );
+    when(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        blacklistedPackages: any(named: 'blacklistedPackages'),
+      ),
+    ).thenAnswer(
+      (_) async => {
+        'enabled': true,
+        'blacklistedPackages': ['com.bank.example'],
+      },
+    );
   });
 
   tearDown(() {
+    connectionChangedController.close();
     MacOSNotifications.debugIsMacOSOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
@@ -372,5 +397,38 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(consumedPendingShareItems, isTrue);
+  });
+
+  testWidgets(
+      'RiftApp reapplies saved notification sync policy on reconnect',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      AppPrefs.notificationSyncEnabled: false,
+      AppPrefs.notificationSyncBlacklist: ['com.bank.example'],
+    });
+    isConnected = false;
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    verifyNever(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        blacklistedPackages: any(named: 'blacklistedPackages'),
+      ),
+    );
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await tester.pump();
+    await tester.pump();
+
+    verify(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: false,
+        blacklistedPackages: ['com.bank.example'],
+      ),
+    ).called(1);
   });
 }

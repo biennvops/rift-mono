@@ -280,7 +280,7 @@ The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUS
 
 ### 7.2 Capability Messages
 
-Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`.
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional notification-sync capability is `notification.sync` version `1`.
 
 `capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
 
@@ -311,6 +311,35 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 `clipboard.fetchResponse` payload fields: `offerId`, `contentBase64` string, `byteSize` non-negative integer, `sha256` clipboard hash.
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
+
+### 7.5 Notification Sync
+
+Notification sync v1 is asymmetric: Android is the only source platform and trusted desktop peers are sinks. Peers MUST negotiate `notification.sync@1` before sending or accepting any notification-sync message. Devices that do not observe native Android notifications locally MUST NOT originate `notification.posted`, `notification.updated`, or `notification.removed`.
+
+The v1 notification record fields are:
+
+| Field             | Required | Type                | Notes                                                                 |
+| ----------------- | -------- | ------------------- | --------------------------------------------------------------------- |
+| `notificationId`  | Yes      | string              | Stable Android-origin identifier scoped to `sourceDeviceId`           |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                        |
+| `packageName`     | Yes      | string              | Android package name                                                  |
+| `appName`         | Yes      | string              | Human-readable app label                                              |
+| `title`           | No       | string              | Mirrored title preview only                                           |
+| `bodyPreview`     | No       | string              | Mirrored body preview only                                            |
+| `postedAt`        | Yes      | RFC 3339 UTC string | Audit timestamp for the Android-side post/update event                |
+| `isDismissible`   | Yes      | boolean             | Whether remote `dismiss` is currently allowed                         |
+| `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed                            |
+| `icon`            | No       | object              | Optional metadata for an icon payload; implementations MAY omit icons |
+
+`notification.posted` payload fields: the full notification record above.
+
+`notification.updated` payload fields: the full notification record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, notificationId)` tuple.
+
+`notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
+
+`notification.actionRequest` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
+
+`notification.actionResult` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
 In v0.1-draft, clipboard payload bytes are the exact raw bytes represented by
 `contentBase64` before Base64 encoding. The `byteSize` and `sha256` values
@@ -434,6 +463,7 @@ The following capabilities are REQUIRED for a conformant v0.1-draft session:
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
 | `security.event_log`    | 1       | 1       | Security event logging for audit                         |
+| `notification.sync`     | 1       | 1       | Android-to-desktop mirrored notification sync           |
 
 The required capability set for a clipboard-first v0.1-draft session is
 `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and
@@ -441,6 +471,8 @@ The required capability set for a clipboard-first v0.1-draft session is
 independently. If any required capability is absent after negotiation, the
 session MAY remain open for diagnostic purposes but MUST NOT permit clipboard,
 presence, or operation messages.
+
+`notification.sync` is optional. When absent, peers MUST reject notification-sync traffic with `CapabilityUnavailable`.
 
 ### 9.4 Version Mismatch and Forward Compatibility
 
@@ -464,6 +496,8 @@ All cross-device actions flow through this transition table:
 
 Duplicate reports for the same terminal state are idempotent. Conflicting terminal reports MUST be rejected with `InvalidTransition` and logged. Each transition MUST record the operation ID, source device ID, destination device ID, operation type, previous state, next state, timestamp or monotonic-relative timing data, and typed failure reason when applicable.
 
+Notification sync remote actions reuse this lifecycle with operation types `notification.open` and `notification.dismiss`.
+
 ## 11. Clipboard Offer/Fetch
 
 Clipboard continuity uses metadata-only offers and authenticated fetch. A device MUST NOT eagerly push clipboard content to all peers.
@@ -477,13 +511,21 @@ are optional extensions on the same authenticated fetch path.
 
 Expiry is measured from local receipt time using monotonic timers. Wall-clock timestamps are audit-only. Expired, rejected, unauthorized, payload-too-large, or mismatched-hash fetches MUST fail with typed failure reasons and produce security event log entries. Clipboard event log entries MUST record metadata only, never clipboard content.
 
-## 12. Presence
+## 12. Notification Sync
+
+Notification sync mirrors limited Android notification metadata to trusted desktop peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
+
+The Android source daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
+
+Receivers MUST key mirrored records by `(sourceDeviceId, notificationId)` and mutate them in place on `notification.updated` / `notification.removed`. Senders and receivers SHOULD log accepted, denied, expired, malformed, and action-result flows with metadata only. Event details MUST NOT include full unredacted notification content beyond the mirrored title/body preview already permitted on the wire.
+
+## 13. Presence
 
 Presence provides basic trusted-peer visibility: online/offline state, last-seen information, reachability, and authenticated capability summary. Presence is not a trust source.
 
 Presence heartbeats and status updates MUST be exchanged only after transport and identity verification. A peer observed only through discovery is `discovered`, not authenticated online. Offline detection SHOULD use local monotonic timers and configurable timeout thresholds so clock skew does not decide reachability.
 
-## 13. Security Event Log Schema
+## 14. Security Event Log Schema
 
 Each daemon maintains an append-only security event log for audit, debugging, conformance, and attack-simulation evidence. Event logs are local audit records; peers do not exchange event-log contents as protocol data.
 
@@ -514,6 +556,9 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `clipboard.fetched`          | Clipboard content fetched by or from a peer                              |
 | `clipboard.expired`          | Clipboard offer expired without fetch                                    |
 | `clipboard.offer_replay`     | Clipboard offer rejected due to out-of-order or replayed sequence number |
+| `notification.synced`        | Mirrored notification posted or updated accepted locally                 |
+| `notification.removed`       | Mirrored notification removed locally                                    |
+| `notification.actioned`      | Remote notification action request/result processed                      |
 | `message.malformed`          | Received peer message failed envelope or schema validation               |
 | `certificate.malformed`      | Peer certificate failed extension parsing                                |
 | `policy.denied`              | Action denied by local policy                                            |
@@ -535,7 +580,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
 | `denied`  | Event blocked by local policy; `failureReason` MUST be present                     |
 
-## 14. Failure Reasons
+## 15. Failure Reasons
 
 The v0.1-draft failure reason vocabulary is:
 
@@ -557,7 +602,7 @@ The v0.1-draft failure reason vocabulary is:
 
 Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draft. Additional diagnostics may appear in local event `details` or optional human-readable `message` fields.
 
-## 15. Test Vectors
+## 16. Test Vectors
 
 The protocol requires deterministic test vectors for both daemon implementations. The full certificate bytes are future conformance material and are not defined in this draft. Machine-readable JSON versions of these vectors will be maintained in `spec/vectors/`.
 

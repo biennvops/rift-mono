@@ -14,9 +14,10 @@ public class RiftApiHandler : IRiftApi
     private readonly ISendQueueService _sendQueueService;
     private readonly IOperationService _operationService;
     private readonly IPairingService _pairingService;
+    private readonly INotificationSyncService _notificationSyncService;
 
     public RiftApiHandler()
-        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService())
+        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService(), new UnsupportedNotificationSyncService())
     {
     }
 
@@ -27,7 +28,8 @@ public class RiftApiHandler : IRiftApi
         IFileTransferService fileTransferService,
         ISendQueueService sendQueueService,
         IOperationService operationService,
-        IPairingService pairingService)
+        IPairingService pairingService,
+        INotificationSyncService notificationSyncService)
     {
         _daemonInfoService = daemonInfoService;
         _discoveryCoordinator = discoveryCoordinator;
@@ -36,6 +38,7 @@ public class RiftApiHandler : IRiftApi
         _sendQueueService = sendQueueService;
         _operationService = operationService;
         _pairingService = pairingService;
+        _notificationSyncService = notificationSyncService;
     }
 
     public Task<string> GetVersionAsync() => Task.FromResult("0.1-draft");
@@ -325,6 +328,36 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.listNotifications")]
+    public Task<ListNotificationsResult> ListNotificationsAsync() =>
+        _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
+
+    [JsonRpcMethod("rift.performNotificationAction")]
+    public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action)
+    {
+        try
+        {
+            return await _notificationSyncService.PerformNotificationActionAsync(notificationId, action, CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.updateNotificationSyncPolicy")]
+    public async Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string[] blacklistedPackages)
+    {
+        try
+        {
+            return await _notificationSyncService.UpdateNotificationSyncPolicyAsync(enabled, blacklistedPackages, CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     private static async Task<TResult> ExecutePairingAsync<TResult>(Func<Task<TResult>> action)
     {
         try
@@ -502,6 +535,31 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("Operation services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedNotificationSyncService : INotificationSyncService
+    {
+        public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Notification sync services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };

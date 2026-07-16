@@ -18,4 +18,6 @@ class AppPrefs {
   static const clipboardNotificationsEnabled =
       'clipboard_notifications_enabled';
   static const sendQueueState = 'send_queue_state_v1';
+  static const notificationSyncEnabled = 'notification_sync_enabled';
+  static const notificationSyncBlacklist = 'notification_sync_blacklist_v1';
 }
