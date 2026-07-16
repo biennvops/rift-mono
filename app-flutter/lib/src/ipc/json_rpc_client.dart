@@ -78,6 +78,26 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onNotificationActionResult =>
       _notificationActionResultController.stream;
 
+  late final _mediaPlaybackPostedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
+      _mediaPlaybackPostedController.stream;
+
+  late final _mediaPlaybackUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackUpdated =>
+      _mediaPlaybackUpdatedController.stream;
+
+  late final _mediaPlaybackRemovedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
+      _mediaPlaybackRemovedController.stream;
+
+  late final _mediaPlaybackActionResultController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackActionResult =>
+      _mediaPlaybackActionResultController.stream;
+
   late final _fileOfferController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onFileOffer => _fileOfferController.stream;
@@ -248,6 +268,20 @@ class JsonRpcRiftClient {
     'BlacklistedPackages': 'blacklistedPackages',
     'Enabled': 'enabled',
     'Policy': 'policy',
+    'PlaybackId': 'playbackId',
+    'AppId': 'appId',
+    'Artist': 'artist',
+    'Album': 'album',
+    'Artwork': 'artwork',
+    'PlaybackState': 'playbackState',
+    'PositionMs': 'positionMs',
+    'DurationMs': 'durationMs',
+    'CanPlay': 'canPlay',
+    'CanPause': 'canPause',
+    'CanSkipNext': 'canSkipNext',
+    'CanSkipPrevious': 'canSkipPrevious',
+    'CanSeek': 'canSeek',
+    'UpdatedAt': 'updatedAt',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
@@ -604,6 +638,61 @@ class JsonRpcRiftClient {
           ],
         );
       });
+      _client!.registerMethod('rift.onMediaPlaybackPosted',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackPosted',
+          _asMap(params),
+          _mediaPlaybackPostedController,
+          requiredStringKeys: const [
+            'playbackId',
+            'sourceDeviceId',
+            'appId',
+            'appName',
+            'playbackState',
+            'updatedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackUpdated',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackUpdated',
+          _asMap(params),
+          _mediaPlaybackUpdatedController,
+          requiredStringKeys: const [
+            'playbackId',
+            'sourceDeviceId',
+            'appId',
+            'appName',
+            'playbackState',
+            'updatedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackRemoved',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackRemoved',
+          _asMap(params),
+          _mediaPlaybackRemovedController,
+          requiredStringKeys: const ['playbackId', 'sourceDeviceId'],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackActionResult',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackActionResult',
+          _asMap(params),
+          _mediaPlaybackActionResultController,
+          requiredStringKeys: const [
+            'playbackId',
+            'action',
+            'operationId',
+            'state',
+          ],
+        );
+      });
       _client!.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileOffer',
@@ -795,6 +884,10 @@ class JsonRpcRiftClient {
     await _notificationUpdatedController.close();
     await _notificationRemovedController.close();
     await _notificationActionResultController.close();
+    await _mediaPlaybackPostedController.close();
+    await _mediaPlaybackUpdatedController.close();
+    await _mediaPlaybackRemovedController.close();
+    await _mediaPlaybackActionResultController.close();
     await _fileOfferController.close();
     await _fileTransferProgressController.close();
     await _fileTransferCompletedController.close();
@@ -826,6 +919,41 @@ class JsonRpcRiftClient {
 
   Future<dynamic> listNotifications() async {
     return _sendRequest('rift.listNotifications');
+  }
+
+  Future<dynamic> notifyLocalMediaPlaybackEvent({
+    required String eventType,
+    required Map<String, Object?> payload,
+  }) async {
+    return _sendRequest('rift.notifyLocalMediaPlaybackEvent', {
+      'eventType': eventType,
+      ...payload,
+    });
+  }
+
+  Future<dynamic> listMediaPlayback() async {
+    return _sendRequest('rift.listMediaPlayback');
+  }
+
+  Future<dynamic> getMediaPlayback(String playbackId) async {
+    return _sendRequest('rift.getMediaPlayback', {
+      'playbackId': playbackId,
+    });
+  }
+
+  Future<dynamic> performMediaPlaybackAction({
+    required String playbackId,
+    required String action,
+    int? positionMs,
+  }) async {
+    final params = <String, dynamic>{
+      'playbackId': playbackId,
+      'action': action,
+    };
+    if (positionMs != null) {
+      params['positionMs'] = positionMs;
+    }
+    return _sendRequest('rift.performMediaPlaybackAction', params);
   }
 
   Future<dynamic> performNotificationAction({

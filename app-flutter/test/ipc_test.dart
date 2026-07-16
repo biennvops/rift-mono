@@ -965,6 +965,72 @@ void main() {
       );
     });
 
+    test('should expose media playback RPC wrappers', () async {
+      await client.connect();
+
+      final localEventResult = await client.notifyLocalMediaPlaybackEvent(
+        eventType: 'posted',
+        payload: const {
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+      final listed = await client.listMediaPlayback();
+      final detailed = await client.getMediaPlayback('playback-1');
+      final actionResult = await client.performMediaPlaybackAction(
+        playbackId: 'playback-1',
+        action: 'pause',
+      );
+
+      expect(localEventResult['playbackId'], 'playback-1');
+      expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
+      expect(detailed['playbackId'], 'playback-1');
+      expect(actionResult['playbackId'], 'playback-1');
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalMediaPlaybackEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.performMediaPlaybackAction',
+            )
+            .single['params'],
+        {
+          'playbackId': 'playback-1',
+          'action': 'pause',
+        },
+      );
+    });
+
     test('should surface getOperation not found JSON-RPC errors', () async {
       transport.getOperationError = {
         'code': -32009,
