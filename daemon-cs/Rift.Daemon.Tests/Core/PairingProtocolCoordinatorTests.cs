@@ -681,7 +681,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleMessageAsync_PairingStart_ThenLocalApprove_SendsPairingComplete()
+    public async Task HandleMessageAsync_PairingStart_ThenLocalApprove_WaitsForRemoteApproveBeforeComplete()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -697,6 +697,15 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             CancellationToken.None);
 
         await _coordinator.NotifyLocalPairingApprovedAsync("rift-peer-a-initiator");
+
+        Assert.DoesNotContain(
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer-a-initiator" && sent.Type == "pairing.complete");
+
+        await _coordinator.HandleMessageAsync("rift-peer-a-initiator", CreateEnvelope("rift-peer-a-initiator", "pairing.approve", new
+        {
+            approvedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
 
         var sentComplete = Assert.Single(
             _transport.SentMessages,
@@ -1032,6 +1041,42 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         Assert.Contains(
             _transport.SentMessages,
             sent => sent.PeerDeviceId == "rift-peer-remote-first" && sent.Type == "pairing.complete");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PairingStart_DoesNotCountAsRemoteApproval()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-incoming-start",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync("rift-peer-incoming-start", CreateEnvelope("rift-peer-incoming-start", "pairing.start", new
+        {
+            displayName = "Pixel 9 Pro",
+            expiresInMs = 120000
+        }), CancellationToken.None);
+
+        await _coordinator.NotifyLocalPairingApprovedAsync("rift-peer-incoming-start");
+
+        Assert.Contains(
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer-incoming-start" && sent.Type == "pairing.approve");
+        Assert.DoesNotContain(
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer-incoming-start" && sent.Type == "pairing.complete");
+
+        await _coordinator.HandleMessageAsync("rift-peer-incoming-start", CreateEnvelope("rift-peer-incoming-start", "pairing.approve", new
+        {
+            approvedAt = DateTimeOffset.UtcNow.ToString("O")
+        }), CancellationToken.None);
+
+        Assert.Contains(
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer-incoming-start" && sent.Type == "pairing.complete");
     }
 
     [Fact]

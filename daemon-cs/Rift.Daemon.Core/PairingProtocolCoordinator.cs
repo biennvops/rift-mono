@@ -495,14 +495,11 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             peerDeviceId,
             _ =>
             {
-                var created = CreatePairingSessionState();
-                created.MarkRemoteApproved();
-                return created;
+                return CreatePairingSessionState();
             },
             (_, existing) =>
             {
                 existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs));
-                existing.MarkRemoteApproved();
                 return existing;
             });
         await LogEventAsync(SecurityEventTypes.PairingAttempted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);

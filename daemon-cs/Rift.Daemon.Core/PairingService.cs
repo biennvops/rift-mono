@@ -147,20 +147,11 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32005, "Fingerprint mismatch.");
         }
 
-        if (!_trustStore.TryTransition(deviceId, TrustState.Trusted))
-        {
-            throw CreateRpcException(-32008, "Failed to persist trusted state.");
-        }
-
         var persistedAt = DateTimeOffset.UtcNow;
         if (_pairingProtocolCoordinator is not null)
         {
             await _pairingProtocolCoordinator.NotifyLocalPairingApprovedAsync(deviceId);
         }
-
-        await LogEventAsync(SecurityEventTypes.PairingCompleted, deviceId, SecurityEventOutcome.Success, null);
-        await NotifyTrustChangedAsync(deviceId, "pairing_pending", "trusted", "Pairing approved locally.");
-        await NotifyPairingCompleteAsync(deviceId, expectedFingerprint, persistedAt.ToString("O"));
 
         return new ApprovePairingResult
         {
