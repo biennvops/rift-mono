@@ -51,6 +51,7 @@ class MainActivity: FlutterActivity() {
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
+    private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
     private var clipboardReceiverRegistered: Boolean = false
@@ -98,7 +99,21 @@ class MainActivity: FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         Log.i(tag, "configureFlutterEngine")
         createNotificationChannel()
+        createMediaPlaybackNotificationChannel()
         isClipboardRelayReady = true
+        remoteMediaPlaybackManager =
+            RemoteMediaPlaybackManager(
+                this,
+                launchIntentFactory = {
+                    Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                },
+                actionCallback = { action ->
+                    shellChannel?.invokeMethod("mediaPlaybackAction", action)
+                },
+            )
+        remoteMediaPlaybackManager.start()
         clipboardChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, clipboardChannelName)
 
@@ -200,6 +215,24 @@ class MainActivity: FlutterActivity() {
                     "showTestNotification" -> {
                         result.success(showTestNotification())
                     }
+                    "showMediaPlayback" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val playback = args?.get("playback") as? Map<*, *>
+                        if (playback == null) {
+                            result.error("invalid_args", "playback is required", null)
+                        } else {
+                            result.success(
+                                remoteMediaPlaybackManager.show(
+                                    playback.entries.associate { (key, value) ->
+                                        key.toString() to value
+                                    },
+                                ),
+                            )
+                        }
+                    }
+                    "clearMediaPlayback" -> {
+                        result.success(remoteMediaPlaybackManager.clear())
+                    }
                     "openFile" -> {
                         val args = call.arguments as? Map<*, *>
                         val path = args?.get("path") as? String
@@ -276,6 +309,7 @@ class MainActivity: FlutterActivity() {
             unregisterReceiver(notificationSyncReceiver)
             notificationSyncReceiverRegistered = false
         }
+        remoteMediaPlaybackManager.stop()
         super.onDestroy()
     }
 
@@ -307,6 +341,20 @@ class MainActivity: FlutterActivity() {
         ).apply {
             description = "Rift pairing, clipboard, and file activity"
         }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun createMediaPlaybackNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel =
+            NotificationChannel(
+                RemoteMediaPlaybackManager.notificationChannelId,
+                RemoteMediaPlaybackManager.notificationChannelName,
+                NotificationManager.IMPORTANCE_LOW,
+            )
         manager.createNotificationChannel(channel)
     }
 

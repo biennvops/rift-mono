@@ -12,6 +12,7 @@ class MainFlutterWindow: NSWindow {
         RegisterGeneratedPlugins(registry: flutterViewController)
         PermissionsBridge.register(with: flutterViewController.engine.binaryMessenger)
         DesktopClipboardBridge.register(with: flutterViewController.engine.binaryMessenger)
+        MacOSMediaPlaybackBridge.register(with: flutterViewController.engine.binaryMessenger)
         SendFilesBridge.shared.register(
             with: flutterViewController.engine.binaryMessenger,
             window: self
