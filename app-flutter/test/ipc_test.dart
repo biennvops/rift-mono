@@ -154,6 +154,29 @@ class MockTransport implements IpcTransport {
       'BlacklistedPackages': ['com.bank.example'],
     }
   };
+  Map<String, dynamic> listMediaPlaybackResult = {
+    'playbacks': [],
+  };
+  Map<String, dynamic> getMediaPlaybackResult = {
+    'playbackId': 'playback-1',
+    'sourceDeviceId': 'rift-peer',
+    'appId': 'com.example.music',
+    'appName': 'Example Music',
+    'playbackState': 'playing',
+    'positionMs': 1000,
+    'canPlay': true,
+    'canPause': true,
+    'canSkipNext': true,
+    'canSkipPrevious': true,
+    'canSeek': true,
+    'updatedAt': '2026-07-16T10:00:00Z',
+  };
+  Map<String, dynamic> performMediaPlaybackActionResult = {
+    'OperationId': 'operation-media-1',
+    'PlaybackId': 'playback-1',
+    'Action': 'pause',
+    'State': 'Pending',
+  };
   Map<String, dynamic> performNotificationActionResult = {
     'OperationId': 'operation-notification-1',
     'NotificationId': 'notif-1',
@@ -168,6 +191,10 @@ class MockTransport implements IpcTransport {
     'NotificationId': 'notif-1',
     'BroadcastTo': ['rift-peer'],
     'Suppressed': false,
+  };
+  Map<String, dynamic> notifyLocalMediaPlaybackEventResult = {
+    'PlaybackId': 'playback-1',
+    'BroadcastTo': ['rift-peer'],
   };
   Map<String, dynamic> getOperationResult = {
     'OperationId': 'operation-1',
@@ -313,6 +340,18 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.notifyLocalNotificationEvent':
           _sendResult(id, notifyLocalNotificationEventResult);
+          break;
+        case 'rift.notifyLocalMediaPlaybackEvent':
+          _sendResult(id, notifyLocalMediaPlaybackEventResult);
+          break;
+        case 'rift.listMediaPlayback':
+          _sendResult(id, listMediaPlaybackResult);
+          break;
+        case 'rift.getMediaPlayback':
+          _sendResult(id, getMediaPlaybackResult);
+          break;
+        case 'rift.performMediaPlaybackAction':
+          _sendResult(id, performMediaPlaybackActionResult);
           break;
       }
     });
@@ -968,7 +1007,7 @@ void main() {
     test('should expose media playback RPC wrappers', () async {
       await client.connect();
 
-      final localEventResult = await client.notifyLocalMediaPlaybackEvent(
+      await client.notifyLocalMediaPlaybackEvent(
         eventType: 'posted',
         payload: const {
           'playbackId': 'playback-1',
@@ -984,17 +1023,6 @@ void main() {
           'canSeek': true,
         },
       );
-      final listed = await client.listMediaPlayback();
-      final detailed = await client.getMediaPlayback('playback-1');
-      final actionResult = await client.performMediaPlaybackAction(
-        playbackId: 'playback-1',
-        action: 'pause',
-      );
-
-      expect(localEventResult['playbackId'], 'playback-1');
-      expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
-      expect(detailed['playbackId'], 'playback-1');
-      expect(actionResult['playbackId'], 'playback-1');
       expect(
         transport.requests
             .where(
@@ -1017,6 +1045,56 @@ void main() {
           'canSeek': true,
         },
       );
+
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-1',
+            'sourceDeviceId': 'rift-peer',
+            'appId': 'com.example.music',
+            'appName': 'Example Music',
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-16T10:00:00Z',
+          }
+        ],
+      };
+      transport.getMediaPlaybackResult = {
+        'playbackId': 'playback-1',
+        'sourceDeviceId': 'rift-peer',
+        'appId': 'com.example.music',
+        'appName': 'Example Music',
+        'playbackState': 'playing',
+        'positionMs': 1000,
+        'canPlay': true,
+        'canPause': true,
+        'canSkipNext': true,
+        'canSkipPrevious': true,
+        'canSeek': true,
+        'updatedAt': '2026-07-16T10:00:00Z',
+      };
+      transport.performMediaPlaybackActionResult = {
+        'OperationId': 'operation-media-1',
+        'PlaybackId': 'playback-1',
+        'Action': 'pause',
+        'State': 'Pending',
+      };
+
+      final listed = await client.listMediaPlayback();
+      final detailed = await client.getMediaPlayback('playback-1');
+      final actionResult = await client.performMediaPlaybackAction(
+        playbackId: 'playback-1',
+        action: 'pause',
+      );
+
+      expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
+      expect(detailed['playbackId'], 'playback-1');
+      expect(actionResult['playbackId'], 'playback-1');
       expect(
         transport.requests
             .where(

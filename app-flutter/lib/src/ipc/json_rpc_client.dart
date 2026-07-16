@@ -281,7 +281,6 @@ class JsonRpcRiftClient {
     'CanSkipNext': 'canSkipNext',
     'CanSkipPrevious': 'canSkipPrevious',
     'CanSeek': 'canSeek',
-    'UpdatedAt': 'updatedAt',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
