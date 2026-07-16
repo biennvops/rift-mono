@@ -6,6 +6,9 @@ import UserNotifications
 
 final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
   static let channelName = "rift.permissions"
+  private static let mirroredNotificationBaseCategory = "rift.mirroredNotification"
+  private static let mirroredNotificationOpenAction = "open"
+  private static let mirroredNotificationDismissAction = "dismiss"
   private static let shared = PermissionsBridge()
   private static var channel: FlutterMethodChannel?
   private static var pendingAction: [String: Any]?
@@ -15,7 +18,64 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     Self.channel = channel
     channel.setMethodCallHandler(Self.shared.handle)
     UNUserNotificationCenter.current().delegate = Self.shared
+    Self.registerNotificationCategories()
     Self.flushPendingActionIfNeeded()
+  }
+
+  private static func registerNotificationCategories() {
+    let openAction = UNNotificationAction(
+      identifier: mirroredNotificationOpenAction,
+      title: "Open",
+      options: []
+    )
+    let dismissAction = UNNotificationAction(
+      identifier: mirroredNotificationDismissAction,
+      title: "Dismiss",
+      options: []
+    )
+    let categories: Set<UNNotificationCategory> = [
+      UNNotificationCategory(
+        identifier: mirroredNotificationBaseCategory,
+        actions: [],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).open",
+        actions: [openAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).dismiss",
+        actions: [dismissAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).openDismiss",
+        actions: [openAction, dismissAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+    ]
+    UNUserNotificationCenter.current().setNotificationCategories(categories)
+  }
+
+  private static func categoryIdentifier(
+    supportsOpen: Bool,
+    supportsDismiss: Bool
+  ) -> String {
+    if supportsOpen && supportsDismiss {
+      return "\(mirroredNotificationBaseCategory).openDismiss"
+    }
+    if supportsOpen {
+      return "\(mirroredNotificationBaseCategory).open"
+    }
+    if supportsDismiss {
+      return "\(mirroredNotificationBaseCategory).dismiss"
+    }
+    return mirroredNotificationBaseCategory
   }
 
   static func dispatchOpenFiles(_ paths: [String]) {
@@ -106,6 +166,7 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     let body = dict?["body"] as? String ?? ""
     let route = dict?["route"] as? String
     let payload = dict?["payload"] as? [String: Any]
+    let actions = dict?["actions"] as? [[String: Any]] ?? []
 
     let content = UNMutableNotificationContent()
     content.title = title
@@ -120,6 +181,11 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       }
       content.userInfo = userInfo
     }
+    let actionIds = Set(actions.compactMap { $0["id"] as? String })
+    content.categoryIdentifier = Self.categoryIdentifier(
+      supportsOpen: actionIds.contains(Self.mirroredNotificationOpenAction),
+      supportsDismiss: actionIds.contains(Self.mirroredNotificationDismissAction)
+    )
 
     let request = UNNotificationRequest(
       identifier: UUID().uuidString,
@@ -159,6 +225,11 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
         continue
       }
       payload[stringKey] = value
+    }
+    if response.actionIdentifier == Self.mirroredNotificationOpenAction {
+      payload["notificationAction"] = Self.mirroredNotificationOpenAction
+    } else if response.actionIdentifier == Self.mirroredNotificationDismissAction {
+      payload["notificationAction"] = Self.mirroredNotificationDismissAction
     }
 
     Self.dispatchPayload(payload)

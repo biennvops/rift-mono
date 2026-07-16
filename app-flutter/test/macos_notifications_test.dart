@@ -57,6 +57,9 @@ void main() {
       body: 'Queued in Rift',
       route: 'history.send',
       payload: const <String, Object?>{'source': 'share-extension'},
+      actions: const <DesktopNotificationAction>[
+        DesktopNotificationAction(id: 'open', title: 'Open'),
+      ],
     );
     final pending = await MacOSNotifications.consumePendingShareItems();
 
@@ -70,6 +73,9 @@ void main() {
       'body': 'Queued in Rift',
       'route': 'history.send',
       'payload': const <String, Object?>{'source': 'share-extension'},
+      'actions': const <Map<String, String>>[
+        <String, String>{'id': 'open', 'title': 'Open'},
+      ],
     });
   });
 }

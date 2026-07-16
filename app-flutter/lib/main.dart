@@ -909,7 +909,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   Future<bool> _isWindowForeground() async {
-    if (!_enableDesktopShellIntegration) return true;
+    if (!_enableDesktopShellIntegration) {
+      return !Platform.environment.containsKey('FLUTTER_TEST');
+    }
     try {
       final visible = await windowManager.isVisible();
       final focused = await windowManager.isFocused();

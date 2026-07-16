@@ -15,6 +15,9 @@ namespace {
 constexpr char kDesktopClipboardChannel[] = "rift/desktop/clipboard";
 constexpr char kLinuxNotificationsChannel[] = "rift/linux/notifications";
 constexpr char kLinuxNotificationActionName[] = "notificationActivated";
+constexpr char kLinuxNotificationActionOpenName[] = "notificationActionOpen";
+constexpr char kLinuxNotificationActionDismissName[] =
+    "notificationActionDismiss";
 std::string g_last_logged_clipboard_fingerprint;
 
 std::string fingerprint_clipboard_payload(const char* content_type,
@@ -392,6 +395,32 @@ static void notification_activated_action(GSimpleAction* action,
   g_application_activate(G_APPLICATION(self));
 }
 
+static void notification_button_action(GSimpleAction* action,
+                                       GVariant* parameter,
+                                       gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* encoded_payload =
+      parameter == nullptr ? "" : g_variant_get_string(parameter, nullptr);
+  dispatch_linux_notification_payload(self, encoded_payload);
+}
+
+static std::string add_notification_action_to_payload(
+    const std::string& encoded_payload,
+    const char* action_name) {
+  std::string action_payload = encoded_payload;
+  g_autofree gchar* escaped_key =
+      g_uri_escape_string("notificationAction", nullptr, TRUE);
+  g_autofree gchar* escaped_value =
+      g_uri_escape_string(action_name, nullptr, TRUE);
+  if (!action_payload.empty()) {
+    action_payload.push_back('&');
+  }
+  action_payload.append(escaped_key);
+  action_payload.push_back('=');
+  action_payload.append(escaped_value);
+  return action_payload;
+}
+
 static FlMethodResponse* show_linux_notification(MyApplication* self,
                                                  FlValue* args) {
   if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
@@ -405,6 +434,7 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
   FlValue* destination_path_value =
       fl_value_lookup_string(args, "destinationPath");
   FlValue* payload_value = fl_value_lookup_string(args, "payload");
+  FlValue* actions_value = fl_value_lookup_string(args, "actions");
   if (title_value == nullptr || body_value == nullptr || route_value == nullptr ||
       fl_value_get_type(title_value) != FL_VALUE_TYPE_STRING ||
       fl_value_get_type(body_value) != FL_VALUE_TYPE_STRING ||
@@ -431,6 +461,44 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
       notification,
       "app.notificationActivated",
       g_variant_new_string(encoded_payload.c_str()));
+  if (actions_value != nullptr &&
+      fl_value_get_type(actions_value) == FL_VALUE_TYPE_LIST) {
+    for (size_t i = 0; i < fl_value_get_length(actions_value); ++i) {
+      FlValue* action_value = fl_value_get_list_value(actions_value, i);
+      if (action_value == nullptr ||
+          fl_value_get_type(action_value) != FL_VALUE_TYPE_MAP) {
+        continue;
+      }
+
+      FlValue* action_id_value = fl_value_lookup_string(action_value, "id");
+      FlValue* action_title_value =
+          fl_value_lookup_string(action_value, "title");
+      if (action_id_value == nullptr || action_title_value == nullptr ||
+          fl_value_get_type(action_id_value) != FL_VALUE_TYPE_STRING ||
+          fl_value_get_type(action_title_value) != FL_VALUE_TYPE_STRING) {
+        continue;
+      }
+
+      const gchar* action_id = fl_value_get_string(action_id_value);
+      const gchar* action_title = fl_value_get_string(action_title_value);
+      const gchar* detailed_action = nullptr;
+      if (g_strcmp0(action_id, "open") == 0) {
+        detailed_action = "app.notificationActionOpen";
+      } else if (g_strcmp0(action_id, "dismiss") == 0) {
+        detailed_action = "app.notificationActionDismiss";
+      } else {
+        continue;
+      }
+
+      const std::string action_payload =
+          add_notification_action_to_payload(encoded_payload, action_id);
+      g_notification_add_button_with_target_value(
+          notification,
+          action_title,
+          detailed_action,
+          g_variant_new_string(action_payload.c_str()));
+    }
+  }
   g_autofree gchar* notification_id = g_uuid_string_random();
   g_application_send_notification(
       G_APPLICATION(self), notification_id, notification);
@@ -566,6 +634,25 @@ static void my_application_startup(GApplication* application) {
                    G_CALLBACK(notification_activated_action),
                    self);
   g_action_map_add_action(G_ACTION_MAP(application), G_ACTION(action));
+  g_object_unref(action);
+
+  GSimpleAction* open_action = g_simple_action_new(
+      kLinuxNotificationActionOpenName, G_VARIANT_TYPE_STRING);
+  g_signal_connect(open_action,
+                   "activate",
+                   G_CALLBACK(notification_button_action),
+                   self);
+  g_action_map_add_action(G_ACTION_MAP(application), G_ACTION(open_action));
+  g_object_unref(open_action);
+
+  GSimpleAction* dismiss_action = g_simple_action_new(
+      kLinuxNotificationActionDismissName, G_VARIANT_TYPE_STRING);
+  g_signal_connect(dismiss_action,
+                   "activate",
+                   G_CALLBACK(notification_button_action),
+                   self);
+  g_action_map_add_action(G_ACTION_MAP(application), G_ACTION(dismiss_action));
+  g_object_unref(dismiss_action);
 }
 
 // Implements GApplication::shutdown.
