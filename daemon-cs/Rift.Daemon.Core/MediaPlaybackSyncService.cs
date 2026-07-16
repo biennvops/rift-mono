@@ -252,8 +252,26 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             var key = GetPlaybackKey(playback.SourceDeviceId, playback.PlaybackId);
             if (_playbacks.TryGetValue(key, out var existing))
             {
-                updated = CloneRecord(existing) with
+                updated = new MediaPlaybackRecord
                 {
+                    PlaybackId = existing.PlaybackId,
+                    SourceDeviceId = existing.SourceDeviceId,
+                    SourcePlatform = existing.SourcePlatform,
+                    AppId = existing.AppId,
+                    AppName = existing.AppName,
+                    Title = existing.Title,
+                    Artist = existing.Artist,
+                    Album = existing.Album,
+                    Artwork = existing.Artwork is null ? null : new Dictionary<string, object?>(existing.Artwork),
+                    PlaybackState = existing.PlaybackState,
+                    PositionMs = existing.PositionMs,
+                    DurationMs = existing.DurationMs,
+                    CanPlay = existing.CanPlay,
+                    CanPause = existing.CanPause,
+                    CanSkipNext = existing.CanSkipNext,
+                    CanSkipPrevious = existing.CanSkipPrevious,
+                    CanSeek = existing.CanSeek,
+                    UpdatedAt = existing.UpdatedAt,
                     IsRemoved = true,
                     RemovedAt = playback.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O")
                 };
