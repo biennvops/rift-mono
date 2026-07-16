@@ -9,6 +9,7 @@ public sealed class ProtocolMessageRouter(
     IPresenceService presenceService,
     IClipboardService clipboardService,
     IFileTransferService fileTransferService,
+    IMediaPlaybackSyncService mediaPlaybackSyncService,
     INotificationSyncService notificationSyncService) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
@@ -126,6 +127,58 @@ public sealed class ProtocolMessageRouter(
             await notificationSyncService.HandleNotificationPostedAsync(
                 ParseNotificationRecord(notificationPayload),
                 cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "media.playbackPosted", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "media.playback", messageType);
+            var mediaPayload = root.GetProperty("payload");
+            EnsureEnvelopeIdentityMatches(peerDeviceId, mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty, messageType);
+            await mediaPlaybackSyncService.HandleMediaPlaybackPostedAsync(ParseMediaPlaybackRecord(mediaPayload), cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "media.playbackUpdated", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "media.playback", messageType);
+            var mediaPayload = root.GetProperty("payload");
+            EnsureEnvelopeIdentityMatches(peerDeviceId, mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty, messageType);
+            await mediaPlaybackSyncService.HandleMediaPlaybackUpdatedAsync(ParseMediaPlaybackRecord(mediaPayload), cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "media.playbackRemoved", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "media.playback", messageType);
+            var mediaPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            await mediaPlaybackSyncService.HandleMediaPlaybackRemovedAsync(new MediaPlaybackRemovedRecord
+            {
+                PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
+                SourceDeviceId = payloadSourceDeviceId,
+                RemovedAt = mediaPayload.TryGetProperty("removedAt", out var removedAtElement) ? removedAtElement.GetString() : null
+            }, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "media.playbackActionResult", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "media.playback", messageType);
+            var mediaPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            await mediaPlaybackSyncService.HandleMediaPlaybackActionResultAsync(new MediaPlaybackActionResultRecord
+            {
+                PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
+                SourceDeviceId = payloadSourceDeviceId,
+                RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
+                Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
+                Success = mediaPayload.GetProperty("success").GetBoolean(),
+                FailureReason = mediaPayload.TryGetProperty("failureReason", out var failureReasonElement) ? failureReasonElement.GetString() : null,
+                Message = mediaPayload.TryGetProperty("message", out var messageElement) ? messageElement.GetString() : null
+            }, cancellationToken);
             return;
         }
 
@@ -337,6 +390,30 @@ public sealed class ProtocolMessageRouter(
             IsDismissible = notificationPayload.GetProperty("isDismissible").GetBoolean(),
             IsOpenable = notificationPayload.GetProperty("isOpenable").GetBoolean(),
             Icon = icon
+        };
+    }
+
+    private static MediaPlaybackRecord ParseMediaPlaybackRecord(JsonElement mediaPayload)
+    {
+        return new MediaPlaybackRecord
+        {
+            PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
+            SourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
+            SourcePlatform = mediaPayload.TryGetProperty("sourcePlatform", out var platformElement) ? platformElement.GetString() : null,
+            AppId = mediaPayload.GetProperty("appId").GetString() ?? string.Empty,
+            AppName = mediaPayload.GetProperty("appName").GetString() ?? string.Empty,
+            Title = mediaPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,
+            Artist = mediaPayload.TryGetProperty("artist", out var artistElement) ? artistElement.GetString() : null,
+            Album = mediaPayload.TryGetProperty("album", out var albumElement) ? albumElement.GetString() : null,
+            PlaybackState = mediaPayload.GetProperty("playbackState").GetString() ?? string.Empty,
+            PositionMs = mediaPayload.GetProperty("positionMs").GetInt64(),
+            DurationMs = mediaPayload.TryGetProperty("durationMs", out var durationElement) ? durationElement.GetInt64() : null,
+            CanPlay = mediaPayload.GetProperty("canPlay").GetBoolean(),
+            CanPause = mediaPayload.GetProperty("canPause").GetBoolean(),
+            CanSkipNext = mediaPayload.GetProperty("canSkipNext").GetBoolean(),
+            CanSkipPrevious = mediaPayload.GetProperty("canSkipPrevious").GetBoolean(),
+            CanSeek = mediaPayload.GetProperty("canSeek").GetBoolean(),
+            UpdatedAt = mediaPayload.GetProperty("updatedAt").GetString() ?? string.Empty
         };
     }
 }

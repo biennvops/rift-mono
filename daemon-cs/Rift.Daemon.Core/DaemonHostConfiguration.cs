@@ -31,6 +31,7 @@ public static class DaemonHostConfiguration
         services.AddSingleton<IOperationService, OperationService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
         services.AddSingleton<IFileTransferService, FileTransferService>();
+        services.AddSingleton<IMediaPlaybackSyncService, MediaPlaybackSyncService>();
         services.AddSingleton<INotificationSyncService, NotificationSyncService>();
         services.AddSingleton<ISendQueueService>(provider => new SendQueueService(
             provider.GetRequiredService<ITrustStore>(),

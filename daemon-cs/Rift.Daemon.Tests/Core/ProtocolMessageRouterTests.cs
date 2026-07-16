@@ -20,6 +20,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly PairingProtocolCoordinator _pairingCoordinator;
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
+    private readonly MediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly NotificationSyncService _notificationSyncService;
     private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
@@ -57,6 +58,14 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _operationService,
             null,
             NullLogger<FileTransferService>.Instance);
+        _mediaPlaybackSyncService = new MediaPlaybackSyncService(
+            _clipboardTransport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            null,
+            NullLogger<MediaPlaybackSyncService>.Instance);
         _notificationSyncService = new NotificationSyncService(
             _clipboardTransport,
             _presenceService,
@@ -65,7 +74,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _securityEventLog,
             null,
             NullLogger<NotificationSyncService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _notificationSyncService);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService);
     }
 
     [Fact]

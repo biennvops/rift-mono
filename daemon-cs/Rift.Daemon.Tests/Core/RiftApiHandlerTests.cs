@@ -25,6 +25,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
     private readonly SendQueueService _sendQueueService;
+    private readonly FakeMediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly FakeNotificationSyncService _notificationSyncService;
     private readonly RiftApiHandler _handler;
 
@@ -45,6 +46,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         _fileTransferService = new FileTransferService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<FileTransferService>.Instance);
         _sendQueueService = new SendQueueService(_trustStore, null);
+        _mediaPlaybackSyncService = new FakeMediaPlaybackSyncService();
         _notificationSyncService = new FakeNotificationSyncService();
         var pairingService = new PairingService(
             _trustStore,
@@ -52,7 +54,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _notificationSyncService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService);
     }
 
     [Fact]
@@ -66,6 +68,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Equal("riftd-cs/0.1.0", result.ImplementationId);
         Assert.Equal("0.1-draft", result.ProtocolVersion);
         Assert.Contains(result.Capabilities, capability => capability.Name == "security.event_log");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "media.playback");
         Assert.Contains(result.Capabilities, capability => capability.Name == "notification.sync");
     }
 
@@ -164,6 +167,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _sendQueueService,
             _operationService,
             pairingService,
+            _mediaPlaybackSyncService,
             _notificationSyncService);
 
         var result = await handler.StartPairingByEndpointAsync("10.53.38.174", 9140);
@@ -622,6 +626,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _sendQueueService,
             _operationService,
             new ThrowingPairingService(),
+            _mediaPlaybackSyncService,
             _notificationSyncService);
 
         var ex = await Assert.ThrowsAsync<LocalRpcException>(() => handler.StartPairingAsync("rift-peer-failure"));
@@ -739,6 +744,76 @@ public sealed class RiftApiHandlerTests : IDisposable
         public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class FakeMediaPlaybackSyncService : IMediaPlaybackSyncService
+    {
+        public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(string eventType, MediaPlaybackRecord playback, string? removedAt, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotifyLocalMediaPlaybackEventResult
+            {
+                PlaybackId = playback.PlaybackId,
+                BroadcastTo = ["rift-peer"]
+            });
+        }
+
+        public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new ListMediaPlaybackResult
+            {
+                Playbacks =
+                [
+                    new MediaPlaybackRecord
+                    {
+                        PlaybackId = "playback-1",
+                        SourceDeviceId = "rift-peer",
+                        AppId = "com.example.music",
+                        AppName = "Example Music",
+                        PlaybackState = "playing",
+                        PositionMs = 1000,
+                        CanPlay = true,
+                        CanPause = true,
+                        CanSkipNext = true,
+                        CanSkipPrevious = true,
+                        CanSeek = true,
+                        UpdatedAt = "2026-07-16T10:00:00Z"
+                    }
+                ]
+            });
+        }
+
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken) =>
+            Task.FromResult(new MediaPlaybackRecord
+            {
+                PlaybackId = playbackId,
+                SourceDeviceId = "rift-peer",
+                AppId = "com.example.music",
+                AppName = "Example Music",
+                PlaybackState = "playing",
+                PositionMs = 1000,
+                CanPlay = true,
+                CanPause = true,
+                CanSkipNext = true,
+                CanSkipPrevious = true,
+                CanSeek = true,
+                UpdatedAt = "2026-07-16T10:00:00Z"
+            });
+
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new PerformMediaPlaybackActionResult
+            {
+                OperationId = "operation-media-1",
+                PlaybackId = playbackId,
+                Action = action,
+                State = "Pending"
+            });
+        }
+
+        public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class FakeTransport : ITransport
