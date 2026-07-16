@@ -862,6 +862,8 @@ public sealed class FileTransferServiceTests : IDisposable
 
         public bool HasProtectedSession(string peerDeviceId) => HasProtectedSessionValue;
 
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
+
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
 
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)

@@ -214,6 +214,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         public bool HasActiveSession(string peerDeviceId) => ActivePeers.Contains(peerDeviceId);
         public bool HasProtectedSession(string peerDeviceId) => ActivePeers.Contains(peerDeviceId);
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
 
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
 

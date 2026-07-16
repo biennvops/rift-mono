@@ -167,6 +167,13 @@ public interface ITransport
     bool HasProtectedSession(string peerDeviceId);
 
     /// <summary>
+    /// Re-evaluates the current authenticated session for the specified peer device ID
+    /// against the latest trust-store state and emits a session-state update if the
+    /// protected-traffic authorization changes.
+    /// </summary>
+    void RefreshSessionAuthorization(string peerDeviceId);
+
+    /// <summary>
     /// Returns the current authenticated session's remote socket endpoint for the peer,
     /// if one is presently registered.
     /// </summary>

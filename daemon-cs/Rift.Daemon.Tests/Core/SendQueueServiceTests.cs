@@ -571,6 +571,7 @@ public sealed class SendQueueServiceTests
         public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) => throw new NotSupportedException();
         public bool HasActiveSession(string peerDeviceId) => false;
         public bool HasProtectedSession(string peerDeviceId) => false;
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => throw new NotSupportedException();

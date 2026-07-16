@@ -837,6 +837,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
+        _transport.RefreshSessionAuthorization(peerDeviceId);
         PersistTrustedEndpointIfAvailable(peerDeviceId, source: "pairing-session");
         await LogEventAsync(SecurityEventTypes.PairingCompleted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
         await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "trusted", "Pairing completed.", cancellationToken);

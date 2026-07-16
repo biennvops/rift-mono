@@ -4,6 +4,10 @@ using Rift.Daemon.Core.Cryptography;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Networking;
+using System.Collections.Concurrent;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Reflection;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -246,6 +250,40 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task RefreshSessionAuthorization_WhenPeerBecomesTrusted_EnablesProtectedTraffic()
+    {
+        const string remoteDeviceId = "rift-peer-refresh-auth";
+        var onlineEvents = new List<SessionStateChangedEventArgs>();
+
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = remoteDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.PairingPending,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        _transport.SessionStateChanged += (_, args) =>
+        {
+            if (string.Equals(args.PeerDeviceId, remoteDeviceId, StringComparison.Ordinal) && args.IsOnline)
+            {
+                onlineEvents.Add(args);
+            }
+        };
+
+        RegisterAuthenticatedSession(remoteDeviceId, allowsProtectedTraffic: false, ["presence.basic"]);
+
+        Assert.False(_transport.HasProtectedSession(remoteDeviceId));
+
+        Assert.True(_trustStore.TryTransition(remoteDeviceId, TrustState.Trusted));
+        _transport.RefreshSessionAuthorization(remoteDeviceId);
+
+        Assert.True(_transport.HasProtectedSession(remoteDeviceId));
+        Assert.Single(onlineEvents);
+        Assert.True(onlineEvents[^1].AllowsProtectedTraffic);
+    }
+
+    [Fact]
     public async Task CompleteInboundHandshakeAndRegistrationAsync_HandshakeFailurePreventsPersistence()
     {
         var remoteIdentity = new IdentityManager();
@@ -291,5 +329,56 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         }
 
         await task;
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        Assert.True(condition(), "Condition was not met within the allotted time.");
+    }
+
+    private void RegisterAuthenticatedSession(string deviceId, bool allowsProtectedTraffic, IReadOnlyList<string> selectedCapabilities)
+    {
+        var activeSessionType = typeof(TlsTransport).GetNestedType("ActiveSession", BindingFlags.NonPublic);
+        Assert.NotNull(activeSessionType);
+
+        var constructor = activeSessionType!.GetConstructor(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            [typeof(SslStream), typeof(TcpClient), typeof(string), typeof(bool)],
+            modifiers: null);
+        Assert.NotNull(constructor);
+
+        using var baseStream = new MemoryStream();
+        var sslStream = new SslStream(baseStream, leaveInnerStreamOpen: false);
+        var tcpClient = new TcpClient();
+        var session = constructor!.Invoke([sslStream, tcpClient, deviceId, true]);
+
+        activeSessionType.GetProperty("IsAuthenticated")!.SetValue(session, true);
+        activeSessionType.GetProperty("SelectedCapabilities")!.SetValue(
+            session,
+            selectedCapabilities.Select(capability => new CapabilityDescriptor(capability, 1)).ToArray());
+        activeSessionType.GetProperty("AllowsProtectedTraffic")!.SetValue(session, allowsProtectedTraffic);
+        activeSessionType.GetProperty("PeerContext")!.SetValue(
+            session,
+            new SessionPeerContext(deviceId, selectedCapabilities, allowsProtectedTraffic));
+
+        var sessionsField = typeof(TlsTransport).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(sessionsField);
+        var sessions = sessionsField!.GetValue(_transport)!;
+        var tryAdd = sessions.GetType().GetMethod("TryAdd");
+        Assert.NotNull(tryAdd);
+        var added = (bool)tryAdd!.Invoke(sessions, [deviceId, session])!;
+        Assert.True(added);
     }
 }

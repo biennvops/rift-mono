@@ -746,6 +746,32 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.AllowsProtectedTraffic;
     }
 
+    public void RefreshSessionAuthorization(string peerDeviceId)
+    {
+        if (!_sessions.TryGetValue(peerDeviceId, out var session) || !session.IsAuthenticated)
+        {
+            return;
+        }
+
+        var allowsProtectedTraffic = ShouldAllowProtectedTraffic(peerDeviceId);
+        if (session.AllowsProtectedTraffic == allowsProtectedTraffic)
+        {
+            return;
+        }
+
+        session.AllowsProtectedTraffic = allowsProtectedTraffic;
+        session.PeerContext = new SessionPeerContext(
+            session.DeviceId,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic);
+
+        SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+            peerDeviceId,
+            isOnline: true,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic));
+    }
+
     public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId)
     {
         if (!_sessions.TryGetValue(peerDeviceId, out var session))
