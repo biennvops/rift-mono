@@ -24,6 +24,7 @@ import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
+import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/macos_notifications.dart';
@@ -143,12 +144,17 @@ void main() async {
       prefs.getBool('has_completed_onboarding') ?? false;
 
   runApp(
-    Provider<DesktopClipboardManager?>.value(
-      value: clipboardManager,
-      child: Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: RiftApp(hasCompletedOnboarding: hasCompletedOnboarding),
-      ),
+    MultiProvider(
+      providers: [
+        Provider<DesktopClipboardManager?>.value(value: clipboardManager),
+        Provider<JsonRpcRiftClient>.value(value: client),
+        ChangeNotifierProvider<SendQueueController>(
+          create: (context) => SendQueueController(
+            context.read<JsonRpcRiftClient>(),
+          ),
+        ),
+      ],
+      child: RiftApp(hasCompletedOnboarding: hasCompletedOnboarding),
     ),
   );
 }
@@ -184,10 +190,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final Set<String> _autoAcceptingTransferIds = <String>{};
   final ValueNotifier<String?> _historyRouteNotifier =
       ValueNotifier<String?>(null);
-  final ValueNotifier<List<Map<String, String>>?> _sharedSendRequestsNotifier =
-      ValueNotifier<List<Map<String, String>>?>(null);
+  final ValueNotifier<String?> _sharedClipboardTextNotifier =
+      ValueNotifier<String?>(null);
   final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
       <Map<String, dynamic>>[];
+  final List<Map<String, String>> _pendingSharedSendItems =
+      <Map<String, String>>[];
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -204,6 +212,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _initSystemTray();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(context.read<SendQueueController>().ensureRestored());
       _bindPlatformNotificationActions();
       _bindPairingRequests();
       _bindNotifications();
@@ -286,6 +295,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         );
       }
     }
+
+    if (MacOSNotifications.supportsPendingShareHandoff) {
+      final pendingSharePayload =
+          await MacOSNotifications.consumePendingShareItems();
+      if (pendingSharePayload != null) {
+        _handleNotificationActionPayload(pendingSharePayload);
+      }
+    }
   }
 
   void _bindConnectionRecovery() {
@@ -294,6 +311,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
+        unawaited(_flushPendingSharedSendItems());
       }
     });
   }
@@ -473,7 +491,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
               (item) => Map<String, String>.from(item as Map),
             ),
           );
-          _sharedSendRequestsNotifier.value = items;
+          unawaited(_enqueueSharedSendItems(items));
         }
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
@@ -487,6 +505,56 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       case NotificationRoute.historyTransferActivity:
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
+    }
+  }
+
+  Future<void> _enqueueSharedSendItems(
+    List<Map<String, String>> items,
+  ) async {
+    if (items.isEmpty) {
+      return;
+    }
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _pendingSharedSendItems.addAll(items);
+      debugPrint(
+        '[Send Queue] Buffered ${items.length} shared item(s); daemon not connected yet.',
+      );
+      return;
+    }
+    final result = await context.read<SendQueueController>().enqueueRequests(
+          items,
+        );
+    debugPrint(
+      '[Send Queue] Enqueued shared items: added=${result.added} skipped=${result.skipped}',
+    );
+  }
+
+  Future<void> _flushPendingSharedSendItems() async {
+    if (_pendingSharedSendItems.isEmpty) {
+      return;
+    }
+    final pending = List<Map<String, String>>.from(_pendingSharedSendItems);
+    _pendingSharedSendItems.clear();
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      // Put them back; we'll try again on the next reconnect.
+      _pendingSharedSendItems.insertAll(0, pending);
+      return;
+    }
+    final result = await context.read<SendQueueController>().enqueueRequests(
+          pending,
+        );
+    debugPrint(
+      '[Send Queue] Drained buffered shared items: added=${result.added} skipped=${result.skipped}',
+    );
+    // If anything still couldn't be enqueued (e.g., file disappeared), re-buffer
+    // so we don't lose the user's intent — they'll see it once the daemon
+    // recovers and can act on it.
+    if (result.skipped > 0 && !_pendingSharedSendItems.contains(pending.first)) {
+      debugPrint(
+        '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
+      );
     }
   }
 
@@ -610,6 +678,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   void _maybeNotify(String title, String body) {
     _maybeNotifyWithRoute(title: title, body: body);
+  }
+
+  Future<bool> _clipboardNotificationsEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
   }
 
   void _maybeNotifyCompletedTransfer({
@@ -807,25 +880,27 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
                 contentBase64: contentBase64,
               );
             }
-
-            _scaffoldMessengerKey.currentState?.showSnackBar(
-              SnackBar(content: Text(clipboardTitle)),
-            );
-            _maybeNotifyWithRoute(
-              title: clipboardTitle,
-              body: clipboardBody,
-              route: NotificationRoute.historyClipboard,
-            );
+            if (await _clipboardNotificationsEnabled()) {
+              _maybeNotifyWithRoute(
+                title: clipboardTitle,
+                body: clipboardBody,
+                route: NotificationRoute.historyClipboard,
+              );
+            }
           } catch (e) {
             debugPrint('Auto-fetch clipboard failed: $e');
           }
         }());
       } else {
-        _maybeNotifyWithRoute(
-          title: clipboardTitle,
-          body: clipboardBody,
-          route: NotificationRoute.historyClipboard,
-        );
+        unawaited(() async {
+          if (await _clipboardNotificationsEnabled()) {
+            _maybeNotifyWithRoute(
+              title: clipboardTitle,
+              body: clipboardBody,
+              route: NotificationRoute.historyClipboard,
+            );
+          }
+        }());
       }
     });
 
@@ -851,27 +926,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       final destinationPath = event['destinationPath']?.toString();
       final isIncoming =
           destinationPath != null && destinationPath.trim().isNotEmpty;
-      final verb = isIncoming ? 'Received' : 'Sent';
-      final snackBarMessage = isIncoming
-          ? '$verb $fileName from $peer\nSaved to: $destinationPath'
-          : '$verb $fileName to $peer';
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text(snackBarMessage),
-          action: destinationPath == null || destinationPath.trim().isEmpty
-              ? null
-              : SnackBarAction(
-                  label: 'Open',
-                  onPressed: () {
-                    unawaited(_openCompletedTransferPath(
-                      destinationPath: destinationPath,
-                      revealInFolder:
-                          shouldRevealCompletedTransferDestination(),
-                    ));
-                  },
-                ),
-        ),
-      );
       _maybeNotify(
         isIncoming ? 'File received' : 'File sent',
         destinationPath == null || destinationPath.trim().isEmpty
@@ -890,9 +944,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
       final fileName = event['fileName']?.toString() ?? 'file';
       final reason = event['failureReason']?.toString() ?? 'failed';
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(content: Text('File transfer failed for $fileName: $reason')),
-      );
       _maybeNotifyWithRoute(
         title: 'File transfer failed',
         body: '$fileName failed: $reason.',
@@ -969,80 +1020,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       } catch (_) {
         // Best-effort reject if incoming transfer setup fails.
       }
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text('Could not receive incoming file: $error'),
-        ),
+      _maybeNotifyWithRoute(
+        title: 'Incoming file failed',
+        body: 'Could not auto-save $fileName: $error',
+        route: NotificationRoute.historyTransferActivity,
       );
     } finally {
       _autoAcceptingTransferIds.remove(transferId);
     }
   }
-
-  Future<bool> _confirmIncomingFileOffer({
-    required String fileName,
-    required String sourceDeviceId,
-    required String destinationPath,
-  }) async {
-    final dialogContext = _navigatorKey.currentContext;
-    if (dialogContext == null) {
-      return false;
-    }
-
-    final accepted = await showDialog<bool>(
-      context: dialogContext,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Accept incoming file?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('$sourceDeviceId wants to send:'),
-              const SizedBox(height: 8),
-              Text(
-                fileName,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 12),
-              Text('Save to: $destinationPath'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Decline'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Accept'),
-            ),
-          ],
-        );
-      },
-    );
-
-    return accepted ?? false;
-  }
-
-  Future<void> _openCompletedTransferPath({
-    required String destinationPath,
-    required bool revealInFolder,
-  }) async {
-    try {
-      if (revealInFolder) {
-        await showFileInFolder(destinationPath);
-      } else {
-        await openFilePath(destinationPath);
-      }
-    } catch (error) {
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(content: Text('Could not open saved file: $error')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -1055,7 +1041,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           ? AppShell(
               key: _appShellKey,
               historyRouteNotifier: _historyRouteNotifier,
-              sharedSendRequestsNotifier: _sharedSendRequestsNotifier,
+              sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
             )
           : const OnboardingScreen(),
     );
@@ -1140,12 +1126,12 @@ ThemeData _buildRiftTheme() {
 
 class AppShell extends StatefulWidget {
   final ValueNotifier<String?>? historyRouteNotifier;
-  final ValueNotifier<List<Map<String, String>>?>? sharedSendRequestsNotifier;
+  final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
   const AppShell({
     super.key,
     this.historyRouteNotifier,
-    this.sharedSendRequestsNotifier,
+    this.sharedClipboardTextNotifier,
   });
 
   @override
@@ -1159,7 +1145,7 @@ class _AppShellState extends State<AppShell> {
     const TrustedDevicesScreen(),
     ClipboardTransferScreen(
       routeNotifier: widget.historyRouteNotifier,
-      sharedSendRequestsNotifier: widget.sharedSendRequestsNotifier,
+      sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
     ),
     const SecurityDashboardScreen(),
     const OperationsScreen(),

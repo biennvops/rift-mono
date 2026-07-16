@@ -25,6 +25,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Map<String, dynamic> deviceInfo = const {
     'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
   };
+  Map<String, dynamic>? startPairingResultOverride;
+  Map<String, dynamic>? startPairingByEndpointResultOverride;
 
   @override
   bool get isConnected => true;
@@ -58,6 +60,9 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     if (startPairingError != null) {
       throw startPairingError!;
     }
+    if (startPairingResultOverride != null) {
+      return startPairingResultOverride!;
+    }
     return {
       'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
       'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
@@ -74,6 +79,9 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     startPairingByEndpointPort = port;
     if (startPairingError != null) {
       throw startPairingError!;
+    }
+    if (startPairingByEndpointResultOverride != null) {
+      return startPairingByEndpointResultOverride!;
     }
     return {
       'deviceId': 'rift-manual-peer',
@@ -98,7 +106,6 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     rejectedDeviceId = deviceId;
     return {'rejected': true};
   }
-
 }
 
 void main() {
@@ -194,10 +201,42 @@ void main() {
 
     expect(client.startPairingByEndpointAddress, '10.53.38.174');
     expect(client.startPairingByEndpointPort, 9140);
-    expect(find.text('Pairing with 10.53.38.174:9140'), findsOneWidget);
+    expect(find.text('Pairing with rift-manual-peer'), findsOneWidget);
   });
 
-  testWidgets('PairingScreen incoming request approve and reject call IPC methods',
+  testWidgets('PairingScreen refreshes title when endpoint pairing resolves peer name',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..startPairingByEndpointResultOverride = {
+        'deviceId': 'rift-manual-peer',
+        'displayName': 'Windows Laptop',
+        'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+        'expiresInMs': 120000,
+      };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialEndpointAddress: '10.53.38.174',
+            initialEndpointPort: 9140,
+            initialDisplayName: '10.53.38.174:9140',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Pairing with Windows Laptop'), findsOneWidget);
+    expect(find.text('Pairing with 10.53.38.174:9140'), findsNothing);
+  });
+
+  testWidgets(
+      'PairingScreen incoming request approve and reject call IPC methods',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
@@ -281,7 +320,108 @@ void main() {
     expect(find.text('Thiết bị đã kết nối'), findsOneWidget);
   });
 
-  testWidgets('PairingScreen preserves local fingerprint when late pairing request arrives',
+  testWidgets('PairingScreen requester reject returns to previous screen',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            return Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => Provider<JsonRpcRiftClient>.value(
+                          value: client,
+                          child: const PairingScreen(
+                            initialDeviceId: 'rift-peer',
+                            initialDisplayName: 'Pixel 9',
+                            autoStart: true,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Open'),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Reject'));
+    await tester.pumpAndSettle();
+
+    expect(client.rejectedDeviceId, 'rift-peer');
+    expect(find.text('Open'), findsOneWidget);
+    expect(find.text('Pairing with Pixel 9'), findsNothing);
+  });
+
+  testWidgets(
+      'PairingScreen recipient closes instead of showing success screen',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            return Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => Provider<JsonRpcRiftClient>.value(
+                          value: client,
+                          child: const PairingScreen(),
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Open'),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    await client.emitPairingRequest({
+      'deviceId': 'rift-peer',
+      'displayName': 'Windows Laptop',
+      'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    });
+    await tester.pumpAndSettle();
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.tap(find.text('Approve'));
+    await tester.pumpAndSettle();
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer',
+      'newState': 'trusted',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open'), findsOneWidget);
+    expect(find.text('Thiết bị đã kết nối'), findsNothing);
+  });
+
+  testWidgets(
+      'PairingScreen preserves local fingerprint when late pairing request arrives',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
     await tester.pumpWidget(
@@ -362,5 +502,4 @@ void main() {
       findsOneWidget,
     );
   });
-
 }

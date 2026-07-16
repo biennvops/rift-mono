@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/android_shell.dart';
+import '../src/platform/macos_notifications.dart';
+import '../src/platform/notification_route.dart';
+import '../src/platform/windows_shell.dart';
 import 'dart:async';
 
 class PairingScreen extends StatefulWidget {
@@ -52,6 +56,8 @@ class _PairingScreenState extends State<PairingScreen> {
   bool _hasActivePairingFlow = false;
   bool _canApproveLocally = false;
   bool _canApproveDelay = false;
+  bool _isRecipientFlow = false;
+  bool _isClosingAfterCompletion = false;
   Future<void>? _localFingerprintLoad;
 
   void _startApproveDelay() {
@@ -114,6 +120,7 @@ class _PairingScreenState extends State<PairingScreen> {
     _status = widget.initialStatus ?? _status;
     _hasActivePairingFlow = widget.initialPeerFingerprint != null;
     _canApproveLocally = widget.initialCanApproveLocally;
+    _isRecipientFlow = widget.initialCanApproveLocally;
     if (_hasActivePairingFlow) {
       _startApproveDelay();
     }
@@ -158,39 +165,23 @@ class _PairingScreenState extends State<PairingScreen> {
         _completed = false;
         _hasActivePairingFlow = true;
         _canApproveLocally = true;
+        _isRecipientFlow = true;
       });
       unawaited(_ensureLocalFingerprint());
       _startApproveDelay();
     });
-    _completeSub = client.onPairingComplete.listen((event) {
+    _completeSub = client.onPairingComplete.listen((event) async {
       if (!mounted || event['deviceId']?.toString() != _deviceId) return;
-      setState(() {
-        _peerFingerprint ??= event['fingerprint']?.toString();
-        _status = 'Pairing complete';
-        _error = null;
-        _busy = false;
-        _completed = true;
-        _hasActivePairingFlow = false;
-        _countdownTimer?.cancel();
-        _remainingSeconds = null;
-        _canApproveLocally = false;
-      });
+      _peerFingerprint ??= event['fingerprint']?.toString();
+      await _handlePairingCompleted();
     });
-    _trustSub = client.onTrustChanged.listen((event) {
+    _trustSub = client.onTrustChanged.listen((event) async {
       if (!mounted || event['deviceId']?.toString() != _deviceId) return;
       final newState = event['newState']?.toString();
       if (newState == 'trusted' && !_completed) {
-        setState(() {
-          _status = 'Pairing complete';
-          _error = null;
-          _busy = false;
-          _completed = true;
-          _hasActivePairingFlow = false;
-          _countdownTimer?.cancel();
-          _remainingSeconds = null;
-          _canApproveLocally = false;
-        });
+        await _handlePairingCompleted();
       } else if (newState == 'discovered' && !_completed) {
+        final shouldAutoClose = !_isRecipientFlow;
         setState(() {
           _status = 'Pairing closed';
           _busy = false;
@@ -202,8 +193,60 @@ class _PairingScreenState extends State<PairingScreen> {
         });
         _countdownTimer?.cancel();
         _remainingSeconds = null;
+        if (shouldAutoClose && mounted) {
+          Navigator.of(context).maybePop();
+        }
       }
     });
+  }
+
+  Future<void> _handlePairingCompleted() async {
+    if (!mounted || _isClosingAfterCompletion) {
+      return;
+    }
+
+    if (_isRecipientFlow) {
+      _isClosingAfterCompletion = true;
+      await _showRecipientPairingSuccessNotice();
+      if (!mounted) {
+        return;
+      }
+      Navigator.of(context).maybePop();
+      return;
+    }
+
+    setState(() {
+      _status = 'Pairing complete';
+      _error = null;
+      _busy = false;
+      _completed = true;
+      _hasActivePairingFlow = false;
+      _countdownTimer?.cancel();
+      _remainingSeconds = null;
+      _canApproveLocally = false;
+    });
+  }
+
+  Future<void> _showRecipientPairingSuccessNotice() async {
+    final label = _displayName ?? _deviceId ?? 'device';
+    final message = 'Paired successfully with $label';
+    if (AndroidShell.isSupported) {
+      await AndroidShell.showToast(message);
+      return;
+    }
+    if (WindowsShell.isSupported) {
+      await WindowsShell.showNotification(
+        title: 'Pairing completed',
+        body: message,
+        route: NotificationRoute.devices,
+      );
+      return;
+    }
+    await MacOSNotifications.show(
+      title: 'Pairing completed',
+      body: message,
+      route: NotificationRoute.devices,
+    );
   }
 
   void _startCountdown(int? expiresInMs) {
@@ -255,10 +298,13 @@ class _PairingScreenState extends State<PairingScreen> {
 
     try {
       final result = await client.startPairing(deviceId) as Map;
+      final resolvedDeviceId = result['deviceId']?.toString() ?? deviceId;
+      final resolvedDisplayName =
+          result['displayName']?.toString() ?? _displayName ?? resolvedDeviceId;
       if (!mounted) return;
       setState(() {
-        _deviceId = result['deviceId']?.toString() ?? deviceId;
-        _displayName ??= deviceId;
+        _deviceId = resolvedDeviceId;
+        _displayName = resolvedDisplayName;
         _localFingerprint = result['fingerprint']?.toString();
         _peerFingerprint = result['peerFingerprint']?.toString();
         _expiresInMs = (result['expiresInMs'] as num?)?.toInt();
@@ -267,6 +313,7 @@ class _PairingScreenState extends State<PairingScreen> {
         _busy = false;
         _hasActivePairingFlow = true;
         _canApproveLocally = false;
+        _isRecipientFlow = false;
       });
       _startApproveDelay();
     } catch (e) {
@@ -304,9 +351,14 @@ class _PairingScreenState extends State<PairingScreen> {
       final result = await client.startPairingByEndpoint(address, port) as Map;
       if (!mounted) return;
       final resolvedDeviceId = result['deviceId']?.toString();
+      final resolvedDisplayName =
+          result['displayName']?.toString() ??
+              resolvedDeviceId ??
+              _displayName ??
+              '$address:$port';
       setState(() {
         _deviceId = resolvedDeviceId;
-        _displayName ??= resolvedDeviceId ?? '$address:$port';
+        _displayName = resolvedDisplayName;
         _localFingerprint = result['fingerprint']?.toString();
         _peerFingerprint = result['peerFingerprint']?.toString();
         _expiresInMs = (result['expiresInMs'] as num?)?.toInt();
@@ -315,6 +367,7 @@ class _PairingScreenState extends State<PairingScreen> {
         _busy = false;
         _hasActivePairingFlow = true;
         _canApproveLocally = false;
+        _isRecipientFlow = false;
       });
       _startApproveDelay();
     } catch (e) {
@@ -374,6 +427,10 @@ class _PairingScreenState extends State<PairingScreen> {
     try {
       await client.rejectPairing(deviceId);
       if (!mounted) return;
+      if (!_isRecipientFlow) {
+        Navigator.of(context).maybePop();
+        return;
+      }
       setState(() {
         _busy = false;
         _status = 'Pairing rejected';
@@ -408,8 +465,22 @@ class _PairingScreenState extends State<PairingScreen> {
       return List.filled(8, 'Waiting');
     }
     final mockWords = [
-      'Apple', 'Banana', 'Cherry', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel',
-      'India', 'Juliett', 'Kilo', 'Lima', 'Mike', 'November', 'Oscar', 'Papa'
+      'Apple',
+      'Banana',
+      'Cherry',
+      'Delta',
+      'Echo',
+      'Foxtrot',
+      'Golf',
+      'Hotel',
+      'India',
+      'Juliett',
+      'Kilo',
+      'Lima',
+      'Mike',
+      'November',
+      'Oscar',
+      'Papa'
     ];
     List<String> words = [];
     final clean = fingerprint.replaceAll(' ', '');
@@ -430,7 +501,8 @@ class _PairingScreenState extends State<PairingScreen> {
     if (clean.isEmpty) return fp;
     final chunks = <String>[];
     for (int i = 0; i < clean.length; i += 4) {
-      chunks.add(clean.substring(i, (i + 4) > clean.length ? clean.length : i + 4));
+      chunks.add(
+          clean.substring(i, (i + 4) > clean.length ? clean.length : i + 4));
     }
     return chunks.join(' ');
   }
@@ -465,7 +537,8 @@ class _PairingScreenState extends State<PairingScreen> {
                 const SizedBox(width: 8),
                 Text(
                   title,
-                  style: theme.textTheme.titleSmall?.copyWith(color: onPrimaryContainer, fontWeight: FontWeight.bold),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                      color: onPrimaryContainer, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -490,11 +563,14 @@ class _PairingScreenState extends State<PairingScreen> {
                       children: [
                         Text(
                           '0${index + 1}',
-                          style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.outline),
+                          style: theme.textTheme.labelSmall
+                              ?.copyWith(color: theme.colorScheme.outline),
                         ),
                         Text(
                           words[index],
-                          style: theme.textTheme.titleMedium?.copyWith(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold),
+                          style: theme.textTheme.titleMedium?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.bold),
                         ),
                       ],
                     );
@@ -532,7 +608,8 @@ class _PairingScreenState extends State<PairingScreen> {
     if (clean.isEmpty) return fp;
     final chunks = <String>[];
     for (int i = 0; i < clean.length; i += 2) {
-      chunks.add(clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2));
+      chunks.add(
+          clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2));
     }
     return chunks.join(':');
   }
@@ -575,7 +652,8 @@ class _PairingScreenState extends State<PairingScreen> {
                           width: 96,
                           height: 96,
                           decoration: BoxDecoration(
-                            color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                            color: theme.colorScheme.secondaryContainer
+                                .withValues(alpha: 0.5),
                             shape: BoxShape.circle,
                           ),
                         ),
@@ -607,12 +685,17 @@ class _PairingScreenState extends State<PairingScreen> {
                   RichText(
                     textAlign: TextAlign.center,
                     text: TextSpan(
-                      style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       children: [
-                        const TextSpan(text: 'Kênh truyền tin đã được thiết lập an toàn với '),
+                        const TextSpan(
+                            text:
+                                'Kênh truyền tin đã được thiết lập an toàn với '),
                         TextSpan(
                           text: _displayName ?? _deviceId ?? 'Unknown',
-                          style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.bold),
                         ),
                         const TextSpan(text: '.'),
                       ],
@@ -625,7 +708,8 @@ class _PairingScreenState extends State<PairingScreen> {
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: theme.colorScheme.outlineVariant),
+                      border:
+                          Border.all(color: theme.colorScheme.outlineVariant),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: 0.05),
@@ -642,7 +726,8 @@ class _PairingScreenState extends State<PairingScreen> {
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.desktop_windows, color: theme.colorScheme.outline),
+                                Icon(Icons.desktop_windows,
+                                    color: theme.colorScheme.outline),
                                 const SizedBox(width: 8),
                                 Text(
                                   _displayName ?? _deviceId ?? 'Unknown',
@@ -653,29 +738,40 @@ class _PairingScreenState extends State<PairingScreen> {
                                 ),
                               ],
                             ),
-                            Icon(Icons.verified, color: theme.colorScheme.secondary),
+                            Icon(Icons.verified,
+                                color: theme.colorScheme.secondary),
                           ],
                         ),
                         const SizedBox(height: 12),
-                        Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+                        Divider(
+                            height: 1,
+                            color: theme.colorScheme.outlineVariant
+                                .withValues(alpha: 0.5)),
                         const SizedBox(height: 12),
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: theme.colorScheme.outlineVariant),
+                            border: Border.all(
+                                color: theme.colorScheme.outlineVariant),
                           ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
                                 children: [
-                                  Icon(Icons.key, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                                  Icon(Icons.key,
+                                      size: 14,
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
                                   const SizedBox(width: 4),
                                   Text(
                                     'ACTIVE FINGERPRINT',
-                                    style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, fontWeight: FontWeight.bold),
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                        fontWeight: FontWeight.bold),
                                   ),
                                 ],
                               ),
@@ -701,10 +797,13 @@ class _PairingScreenState extends State<PairingScreen> {
                       style: ElevatedButton.styleFrom(
                         backgroundColor: theme.colorScheme.primary,
                         foregroundColor: theme.colorScheme.onPrimary,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Bắt đầu ngay', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      child: const Text('Bắt đầu ngay',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16)),
                     ),
                   ),
                   const SizedBox(height: 16),
@@ -715,10 +814,13 @@ class _PairingScreenState extends State<PairingScreen> {
                       style: OutlinedButton.styleFrom(
                         foregroundColor: theme.colorScheme.onSurface,
                         side: BorderSide(color: theme.colorScheme.outline),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Về danh sách', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      child: const Text('Về danh sách',
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 16)),
                     ),
                   ),
                 ],
@@ -737,7 +839,8 @@ class _PairingScreenState extends State<PairingScreen> {
     if (_completed) {
       return _buildSuccessState(theme);
     }
-    final hasExpired = (_remainingSeconds != null && _remainingSeconds == 0 && !_completed);
+    final hasExpired =
+        (_remainingSeconds != null && _remainingSeconds == 0 && !_completed);
     final canApprove = !_busy &&
         !_completed &&
         !hasExpired &&
@@ -745,7 +848,8 @@ class _PairingScreenState extends State<PairingScreen> {
         _canApproveLocally &&
         _deviceId != null &&
         _peerFingerprint != null;
-    final canReject = !_busy && !_completed && _deviceId != null && _hasActivePairingFlow;
+    final canReject =
+        !_busy && !_completed && _deviceId != null && _hasActivePairingFlow;
 
     final approveEnabled = canApprove && _canApproveDelay;
 
@@ -778,7 +882,9 @@ class _PairingScreenState extends State<PairingScreen> {
                     const SizedBox(height: 12),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      child: Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.error)),
+                      child: Text(_error!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: theme.colorScheme.error)),
                     ),
                   ]
                 ],
@@ -789,18 +895,26 @@ class _PairingScreenState extends State<PairingScreen> {
                 ListView(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
                   children: [
-                    Text('Compare fingerprints', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                    Text('Compare fingerprints',
+                        style: theme.textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 4),
                     Text(
                       'Ensure both screens display the exact same words and codes.',
-                      style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      style: theme.textTheme.bodyLarge
+                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                     ),
                     if (hasExpired) ...[
                       const SizedBox(height: 8),
-                      Text('Expired', style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.bold)),
+                      Text('Expired',
+                          style: TextStyle(
+                              color: theme.colorScheme.error,
+                              fontWeight: FontWeight.bold)),
                     ] else if (_remainingSeconds != null) ...[
                       const SizedBox(height: 8),
-                      Text('Expires in ${_remainingSeconds!}s', style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
+                      Text('Expires in ${_remainingSeconds!}s',
+                          style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant)),
                     ],
                     const SizedBox(height: 24),
                     _buildFingerprintBlock(
@@ -819,7 +933,8 @@ class _PairingScreenState extends State<PairingScreen> {
                       icon: Icons.desktop_windows,
                       primaryColor: theme.colorScheme.secondary,
                       primaryContainer: theme.colorScheme.secondaryContainer,
-                      onPrimaryContainer: theme.colorScheme.onSecondaryContainer,
+                      onPrimaryContainer:
+                          theme.colorScheme.onSecondaryContainer,
                       fingerprint: _peerFingerprint,
                     ),
                   ],
@@ -832,7 +947,9 @@ class _PairingScreenState extends State<PairingScreen> {
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surface,
-                      border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+                      border: Border(
+                          top: BorderSide(
+                              color: theme.colorScheme.outlineVariant)),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -842,10 +959,13 @@ class _PairingScreenState extends State<PairingScreen> {
                           style: TextButton.styleFrom(
                             backgroundColor: theme.colorScheme.error,
                             foregroundColor: theme.colorScheme.onError,
-                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 32, vertical: 12),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8)),
                           ),
-                          child: const Text('Reject', style: TextStyle(fontWeight: FontWeight.bold)),
+                          child: const Text('Reject',
+                              style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                         if (_canApproveLocally)
                           ElevatedButton(
@@ -853,18 +973,29 @@ class _PairingScreenState extends State<PairingScreen> {
                             style: ElevatedButton.styleFrom(
                               backgroundColor: theme.colorScheme.primary,
                               foregroundColor: theme.colorScheme.onPrimary,
-                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 32, vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8)),
                               elevation: 0,
                             ),
-                            child: _busy ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Text('Approve', style: TextStyle(fontWeight: FontWeight.bold)),
+                            child: _busy
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2, color: Colors.white))
+                                : const Text('Approve',
+                                    style:
+                                        TextStyle(fontWeight: FontWeight.bold)),
                           )
                         else
                           Padding(
                             padding: const EdgeInsets.only(right: 16.0),
                             child: Text(
                               'Waiting for peer...',
-                              style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.outline),
+                              style: theme.textTheme.labelMedium
+                                  ?.copyWith(color: theme.colorScheme.outline),
                             ),
                           ),
                       ],

@@ -86,8 +86,25 @@ public sealed class ReceivedFileOffer
     public string RequiredCapability { get; init; } = string.Empty;
 }
 
+public sealed class FileTransferLifecycleEventArgs : EventArgs
+{
+    public string TransferId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
+    public string Direction { get; init; } = string.Empty;
+    public string PeerDeviceId { get; init; } = string.Empty;
+    public string FileName { get; init; } = string.Empty;
+    public long ByteSize { get; init; }
+    public long BytesTransferred { get; init; }
+    public string State { get; init; } = string.Empty;
+    public string? FailureReason { get; init; }
+    public string? Message { get; init; }
+    public string? DestinationPath { get; init; }
+}
+
 public interface IFileTransferService
 {
+    event EventHandler<FileTransferLifecycleEventArgs>? TransferUpdated;
+
     Task<OfferFileResult> OfferFileAsync(
         string targetDeviceId,
         string localPath,

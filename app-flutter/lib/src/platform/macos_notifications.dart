@@ -1,20 +1,26 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 class MacOSNotifications {
   static const MethodChannel _channel = MethodChannel('rift.permissions');
+  @visibleForTesting
+  static bool? debugIsMacOSOverride;
 
-  static bool get isSupported => Platform.isMacOS || Platform.isAndroid;
+  static bool get _isMacOS => debugIsMacOSOverride ?? Platform.isMacOS;
+
+  static bool get isSupported => _isMacOS || Platform.isAndroid;
+  static bool get supportsPendingShareHandoff => _isMacOS;
 
   static Future<String> getStatus() async {
-    if (!Platform.isMacOS) return 'unknown';
+    if (!_isMacOS) return 'unknown';
     final res = await _channel.invokeMethod<String>('notification.getStatus');
     return res ?? 'unknown';
   }
 
   static Future<bool> request() async {
-    if (!Platform.isMacOS) return true;
+    if (!_isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.request');
     return res ?? false;
   }
@@ -25,7 +31,7 @@ class MacOSNotifications {
     String? route,
     Map<String, Object?>? payload,
   }) async {
-    if (!Platform.isMacOS) return true;
+    if (!_isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.show', {
       'title': title,
       'body': body,
@@ -33,6 +39,15 @@ class MacOSNotifications {
       if (payload != null) 'payload': payload,
     });
     return res ?? false;
+  }
+
+  static Future<Map<String, dynamic>?> consumePendingShareItems() async {
+    if (!_isMacOS) return null;
+    final res = await _channel.invokeMethod<Object>('share.consumePendingItems');
+    if (res is Map) {
+      return Map<String, dynamic>.from(res);
+    }
+    return null;
   }
 
   static void setMethodCallHandler(

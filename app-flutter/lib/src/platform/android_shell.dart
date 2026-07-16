@@ -35,6 +35,43 @@ class AndroidShell {
     return result is Map ? result : null;
   }
 
+  static Future<String> getNotificationPermissionStatus() async {
+    if (!isSupported) {
+      return 'unknown';
+    }
+    final result = await _channel.invokeMethod<String>(
+      'getNotificationPermissionStatus',
+    );
+    return result ?? 'unknown';
+  }
+
+  static Future<bool> requestNotificationPermission() async {
+    if (!isSupported) {
+      return true;
+    }
+    final result = await _channel.invokeMethod<bool>(
+      'requestNotificationPermission',
+    );
+    return result ?? false;
+  }
+
+  static Future<void> showToast(String message) async {
+    if (!isSupported) {
+      return;
+    }
+    await _channel.invokeMethod<void>('showToast', {
+      'message': message,
+    });
+  }
+
+  static Future<bool> openNotificationSettings() async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('openNotificationSettings');
+    return result ?? false;
+  }
+
   static void setMethodCallHandler(
     Future<dynamic> Function(MethodCall call)? handler,
   ) {

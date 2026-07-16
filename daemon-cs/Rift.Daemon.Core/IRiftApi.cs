@@ -16,6 +16,12 @@ public interface IRiftApi
     Task<ListClipboardOffersResult> ListClipboardOffersAsync();
     Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId);
     Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName = null, string? mediaType = null);
+    Task<EnqueueFileSendResult> EnqueueFileSendAsync(string localPath, string? fileName = null, string? mediaType = null, string? targetDeviceId = null, string? origin = null);
+    Task<ListSendQueueResult> ListSendQueueAsync();
+    Task<SendQueueItemInfo> GetSendQueueItemAsync(string queueItemId);
+    Task<SendQueueItemInfo> AssignSendQueueTargetAsync(string queueItemId, string targetDeviceId);
+    Task<SendQueueItemInfo> RetrySendQueueItemAsync(string queueItemId);
+    Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId);
     Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync();
     Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite = false);
     Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message = null);

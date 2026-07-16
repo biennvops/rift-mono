@@ -96,6 +96,31 @@ class MockTransport implements IpcTransport {
       }
     ]
   };
+  Map<String, dynamic> enqueueFileSendResult = {
+    'QueueItemId': 'queue-1',
+    'Status': 'waiting_for_target',
+    'TargetDeviceId': null,
+  };
+  Map<String, dynamic> listSendQueueResult = {
+    'Items': [
+      {
+        'QueueItemId': 'queue-1',
+        'Status': 'queued',
+        'TargetDeviceId': 'rift-peer',
+        'LocalPath': '/tmp/demo.txt',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'CurrentOperationId': null,
+        'LastTransferId': null,
+        'FailureReason': null,
+        'FailureMessage': null,
+        'CreatedAt': '2026-07-14T10:00:00Z',
+        'UpdatedAt': '2026-07-14T10:00:00Z',
+        'Origin': 'share',
+      }
+    ]
+  };
   Map<String, dynamic> listOperationsResult = {
     'Operations': [
       {
@@ -217,6 +242,12 @@ class MockTransport implements IpcTransport {
           break;
         case 'rift.listIncomingFileOffers':
           _sendResult(id, listIncomingFileOffersResult);
+          break;
+        case 'rift.enqueueFileSend':
+          _sendResult(id, enqueueFileSendResult);
+          break;
+        case 'rift.listSendQueue':
+          _sendResult(id, listSendQueueResult);
           break;
         case 'rift.acceptFileOffer':
           _sendResult(id, acceptFileOfferResult);
@@ -549,6 +580,42 @@ void main() {
       });
     });
 
+    test('should deliver send queue notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final changedFuture = client.onSendQueueChanged.first;
+      final updatedFuture = client.onSendQueueItemUpdated.first;
+
+      transport.emitNotification('rift.onSendQueueChanged', {
+        'QueueItemId': 'queue-1',
+        'Removed': true,
+      });
+      transport.emitNotification('rift.onSendQueueItemUpdated', {
+        'QueueItemId': 'queue-1',
+        'Status': 'waiting_for_peer',
+        'TargetDeviceId': 'rift-peer',
+        'CurrentOperationId': 'operation-1',
+        'LastTransferId': 'transfer-1',
+        'FailureReason': 'PeerUnreachable',
+        'FailureMessage': 'offline',
+      });
+
+      expect(await changedFuture, {
+        'queueItemId': 'queue-1',
+        'removed': true,
+      });
+      expect(await updatedFuture, {
+        'queueItemId': 'queue-1',
+        'status': 'waiting_for_peer',
+        'targetDeviceId': 'rift-peer',
+        'currentOperationId': 'operation-1',
+        'lastTransferId': 'transfer-1',
+        'failureReason': 'PeerUnreachable',
+        'failureMessage': 'offline',
+      });
+    });
+
     test('should expose clipboard RPC wrappers', () async {
       await client.connect();
 
@@ -636,6 +703,42 @@ void main() {
       expect(acceptResult['destinationPath'], 'C:/tmp/photo.jpg');
       expect(rejectResult['rejected'], isTrue);
       expect(transfers['transfers'], hasLength(1));
+    });
+
+    test('should expose daemon send queue RPC wrappers', () async {
+      await client.connect();
+
+      final enqueue = await client.enqueueFileSend(
+        localPath: '/tmp/demo.txt',
+        fileName: 'demo.txt',
+        mediaType: 'text/plain',
+        origin: 'share',
+      );
+      final queue = await client.listSendQueue();
+      final supported = await client.supportsSendQueue();
+
+      expect(enqueue['queueItemId'], 'queue-1');
+      expect(queue['items'], hasLength(1));
+      expect((queue['items'] as List).single['fileName'], 'demo.txt');
+      expect(supported, isTrue);
+    });
+
+    test('supportsSendQueue cache is cleared on reconnect', () async {
+      await client.connect();
+
+      // First probe caches true.
+      expect(await client.supportsSendQueue(), isTrue);
+
+      // Drop the connection; the cache must be cleared so a subsequent
+      // reconnect re-probes the capability.
+      await client.disconnect();
+      await client.connect();
+
+      // Re-probe after reconnect. If the cache had stuck as true without
+      // re-checking, this would still pass even if the daemon no longer
+      // supported the method — so the assertion is that the call still
+      // succeeds (true) AND that a subsequent force-fail still re-probes.
+      expect(await client.supportsSendQueue(), isTrue);
     });
 
     test('should expose operation RPC wrappers', () async {

@@ -446,6 +446,104 @@ Offers a local file to a trusted peer.
 }
 ```
 
+#### `rift.enqueueFileSend`
+
+Queues a local file for durable daemon-managed sending. Unlike `rift.offerFile`,
+this method creates a queued send intent that may survive Flutter UI exit and
+may wait for target assignment or peer availability before dispatch.
+
+**Params:**
+
+| Field            | Type               | Required | Description                                 |
+| ---------------- | ------------------ | -------- | ------------------------------------------- |
+| `localPath`      | string             | Yes      | Local source path on this device            |
+| `fileName`       | string             | No       | Override name shown to the peer             |
+| `mediaType`      | string             | No       | MIME type; default is implementation-defined |
+| `targetDeviceId` | device ID string   | No       | If omitted, the item waits for target assignment |
+| `origin`         | string             | No       | Optional UI/source hint such as `picker` or `share` |
+
+**Result:**
+
+```json
+{
+  "queueItemId": "018f2f9a-8b7c-4a4b-9c0d-777777777777",
+  "status": "waiting_for_target",
+  "targetDeviceId": null
+}
+```
+
+#### `rift.listSendQueue`
+
+Returns durable outgoing send queue items owned by the daemon.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "items": [
+    {
+      "queueItemId": "018f2f9a-8b7c-4a4b-9c0d-777777777777",
+      "status": "queued",
+      "targetDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "localPath": "/home/user/Downloads/example.png",
+      "fileName": "example.png",
+      "mediaType": "image/png",
+      "byteSize": 1024,
+      "currentOperationId": null,
+      "lastTransferId": null,
+      "failureReason": null,
+      "failureMessage": null,
+      "createdAt": "2026-07-14T09:58:00.0000000+00:00",
+      "updatedAt": "2026-07-14T09:58:00.0000000+00:00",
+      "origin": "share"
+    }
+  ]
+}
+```
+
+#### `rift.getSendQueueItem`
+
+Returns one durable outgoing send queue item.
+
+**Params:**
+
+| Field         | Type          | Required | Description             |
+| ------------- | ------------- | -------- | ----------------------- |
+| `queueItemId` | UUIDv4 string | Yes      | The queue item to fetch |
+
+#### `rift.assignSendQueueTarget`
+
+Assigns or changes the target peer for an existing queue item.
+
+**Params:**
+
+| Field          | Type             | Required | Description        |
+| -------------- | ---------------- | -------- | ------------------ |
+| `queueItemId`  | UUIDv4 string    | Yes      | The queue item     |
+| `targetDeviceId` | device ID string | Yes    | Trusted destination |
+
+#### `rift.retrySendQueueItem`
+
+Requests retry of a durable send queue item.
+
+**Params:**
+
+| Field         | Type          | Required | Description        |
+| ------------- | ------------- | -------- | ------------------ |
+| `queueItemId` | UUIDv4 string | Yes      | The queue item     |
+
+#### `rift.removeSendQueueItem`
+
+Removes a durable send queue item.
+
+**Params:**
+
+| Field         | Type          | Required | Description        |
+| ------------- | ------------- | -------- | ------------------ |
+| `queueItemId` | UUIDv4 string | Yes      | The queue item     |
+
 #### `rift.acceptFileOffer`
 
 Accepts an incoming file offer and selects the destination path locally.
@@ -627,6 +725,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onClipboardOffer`      | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }`  | New clipboard offer from a peer      |
 | `rift.onClipboardExpired`    | `{ "offerId" }`                                                                        | Clipboard offer expired              |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
+| `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
+| `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |
 | `rift.onPresenceUpdate`      | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }`                              | Peer presence changed                |
 | `rift.onOperationTransition` | `{ "operationId", "operationType", "previousState", "nextState", "failureReason?" }`   | Operation state changed              |
 | `rift.onSecurityEvent`       | `{ "eventId", "eventType", "severity", "peerDeviceId?", "outcome", "failureReason?" }` | Security event logged                |

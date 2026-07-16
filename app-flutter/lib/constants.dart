@@ -13,3 +13,9 @@ class AppStrings {
   static const openSettings = 'Open settings/debug';
   static const settingsTitle = 'Settings / Debug';
 }
+
+class AppPrefs {
+  static const clipboardNotificationsEnabled =
+      'clipboard_notifications_enabled';
+  static const sendQueueState = 'send_queue_state_v1';
+}

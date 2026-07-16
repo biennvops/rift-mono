@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -20,12 +22,117 @@ class DeviceDetailScreen extends StatefulWidget {
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   late Map<String, dynamic> peer;
   late bool isOnline;
+  late final String _deviceId;
+  bool _wasRemoved = false;
+  bool _isRefreshing = false;
+  StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
+  StreamSubscription<Map<String, dynamic>>? _peerLostSub;
+  StreamSubscription<bool>? _connectionChangedSub;
 
   @override
   void initState() {
     super.initState();
     peer = widget.peer;
     isOnline = widget.isOnline;
+    _deviceId = widget.peer['deviceId']?.toString() ?? '';
+    _subscribeToPeerUpdates();
+  }
+
+  @override
+  void dispose() {
+    _trustChangedSub?.cancel();
+    _peerLostSub?.cancel();
+    _connectionChangedSub?.cancel();
+    super.dispose();
+  }
+
+  void _subscribeToPeerUpdates() {
+    final client = context.read<JsonRpcRiftClient>();
+    _trustChangedSub = client.onTrustChanged.listen(_handleTrustChanged);
+    _peerLostSub = client.onPeerLost.listen(_handlePeerLost);
+    _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
+      if (!mounted) return;
+      if (isConnected) {
+        unawaited(_refreshPeerFromDaemon());
+      }
+    });
+  }
+
+  void _handleTrustChanged(Map<String, dynamic> event) {
+    final eventDeviceId = event['deviceId']?.toString();
+    if (eventDeviceId == null || eventDeviceId != _deviceId) {
+      return;
+    }
+
+    final newState = event['newState']?.toString();
+    if (newState == 'trusted') {
+      unawaited(_refreshPeerFromDaemon());
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _wasRemoved = true;
+      isOnline = false;
+      if (newState != null && newState.isNotEmpty) {
+        peer = Map<String, dynamic>.from(peer)..['trustState'] = newState;
+      }
+    });
+  }
+
+  void _handlePeerLost(Map<String, dynamic> event) {
+    final eventDeviceId = event['deviceId']?.toString();
+    if (eventDeviceId == null || eventDeviceId != _deviceId || !mounted) {
+      return;
+    }
+    setState(() {
+      isOnline = false;
+    });
+  }
+
+  Future<void> _refreshPeerFromDaemon() async {
+    if (!mounted || _deviceId.isEmpty || _isRefreshing) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      return;
+    }
+
+    _isRefreshing = true;
+    try {
+      final result = await client.listTrustedPeers();
+      final peers = List<dynamic>.from((result as Map)['peers'] ?? const []);
+      Map<String, dynamic>? refreshedPeer;
+      for (final candidate in peers) {
+        if (candidate is! Map) continue;
+        final map = Map<String, dynamic>.from(candidate);
+        if (map['deviceId']?.toString() == _deviceId) {
+          refreshedPeer = map;
+          break;
+        }
+      }
+
+      if (!mounted) return;
+      if (refreshedPeer == null) {
+        setState(() {
+          _wasRemoved = true;
+          isOnline = false;
+        });
+        return;
+      }
+
+      setState(() {
+        peer = refreshedPeer!;
+        isOnline = refreshedPeer['presence']?.toString() == 'online';
+        _wasRemoved = false;
+      });
+    } catch (_) {
+      // Keep the last known snapshot if a transient refresh fails.
+    } finally {
+      _isRefreshing = false;
+    }
   }
 
   String _formatFingerprintWithColons(String? fp) {
@@ -319,7 +426,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Future<void> _forgetPeer() async {
     final deviceId = peer['deviceId']?.toString();
-    final displayName = peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
+    final displayName =
+        peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
     final fingerprint = peer['fingerprint']?.toString() ?? 'Unknown';
     if (deviceId == null) return;
     final client = context.read<JsonRpcRiftClient>();
@@ -329,9 +437,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
     try {
       await client.revokeTrust(
-            deviceId,
-            'User removed trusted device from Device Detail',
-          );
+        deviceId,
+        'User removed trusted device from Device Detail',
+      );
       if (!mounted) return;
       Navigator.of(context).pop({
         'action': 'forgotten',
@@ -348,7 +456,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Future<void> _blockPeer() async {
     final deviceId = peer['deviceId']?.toString();
-    final displayName = peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
+    final displayName =
+        peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
     if (deviceId == null) return;
 
     final confirmed = await _showBlockBottomSheet(displayName);
@@ -388,7 +497,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          displayName,
+          _wasRemoved ? 'Device unavailable' : displayName,
           style: theme.textTheme.titleMedium?.copyWith(
             color: theme.colorScheme.primary,
             fontWeight: FontWeight.bold,
@@ -402,265 +511,330 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           child: Container(color: theme.colorScheme.outlineVariant, height: 1),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Center(
-            child: Column(
+      body: _wasRemoved
+          ? _buildRemovedState(theme, displayName)
+          : ListView(
+              padding: const EdgeInsets.all(16),
               children: [
-                Container(
-                  width: 64,
-                  height: 64,
-                  margin: const EdgeInsets.only(bottom: 8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHigh,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                  ),
-                  child: Icon(
-                    _platformIcon(platform),
-                    size: 32,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
+                Center(
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 64,
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHigh,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: theme.colorScheme.outlineVariant),
+                        ),
+                        child: Icon(
+                          _platformIcon(platform),
+                          size: 32,
+                          color: theme.colorScheme.onSurface,
+                        ),
                       ),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            Icons.verified,
-                            size: 14,
-                            color: theme.colorScheme.onSecondaryContainer,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            trustState.toUpperCase(),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSecondaryContainer,
-                              fontWeight: FontWeight.bold,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
                             ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.verified,
+                                  size: 14,
+                                  color: theme.colorScheme.onSecondaryContainer,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  trustState.toUpperCase(),
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color:
+                                        theme.colorScheme.onSecondaryContainer,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Row(
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: isOnline
+                                      ? theme.colorScheme.secondary
+                                      : theme.colorScheme.outline,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                isOnline ? 'ONLINE' : 'OFFLINE',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: isOnline
+                                      ? theme.colorScheme.secondary
+                                      : theme.colorScheme.outline,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
+                      const SizedBox(height: 8),
+                      Text(
+                        trustState == 'trusted'
+                            ? 'Trusted since $pairedAt'
+                            : 'Last seen $lastSeenAt',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _buildSection(
+                  theme,
+                  'IDENTITY',
+                  [
+                    _buildInfoLine(theme, 'Device ID', deviceId),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Fingerprint',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                    const SizedBox(width: 8),
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(top: 4),
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        _formatFingerprintWithColons(fingerprint),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Row(
                       children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: isOnline
-                                ? theme.colorScheme.secondary
-                                : theme.colorScheme.outline,
-                            shape: BoxShape.circle,
+                        Expanded(
+                          child: _buildInfoColumn(
+                            theme,
+                            'Certificate',
+                            implementationId,
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          isOnline ? 'ONLINE' : 'OFFLINE',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: isOnline
-                                ? theme.colorScheme.secondary
-                                : theme.colorScheme.outline,
+                        Expanded(
+                          child: _buildInfoColumn(
+                            theme,
+                            'Protocol',
+                            protocolVersion,
                           ),
                         ),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  trustState == 'trusted'
-                      ? 'Trusted since $pairedAt'
-                      : 'Last seen $lastSeenAt',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          _buildSection(
-            theme,
-            'IDENTITY',
-            [
-              _buildInfoLine(theme, 'Device ID', deviceId),
-              const SizedBox(height: 12),
-              Text(
-                'Fingerprint',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.only(top: 4),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _formatFingerprintWithColons(fingerprint),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurface,
-                    letterSpacing: 1,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInfoColumn(
-                      theme,
-                      'Certificate',
-                      implementationId,
-                    ),
-                  ),
-                  Expanded(
-                    child: _buildInfoColumn(
-                      theme,
-                      'Protocol',
-                      protocolVersion,
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          _buildSection(
-            theme,
-            'SESSION & CAPABILITIES',
-            [
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInfoColumn(
-                      theme,
-                      'Platform',
-                      platform?.toUpperCase() ?? 'Unavailable',
-                    ),
-                  ),
-                  Expanded(
-                    child: _buildInfoColumn(theme, 'IP Address', ipAddress),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildInfoColumn(theme, 'Latency', latency),
-                  ),
-                  Expanded(
-                    child: _buildInfoColumn(theme, 'TLS Cipher', tlsCipher),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Divider(
-                height: 1,
-                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Capabilities',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: capabilities.isEmpty
-                    ? [
-                        Text(
-                          'Unavailable',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                const SizedBox(height: 24),
+                _buildSection(
+                  theme,
+                  'SESSION & CAPABILITIES',
+                  [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildInfoColumn(
+                            theme,
+                            'Platform',
+                            platform?.toUpperCase() ?? 'Unavailable',
                           ),
                         ),
-                      ]
-                    : capabilities.map((capability) {
-                        return Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: theme.colorScheme.outlineVariant,
-                            ),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            capability,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          ),
-                        );
-                      }).toList(growable: false),
+                        Expanded(
+                          child:
+                              _buildInfoColumn(theme, 'IP Address', ipAddress),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildInfoColumn(theme, 'Latency', latency),
+                        ),
+                        Expanded(
+                          child:
+                              _buildInfoColumn(theme, 'TLS Cipher', tlsCipher),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Divider(
+                      height: 1,
+                      color: theme.colorScheme.outlineVariant
+                          .withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Capabilities',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: capabilities.isEmpty
+                          ? [
+                              Text(
+                                'Unavailable',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ]
+                          : capabilities.map((capability) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: theme.colorScheme.outlineVariant,
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  capability,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                              );
+                            }).toList(growable: false),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 32),
+                OutlinedButton(
+                  onPressed: _forgetPeer,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.error,
+                    side: BorderSide(color: theme.colorScheme.error),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    'Quên thiết bị',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: _blockPeer,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: theme.colorScheme.error,
+                    foregroundColor: theme.colorScheme.onError,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: const Text(
+                    'Chặn',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Blocking from this view is pending full daemon support.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 32),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildRemovedState(ThemeData theme, String displayName) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer,
+                shape: BoxShape.circle,
               ),
-            ],
-          ),
-          const SizedBox(height: 32),
-          OutlinedButton(
-            onPressed: _forgetPeer,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-              side: BorderSide(color: theme.colorScheme.error),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+              child: Icon(
+                Icons.device_unknown,
+                size: 36,
+                color: theme.colorScheme.onErrorContainer,
               ),
             ),
-            child: const Text(
-              'Quên thiết bị',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton(
-            onPressed: _blockPeer,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+            const SizedBox(height: 20),
+            Text(
+              '$displayName is no longer available',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.onSurface,
               ),
             ),
-            child: const Text(
-              'Chặn',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            const SizedBox(height: 8),
+            Text(
+              'This trusted device was removed or is no longer in your trusted list. Return to the home screen to continue.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Blocking from this view is pending full daemon support.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop({
+                    'action': 'removed',
+                    'deviceId': _deviceId,
+                    'displayName': displayName,
+                  });
+                },
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Back to home'),
+              ),
             ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 32),
-        ],
+          ],
+        ),
       ),
     );
   }

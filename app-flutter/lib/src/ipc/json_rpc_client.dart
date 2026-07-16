@@ -12,6 +12,7 @@ class JsonRpcRiftClient {
   bool _isConnected = false;
   final Map<String, Future<dynamic>> _pendingStartPairings = {};
   final Map<String, Future<dynamic>> _pendingEndpointPairings = {};
+  bool? _supportsSendQueue;
 
   JsonRpcRiftClient(this._transport);
 
@@ -79,6 +80,16 @@ class JsonRpcRiftClient {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onOperationTransition =>
       _operationTransitionController.stream;
+
+  late final _sendQueueChangedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onSendQueueChanged =>
+      _sendQueueChangedController.stream;
+
+  late final _sendQueueItemUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onSendQueueItemUpdated =>
+      _sendQueueItemUpdatedController.stream;
 
   late final _connectionChangedController = StreamController<bool>.broadcast();
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
@@ -187,6 +198,13 @@ class JsonRpcRiftClient {
     'Direction': 'direction',
     'BytesTransferred': 'bytesTransferred',
     'Transfers': 'transfers',
+    'Items': 'items',
+    'QueueItemId': 'queueItemId',
+    'TargetDeviceId': 'targetDeviceId',
+    'CurrentOperationId': 'currentOperationId',
+    'LastTransferId': 'lastTransferId',
+    'FailureMessage': 'failureMessage',
+    'Origin': 'origin',
     'ExpiresAt': 'expiresAt',
     'ContentBase64': 'contentBase64',
     'Verified': 'verified',
@@ -298,6 +316,12 @@ class JsonRpcRiftClient {
     return withoutJsonRpc;
   }
 
+  static bool isMethodNotFoundError(Object error) {
+    final raw = error.toString();
+    return raw.contains('JSON-RPC error -32601') ||
+        raw.toLowerCase().contains('method not found');
+  }
+
   void _emitIfValid(
     String method,
     Map<String, dynamic>? payload,
@@ -324,6 +348,10 @@ class JsonRpcRiftClient {
     }
 
     _isConnected = isConnected;
+    // Drop the cached capability probe on any connection transition so a
+    // daemon upgrade (or a mid-session feature enablement) can be
+    // re-detected on the next supportsSendQueue() call.
+    _supportsSendQueue = null;
     _connectionChangedController.add(isConnected);
   }
 
@@ -524,6 +552,24 @@ class JsonRpcRiftClient {
             'previousState',
             'nextState',
           ],
+        );
+      });
+      _client!.registerMethod('rift.onSendQueueChanged',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onSendQueueChanged',
+          _asMap(params),
+          _sendQueueChangedController,
+          requiredStringKeys: const ['queueItemId'],
+        );
+      });
+      _client!.registerMethod('rift.onSendQueueItemUpdated',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onSendQueueItemUpdated',
+          _asMap(params),
+          _sendQueueItemUpdatedController,
+          requiredStringKeys: const ['queueItemId', 'status'],
         );
       });
       // Start listening to the RPC channel
@@ -874,6 +920,105 @@ class JsonRpcRiftClient {
       params['mediaType'] = mediaType;
     }
     final r = await _client!.sendRequest('rift.offerFile', params);
+    return _canonicalizeResult(r);
+  }
+
+  Future<bool> supportsSendQueue() async {
+    final cached = _supportsSendQueue;
+    if (cached != null) {
+      return cached;
+    }
+    try {
+      await listSendQueue();
+      _supportsSendQueue = true;
+    } catch (error) {
+      if (isMethodNotFoundError(error)) {
+        _supportsSendQueue = false;
+        return false;
+      }
+      rethrow;
+    }
+    return true;
+  }
+
+  Future<dynamic> enqueueFileSend({
+    required String localPath,
+    String? fileName,
+    String? mediaType,
+    String? targetDeviceId,
+    String? origin,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final params = <String, dynamic>{
+      'localPath': localPath,
+    };
+    if (fileName != null && fileName.isNotEmpty) {
+      params['fileName'] = fileName;
+    }
+    if (mediaType != null && mediaType.isNotEmpty) {
+      params['mediaType'] = mediaType;
+    }
+    if (targetDeviceId != null && targetDeviceId.isNotEmpty) {
+      params['targetDeviceId'] = targetDeviceId;
+    }
+    if (origin != null && origin.isNotEmpty) {
+      params['origin'] = origin;
+    }
+    final r = await _client!.sendRequest('rift.enqueueFileSend', params);
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> listSendQueue() async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.listSendQueue');
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> getSendQueueItem(String queueItemId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.getSendQueueItem', {
+      'queueItemId': queueItemId,
+    });
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> assignSendQueueTarget({
+    required String queueItemId,
+    required String targetDeviceId,
+  }) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.assignSendQueueTarget', {
+      'queueItemId': queueItemId,
+      'targetDeviceId': targetDeviceId,
+    });
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> retrySendQueueItem(String queueItemId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.retrySendQueueItem', {
+      'queueItemId': queueItemId,
+    });
+    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> removeSendQueueItem(String queueItemId) async {
+    if (!_isConnected || _client == null) {
+      throw StateError('Not connected to daemon');
+    }
+    final r = await _client!.sendRequest('rift.removeSendQueueItem', {
+      'queueItemId': queueItemId,
+    });
     return _canonicalizeResult(r);
   }
 

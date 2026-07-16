@@ -1,5 +1,6 @@
 package com.example.app_flutter
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
@@ -14,11 +15,16 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import android.os.Environment
+import android.content.pm.PackageManager
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.util.Log
+import android.widget.Toast
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -34,6 +40,7 @@ class MainActivity: FlutterActivity() {
         private const val notificationIntentPayloadPrefix = "rift.notification.payload."
         private const val shareSendRoute = "history.send"
         private const val shareClipboardRoute = "history.clipboard"
+        private const val notificationPermissionRequestCode = 4107
         @JvmStatic
         var isClipboardRelayReady: Boolean = false
     }
@@ -44,6 +51,7 @@ class MainActivity: FlutterActivity() {
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
     private var pendingLaunchAction: Map<String, Any?>? = null
+    private var pendingNotificationPermissionResult: MethodChannel.Result? = null
 
     private val clipboardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -132,6 +140,12 @@ class MainActivity: FlutterActivity() {
                     "getPublicDownloadsDirectory" -> {
                         result.success(getPublicDownloadsDirectory())
                     }
+                    "getNotificationPermissionStatus" -> {
+                        result.success(getNotificationPermissionStatus())
+                    }
+                    "requestNotificationPermission" -> {
+                        requestNotificationPermission(result)
+                    }
                     "showNotification" -> {
                         val args = call.arguments as? Map<*, *>
                         val title = args?.get("title") as? String
@@ -153,6 +167,19 @@ class MainActivity: FlutterActivity() {
                             )
                         }
                     }
+                    "showToast" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val message = args?.get("message") as? String
+                        if (message.isNullOrBlank()) {
+                            result.error("invalid_args", "message is required", null)
+                        } else {
+                            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+                            result.success(true)
+                        }
+                    }
+                    "openNotificationSettings" -> {
+                        result.success(openNotificationSettings())
+                    }
                     "openFile" -> {
                         val args = call.arguments as? Map<*, *>
                         val path = args?.get("path") as? String
@@ -172,7 +199,7 @@ class MainActivity: FlutterActivity() {
             registerReceiver(clipboardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(clipboardReceiver, filter)
-        }
+            }
         Log.i(tag, "Clipboard broadcast receiver registered")
     }
 
@@ -210,6 +237,22 @@ class MainActivity: FlutterActivity() {
         super.onDestroy()
     }
 
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != notificationPermissionRequestCode) {
+            return
+        }
+
+        val granted =
+            grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        pendingNotificationPermissionResult?.success(granted)
+        pendingNotificationPermissionResult = null
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
@@ -223,6 +266,74 @@ class MainActivity: FlutterActivity() {
             description = "Rift pairing, clipboard, and file activity"
         }
         manager.createNotificationChannel(channel)
+    }
+
+    private fun getNotificationPermissionStatus(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted =
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
+            return if (granted) "authorized" else "denied"
+        }
+
+        return if (NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+            "authorized"
+        } else {
+            "denied"
+        }
+    }
+
+    private fun requestNotificationPermission(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success(NotificationManagerCompat.from(this).areNotificationsEnabled())
+            return
+        }
+
+        if (
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS,
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+
+        pendingNotificationPermissionResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+            notificationPermissionRequestCode,
+        )
+    }
+
+    private fun openNotificationSettings(): Boolean {
+        val intent =
+            Intent().apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                action =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                    } else {
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                    }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                } else {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+            }
+
+        return try {
+            startActivity(intent)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.w(tag, "Unable to open notification settings", e)
+            false
+        }
     }
 
     private fun showNotification(

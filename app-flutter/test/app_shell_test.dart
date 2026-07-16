@@ -1,11 +1,14 @@
 import 'dart:async';
-
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
+import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
+import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
 
 // Create a Mock for the JsonRpcRiftClient
@@ -54,6 +57,14 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
+  Stream<Map<String, dynamic>> get onSendQueueChanged =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onSendQueueItemUpdated =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
   Stream<Map<String, dynamic>> get onPeerDiscovered =>
       const Stream<Map<String, dynamic>>.empty();
 
@@ -87,6 +98,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
+
+  @override
+  Future<bool> supportsSendQueue() async => false;
+
+  @override
+  Future<dynamic> listSendQueue() async => {'items': []};
 
   @override
   Future<dynamic> listTrustedPeers() async => {
@@ -123,6 +140,18 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 void main() {
   late MockJsonRpcClient mockClient;
 
+  Widget buildRiftApp(JsonRpcRiftClient client) {
+    return MultiProvider(
+      providers: [
+        Provider<JsonRpcRiftClient>.value(value: client),
+        ChangeNotifierProvider<SendQueueController>(
+          create: (_) => SendQueueController(client, false),
+        ),
+      ],
+      child: const RiftApp(hasCompletedOnboarding: true),
+    );
+  }
+
   final mockDeviceInfo = {
     'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
     'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
@@ -134,6 +163,8 @@ void main() {
   };
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    MacOSNotifications.debugIsMacOSOverride = null;
     mockClient = MockJsonRpcClient();
 
     // Default mock behavior
@@ -170,6 +201,10 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferFailed)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onSendQueueChanged)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onSendQueueItemUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
         .thenAnswer((_) => Stream.value(true));
     when(() => mockClient.onOperationTransition)
@@ -180,6 +215,9 @@ void main() {
         )).thenAnswer((_) async => {'operations': [], 'total': 0});
     when(() => mockClient.listClipboardOffers())
         .thenAnswer((_) async => {'offers': []});
+    when(() => mockClient.supportsSendQueue()).thenAnswer((_) async => false);
+    when(() => mockClient.listSendQueue())
+        .thenAnswer((_) async => {'items': []});
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
     when(() => mockClient.listTrustedPeers()).thenAnswer(
@@ -211,14 +249,20 @@ void main() {
     );
   });
 
+  tearDown(() {
+    MacOSNotifications.debugIsMacOSOverride = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift.permissions'),
+      null,
+    );
+  });
+
   testWidgets('App shell boots up and displays main navigation',
       (WidgetTester tester) async {
     // Inject mockClient via Provider
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: mockClient,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(mockClient),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -243,10 +287,7 @@ void main() {
     final client = FakeShellJsonRpcClient();
 
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(client),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -276,10 +317,7 @@ void main() {
     final client = FakeShellJsonRpcClient();
 
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(client),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -303,5 +341,36 @@ void main() {
       client.approvedFingerprint,
       'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     );
+  });
+
+  testWidgets('App shell consumes pending macOS share payload on startup',
+      (WidgetTester tester) async {
+    final client = FakeShellJsonRpcClient();
+    MacOSNotifications.debugIsMacOSOverride = true;
+    final channel = const MethodChannel('rift.permissions');
+    var consumedPendingShareItems = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'share.consumePendingItems') {
+        consumedPendingShareItems = true;
+        return <String, Object?>{
+          'route': 'history.send',
+          'items': <Map<String, String>>[
+            <String, String>{
+              'localPath': '/definitely/missing/shared.txt',
+              'fileName': 'shared.txt',
+              'mediaType': 'text/plain',
+            },
+          ],
+        };
+      }
+      return null;
+    });
+
+    await tester.pumpWidget(buildRiftApp(client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(consumedPendingShareItems, isTrue);
   });
 }
