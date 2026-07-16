@@ -17,12 +17,16 @@ class _FakeQueueClient extends JsonRpcRiftClient {
     this.sendQueueSupported = true,
     List<Map<String, dynamic>>? queueItems,
     this.hideItemsFromList = false,
+    this.hideItemsFromGet = false,
+    this.listSendQueueCompleter,
   })  : _queueItems = queueItems ?? <Map<String, dynamic>>[],
         super(FakeTransport());
 
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> _queueItems;
   final bool hideItemsFromList;
+  final bool hideItemsFromGet;
+  final Completer<void>? listSendQueueCompleter;
   final StreamController<Map<String, dynamic>> _sendQueueChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _sendQueueItemUpdatedController =
@@ -56,6 +60,10 @@ class _FakeQueueClient extends JsonRpcRiftClient {
     if (!sendQueueSupported) {
       throw Exception('JSON-RPC error -32601: Method not found');
     }
+    final completer = listSendQueueCompleter;
+    if (completer != null && !completer.isCompleted) {
+      await completer.future;
+    }
     return {
       'items': hideItemsFromList ? <Map<String, dynamic>>[] : _queueItems,
     };
@@ -65,6 +73,9 @@ class _FakeQueueClient extends JsonRpcRiftClient {
   Future<dynamic> getSendQueueItem(String queueItemId) async {
     if (!sendQueueSupported) {
       throw Exception('JSON-RPC error -32601: Method not found');
+    }
+    if (hideItemsFromGet) {
+      throw StateError('Queue item not visible yet');
     }
     return _findQueueItem(queueItemId);
   }
@@ -364,6 +375,78 @@ void main() {
     expect(controller.items, hasLength(1));
     expect(controller.items.single.queueItemId, 'queue-1');
     expect(controller.items.single.fileName, 'demo.txt');
+  });
+
+  test('controller waits for in-flight restore before daemon enqueue', () async {
+    final tempDir = await Directory.systemTemp.createTemp('rift-queue-race');
+    final file = File('${tempDir.path}/demo.txt');
+    await file.writeAsString('hello');
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final restoreGate = Completer<void>();
+    final client = _FakeQueueClient(
+      sendQueueSupported: true,
+      listSendQueueCompleter: restoreGate,
+    );
+    final controller = SendQueueController(client);
+
+    final restoreFuture = controller.restore();
+    final enqueueFuture = controller.enqueueRequests([
+      {
+        'localPath': file.path,
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+      },
+    ]);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.items, isEmpty);
+
+    restoreGate.complete();
+    final result = await enqueueFuture;
+    await restoreFuture;
+
+    expect(result.added, 1);
+    expect(result.skipped, 0);
+    expect(controller.items, hasLength(1));
+    expect(controller.items.single.fileName, 'demo.txt');
+  });
+
+  test('controller keeps provisional daemon entry when readback is stale',
+      () async {
+    final tempDir = await Directory.systemTemp.createTemp('rift-queue-provisional');
+    final file = File('${tempDir.path}/demo.txt');
+    await file.writeAsString('hello');
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final client = _FakeQueueClient(
+      sendQueueSupported: true,
+      hideItemsFromList: true,
+      hideItemsFromGet: true,
+    );
+    final controller = SendQueueController(client);
+    final result = await controller.enqueueRequests([
+      {
+        'localPath': file.path,
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+      },
+    ]);
+
+    expect(result.added, 1);
+    expect(result.skipped, 0);
+    expect(controller.items, hasLength(1));
+    expect(controller.items.single.queueItemId, 'queue-1');
+    expect(controller.items.single.fileName, 'demo.txt');
+    expect(controller.items.single.status, SendQueueStatus.queued);
   });
 
   test('controller assignTarget updates daemon-backed queue item', () async {

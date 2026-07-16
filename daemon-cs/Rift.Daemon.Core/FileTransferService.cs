@@ -1028,9 +1028,13 @@ public sealed class FileTransferService : IFileTransferService
     {
         try
         {
-            await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
-            return;
+            if (_transport.HasProtectedSession(peerDeviceId))
+            {
+                await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
+                return;
+            }
         }
+
         catch (InvalidOperationException ex) when (IsNoOpenSessionError(ex))
         {
             _logger.LogDebug(ex, "No active session for peer {PeerDeviceId}. Trying trusted reconnect for file transfer.", peerDeviceId);
@@ -1042,7 +1046,7 @@ public sealed class FileTransferService : IFileTransferService
 
     private async Task EnsureConnectedForTrustedPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
     {
-        if (_transport.HasActiveSession(peerDeviceId))
+        if (_transport.HasProtectedSession(peerDeviceId))
         {
             return;
         }
@@ -1051,6 +1055,11 @@ public sealed class FileTransferService : IFileTransferService
         if (peer is null || peer.State != TrustState.Trusted)
         {
             throw new FileTransferFailureException("Unauthorized", -32004, $"Peer '{peerDeviceId}' is not trusted.");
+        }
+
+        if (_transport.HasActiveSession(peerDeviceId))
+        {
+            await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
         }
 
         if (peer.TrustedEndpoints.Count == 0)

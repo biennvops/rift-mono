@@ -541,6 +541,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         }
 
         public bool HasActiveSession(string peerDeviceId) => true;
+        public bool HasProtectedSession(string peerDeviceId) => true;
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }

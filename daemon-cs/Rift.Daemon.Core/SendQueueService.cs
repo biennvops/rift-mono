@@ -464,7 +464,7 @@ public sealed class SendQueueService : ISendQueueService
 
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
-        if (!args.IsOnline)
+        if (!args.IsOnline || !args.AllowsProtectedTraffic)
         {
             return;
         }

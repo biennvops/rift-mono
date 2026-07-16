@@ -213,6 +213,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
             Task.FromResult("rift-peer");
 
         public bool HasActiveSession(string peerDeviceId) => ActivePeers.Contains(peerDeviceId);
+        public bool HasProtectedSession(string peerDeviceId) => ActivePeers.Contains(peerDeviceId);
 
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
 

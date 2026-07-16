@@ -161,6 +161,12 @@ public interface ITransport
     bool HasActiveSession(string peerDeviceId);
 
     /// <summary>
+    /// Returns <see langword="true"/> when an authenticated session already exists
+    /// for the specified peer device ID and is authorized for protected traffic.
+    /// </summary>
+    bool HasProtectedSession(string peerDeviceId);
+
+    /// <summary>
     /// Returns the current authenticated session's remote socket endpoint for the peer,
     /// if one is presently registered.
     /// </summary>

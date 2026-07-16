@@ -126,6 +126,36 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void ShouldAllowProtectedTraffic_ReturnsTrueForTrustedPeer()
+    {
+        const string deviceId = "rift-peer-trusted";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        Assert.True(_transport.ShouldAllowProtectedTraffic(deviceId));
+    }
+
+    [Fact]
+    public void ShouldAllowProtectedTraffic_ReturnsFalseForDiscoveredPeer()
+    {
+        const string deviceId = "rift-peer-discovered";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = deviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        Assert.False(_transport.ShouldAllowProtectedTraffic(deviceId));
+    }
+
+    [Fact]
     public void PersistAuthorizedPeer_PersistsUnknownPeerAfterVerifiedHandshake()
     {
         var remoteIdentity = new IdentityManager();

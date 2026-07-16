@@ -1381,6 +1381,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         }
 
         public bool HasActiveSession(string peerDeviceId) => ActiveSessions.Contains(peerDeviceId);
+        public bool HasProtectedSession(string peerDeviceId) => ActiveSessions.Contains(peerDeviceId);
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) =>
             SessionEndpoints.TryGetValue(peerDeviceId, out var endpoint) ? endpoint : null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
