@@ -933,10 +933,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
             destinationPath: destinationPath,
           );
           if (shown) {
-            await _mirrorDesktopNotificationToMobile(
-              title: title,
-              body: body,
-            );
+            await _mirrorDesktopNotificationToPeers(title: title, body: body);
           }
           return;
         }
@@ -992,10 +989,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
             payload: payload,
           );
           if (shown) {
-            await _mirrorDesktopNotificationToMobile(
-              title: title,
-              body: body,
-            );
+            await _mirrorDesktopNotificationToPeers(title: title, body: body);
           }
           return;
         }
@@ -1008,10 +1002,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
             payload: payload,
           );
           if (shown) {
-            await _mirrorDesktopNotificationToMobile(
-              title: title,
-              body: body,
-            );
+            await _mirrorDesktopNotificationToPeers(title: title, body: body);
           }
           return;
         }
@@ -1023,10 +1014,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
             payload: payload,
           );
           if (shown) {
-            await _mirrorDesktopNotificationToMobile(
-              title: title,
-              body: body,
-            );
+            await _mirrorDesktopNotificationToPeers(title: title, body: body);
           }
         }
       } catch (_) {
@@ -1035,7 +1023,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }());
   }
 
-  Future<void> _mirrorDesktopNotificationToMobile({
+  Future<void> _mirrorDesktopNotificationToPeers({
     required String title,
     required String body,
   }) async {

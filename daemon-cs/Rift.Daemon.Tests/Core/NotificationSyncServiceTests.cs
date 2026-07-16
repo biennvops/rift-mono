@@ -174,7 +174,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
                 PackageName = "dev.rift.desktop",
                 AppName = "Rift Desktop",
                 Title = "Desktop test",
-                BodyPreview = "Hello mobile",
+                BodyPreview = "Hello peers",
                 PostedAt = "2026-07-16T10:00:00Z",
                 IsDismissible = false,
                 IsOpenable = false

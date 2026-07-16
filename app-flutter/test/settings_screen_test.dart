@@ -339,4 +339,32 @@ void main() {
 
     verify(() => mockClient.getDeviceInfo()).called(greaterThan(0));
   });
+
+  testWidgets('desktop notification sync copy references trusted peers',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = false;
+    LinuxNotifications.debugIsLinuxOverride = true;
+
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.dragUntilVisible(
+      find.text('Test desktop sync'),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('trusted peers'), findsNothing);
+  });
 }

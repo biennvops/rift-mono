@@ -667,7 +667,7 @@ Updates the local notification-sync policy. In v1, the default policy is enabled
 
 #### `rift.notifyLocalNotificationEvent`
 
-Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers.
+Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers, including desktop and Android sinks.
 
 `posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
 

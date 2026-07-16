@@ -593,7 +593,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             "dev.rift.desktop",
             "Rift Desktop",
             "Desktop test",
-            "Mirrored to mobile",
+            "Mirrored to trusted peers",
             "2026-07-16T10:00:00Z",
             false,
             false,

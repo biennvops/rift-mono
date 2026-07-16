@@ -223,8 +223,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     final now = DateTime.now().toUtc();
     final title = 'Rift desktop test notification';
-    final body =
-        'Desktop notification sync is active for trusted mobile peers.';
+    final body = 'Desktop notification sync is active for trusted peers.';
     bool shown = false;
 
     if (WindowsShell.isSupported) {
