@@ -908,19 +908,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
-  Future<bool> _isWindowForeground() async {
-    if (!_enableDesktopShellIntegration) {
-      return !Platform.environment.containsKey('FLUTTER_TEST');
-    }
-    try {
-      final visible = await windowManager.isVisible();
-      final focused = await windowManager.isFocused();
-      return visible && focused;
-    } catch (_) {
-      return true;
-    }
-  }
-
   void _maybeNotify(String title, String body) {
     _maybeNotifyWithRoute(title: title, body: body);
   }
@@ -936,10 +923,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     String? destinationPath,
   }) {
     unawaited(() async {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        final foreground = await _isWindowForeground();
-        if (foreground) return;
-      }
       try {
         if (Platform.isWindows &&
             destinationPath != null &&
@@ -983,10 +966,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     Map<String, Object?>? payload,
   }) {
     unawaited(() async {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        final foreground = await _isWindowForeground();
-        if (foreground) return;
-      }
       try {
         if (Platform.isAndroid && route != null) {
           await AndroidShell.showNotification(
@@ -1080,10 +1059,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     ].join(' • ');
 
     unawaited(() async {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        final foreground = await _isWindowForeground();
-        if (foreground) return;
-      }
       try {
         if (Platform.isWindows) {
           await WindowsShell.showNotification(
