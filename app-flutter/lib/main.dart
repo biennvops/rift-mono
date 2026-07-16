@@ -927,11 +927,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         if (Platform.isWindows &&
             destinationPath != null &&
             destinationPath.trim().isNotEmpty) {
-          await WindowsShell.showTransferNotification(
+          final shown = await WindowsShell.showTransferNotification(
             title: title,
             body: body,
             destinationPath: destinationPath,
           );
+          if (shown) {
+            await _mirrorDesktopNotificationToMobile(
+              title: title,
+              body: body,
+            );
+          }
           return;
         }
         if (Platform.isAndroid &&
@@ -978,37 +984,81 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           return;
         }
         if (Platform.isWindows && route != null) {
-          await WindowsShell.showNotification(
+          final shown = await WindowsShell.showNotification(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
             payload: payload,
           );
+          if (shown) {
+            await _mirrorDesktopNotificationToMobile(
+              title: title,
+              body: body,
+            );
+          }
           return;
         }
         if (Platform.isLinux && route != null) {
-          await LinuxNotifications.show(
+          final shown = await LinuxNotifications.show(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
             payload: payload,
           );
+          if (shown) {
+            await _mirrorDesktopNotificationToMobile(
+              title: title,
+              body: body,
+            );
+          }
           return;
         }
         if (Platform.isMacOS) {
-          await MacOSNotifications.show(
+          final shown = await MacOSNotifications.show(
             title: title,
             body: body,
             route: route,
             payload: payload,
           );
+          if (shown) {
+            await _mirrorDesktopNotificationToMobile(
+              title: title,
+              body: body,
+            );
+          }
         }
       } catch (_) {
         // Best-effort: depends on user permission and runner support.
       }
     }());
+  }
+
+  Future<void> _mirrorDesktopNotificationToMobile({
+    required String title,
+    required String body,
+  }) async {
+    if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
+      return;
+    }
+    final now = DateTime.now().toUtc();
+    await _submitNativeNotificationSyncEvent(<String, dynamic>{
+      'eventType': 'posted',
+      'notificationId': 'desktop:rift:${now.microsecondsSinceEpoch}',
+      'packageName': 'dev.rift.desktop',
+      'appName': 'Rift',
+      'title': title,
+      'bodyPreview': body,
+      'postedAt': now.toIso8601String(),
+      'isDismissible': false,
+      'isOpenable': false,
+      'sourcePlatform': Platform.isWindows
+          ? 'windows'
+          : Platform.isMacOS
+              ? 'macos'
+              : 'linux',
+    });
   }
 
   List<DesktopNotificationAction> _buildMirroredNotificationActions(
@@ -1029,9 +1079,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   void _showMirroredNotificationPreview(Map<String, dynamic> event) {
-    if (Platform.isAndroid) {
-      return;
-    }
     final notificationId = event['notificationId']?.toString();
     if (notificationId == null || notificationId.isEmpty) {
       return;
@@ -1060,6 +1107,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     unawaited(() async {
       try {
+        if (Platform.isAndroid) {
+          final sourcePlatform = event['sourcePlatform']?.toString();
+          if (sourcePlatform != 'windows' &&
+              sourcePlatform != 'macos' &&
+              sourcePlatform != 'linux') {
+            return;
+          }
+          await AndroidShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
         if (Platform.isWindows) {
           await WindowsShell.showNotification(
             title: notificationTitle,

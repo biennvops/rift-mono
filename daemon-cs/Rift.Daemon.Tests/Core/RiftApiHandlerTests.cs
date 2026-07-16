@@ -587,10 +587,22 @@ public sealed class RiftApiHandlerTests : IDisposable
     [Fact]
     public async Task NotificationSyncMethods_DelegateToNotificationService()
     {
+        var localEvent = await _handler.NotifyLocalNotificationEventAsync(
+            "posted",
+            "notif-local-1",
+            "dev.rift.desktop",
+            "Rift Desktop",
+            "Desktop test",
+            "Mirrored to mobile",
+            "2026-07-16T10:00:00Z",
+            false,
+            false,
+            "windows");
         var listed = await _handler.ListNotificationsAsync();
         var action = await _handler.PerformNotificationActionAsync("notif-1", "open");
         var policy = await _handler.UpdateNotificationSyncPolicyAsync(true, ["com.bank.example"]);
 
+        Assert.Equal("notif-local-1", localEvent.NotificationId);
         Assert.Single(listed.Notifications);
         Assert.Equal("notif-1", listed.Notifications[0].NotificationId);
         Assert.Equal("operation-notification-1", action.OperationId);
@@ -659,6 +671,20 @@ public sealed class RiftApiHandlerTests : IDisposable
 
     private sealed class FakeNotificationSyncService : INotificationSyncService
     {
+        public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+            string eventType,
+            NotificationSyncRecord notification,
+            string? removedAt,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotifyLocalNotificationEventResult
+            {
+                NotificationId = notification.NotificationId,
+                BroadcastTo = ["rift-peer"],
+                Suppressed = false
+            });
+        }
+
         public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(new ListNotificationsResult

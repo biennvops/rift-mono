@@ -604,6 +604,7 @@ Returns the locally cached mirrored notification inbox plus the current local no
     {
       "notificationId": "android:com.example.chat:42",
       "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "sourcePlatform": "android",
       "packageName": "com.example.chat",
       "appName": "Example Chat",
       "title": "Riley",
@@ -622,7 +623,7 @@ Returns the locally cached mirrored notification inbox plus the current local no
 
 #### `rift.performNotificationAction`
 
-Requests a remote action against an Android-origin mirrored notification.
+Requests a remote action against a mirrored notification when the source marked that action as available.
 
 **Params:**
 
@@ -663,6 +664,12 @@ Updates the local notification-sync policy. In v1, the default policy is enabled
   "blacklistedPackages": ["com.bank.example"]
 }
 ```
+
+#### `rift.notifyLocalNotificationEvent`
+
+Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers.
+
+`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
 
 ### 4.8 Presence
 

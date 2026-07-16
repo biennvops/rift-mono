@@ -35,6 +35,7 @@ void main() {
           'notificationId': 'android:com.example.chat:42',
           'packageName': 'com.example.chat',
           'appName': 'Example Chat',
+          'sourcePlatform': 'windows',
           'title': 'Riley',
           'bodyPreview': 'See you at 6?',
           'postedAt': '2026-07-15T08:30:00.000Z',
@@ -58,6 +59,7 @@ void main() {
         notifications.single['notificationId'],
         'android:com.example.chat:42',
       );
+      expect(notifications.single['sourcePlatform'], 'windows');
       expect(notifications.single['packageName'], 'com.example.chat');
       expect((listed['policy'] as Map)['enabled'], isTrue);
     });

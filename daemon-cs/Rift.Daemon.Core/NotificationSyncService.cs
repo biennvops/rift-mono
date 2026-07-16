@@ -61,6 +61,80 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
+    public async Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+        string eventType,
+        NotificationSyncRecord notification,
+        string? removedAt,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(eventType))
+        {
+            throw new NotificationSyncFailureException("A notification eventType is required.", -32602);
+        }
+
+        var normalizedEventType = eventType.Trim();
+        if (string.Equals(normalizedEventType, "removed", StringComparison.Ordinal))
+        {
+            var removal = new NotificationRemovedRecord
+            {
+                NotificationId = notification.NotificationId,
+                SourceDeviceId = notification.SourceDeviceId,
+                RemovedAt = removedAt
+            };
+            await HandleNotificationRemovedAsync(removal, cancellationToken).ConfigureAwait(false);
+            var removedBroadcast = await BroadcastNotificationAsync(
+                "notification.removed",
+                new
+                {
+                    notificationId = removal.NotificationId,
+                    sourceDeviceId = removal.SourceDeviceId,
+                    removedAt = removal.RemovedAt
+                },
+                cancellationToken).ConfigureAwait(false);
+            return new NotifyLocalNotificationEventResult
+            {
+                NotificationId = notification.NotificationId,
+                BroadcastTo = removedBroadcast,
+                Suppressed = false
+            };
+        }
+
+        var normalizedNotification = NormalizeLocalNotification(notification);
+        ValidateNotification(normalizedNotification);
+
+        if (string.Equals(normalizedEventType, "posted", StringComparison.Ordinal))
+        {
+            await HandleNotificationPostedAsync(normalizedNotification, cancellationToken).ConfigureAwait(false);
+        }
+        else if (string.Equals(normalizedEventType, "updated", StringComparison.Ordinal))
+        {
+            await HandleNotificationUpdatedAsync(normalizedNotification, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            throw new NotificationSyncFailureException("Notification eventType must be posted, updated, or removed.", -32602);
+        }
+
+        var suppressed = IsNotificationSuppressed(normalizedNotification.PackageName);
+        var broadcastTo = suppressed
+            ? []
+            : await BroadcastNotificationAsync(
+                string.Equals(normalizedEventType, "posted", StringComparison.Ordinal)
+                    ? "notification.posted"
+                    : "notification.updated",
+                normalizedNotification,
+                cancellationToken).ConfigureAwait(false);
+
+        return new NotifyLocalNotificationEventResult
+        {
+            NotificationId = normalizedNotification.NotificationId,
+            BroadcastTo = broadcastTo,
+            Suppressed = suppressed
+        };
+    }
+
     public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(
         string notificationId,
         string action,
@@ -172,6 +246,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             {
                 NotificationId = stored.NotificationId,
                 SourceDeviceId = stored.SourceDeviceId,
+                SourcePlatform = stored.SourcePlatform,
                 PackageName = stored.PackageName,
                 AppName = stored.AppName,
                 Title = stored.Title,
@@ -204,6 +279,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             {
                 NotificationId = stored.NotificationId,
                 SourceDeviceId = stored.SourceDeviceId,
+                SourcePlatform = stored.SourcePlatform,
                 PackageName = stored.PackageName,
                 AppName = stored.AppName,
                 Title = stored.Title,
@@ -244,6 +320,7 @@ public sealed class NotificationSyncService : INotificationSyncService
                 {
                     NotificationId = existing.NotificationId,
                     SourceDeviceId = existing.SourceDeviceId,
+                    SourcePlatform = existing.SourcePlatform,
                     PackageName = existing.PackageName,
                     AppName = existing.AppName,
                     Title = existing.Title,
@@ -425,6 +502,75 @@ public sealed class NotificationSyncService : INotificationSyncService
             ["action"] = action
         };
 
+    private async Task<IReadOnlyList<string>> BroadcastNotificationAsync(
+        string messageType,
+        object payload,
+        CancellationToken cancellationToken)
+    {
+        var sentTo = new List<string>();
+        foreach (var peer in _presenceService.ListPeers())
+        {
+            if (!string.Equals(peer.Status, "online", StringComparison.OrdinalIgnoreCase) ||
+                !peer.Capabilities.Contains(RequiredCapability, StringComparer.Ordinal) ||
+                !_transport.HasActiveSession(peer.DeviceId))
+            {
+                continue;
+            }
+
+            try
+            {
+                var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(messageType, payload)));
+                await _transport.SendAsync(peer.DeviceId, bytes, cancellationToken).ConfigureAwait(false);
+                sentTo.Add(peer.DeviceId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to send {MessageType} to {PeerDeviceId}.", messageType, peer.DeviceId);
+            }
+        }
+
+        return sentTo;
+    }
+
+    private bool IsNotificationSuppressed(string packageName)
+    {
+        lock (_gate)
+        {
+            return !_policy.Enabled ||
+                _policy.BlacklistedPackages.Contains(packageName, StringComparer.Ordinal);
+        }
+    }
+
+    private NotificationSyncRecord NormalizeLocalNotification(NotificationSyncRecord notification)
+    {
+        return new NotificationSyncRecord
+        {
+            NotificationId = notification.NotificationId,
+            SourceDeviceId = string.IsNullOrWhiteSpace(notification.SourceDeviceId)
+                ? _identityManager.GetDeviceId()
+                : notification.SourceDeviceId,
+            SourcePlatform = string.IsNullOrWhiteSpace(notification.SourcePlatform)
+                ? DetectLocalPlatform()
+                : notification.SourcePlatform,
+            PackageName = notification.PackageName,
+            AppName = notification.AppName,
+            Title = notification.Title,
+            BodyPreview = notification.BodyPreview,
+            PostedAt = notification.PostedAt,
+            IsDismissible = notification.IsDismissible,
+            IsOpenable = notification.IsOpenable,
+            IsRemoved = notification.IsRemoved,
+            RemovedAt = notification.RemovedAt,
+            Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)
+        };
+    }
+
+    private static string DetectLocalPlatform() =>
+        OperatingSystem.IsWindows() ? "windows" :
+        OperatingSystem.IsMacOS() ? "macos" :
+        OperatingSystem.IsLinux() ? "linux" :
+        "unknown";
+
     private void TryTransitionActive(string operationId)
     {
         try
@@ -498,6 +644,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         {
             NotificationId = notification.NotificationId,
             SourceDeviceId = notification.SourceDeviceId,
+            SourcePlatform = notification.SourcePlatform,
             PackageName = notification.PackageName,
             AppName = notification.AppName,
             Title = notification.Title,

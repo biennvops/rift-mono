@@ -326,6 +326,9 @@ public sealed class ProtocolMessageRouter(
         {
             NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
             SourceDeviceId = notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty,
+            SourcePlatform = notificationPayload.TryGetProperty("sourcePlatform", out var sourcePlatformElement)
+                ? sourcePlatformElement.GetString()
+                : null,
             PackageName = notificationPayload.GetProperty("packageName").GetString() ?? string.Empty,
             AppName = notificationPayload.GetProperty("appName").GetString() ?? string.Empty,
             Title = notificationPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,

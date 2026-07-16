@@ -198,6 +198,7 @@ class JsonRpcRiftClient {
     'OperationType': 'operationType',
     'State': 'state',
     'SourceDeviceId': 'sourceDeviceId',
+    'SourcePlatform': 'sourcePlatform',
     'DestinationDeviceId': 'destinationDeviceId',
     'CreatedAt': 'createdAt',
     'UpdatedAt': 'updatedAt',

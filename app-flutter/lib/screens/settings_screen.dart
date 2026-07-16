@@ -9,7 +9,10 @@ import 'event_log_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
+import '../src/platform/notification_route.dart';
+import '../src/platform/windows_shell.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -21,6 +24,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   static const _androidTestNotificationPackage = 'com.example.app_flutter';
   static const _androidTestNotificationAppName = 'Rift';
+  static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
+  static const _desktopTestNotificationAppName = 'Rift Desktop';
   Map<String, dynamic>? _deviceInfo;
   bool _isLoading = true;
   String? _error;
@@ -30,6 +35,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationSyncEnabled = true;
   final TextEditingController _notificationBlacklistController =
       TextEditingController();
+
+  bool get _isDesktopPlatform =>
+      WindowsShell.isSupported ||
+      LinuxNotifications.isSupported ||
+      Platform.isMacOS;
 
   @override
   void initState() {
@@ -204,6 +214,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
           success
               ? 'Sent Android test notification.'
               : 'Unable to send test notification. Enable app notifications first.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDesktopTestNotification() async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    final now = DateTime.now().toUtc();
+    final title = 'Rift desktop test notification';
+    final body =
+        'Desktop notification sync is active for trusted mobile peers.';
+    bool shown = false;
+
+    if (WindowsShell.isSupported) {
+      shown = await WindowsShell.showNotification(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    } else if (LinuxNotifications.isSupported) {
+      shown = await LinuxNotifications.show(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    } else if (Platform.isMacOS) {
+      shown = await MacOSNotifications.show(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    }
+
+    if (shown) {
+      try {
+        await client.notifyLocalNotificationEvent(
+          eventType: 'posted',
+          payload: <String, Object?>{
+            'notificationId':
+                'desktop:$_desktopTestNotificationPackage:test:${now.microsecondsSinceEpoch}',
+            'sourcePlatform': Platform.isWindows
+                ? 'windows'
+                : Platform.isMacOS
+                    ? 'macos'
+                    : 'linux',
+            'packageName': _desktopTestNotificationPackage,
+            'appName': _desktopTestNotificationAppName,
+            'title': title,
+            'bodyPreview': body,
+            'postedAt': now.toIso8601String(),
+            'isDismissible': false,
+            'isOpenable': false,
+          },
+        );
+      } catch (error) {
+        debugPrint(
+          '[Notification Sync] Failed to mirror desktop test notification: $error',
+        );
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          shown
+              ? 'Sent desktop test notification.'
+              : 'Unable to send desktop test notification on this platform.',
         ),
       ),
     );
@@ -478,7 +561,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
           if (_error != null) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -488,7 +570,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
           ],
-
           _buildSectionHeader('General'),
           Container(
             decoration: BoxDecoration(
@@ -515,7 +596,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
           _buildSectionHeader('Identity'),
           Container(
             decoration: BoxDecoration(
@@ -537,7 +617,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
           _buildSectionHeader('Permissions'),
           Container(
             decoration: BoxDecoration(
@@ -558,29 +637,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: _notificationPermissionColor(theme),
                   title: 'Notifications',
                   subtitle: _notificationPermissionSubtitle,
-                  trailing:
-                      !_notificationsAuthorized &&
-                              _canManageNotificationSettings
-                          ? ElevatedButton(
-                              onPressed: _handleNotificationPermissionAction,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: theme.colorScheme.primary,
-                                foregroundColor: theme.colorScheme.onPrimary,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                              ),
-                              child: Text(
-                                _notificationPermissionActionLabel,
-                                style: const TextStyle(
-                                  fontFamily: 'JetBrains Mono',
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            )
-                          : null,
+                  trailing: !_notificationsAuthorized &&
+                          _canManageNotificationSettings
+                      ? ElevatedButton(
+                          onPressed: _handleNotificationPermissionAction,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: theme.colorScheme.onPrimary,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                          ),
+                          child: Text(
+                            _notificationPermissionActionLabel,
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        )
+                      : null,
                 ),
                 if (AndroidShell.isSupported)
                   _buildStatusRow(
@@ -690,11 +768,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                if (_isDesktopPlatform)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showDesktopTestNotification,
+                        icon: const Icon(Icons.desktop_windows_outlined),
+                        label: const Text('Test desktop sync'),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
           const SizedBox(height: 32),
-
           _buildSectionHeader('System Checks'),
           Container(
             decoration: BoxDecoration(
@@ -798,7 +887,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           const SizedBox(height: 40),
-
           _buildSectionHeader('Trust Store'),
           OutlinedButton.icon(
             onPressed: () {},

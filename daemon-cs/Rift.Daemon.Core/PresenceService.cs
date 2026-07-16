@@ -58,4 +58,6 @@ public sealed class PresenceService : IPresenceService
     {
         return _presence.TryGetValue(deviceId, out var info) ? info : null;
     }
+
+    public IReadOnlyList<PeerPresenceInfo> ListPeers() => _presence.Values.ToArray();
 }

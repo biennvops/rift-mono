@@ -314,7 +314,7 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 
 ### 7.5 Notification Sync
 
-Notification sync v1 is asymmetric: Android is the only source platform and trusted desktop peers are sinks. Peers MUST negotiate `notification.sync@1` before sending or accepting any notification-sync message. Devices that do not observe native Android notifications locally MUST NOT originate `notification.posted`, `notification.updated`, or `notification.removed`.
+Notification sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate `notification.posted`, `notification.updated`, and `notification.removed` for locally observed or locally generated notifications. Peers MUST negotiate `notification.sync@1` before sending or accepting any notification-sync message.
 
 The v1 notification record fields are:
 
@@ -322,7 +322,8 @@ The v1 notification record fields are:
 | ----------------- | -------- | ------------------- | --------------------------------------------------------------------- |
 | `notificationId`  | Yes      | string              | Stable Android-origin identifier scoped to `sourceDeviceId`           |
 | `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                        |
-| `packageName`     | Yes      | string              | Android package name                                                  |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `windows`, `macos`, `linux`   |
+| `packageName`     | Yes      | string              | Stable source application identifier                                  |
 | `appName`         | Yes      | string              | Human-readable app label                                              |
 | `title`           | No       | string              | Mirrored title preview only                                           |
 | `bodyPreview`     | No       | string              | Mirrored body preview only                                            |
@@ -513,7 +514,7 @@ Expiry is measured from local receipt time using monotonic timers. Wall-clock ti
 
 ## 12. Notification Sync
 
-Notification sync mirrors limited Android notification metadata to trusted desktop peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
+Notification sync mirrors limited notification metadata between trusted peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
 
 The Android source daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
 

@@ -332,6 +332,46 @@ public class RiftApiHandler : IRiftApi
     public Task<ListNotificationsResult> ListNotificationsAsync() =>
         _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
 
+    [JsonRpcMethod("rift.notifyLocalNotificationEvent")]
+    public async Task<NotifyLocalNotificationEventResult> NotifyLocalNotificationEventAsync(
+        string eventType,
+        string notificationId,
+        string? packageName = null,
+        string? appName = null,
+        string? title = null,
+        string? bodyPreview = null,
+        string? postedAt = null,
+        bool? isDismissible = null,
+        bool? isOpenable = null,
+        string? sourcePlatform = null,
+        string? removedAt = null)
+    {
+        try
+        {
+            return await _notificationSyncService.HandleLocalNotificationEventAsync(
+                eventType,
+                new NotificationSyncRecord
+                {
+                    NotificationId = notificationId,
+                    SourceDeviceId = _daemonInfoService.GetDeviceInfo().DeviceId,
+                    SourcePlatform = sourcePlatform,
+                    PackageName = packageName ?? string.Empty,
+                    AppName = appName ?? string.Empty,
+                    Title = title,
+                    BodyPreview = bodyPreview,
+                    PostedAt = postedAt ?? string.Empty,
+                    IsDismissible = isDismissible ?? false,
+                    IsOpenable = isOpenable ?? false
+                },
+                removedAt,
+                CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.performNotificationAction")]
     public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action)
     {
@@ -544,6 +584,8 @@ public class RiftApiHandler : IRiftApi
     private sealed class UnsupportedNotificationSyncService : INotificationSyncService
     {
         public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(string eventType, NotificationSyncRecord notification, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 

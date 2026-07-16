@@ -10,12 +10,14 @@ import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/linux_notifications.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const androidShellChannel = MethodChannel('rift/android/shell');
+  const linuxNotificationsChannel = MethodChannel('rift/linux/notifications');
   const macOsPermissionsChannel = MethodChannel('rift.permissions');
   late MockJsonRpcClient mockClient;
   late StreamController<bool> connectionChangedController;
@@ -35,6 +37,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     AndroidShell.debugIsAndroidOverride = true;
+    LinuxNotifications.debugIsLinuxOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
     isConnected = true;
@@ -49,6 +52,14 @@ void main() {
         case 'openNotificationListenerSettings':
           return true;
         case 'showTestNotification':
+          return true;
+      }
+      return null;
+    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(linuxNotificationsChannel, (call) async {
+      switch (call.method) {
+        case 'showNotification':
           return true;
       }
       return null;
@@ -93,9 +104,12 @@ void main() {
 
   tearDown(() {
     AndroidShell.debugIsAndroidOverride = null;
+    LinuxNotifications.debugIsLinuxOverride = null;
     connectionChangedController.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(linuxNotificationsChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(macOsPermissionsChannel, null);
   });
@@ -296,5 +310,33 @@ void main() {
     expect(captured['bodyPreview'], contains('Notification sync'));
     expect(captured['isDismissible'], isTrue);
     expect(captured['isOpenable'], isTrue);
+  });
+
+  testWidgets('SettingsScreen exposes desktop notification sync test button',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = false;
+    LinuxNotifications.debugIsLinuxOverride = null;
+
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.dragUntilVisible(
+      find.text('Test desktop sync'),
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    await tester.pumpAndSettle();
+
+    verify(() => mockClient.getDeviceInfo()).called(greaterThan(0));
   });
 }

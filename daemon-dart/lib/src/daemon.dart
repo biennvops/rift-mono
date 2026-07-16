@@ -368,6 +368,7 @@ class RiftDaemon {
   ClipboardProtocolHandler? _clipboardHandler;
   FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
+  StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
@@ -534,6 +535,10 @@ class RiftDaemon {
           ),
         );
       });
+
+      _notificationSyncMessageSub = _sessionManager!.onMessage.listen(
+        _handleNotificationSyncProtocolMessage,
+      );
     }
 
     if (enableDiscovery) {
@@ -636,6 +641,44 @@ class RiftDaemon {
     };
   }
 
+  String _notificationRecordKey(String sourceDeviceId, String notificationId) =>
+      '$sourceDeviceId\n$notificationId';
+
+  Map<String, dynamic> _normalizeNotificationRecord(
+    Map<String, dynamic> params, {
+    required String notificationId,
+    required String sourceDeviceId,
+  }) {
+    final record = <String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      if (params['sourcePlatform'] is String &&
+          (params['sourcePlatform'] as String).isNotEmpty)
+        'sourcePlatform': params['sourcePlatform'],
+      'packageName': RpcUtils.requireStringParam(params, 'packageName'),
+      'appName': RpcUtils.requireStringParam(params, 'appName'),
+      if (params['title'] is String && (params['title'] as String).isNotEmpty)
+        'title': params['title'],
+      if (params['bodyPreview'] is String &&
+          (params['bodyPreview'] as String).isNotEmpty)
+        'bodyPreview': params['bodyPreview'],
+      'postedAt': RpcUtils.requireStringParam(params, 'postedAt'),
+    };
+
+    final isDismissible = params['isDismissible'];
+    final isOpenable = params['isOpenable'];
+    if (isDismissible is! bool || isOpenable is! bool) {
+      throw ArgumentError.value(
+        params,
+        'isDismissible/isOpenable',
+        'must be booleans',
+      );
+    }
+    record['isDismissible'] = isDismissible;
+    record['isOpenable'] = isOpenable;
+    return record;
+  }
+
   bool _isNotificationBlacklisted(String packageName) {
     return _notificationSyncPolicy.blacklistedPackages.contains(packageName);
   }
@@ -685,36 +728,17 @@ class RiftDaemon {
     switch (eventType) {
       case 'posted':
       case 'updated':
-        final packageName = RpcUtils.requireStringParam(params, 'packageName');
-        final appName = RpcUtils.requireStringParam(params, 'appName');
-        final postedAt = RpcUtils.requireStringParam(params, 'postedAt');
-        final isDismissible = params['isDismissible'];
-        final isOpenable = params['isOpenable'];
-        if (isDismissible is! bool || isOpenable is! bool) {
-          throw ArgumentError.value(
-            params,
-            'isDismissible/isOpenable',
-            'must be booleans',
-          );
-        }
+        final record = _normalizeNotificationRecord(
+          params,
+          notificationId: notificationId,
+          sourceDeviceId: localDeviceId,
+        );
 
-        final record = <String, dynamic>{
-          'notificationId': notificationId,
-          'sourceDeviceId': localDeviceId,
-          'packageName': packageName,
-          'appName': appName,
-          if (params['title'] is String &&
-              (params['title'] as String).isNotEmpty)
-            'title': params['title'],
-          if (params['bodyPreview'] is String &&
-              (params['bodyPreview'] as String).isNotEmpty)
-            'bodyPreview': params['bodyPreview'],
-          'postedAt': postedAt,
-          'isDismissible': isDismissible,
-          'isOpenable': isOpenable,
-        };
-
-        _notificationSyncRecords[notificationId] = record;
+        _notificationSyncRecords[_notificationRecordKey(
+              localDeviceId,
+              notificationId,
+            )] =
+            record;
 
         onIpcEvent?.call({
           'jsonrpc': '2.0',
@@ -725,6 +749,7 @@ class RiftDaemon {
         });
 
         var broadcastTo = const <String>[];
+        final packageName = record['packageName'] as String;
         if (_notificationSyncPolicy.enabled &&
             !_isNotificationBlacklisted(packageName)) {
           broadcastTo = await _broadcastNotificationSyncEnvelope(
@@ -743,7 +768,6 @@ class RiftDaemon {
               _isNotificationBlacklisted(packageName),
         };
       case 'removed':
-        _notificationSyncRecords.remove(notificationId);
         final removedPayload = <String, dynamic>{
           'notificationId': notificationId,
           'sourceDeviceId': localDeviceId,
@@ -751,6 +775,9 @@ class RiftDaemon {
               (params['removedAt'] as String).isNotEmpty)
             'removedAt': params['removedAt'],
         };
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(localDeviceId, notificationId),
+        );
 
         onIpcEvent?.call({
           'jsonrpc': '2.0',
@@ -772,7 +799,104 @@ class RiftDaemon {
     }
   }
 
+  Future<void> _handleNotificationSyncProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'] as String?;
+    if (type == null || !type.startsWith('notification.')) {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'notification.sync',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      return;
+    }
+
+    final payload = message.payload['payload'];
+    if (payload is! Map<String, dynamic>) {
+      RiftLog.warn(
+        '[NotificationSync] Missing payload for $type from ${message.peerDeviceId}',
+      );
+      return;
+    }
+
+    switch (type) {
+      case 'notification.posted':
+      case 'notification.updated':
+        final record = _normalizeNotificationRecord(
+          payload,
+          notificationId: RpcUtils.requireStringParam(
+            payload,
+            'notificationId',
+          ),
+          sourceDeviceId: RpcUtils.requireStringParam(
+            payload,
+            'sourceDeviceId',
+          ),
+        );
+        if (record['sourceDeviceId'] != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords[_notificationRecordKey(
+              record['sourceDeviceId'] as String,
+              record['notificationId'] as String,
+            )] =
+            record;
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': type == 'notification.posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+        return;
+      case 'notification.removed':
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        if (sourceDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(sourceDeviceId, notificationId),
+        );
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': <String, dynamic>{
+            'notificationId': notificationId,
+            'sourceDeviceId': sourceDeviceId,
+            if (payload['removedAt'] is String &&
+                (payload['removedAt'] as String).isNotEmpty)
+              'removedAt': payload['removedAt'],
+          },
+        });
+        return;
+      default:
+        return;
+    }
+  }
+
   Future<void> stop() async {
+    await _notificationSyncMessageSub?.cancel();
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();

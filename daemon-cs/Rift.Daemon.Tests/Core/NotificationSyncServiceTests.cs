@@ -158,6 +158,36 @@ public sealed class NotificationSyncServiceTests : IDisposable
         Assert.Equal("Done", operation.State);
     }
 
+    [Fact]
+    public async Task HandleLocalNotificationEventAsync_BroadcastsToTrustedPeers()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+
+        var result = await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            new NotificationSyncRecord
+            {
+                NotificationId = "desktop-test-1",
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                SourcePlatform = "windows",
+                PackageName = "dev.rift.desktop",
+                AppName = "Rift Desktop",
+                Title = "Desktop test",
+                BodyPreview = "Hello mobile",
+                PostedAt = "2026-07-16T10:00:00Z",
+                IsDismissible = false,
+                IsOpenable = false
+            },
+            null,
+            CancellationToken.None);
+
+        Assert.Equal("desktop-test-1", result.NotificationId);
+        Assert.False(result.Suppressed);
+        Assert.Contains("rift-peer", result.BroadcastTo);
+        Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted");
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

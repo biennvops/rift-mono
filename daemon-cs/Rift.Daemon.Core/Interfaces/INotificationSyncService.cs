@@ -10,6 +10,7 @@ public sealed class NotificationSyncRecord
 {
     public string NotificationId { get; init; } = string.Empty;
     public string SourceDeviceId { get; init; } = string.Empty;
+    public string? SourcePlatform { get; init; }
     public string PackageName { get; init; } = string.Empty;
     public string AppName { get; init; } = string.Empty;
     public string? Title { get; init; }
@@ -36,6 +37,13 @@ public sealed class PerformNotificationActionResult
     public string State { get; init; } = string.Empty;
 }
 
+public sealed class NotifyLocalNotificationEventResult
+{
+    public string NotificationId { get; init; } = string.Empty;
+    public IReadOnlyList<string> BroadcastTo { get; init; } = [];
+    public bool Suppressed { get; init; }
+}
+
 public sealed class NotificationRemovedRecord
 {
     public string NotificationId { get; init; } = string.Empty;
@@ -56,6 +64,12 @@ public sealed class NotificationActionResultRecord
 
 public interface INotificationSyncService
 {
+    Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+        string eventType,
+        NotificationSyncRecord notification,
+        string? removedAt,
+        CancellationToken cancellationToken);
+
     Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken);
 
     Task<PerformNotificationActionResult> PerformNotificationActionAsync(
