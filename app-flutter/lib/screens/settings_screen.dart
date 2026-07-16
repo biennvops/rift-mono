@@ -99,15 +99,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _openNotificationSettings() async {
     final theme = Theme.of(context);
-    final success = AndroidShell.isSupported
-        ? await AndroidShell.openNotificationSettings()
-        : false;
+    bool success = false;
+    if (AndroidShell.isSupported) {
+      success = await AndroidShell.openNotificationSettings();
+    } else if (Platform.isMacOS) {
+      try {
+        final direct = await Process.run('open', <String>[
+          'x-apple.systempreferences:com.apple.preference.notifications',
+        ]);
+        success = direct.exitCode == 0;
+        if (!success) {
+          final fallback = await Process.run('open', <String>[
+            '-b',
+            'com.apple.systempreferences',
+          ]);
+          success = fallback.exitCode == 0;
+        }
+      } catch (_) {
+        success = false;
+      }
+    }
     if (!mounted || success) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           'Unable to open notification settings on ${Platform.operatingSystem}.',
           style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _requestMacOSNotifications() async {
+    final granted = await MacOSNotifications.request();
+    final status = await _loadNotificationPermissionStatus();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _notificationPermissionStatus = status;
+    });
+    if (granted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Notifications were not enabled. You can allow them in System Settings > Notifications.',
         ),
       ),
     );
@@ -220,7 +258,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  bool get _canOpenNotificationSettings => AndroidShell.isSupported;
+  bool get _canManageNotificationSettings =>
+      AndroidShell.isSupported || Platform.isMacOS;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
@@ -260,9 +299,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'System notifications enabled';
       case 'denied':
         return 'System notifications are off';
+      case 'notDetermined':
+        return Platform.isMacOS
+            ? 'Permission has not been requested yet'
+            : 'Notification permission not granted yet';
+      case 'unknown':
+        return Platform.isMacOS
+            ? 'Unable to read macOS notification permission state'
+            : 'Notification status unavailable on this platform';
       default:
-        return 'Notification status unavailable on this platform';
+        return 'Notification status: $_notificationPermissionStatus';
     }
+  }
+
+  String get _notificationPermissionActionLabel {
+    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
+      return 'ALLOW';
+    }
+    return 'OPEN SETTINGS';
+  }
+
+  Future<void> _handleNotificationPermissionAction() async {
+    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
+      await _requestMacOSNotifications();
+      return;
+    }
+    await _openNotificationSettings();
   }
 
   String get _notificationAccessSubtitle {
@@ -427,7 +489,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 24),
           ],
 
-          // General Section
           _buildSectionHeader('General'),
           Container(
             decoration: BoxDecoration(
@@ -455,7 +516,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 32),
 
-          // Identity Section
           _buildSectionHeader('Identity'),
           Container(
             decoration: BoxDecoration(
@@ -478,7 +538,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 32),
 
-          // Permissions Section
           _buildSectionHeader('Permissions'),
           Container(
             decoration: BoxDecoration(
@@ -500,9 +559,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: 'Notifications',
                   subtitle: _notificationPermissionSubtitle,
                   trailing:
-                      !_notificationsAuthorized && _canOpenNotificationSettings
+                      !_notificationsAuthorized &&
+                              _canManageNotificationSettings
                           ? ElevatedButton(
-                              onPressed: _openNotificationSettings,
+                              onPressed: _handleNotificationPermissionAction,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: theme.colorScheme.primary,
                                 foregroundColor: theme.colorScheme.onPrimary,
@@ -511,9 +571,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                   vertical: 8,
                                 ),
                               ),
-                              child: const Text(
-                                'OPEN SETTINGS',
-                                style: TextStyle(
+                              child: Text(
+                                _notificationPermissionActionLabel,
+                                style: const TextStyle(
                                   fontFamily: 'JetBrains Mono',
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
@@ -635,7 +695,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 32),
 
-          // Platform Specific Section
           _buildSectionHeader('System Checks'),
           Container(
             decoration: BoxDecoration(
