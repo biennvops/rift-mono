@@ -536,7 +536,12 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var previousState = peer.State;
         if (peer.State == TrustState.Discovered)
         {
-            _trustStore.TryTransition(peerDeviceId, TrustState.PairingPending);
+            if (!_trustStore.TryTransition(peerDeviceId, TrustState.PairingPending))
+            {
+                return;
+            }
+
+            peer.State = TrustState.PairingPending;
             await NotifyTrustChangedAsync(peerDeviceId, "discovered", "pairing_pending", "Remote pairing started.", cancellationToken);
         }
 

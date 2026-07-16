@@ -681,6 +681,31 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_WithDisplayName_PreservesPairingPendingState()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-inbound-display",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            "rift-peer-inbound-display",
+            CreateEnvelope("rift-peer-inbound-display", "pairing.start", new
+            {
+                expiresInMs = 120000,
+                displayName = "Pixel 9 Pro"
+            }),
+            CancellationToken.None);
+
+        var peer = _trustStore.GetPeer("rift-peer-inbound-display");
+        Assert.Equal(TrustState.PairingPending, peer!.State);
+        Assert.Equal("Pixel 9 Pro", peer.DisplayName);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingStart_ThenLocalApprove_SendsPairingComplete()
     {
         _transport.ActiveSessions.Add("rift-peer-a-initiator");
