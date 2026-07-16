@@ -728,6 +728,9 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             _transport.SentMessages,
             sent => sent.PeerDeviceId == "rift-peer-a-initiator" && sent.Type == "pairing.complete");
         Assert.Equal(_identityManager.GetDeviceId(), sentComplete.Payload.GetProperty("trustedDeviceId").GetString());
+
+        var peer = _trustStore.GetPeer("rift-peer-a-initiator");
+        Assert.Equal(TrustState.Trusted, peer!.State);
     }
 
     [Fact]

@@ -393,8 +393,11 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var peer = _trustStore.GetPeer(resolvedDeviceId);
         if (peer is not null &&
             peer.State == TrustState.PairingPending &&
-            state.TryGetRemoteCompletionPersistedAt(out var persistedAt))
+            state.HasMutualApproval())
         {
+            var persistedAt = state.TryGetRemoteCompletionPersistedAt(out var remotePersistedAt)
+                ? remotePersistedAt
+                : approvedAt;
             await PromotePeerToTrustedAsync(resolvedDeviceId, peer, persistedAt, cancellationToken);
         }
     }
