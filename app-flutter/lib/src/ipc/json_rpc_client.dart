@@ -98,6 +98,11 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onMediaPlaybackActionResult =>
       _mediaPlaybackActionResultController.stream;
 
+  late final _mediaPlaybackActionRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackActionRequest =>
+      _mediaPlaybackActionRequestController.stream;
+
   late final _fileOfferController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onFileOffer => _fileOfferController.stream;
@@ -251,6 +256,7 @@ class JsonRpcRiftClient {
     'Verified': 'verified',
     'Offers': 'offers',
     'BroadcastTo': 'broadcastTo',
+    'RequestId': 'requestId',
     'Notifications': 'notifications',
     'NotificationId': 'notificationId',
     'PackageName': 'packageName',
@@ -692,6 +698,21 @@ class JsonRpcRiftClient {
           ],
         );
       });
+      _client!.registerMethod('rift.onMediaPlaybackActionRequest',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackActionRequest',
+          _asMap(params),
+          _mediaPlaybackActionRequestController,
+          requiredStringKeys: const [
+            'requestId',
+            'playbackId',
+            'sourceDeviceId',
+            'requestingDeviceId',
+            'action',
+          ],
+        );
+      });
       _client!.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
         _emitIfValid(
           'rift.onFileOffer',
@@ -887,6 +908,7 @@ class JsonRpcRiftClient {
     await _mediaPlaybackUpdatedController.close();
     await _mediaPlaybackRemovedController.close();
     await _mediaPlaybackActionResultController.close();
+    await _mediaPlaybackActionRequestController.close();
     await _fileOfferController.close();
     await _fileTransferProgressController.close();
     await _fileTransferCompletedController.close();
@@ -953,6 +975,20 @@ class JsonRpcRiftClient {
       params['positionMs'] = positionMs;
     }
     return _sendRequest('rift.performMediaPlaybackAction', params);
+  }
+
+  Future<dynamic> reportLocalMediaPlaybackActionHandled({
+    required String requestId,
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    return _sendRequest('rift.reportLocalMediaPlaybackActionHandled', {
+      'requestId': requestId,
+      'success': success,
+      if (failureReason != null) 'failureReason': failureReason,
+      if (message != null) 'message': message,
+    });
   }
 
   Future<dynamic> performNotificationAction({

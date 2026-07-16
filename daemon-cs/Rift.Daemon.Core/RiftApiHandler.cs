@@ -419,6 +419,28 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.reportLocalMediaPlaybackActionHandled")]
+    public async Task<ReportHandledMediaPlaybackActionResult> ReportLocalMediaPlaybackActionHandledAsync(
+        string requestId,
+        bool success,
+        string? failureReason = null,
+        string? message = null)
+    {
+        try
+        {
+            return await _mediaPlaybackSyncService.ReportHandledMediaPlaybackActionAsync(
+                requestId,
+                success,
+                failureReason,
+                message,
+                CancellationToken.None);
+        }
+        catch (MediaPlaybackSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.notifyLocalNotificationEvent")]
     public async Task<NotifyLocalNotificationEventResult> NotifyLocalNotificationEventAsync(
         string eventType,
@@ -705,6 +727,8 @@ public class RiftApiHandler : IRiftApi
         public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(string requestId, bool success, string? failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()
         {

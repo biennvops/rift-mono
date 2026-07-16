@@ -182,6 +182,24 @@ public sealed class ProtocolMessageRouter(
             return;
         }
 
+        if (string.Equals(messageType, "media.playbackActionRequest", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "media.playback", messageType);
+            var mediaPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            await mediaPlaybackSyncService.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
+            {
+                PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
+                SourceDeviceId = payloadSourceDeviceId,
+                RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
+                Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
+                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) ? positionElement.GetInt64() : null,
+                RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null
+            }, cancellationToken);
+            return;
+        }
+
         if (string.Equals(messageType, "notification.updated", StringComparison.Ordinal))
         {
             EnsureProtectedMessageAllowed(session, "notification.sync", messageType);

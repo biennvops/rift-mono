@@ -21,6 +21,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     private readonly Dictionary<string, MediaPlaybackRecord> _playbacks = new(Comparer);
     private readonly Dictionary<string, PendingPlaybackAction> _pendingActionsByOperationId = new(Comparer);
     private readonly Dictionary<string, string> _pendingActionKeys = new(Comparer);
+    private readonly Dictionary<string, PendingIncomingMediaPlaybackAction> _pendingIncomingActionsByRequestId = new(Comparer);
 
     public MediaPlaybackSyncService(
         ITransport transport,
@@ -359,6 +360,129 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             ["action"] = action,
             ["operationId"] = pending.OperationId
         }).ConfigureAwait(false);
+    }
+
+    public async Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(request.PlaybackId) ||
+            string.IsNullOrWhiteSpace(request.SourceDeviceId) ||
+            string.IsNullOrWhiteSpace(request.RequestingDeviceId))
+        {
+            throw new InvalidOperationException("media.playbackActionRequest requires playbackId, sourceDeviceId, and requestingDeviceId.");
+        }
+
+        var action = NormalizeAction(request.Action, request.PositionMs);
+        var requestId = Guid.NewGuid().ToString("D");
+        var pending = new PendingIncomingMediaPlaybackAction
+        {
+            RequestId = requestId,
+            PlaybackId = request.PlaybackId,
+            SourceDeviceId = request.SourceDeviceId,
+            RequestingDeviceId = request.RequestingDeviceId,
+            Action = action,
+            PositionMs = request.PositionMs
+        };
+
+        lock (_gate)
+        {
+            _pendingIncomingActionsByRequestId[requestId] = pending;
+        }
+
+        if (_ipcNotificationService is null)
+        {
+            _logger.LogWarning(
+                "No IPC client is registered to handle local media playback action request {Action} for {PlaybackId}.",
+                action,
+                request.PlaybackId);
+            await ReportHandledMediaPlaybackActionAsync(
+                requestId,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: "No local media control client is connected.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await NotifyIpcAsync("rift.onMediaPlaybackActionRequest", new
+        {
+            requestId,
+            playbackId = request.PlaybackId,
+            sourceDeviceId = request.SourceDeviceId,
+            requestingDeviceId = request.RequestingDeviceId,
+            action,
+            positionMs = request.PositionMs,
+            requestedAt = request.RequestedAt
+        }).ConfigureAwait(false);
+    }
+
+    public async Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(
+        string requestId,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(requestId))
+        {
+            throw new MediaPlaybackSyncFailureException("A media playback action request ID is required.", -32009);
+        }
+
+        PendingIncomingMediaPlaybackAction pending;
+        lock (_gate)
+        {
+            if (!_pendingIncomingActionsByRequestId.Remove(requestId, out pending!))
+            {
+                throw new MediaPlaybackSyncFailureException($"Media playback action request '{requestId}' was not found.", -32009);
+            }
+        }
+
+        var envelope = CreateEnvelope(
+            "media.playbackActionResult",
+            new
+            {
+                playbackId = pending.PlaybackId,
+                sourceDeviceId = pending.SourceDeviceId,
+                requestingDeviceId = pending.RequestingDeviceId,
+                action = pending.Action,
+                success,
+                failureReason,
+                message
+            });
+
+        try
+        {
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+            await _transport.SendAsync(pending.RequestingDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            throw new MediaPlaybackSyncFailureException(
+                $"Failed to send media playback action result: {ex.Message}",
+                -32003);
+        }
+
+        await LogEventAsync(
+            SecurityEventTypes.MediaPlaybackActioned,
+            pending.RequestingDeviceId,
+            success ? SecurityEventOutcome.Success : SecurityEventOutcome.Failure,
+            failureReason,
+            new Dictionary<string, object?>
+            {
+                ["playbackId"] = pending.PlaybackId,
+                ["action"] = pending.Action,
+                ["requestId"] = requestId,
+                ["direction"] = "incoming"
+            }).ConfigureAwait(false);
+
+        return new ReportHandledMediaPlaybackActionResult
+        {
+            RequestId = requestId,
+            PlaybackId = pending.PlaybackId,
+            Action = pending.Action,
+            Success = success
+        };
     }
 
     private void EnsureActionAllowed(MediaPlaybackRecord playback, string action)

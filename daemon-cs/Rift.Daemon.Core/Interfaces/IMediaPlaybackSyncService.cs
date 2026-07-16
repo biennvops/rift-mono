@@ -61,6 +61,34 @@ public sealed class MediaPlaybackActionResultRecord
     public string? Message { get; init; }
 }
 
+public sealed class MediaPlaybackActionRequestRecord
+{
+    public string PlaybackId { get; init; } = string.Empty;
+    public string SourceDeviceId { get; init; } = string.Empty;
+    public string RequestingDeviceId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public long? PositionMs { get; init; }
+    public string? RequestedAt { get; init; }
+}
+
+public sealed class PendingIncomingMediaPlaybackAction
+{
+    public string RequestId { get; init; } = string.Empty;
+    public string PlaybackId { get; init; } = string.Empty;
+    public string SourceDeviceId { get; init; } = string.Empty;
+    public string RequestingDeviceId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public long? PositionMs { get; init; }
+}
+
+public sealed class ReportHandledMediaPlaybackActionResult
+{
+    public string RequestId { get; init; } = string.Empty;
+    public string PlaybackId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty;
+    public bool Success { get; init; }
+}
+
 public interface IMediaPlaybackSyncService
 {
     Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(
@@ -86,4 +114,13 @@ public interface IMediaPlaybackSyncService
     Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken);
 
     Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken);
+
+    Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken);
+
+    Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(
+        string requestId,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken);
 }
