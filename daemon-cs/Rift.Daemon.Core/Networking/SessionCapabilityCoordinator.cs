@@ -15,6 +15,7 @@ internal sealed class SessionCapabilityCoordinator
     [
         new("clipboard.offer_fetch", 1),
         new("file.transfer", 1),
+        new("media.playback", 1),
         new("notification.sync", 1),
         new("presence.basic", 1),
         new("operation.lifecycle", 1),
@@ -258,10 +259,10 @@ internal sealed class SessionCapabilityCoordinator
     {
         return capabilityName switch
         {
-            "clipboard.offer_fetch" or "file.transfer" or "notification.sync" or "presence.basic" or "operation.lifecycle" or "security.event_log" => 1,
+            "clipboard.offer_fetch" or "file.transfer" or "media.playback" or "notification.sync" or "presence.basic" or "operation.lifecycle" or "security.event_log" => 1,
             _ => int.MaxValue
         };
-}
+    }
 
     private static void ValidatePolicyFlags(JsonElement policyFlagsElement)
     {

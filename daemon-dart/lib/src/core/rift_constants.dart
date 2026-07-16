@@ -4,6 +4,7 @@ class RiftConstants {
   static const List<Map<String, dynamic>> capabilities = [
     {'name': 'clipboard.offer_fetch', 'version': 1},
     {'name': 'file.transfer', 'version': 1},
+    {'name': 'media.playback', 'version': 1},
     {'name': 'notification.sync', 'version': 1},
     {'name': 'presence.basic', 'version': 1},
     {'name': 'operation.lifecycle', 'version': 1},

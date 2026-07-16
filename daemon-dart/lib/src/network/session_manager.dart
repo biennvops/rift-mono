@@ -208,6 +208,7 @@ class SessionManager {
   static final List<Capability> _defaultCapabilities = [
     Capability(name: 'clipboard.offer_fetch', version: 1),
     Capability(name: 'file.transfer', version: 1),
+    Capability(name: 'media.playback', version: 1),
     Capability(name: 'notification.sync', version: 1),
     Capability(name: 'presence.basic', version: 1),
     Capability(name: 'operation.lifecycle', version: 1),

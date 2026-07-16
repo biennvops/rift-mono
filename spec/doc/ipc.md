@@ -671,6 +671,30 @@ Submits a locally observed or locally generated notification event into the daem
 
 `posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
 
+#### `rift.listMediaPlayback`
+
+Returns the locally cached mirrored media playback state.
+
+**Params:** none.
+
+#### `rift.getMediaPlayback`
+
+Returns one mirrored playback record by `playbackId`.
+
+**Params:** `playbackId` string.
+
+#### `rift.performMediaPlaybackAction`
+
+Requests a remote media playback action.
+
+**Params:** `playbackId` string, `action` string, optional `positionMs` integer for `seek`.
+
+#### `rift.notifyLocalMediaPlaybackEvent`
+
+Submits a locally observed or locally generated media playback event into the daemon so it can update the local playback cache and mirror the event to trusted peers.
+
+`posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
+
 ### 4.8 Presence
 
 #### `rift.getPeerPresence`
@@ -812,6 +836,10 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
 | `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
 | `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
+| `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
+| `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |
+| `rift.onMediaPlaybackRemoved` | `{ "playbackId", "sourceDeviceId", "removedAt?" }` | Mirrored playback removed |
+| `rift.onMediaPlaybackActionResult` | `{ "playbackId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote playback action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
 | `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |

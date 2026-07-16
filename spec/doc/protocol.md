@@ -280,7 +280,7 @@ The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUS
 
 ### 7.2 Capability Messages
 
-Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional notification-sync capability is `notification.sync` version `1`.
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`.
 
 `capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
 
@@ -341,6 +341,43 @@ The v1 notification record fields are:
 `notification.actionRequest` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
 
 `notification.actionResult` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
+
+### 7.5A Media Playback Sync
+
+Media playback sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate current playback state. Peers MUST negotiate `media.playback@1` before sending or accepting media-playback messages.
+
+The v1 playback record fields are:
+
+| Field             | Required | Type                | Notes                                                               |
+| ----------------- | -------- | ------------------- | ------------------------------------------------------------------- |
+| `playbackId`      | Yes      | string              | Stable per-source playback session identifier                       |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                      |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `windows`, `macos`, `linux` |
+| `appId`           | Yes      | string              | Stable source application identifier                                |
+| `appName`         | Yes      | string              | Human-readable app label                                            |
+| `title`           | No       | string              | Current media title                                                 |
+| `artist`          | No       | string              | Current media artist                                                |
+| `album`           | No       | string              | Current media album                                                 |
+| `artwork`         | No       | object              | Optional metadata for artwork payloads                              |
+| `playbackState`   | Yes      | string              | One of `playing`, `paused`, `stopped`, or `buffering`               |
+| `positionMs`      | Yes      | integer             | Non-negative current playback position                              |
+| `durationMs`      | No       | integer             | Non-negative media duration when known                              |
+| `canPlay`         | Yes      | boolean             | Whether remote `play` is currently allowed                          |
+| `canPause`        | Yes      | boolean             | Whether remote `pause` is currently allowed                         |
+| `canSkipNext`     | Yes      | boolean             | Whether remote `next` is currently allowed                          |
+| `canSkipPrevious` | Yes      | boolean             | Whether remote `previous` is currently allowed                      |
+| `canSeek`         | Yes      | boolean             | Whether remote `seek` is currently allowed                          |
+| `updatedAt`       | Yes      | RFC 3339 UTC string | Audit timestamp for the latest local observation                    |
+
+`media.playbackPosted` payload fields: the full playback record above.
+
+`media.playbackUpdated` payload fields: the full playback record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, playbackId)` tuple.
+
+`media.playbackRemoved` payload fields: `playbackId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
+
+`media.playbackActionRequest` payload fields: `playbackId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `positionMs`, optional `requestedAt` RFC 3339 timestamp. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `play`, `pause`, `togglePlayPause`, `next`, `previous`, and `seek`. `positionMs` is REQUIRED only for `seek`.
+
+`media.playbackActionResult` payload fields: `playbackId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
 In v0.1-draft, clipboard payload bytes are the exact raw bytes represented by
 `contentBase64` before Base64 encoding. The `byteSize` and `sha256` values
