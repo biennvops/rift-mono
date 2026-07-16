@@ -202,6 +202,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final List<Map<String, dynamic>> _pendingNotificationSyncEvents =
       <Map<String, dynamic>>[];
   bool _isFlushingNotificationSyncEvents = false;
+  final List<Map<String, String>> _pendingDesktopNotificationActions =
+      <Map<String, String>>[];
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
   String? _lastExternalClipboardFingerprint;
@@ -323,6 +325,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
         unawaited(_flushPendingNotificationSyncEvents());
+        unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
@@ -637,17 +640,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (notificationAction != null &&
         notificationId != null &&
         notificationId.isNotEmpty) {
-      final client = context.read<JsonRpcRiftClient>();
-      if (client.isConnected) {
-        unawaited(
-          client
-              .performNotificationAction(
-                notificationId: notificationId,
-                action: notificationAction,
-              )
-              .catchError((_) {}),
-        );
-      }
+      unawaited(
+        _submitDesktopNotificationAction(
+          notificationId: notificationId,
+          action: notificationAction,
+        ),
+      );
     }
     if (route == null || route.isEmpty) {
       return;
@@ -732,6 +730,70 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         !_pendingSharedSendItems.contains(pending.first)) {
       debugPrint(
         '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
+      );
+    }
+  }
+
+  void _queuePendingDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+  }) {
+    final alreadyQueued = _pendingDesktopNotificationActions.any(
+      (candidate) =>
+          candidate['notificationId'] == notificationId &&
+          candidate['action'] == action,
+    );
+    if (alreadyQueued) {
+      return;
+    }
+    _pendingDesktopNotificationActions.add(<String, String>{
+      'notificationId': notificationId,
+      'action': action,
+    });
+  }
+
+  Future<void> _submitDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+  }) async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _queuePendingDesktopNotificationAction(
+        notificationId: notificationId,
+        action: action,
+      );
+      client.connect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[Notification Sync] Failed to reconnect for notification action: $error',
+        );
+      });
+      return;
+    }
+
+    try {
+      await client.performNotificationAction(
+        notificationId: notificationId,
+        action: action,
+      );
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to perform mirrored notification action: $error',
+      );
+    }
+  }
+
+  Future<void> _flushPendingDesktopNotificationActions() async {
+    if (_pendingDesktopNotificationActions.isEmpty) {
+      return;
+    }
+    final pending = List<Map<String, String>>.from(
+      _pendingDesktopNotificationActions,
+    );
+    _pendingDesktopNotificationActions.clear();
+    for (final action in pending) {
+      await _submitDesktopNotificationAction(
+        notificationId: action['notificationId'] ?? '',
+        action: action['action'] ?? '',
       );
     }
   }
@@ -968,31 +1030,91 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }());
   }
 
+  List<DesktopNotificationAction> _buildMirroredNotificationActions(
+    Map<String, dynamic> event,
+  ) {
+    final actions = <DesktopNotificationAction>[];
+    if (event['isOpenable'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'open', title: 'Open'),
+      );
+    }
+    if (event['isDismissible'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'dismiss', title: 'Dismiss'),
+      );
+    }
+    return actions;
+  }
+
   void _showMirroredNotificationPreview(Map<String, dynamic> event) {
     if (Platform.isAndroid) {
+      return;
+    }
+    final notificationId = event['notificationId']?.toString();
+    if (notificationId == null || notificationId.isEmpty) {
       return;
     }
     final title = event['title']?.toString().trim();
     final body = event['bodyPreview']?.toString().trim();
     final appName = event['appName']?.toString().trim();
     final sourceDeviceId = event['sourceDeviceId']?.toString();
+    final mirroredPayload = <String, Object?>{
+      'route': NotificationRoute.historyNotifications,
+      'notificationId': notificationId,
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty)
+        'sourceDeviceId': sourceDeviceId,
+      if (appName != null && appName.isNotEmpty) 'appName': appName,
+      'isOpenable': event['isOpenable'] == true,
+      'isDismissible': event['isDismissible'] == true,
+    };
+    final mirroredActions = _buildMirroredNotificationActions(event);
+    final notificationTitle = (title != null && title.isNotEmpty)
+        ? title
+        : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
+    final notificationBody = [
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
+      if (body != null && body.isNotEmpty) body,
+    ].join(' • ');
 
-    _maybeNotifyWithRoute(
-      title: (title != null && title.isNotEmpty)
-          ? title
-          : ((appName != null && appName.isNotEmpty)
-              ? appName
-              : 'Notification'),
-      body: [
-        if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
-        if (body != null && body.isNotEmpty) body,
-      ].join(' • '),
-      route: NotificationRoute.historyNotifications,
-      payload: <String, Object?>{
-        'route': NotificationRoute.historyNotifications,
-        'notificationId': event['notificationId']?.toString(),
-      },
-    );
+    unawaited(() async {
+      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+        final foreground = await _isWindowForeground();
+        if (foreground) return;
+      }
+      try {
+        if (Platform.isWindows) {
+          await WindowsShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
+        if (Platform.isLinux) {
+          await LinuxNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
+          );
+          return;
+        }
+        if (Platform.isMacOS) {
+          await MacOSNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
+          );
+        }
+      } catch (_) {
+        // Best-effort: depends on user permission and runner support.
+      }
+    }());
   }
 
   @override

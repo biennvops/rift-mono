@@ -3,6 +3,21 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
+class DesktopNotificationAction {
+  const DesktopNotificationAction({
+    required this.id,
+    required this.title,
+  });
+
+  final String id;
+  final String title;
+
+  Map<String, String> toMap() => <String, String>{
+        'id': id,
+        'title': title,
+      };
+}
+
 class MacOSNotifications {
   static const MethodChannel _channel = MethodChannel('rift.permissions');
   @visibleForTesting
@@ -30,6 +45,7 @@ class MacOSNotifications {
     required String body,
     String? route,
     Map<String, Object?>? payload,
+    List<DesktopNotificationAction>? actions,
   }) async {
     if (!_isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.show', {
@@ -37,6 +53,8 @@ class MacOSNotifications {
       'body': body,
       if (route != null) 'route': route,
       if (payload != null) 'payload': payload,
+      if (actions != null)
+        'actions': actions.map((action) => action.toMap()).toList(),
     });
     return res ?? false;
   }
