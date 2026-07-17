@@ -1013,6 +1013,10 @@ void main() {
           'playbackId': 'playback-1',
           'appId': 'com.example.music',
           'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
           'playbackState': 'playing',
           'positionMs': 1000,
           'updatedAt': '2026-07-16T10:00:00Z',
@@ -1035,6 +1039,10 @@ void main() {
           'playbackId': 'playback-1',
           'appId': 'com.example.music',
           'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
           'playbackState': 'playing',
           'positionMs': 1000,
           'updatedAt': '2026-07-16T10:00:00Z',
@@ -1053,6 +1061,10 @@ void main() {
             'sourceDeviceId': 'rift-peer',
             'appId': 'com.example.music',
             'appName': 'Example Music',
+            'artwork': {
+              'dataBase64': 'Zm9v',
+              'mediaType': 'image/png',
+            },
             'playbackState': 'playing',
             'positionMs': 1000,
             'canPlay': true,
@@ -1069,6 +1081,10 @@ void main() {
         'sourceDeviceId': 'rift-peer',
         'appId': 'com.example.music',
         'appName': 'Example Music',
+        'artwork': {
+          'dataBase64': 'Zm9v',
+          'mediaType': 'image/png',
+        },
         'playbackState': 'playing',
         'positionMs': 1000,
         'canPlay': true,
@@ -1093,7 +1109,12 @@ void main() {
       );
 
       expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
+      expect(
+        ((listed['playbacks'] as List).single['artwork'] as Map)['mediaType'],
+        'image/png',
+      );
       expect(detailed['playbackId'], 'playback-1');
+      expect((detailed['artwork'] as Map)['mediaType'], 'image/png');
       expect(actionResult['playbackId'], 'playback-1');
       expect(
         transport.requests

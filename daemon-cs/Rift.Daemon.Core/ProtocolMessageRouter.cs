@@ -423,6 +423,9 @@ public sealed class ProtocolMessageRouter(
             Title = mediaPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,
             Artist = mediaPayload.TryGetProperty("artist", out var artistElement) ? artistElement.GetString() : null,
             Album = mediaPayload.TryGetProperty("album", out var albumElement) ? albumElement.GetString() : null,
+            Artwork = mediaPayload.TryGetProperty("artwork", out var artworkElement) && artworkElement.ValueKind is JsonValueKind.Object
+                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(artworkElement.GetRawText())
+                : null,
             PlaybackState = mediaPayload.GetProperty("playbackState").GetString() ?? string.Empty,
             PositionMs = mediaPayload.GetProperty("positionMs").GetInt64(),
             DurationMs = mediaPayload.TryGetProperty("durationMs", out var durationElement) ? durationElement.GetInt64() : null,

@@ -67,8 +67,8 @@ internal sealed class MacOSMediaPlaybackService(
             "play" => ["send", "0"],
             "pause" => ["send", "1"],
             "togglePlayPause" => ["send", "2"],
-            "nextTrack" => ["send", "4"],
-            "previousTrack" => ["send", "5"],
+            "next" => ["send", "4"],
+            "previous" => ["send", "5"],
             "seek" when request.PositionMs.HasValue => ["seek", request.PositionMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)],
             _ => null
         };
@@ -156,7 +156,7 @@ internal sealed class MacOSMediaPlaybackService(
 
     private async Task<MacOSNowPlayingSnapshot?> TryGetSnapshotAsync(CancellationToken cancellationToken)
     {
-        var output = await RunAdapterAsync(["get", "--no-artwork"], cancellationToken).ConfigureAwait(false);
+        var output = await RunAdapterAsync(["get"], cancellationToken).ConfigureAwait(false);
         if (output.ExitCode != 0)
         {
             if (!output.MissingArtifacts)
@@ -199,6 +199,7 @@ internal sealed class MacOSMediaPlaybackService(
             Title: payload.Title,
             Artist: payload.Artist,
             Album: payload.Album,
+            Artwork: CreateArtwork(payload),
             PlaybackState: playbackState,
             PositionMs: positionMs,
             DurationMs: durationMs,
@@ -324,6 +325,20 @@ internal sealed class MacOSMediaPlaybackService(
             MissingArtifacts: true);
     }
 
+    private static IReadOnlyDictionary<string, object?>? CreateArtwork(AdapterNowPlayingPayload payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload.ArtworkData) || string.IsNullOrWhiteSpace(payload.ArtworkMimeType))
+        {
+            return null;
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["dataBase64"] = payload.ArtworkData,
+            ["mediaType"] = payload.ArtworkMimeType
+        };
+    }
+
     private sealed class AdapterNowPlayingPayload
     {
         public string? BundleIdentifier { get; init; }
@@ -331,6 +346,8 @@ internal sealed class MacOSMediaPlaybackService(
         public string? Title { get; init; }
         public string? Artist { get; init; }
         public string? Album { get; init; }
+        public string? ArtworkData { get; init; }
+        public string? ArtworkMimeType { get; init; }
         public double? Duration { get; init; }
         public double? ElapsedTime { get; init; }
         public bool? ProhibitsSkip { get; init; }
@@ -345,6 +362,7 @@ internal sealed class MacOSMediaPlaybackService(
         string? Title,
         string? Artist,
         string? Album,
+        IReadOnlyDictionary<string, object?>? Artwork,
         string PlaybackState,
         long PositionMs,
         long? DurationMs,
@@ -364,6 +382,7 @@ internal sealed class MacOSMediaPlaybackService(
             Title = Title,
             Artist = Artist,
             Album = Album,
+            Artwork = Artwork,
             PlaybackState = PlaybackState,
             PositionMs = PositionMs,
             DurationMs = DurationMs,

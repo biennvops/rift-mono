@@ -5,14 +5,16 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
-import android.os.Bundle
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.media.app.NotificationCompat.MediaStyle
+import android.util.Base64
 
 class RemoteMediaPlaybackManager(
     private val context: Context,
@@ -81,6 +83,7 @@ class RemoteMediaPlaybackManager(
         mediaSession.setMetadata(buildMetadata(playback))
         mediaSession.setPlaybackState(buildPlaybackState(playback))
 
+        val artwork = decodeArtwork(playback)
         val title = playback["title"]?.toString()?.takeIf { it.isNotBlank() }
             ?: playback["appName"]?.toString()?.takeIf { it.isNotBlank() }
             ?: "Remote playback"
@@ -112,6 +115,9 @@ class RemoteMediaPlaybackManager(
                 .setOnlyAlertOnce(true)
                 .setContentIntent(contentIntent)
                 .setDeleteIntent(buildActionIntent(playback, "dismiss"))
+        if (artwork != null) {
+            builder.setLargeIcon(artwork)
+        }
 
         addActions(builder, playback)
 
@@ -207,17 +213,37 @@ class RemoteMediaPlaybackManager(
     }
 
     private fun buildMetadata(playback: Map<String, Any?>): MediaMetadataCompat {
-        return MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, playback["title"]?.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, playback["artist"]?.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, playback["album"]?.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, playback["title"]?.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, playback["artist"]?.toString())
-            .putLong(
-                MediaMetadataCompat.METADATA_KEY_DURATION,
-                (playback["durationMs"] as? Number)?.toLong() ?: -1L,
-            )
-            .build()
+        val builder =
+            MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, playback["title"]?.toString())
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, playback["artist"]?.toString())
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, playback["album"]?.toString())
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, playback["title"]?.toString())
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, playback["artist"]?.toString())
+                .putLong(
+                    MediaMetadataCompat.METADATA_KEY_DURATION,
+                    (playback["durationMs"] as? Number)?.toLong() ?: -1L,
+                )
+
+        val artwork = decodeArtwork(playback)
+        if (artwork != null) {
+            builder
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artwork)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artwork)
+        }
+
+        return builder.build()
+    }
+
+    private fun decodeArtwork(playback: Map<String, Any?>): Bitmap? {
+        val artwork = playback["artwork"] as? Map<*, *> ?: return null
+        val dataBase64 = artwork["dataBase64"]?.toString()?.takeIf { it.isNotBlank() } ?: return null
+        return try {
+            val bytes = Base64.decode(dataBase64, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        } catch (_: IllegalArgumentException) {
+            null
+        }
     }
 
     private fun buildPlaybackState(playback: Map<String, Any?>): PlaybackStateCompat {

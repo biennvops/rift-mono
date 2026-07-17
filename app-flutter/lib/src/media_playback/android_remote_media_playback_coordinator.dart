@@ -118,6 +118,9 @@ class AndroidRemoteMediaPlaybackCoordinator {
       'title': playback['title']?.toString(),
       'artist': playback['artist']?.toString(),
       'album': playback['album']?.toString(),
+      'artwork': playback['artwork'] is Map
+          ? Map<String, Object?>.from(playback['artwork'] as Map)
+          : null,
       'playbackState': playback['playbackState']?.toString(),
       'positionMs': (playback['positionMs'] as num?)?.toInt() ?? 0,
       'durationMs': (playback['durationMs'] as num?)?.toInt(),

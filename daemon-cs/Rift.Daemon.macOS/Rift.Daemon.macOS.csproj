@@ -7,6 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Rift.Daemon.Tests</_Parameter1>
+    </AssemblyAttribute>
     <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
       <_Parameter1>osx</_Parameter1>
     </AssemblyAttribute>
