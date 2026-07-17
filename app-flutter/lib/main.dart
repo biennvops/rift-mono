@@ -28,10 +28,8 @@ import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
-import 'src/media_playback/macos_media_playback_publisher.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/linux_notifications.dart';
-import 'src/platform/macos_media_playback.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -210,7 +208,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
-  MacOSMediaPlaybackPublisher? _macOSMediaPlaybackPublisher;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -382,10 +379,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (Platform.isAndroid) {
       _androidRemoteMediaPlayback = AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
-    }
-    if (MacOSMediaPlaybackBridge.isSupported) {
-      _macOSMediaPlaybackPublisher = MacOSMediaPlaybackPublisher(client);
-      unawaited(_macOSMediaPlaybackPublisher!.start());
     }
   }
 
@@ -912,7 +905,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
-    unawaited(_macOSMediaPlaybackPublisher?.dispose());
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(

@@ -17,6 +17,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     private readonly IOperationService _operationService;
     private readonly ISecurityEventLog _securityEventLog;
     private readonly IIpcNotificationService? _ipcNotificationService;
+    private readonly ILocalMediaPlaybackActionHandler? _localActionHandler;
     private readonly ILogger<MediaPlaybackSyncService> _logger;
     private readonly Dictionary<string, MediaPlaybackRecord> _playbacks = new(Comparer);
     private readonly Dictionary<string, PendingPlaybackAction> _pendingActionsByOperationId = new(Comparer);
@@ -30,6 +31,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         IOperationService operationService,
         ISecurityEventLog securityEventLog,
         IIpcNotificationService? ipcNotificationService = null,
+        ILocalMediaPlaybackActionHandler? localActionHandler = null,
         ILogger<MediaPlaybackSyncService>? logger = null)
     {
         _transport = transport;
@@ -38,6 +40,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         _operationService = operationService;
         _securityEventLog = securityEventLog;
         _ipcNotificationService = ipcNotificationService;
+        _localActionHandler = localActionHandler;
         _logger = logger ?? NullLogger<MediaPlaybackSyncService>.Instance;
     }
 
@@ -407,6 +410,32 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         lock (_gate)
         {
             _pendingIncomingActionsByRequestId[requestId] = pending;
+        }
+
+        if (_localActionHandler is not null)
+        {
+            try
+            {
+                var result = await _localActionHandler.HandleActionAsync(pending, cancellationToken).ConfigureAwait(false);
+                await ReportHandledMediaPlaybackActionAsync(
+                    requestId,
+                    result.Success,
+                    result.FailureReason,
+                    result.Message,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Local media playback action handler failed for {Action} on {PlaybackId}.", action, request.PlaybackId);
+                await ReportHandledMediaPlaybackActionAsync(
+                    requestId,
+                    success: false,
+                    failureReason: "CapabilityUnavailable",
+                    message: ex.Message,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return;
         }
 
         if (_ipcNotificationService is null)

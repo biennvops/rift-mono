@@ -64,8 +64,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _identityManager,
             _operationService,
             _securityEventLog,
-            null,
-            NullLogger<MediaPlaybackSyncService>.Instance);
+            logger: NullLogger<MediaPlaybackSyncService>.Instance);
         _notificationSyncService = new NotificationSyncService(
             _clipboardTransport,
             _presenceService,
