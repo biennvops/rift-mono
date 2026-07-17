@@ -178,6 +178,43 @@ public sealed class SendQueueServiceTests
     }
 
     [Fact]
+    public async Task RecoverableFailure_DoesNotRetryOnUnprotectedReconnect()
+    {
+        var fileTransfer = new FakeFileTransferService
+        {
+            OfferException = new FileTransferFailureException("PeerUnreachable", -32000, "Peer offline")
+        };
+        var transport = new FakeTransport();
+        var service = new SendQueueService(_trustStore, null, fileTransfer, transport);
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        var path = CreateTempFile("hello");
+        try
+        {
+            var result = await service.EnqueueFileSendAsync(path, "demo.txt", "text/plain", "rift-peer", "picker", CancellationToken.None);
+            var failed = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
+            Assert.Equal("waiting_for_peer", failed.Status);
+
+            fileTransfer.OfferException = null;
+            transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: false));
+            await Task.Delay(50);
+
+            var unchanged = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
+            Assert.Equal("waiting_for_peer", unchanged.Status);
+            Assert.Equal(1, fileTransfer.OfferCallCount);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task Service_RestoresPersistedQueueItems_OnRestart()
     {
         var databasePath = Path.Combine(Path.GetTempPath(), $"rift-send-queue-service-{Guid.NewGuid():N}.db");
@@ -443,6 +480,7 @@ public sealed class SendQueueServiceTests
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw new NotSupportedException();
+        public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -506,6 +544,7 @@ public sealed class SendQueueServiceTests
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw new NotSupportedException();
+        public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -533,6 +572,8 @@ public sealed class SendQueueServiceTests
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) => throw new NotSupportedException();
         public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasProtectedSession(string peerDeviceId) => false;
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => throw new NotSupportedException();

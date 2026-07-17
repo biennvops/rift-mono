@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -35,6 +36,7 @@ class MainActivity: FlutterActivity() {
     companion object {
         private const val notificationChannelId = "rift.events"
         private const val notificationChannelName = "Rift activity"
+        private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
         private const val notificationIntentRouteKey = "rift.notification.route"
         private const val notificationIntentDestinationPathKey = "rift.notification.destinationPath"
         private const val notificationIntentPayloadPrefix = "rift.notification.payload."
@@ -50,8 +52,11 @@ class MainActivity: FlutterActivity() {
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
+    private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
+    private var clipboardReceiverRegistered: Boolean = false
+    private var notificationSyncReceiverRegistered: Boolean = false
 
     private val clipboardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -83,11 +88,33 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private val notificationSyncReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val payload = extractNotificationSyncPayload(intent) ?: return
+            NotificationSyncRelay.acknowledgeDeliveredEvent(this@MainActivity, payload)
+            shellChannel?.invokeMethod("notificationSyncEvent", payload)
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         Log.i(tag, "configureFlutterEngine")
         createNotificationChannel()
+        createMediaPlaybackNotificationChannel()
         isClipboardRelayReady = true
+        remoteMediaPlaybackManager =
+            RemoteMediaPlaybackManager(
+                this,
+                launchIntentFactory = {
+                    Intent(this, MainActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    }
+                },
+                actionCallback = { action ->
+                    shellChannel?.invokeMethod("mediaPlaybackAction", action)
+                },
+            )
+        remoteMediaPlaybackManager.start()
         clipboardChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, clipboardChannelName)
 
@@ -180,6 +207,33 @@ class MainActivity: FlutterActivity() {
                     "openNotificationSettings" -> {
                         result.success(openNotificationSettings())
                     }
+                    "getNotificationListenerAccessStatus" -> {
+                        result.success(getNotificationListenerAccessStatus())
+                    }
+                    "openNotificationListenerSettings" -> {
+                        result.success(openNotificationListenerSettings())
+                    }
+                    "showTestNotification" -> {
+                        result.success(showTestNotification())
+                    }
+                    "showMediaPlayback" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val playback = args?.get("playback") as? Map<*, *>
+                        if (playback == null) {
+                            result.error("invalid_args", "playback is required", null)
+                        } else {
+                            result.success(
+                                remoteMediaPlaybackManager.show(
+                                    playback.entries.associate { (key, value) ->
+                                        key.toString() to value
+                                    },
+                                ),
+                            )
+                        }
+                    }
+                    "clearMediaPlayback" -> {
+                        result.success(remoteMediaPlaybackManager.clear())
+                    }
                     "openFile" -> {
                         val args = call.arguments as? Map<*, *>
                         val path = args?.get("path") as? String
@@ -193,14 +247,28 @@ class MainActivity: FlutterActivity() {
                 }
             }
         handleLaunchIntent(intent)
-        
+
         val filter = IntentFilter("com.example.app_flutter.CLIPBOARD_CHANGED")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(clipboardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(clipboardReceiver, filter)
-            }
+        }
+        clipboardReceiverRegistered = true
         Log.i(tag, "Clipboard broadcast receiver registered")
+
+        val notificationSyncFilter = IntentFilter(NotificationSyncRelay.broadcastAction)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(
+                notificationSyncReceiver,
+                notificationSyncFilter,
+                Context.RECEIVER_NOT_EXPORTED,
+            )
+        } else {
+            registerReceiver(notificationSyncReceiver, notificationSyncFilter)
+        }
+        notificationSyncReceiverRegistered = true
+        deliverPendingNotificationSyncEvents()
     }
 
     override fun onStart() {
@@ -212,6 +280,7 @@ class MainActivity: FlutterActivity() {
         super.onResume()
         Log.i(tag, "onResume")
         deliverPendingLaunchActionIfPossible()
+        deliverPendingNotificationSyncEvents()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -233,7 +302,15 @@ class MainActivity: FlutterActivity() {
     override fun onDestroy() {
         Log.i(tag, "onDestroy")
         isClipboardRelayReady = false
-        unregisterReceiver(clipboardReceiver)
+        if (clipboardReceiverRegistered) {
+            unregisterReceiver(clipboardReceiver)
+            clipboardReceiverRegistered = false
+        }
+        if (notificationSyncReceiverRegistered) {
+            unregisterReceiver(notificationSyncReceiver)
+            notificationSyncReceiverRegistered = false
+        }
+        remoteMediaPlaybackManager.stop()
         super.onDestroy()
     }
 
@@ -265,6 +342,20 @@ class MainActivity: FlutterActivity() {
         ).apply {
             description = "Rift pairing, clipboard, and file activity"
         }
+        manager.createNotificationChannel(channel)
+    }
+
+    private fun createMediaPlaybackNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel =
+            NotificationChannel(
+                RemoteMediaPlaybackManager.notificationChannelId,
+                RemoteMediaPlaybackManager.notificationChannelName,
+                NotificationManager.IMPORTANCE_LOW,
+            )
         manager.createNotificationChannel(channel)
     }
 
@@ -336,12 +427,49 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private fun getNotificationListenerAccessStatus(): String {
+        val enabledPackages = NotificationManagerCompat.getEnabledListenerPackages(this)
+        return if (enabledPackages.contains(packageName)) "authorized" else "denied"
+    }
+
+    private fun openNotificationListenerSettings(): Boolean {
+        val intent =
+            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                putExtra(":settings:fragment_args_key", ComponentName(this@MainActivity, RiftNotificationListenerService::class.java).flattenToString())
+            }
+
+        return try {
+            startActivity(intent)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.w(tag, "Unable to open notification listener settings", e)
+            false
+        }
+    }
+
+    private fun showTestNotification(): Boolean {
+        if (getNotificationPermissionStatus() != "authorized") {
+            return false
+        }
+
+        return showNotification(
+            title = "Rift test notification",
+            body = "If you see this notification, sync is working.",
+            route = "history.notifications",
+            destinationPath = null,
+            payload = mapOf("testNotification" to true),
+            isSyncTestNotification = true,
+        )
+    }
+
     private fun showNotification(
         title: String,
         body: String,
         route: String,
         destinationPath: String?,
         payload: Map<*, *>?,
+        isSyncTestNotification: Boolean = false,
     ): Boolean {
         val intent =
             Intent(this, MainActivity::class.java).apply {
@@ -378,6 +506,11 @@ class MainActivity: FlutterActivity() {
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setContentIntent(pendingIntent)
+                .addExtras(
+                    Bundle().apply {
+                        putBoolean(syncTestExtraKey, isSyncTestNotification)
+                    },
+                )
                 .build()
 
         return try {
@@ -559,6 +692,36 @@ class MainActivity: FlutterActivity() {
         val action = pendingLaunchAction ?: return
         shellChannel?.invokeMethod("notificationActivated", action)
         pendingLaunchAction = null
+    }
+
+    private fun deliverPendingNotificationSyncEvents() {
+        val channel = shellChannel ?: return
+        NotificationSyncRelay.drainPendingEvents(this).forEach { event ->
+            channel.invokeMethod("notificationSyncEvent", event)
+        }
+    }
+
+    private fun extractNotificationSyncPayload(intent: Intent?): Map<String, Any?>? {
+        val extras = intent?.extras ?: return null
+        val eventType = extras.getString("eventType") ?: return null
+        val notificationId = extras.getString("notificationId") ?: return null
+        val payload = linkedMapOf<String, Any?>(
+            "eventType" to eventType,
+            "notificationId" to notificationId,
+        )
+        extras.getString("packageName")?.let { payload["packageName"] = it }
+        extras.getString("appName")?.let { payload["appName"] = it }
+        extras.getString("title")?.let { payload["title"] = it }
+        extras.getString("bodyPreview")?.let { payload["bodyPreview"] = it }
+        extras.getString("postedAt")?.let { payload["postedAt"] = it }
+        extras.getString("removedAt")?.let { payload["removedAt"] = it }
+        if (extras.containsKey("isDismissible")) {
+            payload["isDismissible"] = extras.getBoolean("isDismissible")
+        }
+        if (extras.containsKey("isOpenable")) {
+            payload["isOpenable"] = extras.getBoolean("isOpenable")
+        }
+        return payload
     }
 
     private fun openFile(path: String): Boolean {

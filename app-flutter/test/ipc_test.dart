@@ -135,6 +135,67 @@ class MockTransport implements IpcTransport {
     ],
     'Total': 1,
   };
+  Map<String, dynamic> listNotificationsResult = {
+    'Notifications': [
+      {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'See you at 6?',
+        'PostedAt': '2026-07-14T10:00:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      }
+    ],
+    'Policy': {
+      'Enabled': true,
+      'BlacklistedPackages': ['com.bank.example'],
+    }
+  };
+  Map<String, dynamic> listMediaPlaybackResult = {
+    'playbacks': [],
+  };
+  Map<String, dynamic> getMediaPlaybackResult = {
+    'playbackId': 'playback-1',
+    'sourceDeviceId': 'rift-peer',
+    'appId': 'com.example.music',
+    'appName': 'Example Music',
+    'playbackState': 'playing',
+    'positionMs': 1000,
+    'canPlay': true,
+    'canPause': true,
+    'canSkipNext': true,
+    'canSkipPrevious': true,
+    'canSeek': true,
+    'updatedAt': '2026-07-16T10:00:00Z',
+  };
+  Map<String, dynamic> performMediaPlaybackActionResult = {
+    'OperationId': 'operation-media-1',
+    'PlaybackId': 'playback-1',
+    'Action': 'pause',
+    'State': 'Pending',
+  };
+  Map<String, dynamic> performNotificationActionResult = {
+    'OperationId': 'operation-notification-1',
+    'NotificationId': 'notif-1',
+    'Action': 'open',
+    'State': 'Pending',
+  };
+  Map<String, dynamic> updateNotificationSyncPolicyResult = {
+    'Enabled': true,
+    'BlacklistedPackages': ['com.bank.example'],
+  };
+  Map<String, dynamic> notifyLocalNotificationEventResult = {
+    'NotificationId': 'notif-1',
+    'BroadcastTo': ['rift-peer'],
+    'Suppressed': false,
+  };
+  Map<String, dynamic> notifyLocalMediaPlaybackEventResult = {
+    'PlaybackId': 'playback-1',
+    'BroadcastTo': ['rift-peer'],
+  };
   Map<String, dynamic> getOperationResult = {
     'OperationId': 'operation-1',
     'OperationType': 'clipboard.fetch',
@@ -267,6 +328,30 @@ class MockTransport implements IpcTransport {
           } else {
             _sendResult(id, getOperationResult);
           }
+          break;
+        case 'rift.listNotifications':
+          _sendResult(id, listNotificationsResult);
+          break;
+        case 'rift.performNotificationAction':
+          _sendResult(id, performNotificationActionResult);
+          break;
+        case 'rift.updateNotificationSyncPolicy':
+          _sendResult(id, updateNotificationSyncPolicyResult);
+          break;
+        case 'rift.notifyLocalNotificationEvent':
+          _sendResult(id, notifyLocalNotificationEventResult);
+          break;
+        case 'rift.notifyLocalMediaPlaybackEvent':
+          _sendResult(id, notifyLocalMediaPlaybackEventResult);
+          break;
+        case 'rift.listMediaPlayback':
+          _sendResult(id, listMediaPlaybackResult);
+          break;
+        case 'rift.getMediaPlayback':
+          _sendResult(id, getMediaPlaybackResult);
+          break;
+        case 'rift.performMediaPlaybackAction':
+          _sendResult(id, performMediaPlaybackActionResult);
           break;
       }
     });
@@ -491,6 +576,87 @@ void main() {
       });
       expect(await expiredFuture, {
         'offerId': 'offer-1',
+      });
+    });
+
+    test(
+        'should deliver notification sync notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final postedFuture = client.onNotificationPosted.first;
+      final updatedFuture = client.onNotificationUpdated.first;
+      final removedFuture = client.onNotificationRemoved.first;
+      final actionFuture = client.onNotificationActionResult.first;
+
+      transport.emitNotification('rift.onNotificationPosted', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'See you at 6?',
+        'PostedAt': '2026-07-14T10:00:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      });
+      transport.emitNotification('rift.onNotificationUpdated', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'Running late',
+        'PostedAt': '2026-07-14T10:01:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      });
+      transport.emitNotification('rift.onNotificationRemoved', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'RemovedAt': '2026-07-14T10:02:00Z',
+      });
+      transport.emitNotification('rift.onNotificationActionResult', {
+        'NotificationId': 'notif-1',
+        'OperationId': 'operation-notification-1',
+        'Action': 'open',
+        'State': 'Done',
+        'Success': true,
+      });
+
+      expect(await postedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'packageName': 'com.example.chat',
+        'appName': 'Example Chat',
+        'title': 'Riley',
+        'bodyPreview': 'See you at 6?',
+        'postedAt': '2026-07-14T10:00:00Z',
+        'isDismissible': true,
+        'isOpenable': true,
+      });
+      expect(await updatedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'packageName': 'com.example.chat',
+        'appName': 'Example Chat',
+        'title': 'Riley',
+        'bodyPreview': 'Running late',
+        'postedAt': '2026-07-14T10:01:00Z',
+        'isDismissible': true,
+        'isOpenable': true,
+      });
+      expect(await removedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'removedAt': '2026-07-14T10:02:00Z',
+      });
+      expect(await actionFuture, {
+        'notificationId': 'notif-1',
+        'operationId': 'operation-notification-1',
+        'action': 'open',
+        'state': 'Done',
+        'success': true,
       });
     });
 
@@ -768,6 +934,199 @@ void main() {
             .where((request) => request['method'] == 'rift.getOperation')
             .single['params'],
         {'operationId': 'operation-1'},
+      );
+    });
+
+    test('should expose notification sync RPC wrappers', () async {
+      await client.connect();
+
+      final localEventResult = await client.notifyLocalNotificationEvent(
+        eventType: 'posted',
+        payload: const {
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
+      final listed = await client.listNotifications();
+      final actionResult = await client.performNotificationAction(
+        notificationId: 'notif-1',
+        action: 'open',
+      );
+      final policyResult = await client.updateNotificationSyncPolicy(
+        enabled: true,
+        blacklistedPackages: ['com.bank.example'],
+      );
+
+      expect(localEventResult['notificationId'], 'notif-1');
+      expect((listed['notifications'] as List).single['notificationId'],
+          'notif-1');
+      expect(listed['policy'], {
+        'enabled': true,
+        'blacklistedPackages': ['com.bank.example'],
+      });
+      expect(actionResult['operationId'], 'operation-notification-1');
+      expect(policyResult, {
+        'enabled': true,
+        'blacklistedPackages': ['com.bank.example'],
+      });
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalNotificationEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.performNotificationAction',
+            )
+            .single['params'],
+        {
+          'notificationId': 'notif-1',
+          'action': 'open',
+        },
+      );
+    });
+
+    test('should expose media playback RPC wrappers', () async {
+      await client.connect();
+
+      await client.notifyLocalMediaPlaybackEvent(
+        eventType: 'posted',
+        payload: const {
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalMediaPlaybackEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-1',
+            'sourceDeviceId': 'rift-peer',
+            'appId': 'com.example.music',
+            'appName': 'Example Music',
+            'artwork': {
+              'dataBase64': 'Zm9v',
+              'mediaType': 'image/png',
+            },
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-16T10:00:00Z',
+          }
+        ],
+      };
+      transport.getMediaPlaybackResult = {
+        'playbackId': 'playback-1',
+        'sourceDeviceId': 'rift-peer',
+        'appId': 'com.example.music',
+        'appName': 'Example Music',
+        'artwork': {
+          'dataBase64': 'Zm9v',
+          'mediaType': 'image/png',
+        },
+        'playbackState': 'playing',
+        'positionMs': 1000,
+        'canPlay': true,
+        'canPause': true,
+        'canSkipNext': true,
+        'canSkipPrevious': true,
+        'canSeek': true,
+        'updatedAt': '2026-07-16T10:00:00Z',
+      };
+      transport.performMediaPlaybackActionResult = {
+        'OperationId': 'operation-media-1',
+        'PlaybackId': 'playback-1',
+        'Action': 'pause',
+        'State': 'Pending',
+      };
+
+      final listed = await client.listMediaPlayback();
+      final detailed = await client.getMediaPlayback('playback-1');
+      final actionResult = await client.performMediaPlaybackAction(
+        playbackId: 'playback-1',
+        action: 'pause',
+      );
+
+      expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
+      expect(
+        ((listed['playbacks'] as List).single['artwork'] as Map)['mediaType'],
+        'image/png',
+      );
+      expect(detailed['playbackId'], 'playback-1');
+      expect((detailed['artwork'] as Map)['mediaType'], 'image/png');
+      expect(actionResult['playbackId'], 'playback-1');
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.performMediaPlaybackAction',
+            )
+            .single['params'],
+        {
+          'playbackId': 'playback-1',
+          'action': 'pause',
+        },
       );
     });
 

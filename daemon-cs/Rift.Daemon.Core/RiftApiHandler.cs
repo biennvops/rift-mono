@@ -14,9 +14,11 @@ public class RiftApiHandler : IRiftApi
     private readonly ISendQueueService _sendQueueService;
     private readonly IOperationService _operationService;
     private readonly IPairingService _pairingService;
+    private readonly IMediaPlaybackSyncService _mediaPlaybackSyncService;
+    private readonly INotificationSyncService _notificationSyncService;
 
     public RiftApiHandler()
-        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService())
+        : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService(), new UnsupportedMediaPlaybackSyncService(), new UnsupportedNotificationSyncService())
     {
     }
 
@@ -27,7 +29,9 @@ public class RiftApiHandler : IRiftApi
         IFileTransferService fileTransferService,
         ISendQueueService sendQueueService,
         IOperationService operationService,
-        IPairingService pairingService)
+        IPairingService pairingService,
+        IMediaPlaybackSyncService mediaPlaybackSyncService,
+        INotificationSyncService notificationSyncService)
     {
         _daemonInfoService = daemonInfoService;
         _discoveryCoordinator = discoveryCoordinator;
@@ -36,6 +40,8 @@ public class RiftApiHandler : IRiftApi
         _sendQueueService = sendQueueService;
         _operationService = operationService;
         _pairingService = pairingService;
+        _mediaPlaybackSyncService = mediaPlaybackSyncService;
+        _notificationSyncService = notificationSyncService;
     }
 
     public Task<string> GetVersionAsync() => Task.FromResult("0.1-draft");
@@ -208,6 +214,24 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.cancelFileTransfer")]
+    public async Task<CancelFileTransferResult> CancelFileTransferAsync(string transferId)
+    {
+        try
+        {
+            var info = await _fileTransferService.CancelTransferAsync(transferId, CancellationToken.None);
+            return new CancelFileTransferResult
+            {
+                TransferId = info.TransferId,
+                Cancelled = true
+            };
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.listIncomingFileOffers")]
     public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() =>
         _fileTransferService.ListIncomingFileOffersAsync();
@@ -325,6 +349,182 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.listNotifications")]
+    public Task<ListNotificationsResult> ListNotificationsAsync() =>
+        _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
+
+    [JsonRpcMethod("rift.listMediaPlayback")]
+    public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync() =>
+        _mediaPlaybackSyncService.ListMediaPlaybackAsync(CancellationToken.None);
+
+    [JsonRpcMethod("rift.getMediaPlayback")]
+    public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId)
+    {
+        try
+        {
+            return await _mediaPlaybackSyncService.GetMediaPlaybackAsync(playbackId, CancellationToken.None);
+        }
+        catch (MediaPlaybackSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.notifyLocalMediaPlaybackEvent")]
+    public async Task<NotifyLocalMediaPlaybackEventResult> NotifyLocalMediaPlaybackEventAsync(
+        string eventType,
+        string playbackId,
+        string? appId = null,
+        string? appName = null,
+        string? title = null,
+        string? artist = null,
+        string? album = null,
+        string? playbackState = null,
+        long? positionMs = null,
+        long? durationMs = null,
+        bool? canPlay = null,
+        bool? canPause = null,
+        bool? canSkipNext = null,
+        bool? canSkipPrevious = null,
+        bool? canSeek = null,
+        string? updatedAt = null,
+        string? sourcePlatform = null,
+        string? removedAt = null)
+    {
+        try
+        {
+            return await _mediaPlaybackSyncService.HandleLocalPlaybackEventAsync(
+                eventType,
+                new MediaPlaybackRecord
+                {
+                    PlaybackId = playbackId,
+                    SourceDeviceId = _daemonInfoService.GetDeviceInfo().DeviceId,
+                    SourcePlatform = sourcePlatform,
+                    AppId = appId ?? string.Empty,
+                    AppName = appName ?? string.Empty,
+                    Title = title,
+                    Artist = artist,
+                    Album = album,
+                    PlaybackState = playbackState ?? string.Empty,
+                    PositionMs = positionMs ?? 0,
+                    DurationMs = durationMs,
+                    CanPlay = canPlay ?? false,
+                    CanPause = canPause ?? false,
+                    CanSkipNext = canSkipNext ?? false,
+                    CanSkipPrevious = canSkipPrevious ?? false,
+                    CanSeek = canSeek ?? false,
+                    UpdatedAt = updatedAt ?? string.Empty
+                },
+                removedAt,
+                CancellationToken.None);
+        }
+        catch (MediaPlaybackSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.performMediaPlaybackAction")]
+    public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs = null)
+    {
+        try
+        {
+            return await _mediaPlaybackSyncService.PerformMediaPlaybackActionAsync(playbackId, action, positionMs, CancellationToken.None);
+        }
+        catch (MediaPlaybackSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.reportLocalMediaPlaybackActionHandled")]
+    public async Task<ReportHandledMediaPlaybackActionResult> ReportLocalMediaPlaybackActionHandledAsync(
+        string requestId,
+        bool success,
+        string? failureReason = null,
+        string? message = null)
+    {
+        try
+        {
+            return await _mediaPlaybackSyncService.ReportHandledMediaPlaybackActionAsync(
+                requestId,
+                success,
+                failureReason,
+                message,
+                CancellationToken.None);
+        }
+        catch (MediaPlaybackSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.notifyLocalNotificationEvent")]
+    public async Task<NotifyLocalNotificationEventResult> NotifyLocalNotificationEventAsync(
+        string eventType,
+        string notificationId,
+        string? packageName = null,
+        string? appName = null,
+        string? title = null,
+        string? bodyPreview = null,
+        string? postedAt = null,
+        bool? isDismissible = null,
+        bool? isOpenable = null,
+        string? sourcePlatform = null,
+        string? removedAt = null)
+    {
+        try
+        {
+            return await _notificationSyncService.HandleLocalNotificationEventAsync(
+                eventType,
+                new NotificationSyncRecord
+                {
+                    NotificationId = notificationId,
+                    SourceDeviceId = _daemonInfoService.GetDeviceInfo().DeviceId,
+                    SourcePlatform = sourcePlatform,
+                    PackageName = packageName ?? string.Empty,
+                    AppName = appName ?? string.Empty,
+                    Title = title,
+                    BodyPreview = bodyPreview,
+                    PostedAt = postedAt ?? string.Empty,
+                    IsDismissible = isDismissible ?? false,
+                    IsOpenable = isOpenable ?? false
+                },
+                removedAt,
+                CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.performNotificationAction")]
+    public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action)
+    {
+        try
+        {
+            return await _notificationSyncService.PerformNotificationActionAsync(notificationId, action, CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.updateNotificationSyncPolicy")]
+    public async Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string[] blacklistedPackages)
+    {
+        try
+        {
+            return await _notificationSyncService.UpdateNotificationSyncPolicyAsync(enabled, blacklistedPackages, CancellationToken.None);
+        }
+        catch (NotificationSyncFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     private static async Task<TResult> ExecutePairingAsync<TResult>(Func<Task<TResult>> action)
     {
         try
@@ -430,6 +630,7 @@ public class RiftApiHandler : IRiftApi
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw CreateNotConfiguredException();
+        public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
@@ -502,6 +703,55 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("Operation services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedNotificationSyncService : INotificationSyncService
+    {
+        public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(string eventType, NotificationSyncRecord notification, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Notification sync services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedMediaPlaybackSyncService : IMediaPlaybackSyncService
+    {
+        public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(string eventType, MediaPlaybackRecord playback, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(string requestId, bool success, string? failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Media playback sync services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };

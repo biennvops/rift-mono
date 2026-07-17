@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
+import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/platform/macos_notifications.dart';
+import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -138,7 +140,29 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late MockJsonRpcClient mockClient;
+  late StreamController<bool> connectionChangedController;
+  late StreamController<Map<String, dynamic>> notificationPostedController;
+  late StreamController<Map<String, dynamic>> notificationUpdatedController;
+  late StreamController<Map<String, dynamic>> notificationRemovedController;
+  late bool isConnected;
+  final macOsCalls = <MethodCall>[];
+
+  Future<void> dispatchPlatformMethodCall(String channel, MethodCall call) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final codec = const StandardMethodCodec();
+    ByteData? reply;
+    await messenger.handlePlatformMessage(
+      channel,
+      codec.encodeMethodCall(call),
+      (data) => reply = data,
+    );
+    if (reply != null) {
+      codec.decodeEnvelope(reply!);
+    }
+  }
 
   Widget buildRiftApp(JsonRpcRiftClient client) {
     return MultiProvider(
@@ -164,11 +188,20 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    MacOSNotifications.debugIsMacOSOverride = null;
+    MacOSNotifications.debugIsMacOSOverride = true;
+    WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
+    connectionChangedController = StreamController<bool>.broadcast();
+    notificationPostedController = StreamController<Map<String, dynamic>>.broadcast();
+    notificationUpdatedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    notificationRemovedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    isConnected = true;
+    macOsCalls.clear();
 
     // Default mock behavior
-    when(() => mockClient.isConnected).thenReturn(true);
+    when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
     when(() => mockClient.onPairingRequest)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onSecurityEvent)
@@ -193,6 +226,14 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onClipboardExpired)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationPosted)
+        .thenAnswer((_) => notificationPostedController.stream);
+    when(() => mockClient.onNotificationUpdated)
+        .thenAnswer((_) => notificationUpdatedController.stream);
+    when(() => mockClient.onNotificationRemoved)
+        .thenAnswer((_) => notificationRemovedController.stream);
+    when(() => mockClient.onNotificationActionResult)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
@@ -206,7 +247,7 @@ void main() {
     when(() => mockClient.onSendQueueItemUpdated)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
-        .thenAnswer((_) => Stream.value(true));
+        .thenAnswer((_) => connectionChangedController.stream);
     when(() => mockClient.onOperationTransition)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.listOperations(
@@ -247,10 +288,52 @@ void main() {
         'isDiscovering': true,
       },
     );
+    when(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        blacklistedPackages: any(named: 'blacklistedPackages'),
+      ),
+    ).thenAnswer(
+      (_) async => {
+        'enabled': true,
+        'blacklistedPackages': ['com.bank.example'],
+      },
+    );
+    when(
+      () => mockClient.performNotificationAction(
+        notificationId: any(named: 'notificationId'),
+        action: any(named: 'action'),
+      ),
+    ).thenAnswer((_) async => <String, Object?>{'success': true});
+    when(() => mockClient.connect()).thenAnswer((_) async {});
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift.permissions'),
+      (call) async {
+        macOsCalls.add(call);
+        switch (call.method) {
+          case 'notification.show':
+            return true;
+          case 'share.consumePendingItems':
+            return null;
+          case 'notification.getStatus':
+            return 'authorized';
+          case 'notification.request':
+            return true;
+        }
+        return null;
+      },
+    );
   });
 
   tearDown(() {
+    connectionChangedController.close();
+    notificationPostedController.close();
+    notificationUpdatedController.close();
+    notificationRemovedController.close();
     MacOSNotifications.debugIsMacOSOverride = null;
+    WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
@@ -372,5 +455,173 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(consumedPendingShareItems, isTrue);
+  });
+
+  testWidgets(
+      'RiftApp reapplies saved notification sync policy on reconnect',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      AppPrefs.notificationSyncEnabled: false,
+      AppPrefs.notificationSyncBlacklist: ['com.bank.example'],
+    });
+    isConnected = false;
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    verifyNever(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        blacklistedPackages: any(named: 'blacklistedPackages'),
+      ),
+    );
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await tester.pump();
+    await tester.pump();
+
+    verify(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: false,
+        blacklistedPackages: ['com.bank.example'],
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'mirrored notification post emits desktop payload with route and notification id',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-123',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Ping',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    final showCall =
+        macOsCalls.lastWhere((call) => call.method == 'notification.show');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], 'history.notifications');
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'rift-peer-1 • Ping');
+    expect(arguments['payload'], <String, Object?>{
+      'route': 'history.notifications',
+      'notificationId': 'notif-123',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    expect(arguments['actions'], <Map<String, String>>[
+      <String, String>{'id': 'open', 'title': 'Open'},
+      <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
+    ]);
+  });
+
+  testWidgets(
+      'explicit mirrored notification actions call performNotificationAction',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    await dispatchPlatformMethodCall(
+      'rift.permissions',
+      const MethodCall('notificationActivated', <String, Object?>{
+        'route': 'history.notifications',
+        'notificationId': 'notif-321',
+        'notificationAction': 'open',
+      }),
+    );
+    await tester.pump();
+
+    verify(
+      () => mockClient.performNotificationAction(
+        notificationId: 'notif-321',
+        action: 'open',
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'disconnected mirrored notification actions are queued and flushed on reconnect',
+      (WidgetTester tester) async {
+    isConnected = false;
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    await dispatchPlatformMethodCall(
+      'rift.permissions',
+      const MethodCall('notificationActivated', <String, Object?>{
+        'route': 'history.notifications',
+        'notificationId': 'notif-queued',
+        'notificationAction': 'dismiss',
+      }),
+    );
+    await tester.pump();
+
+    verifyNever(
+      () => mockClient.performNotificationAction(
+        notificationId: any(named: 'notificationId'),
+        action: any(named: 'action'),
+      ),
+    );
+    verify(() => mockClient.connect()).called(1);
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await tester.pump();
+    await tester.pump();
+
+    verify(
+      () => mockClient.performNotificationAction(
+        notificationId: 'notif-queued',
+        action: 'dismiss',
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'mirrored notification updates and removals do not emit duplicate native popups',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-dup',
+      'title': 'Posted',
+    });
+    await tester.pump();
+    final showCountAfterPost =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+
+    notificationUpdatedController.add(<String, dynamic>{
+      'notificationId': 'notif-dup',
+      'title': 'Updated',
+    });
+    notificationRemovedController.add(<String, dynamic>{
+      'notificationId': 'notif-dup',
+    });
+    await tester.pump();
+
+    final showCountFinal =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+    expect(showCountAfterPost, 1);
+    expect(showCountFinal, 1);
   });
 }

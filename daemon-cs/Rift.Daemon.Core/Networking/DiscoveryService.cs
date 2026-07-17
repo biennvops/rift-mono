@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -30,6 +31,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private UdpClient? _fallbackDiscoveryListener;
     private Task? _fallbackDiscoveryTask;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<IPAddress, DateTimeOffset> _fallbackPingPongTargets = new();
+    private IReadOnlyList<FallbackBroadcastTarget> _fallbackBroadcastTargets = [];
+    private DateTimeOffset _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
+    private int _networkRefreshQueued;
+    private Timer? _networkRefreshDebounceTimer;
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -40,6 +45,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         _serviceDiscovery = new ServiceDiscovery(_mdns);
 
         _serviceDiscovery.ServiceInstanceDiscovered += OnServiceInstanceDiscovered;
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+        NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
     }
 
     public void StartAdvertising(string deviceId, string minVersion, string maxVersion)
@@ -67,6 +74,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
             _serviceDiscovery.Advertise(_profile);
             StartMdnsIfNeeded();
+            RefreshFallbackBroadcastTargets(force: true);
             StartFallbackAdvertisingIfNeeded(deviceId, minVersion, maxVersion);
             _isAdvertising = true;
 
@@ -102,6 +110,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
 
             StartMdnsIfNeeded();
+            RefreshFallbackBroadcastTargets(force: true);
             StartFallbackDiscoveryIfNeeded();
             _isDiscovering = true;
 
@@ -287,6 +296,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         {
             try
             {
+                RefreshFallbackBroadcastTargets();
                 var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     ["rift"] = "0.1-draft",
@@ -299,28 +309,19 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 });
                 var bytes = Encoding.UTF8.GetBytes(payload);
                 await client.SendAsync(bytes, endpoint, cancellationToken);
-                
-                // Route to specific subnets to bypass strict hotspot routing
-                foreach (var netIf in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (netIf.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
-                        continue;
 
-                    foreach (var ip in netIf.GetIPProperties().UnicastAddresses)
+                foreach (var broadcastTarget in GetFallbackBroadcastTargets())
+                {
+                    var subnetBroadcast = new IPEndPoint(
+                        broadcastTarget.BroadcastAddress,
+                        RiftNetworkDefaults.FallbackDiscoveryPort);
+                    try
                     {
-                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-                        {
-                            var addressBytes = ip.Address.GetAddressBytes();
-                            // Simple heuristic for /24 broadcast
-                            addressBytes[3] = 255;
-                            var subnetBroadcast = new IPEndPoint(new IPAddress(addressBytes), RiftNetworkDefaults.FallbackDiscoveryPort);
-                            try {
-                                await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
-                            } catch { /* Ignore individual subnet send errors */ }
-                        }
+                        await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
                     }
+                    catch { }
                 }
-                
+
                 // Ping-pong: explicitly unicast to all known peers that sent us a beacon recently
                 var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
                 foreach (var kvp in _fallbackPingPongTargets)
@@ -546,6 +547,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _isAdvertising = false;
             _isDiscovering = false;
             _shutdownCts.Cancel();
+            _networkRefreshDebounceTimer?.Dispose();
+            _networkRefreshDebounceTimer = null;
             _fallbackAdvertiser?.Dispose();
             _fallbackAdvertiser = null;
             _fallbackDiscoveryListener?.Dispose();
@@ -558,6 +561,85 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _serviceDiscovery.Dispose();
             _mdns.Dispose();
             _shutdownCts.Dispose();
+            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+        }
+    }
+
+    private IReadOnlyList<FallbackBroadcastTarget> GetFallbackBroadcastTargets()
+    {
+        lock (_syncRoot)
+        {
+            return _fallbackBroadcastTargets;
+        }
+    }
+
+    private void RefreshFallbackBroadcastTargets(bool force = false)
+    {
+        lock (_syncRoot)
+        {
+            if (!force &&
+                _fallbackBroadcastTargets.Count > 0 &&
+                DateTimeOffset.UtcNow - _fallbackBroadcastTargetsRefreshedAt < TimeSpan.FromSeconds(30))
+            {
+                return;
+            }
+
+            _fallbackBroadcastTargets = FallbackNetworkInterfaceEnumerator.EnumerateIPv4BroadcastTargets();
+            _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        QueueNetworkRefresh();
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+    {
+        QueueNetworkRefresh();
+    }
+
+    private void QueueNetworkRefresh()
+    {
+        if (Interlocked.Exchange(ref _networkRefreshQueued, 1) == 1)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            _networkRefreshDebounceTimer?.Dispose();
+            _networkRefreshDebounceTimer = new Timer(_ =>
+            {
+                try
+                {
+                    lock (_syncRoot)
+                    {
+                        _fallbackBroadcastTargets = [];
+                        _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
+
+                        if (_profile is not null && _isAdvertising)
+                        {
+                            _serviceDiscovery.Unadvertise(_profile);
+                            _serviceDiscovery.Advertise(_profile);
+                        }
+
+                        if (_isDiscovering)
+                        {
+                            _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to refresh discovery state after network change.");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _networkRefreshQueued, 0);
+                }
+            }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
         }
     }
 }

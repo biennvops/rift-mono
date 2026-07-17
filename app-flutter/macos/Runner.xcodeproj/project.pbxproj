@@ -27,6 +27,8 @@
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
 		33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC11122044BFA00003C045 /* MainFlutterWindow.swift */; };
+		7D4A6A7D9F3C4BBF8B778101 /* MacOSMediaPlaybackBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4A6A7C9F3C4BBF8B778101 /* MacOSMediaPlaybackBridge.swift */; };
+		5A22525EA42D13B46A11DE85 /* Pods_Runner_RiftShareExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 34A40F4EE86E65F35EA5B531 /* Pods_Runner_RiftShareExtension.framework */; };
 		6323130605EE2768038927EA /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E0141682C255CAF9C2E5EA9 /* Pods_RunnerTests.framework */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		97F9E8B6716A997611DDF393 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 314A26C08EBD1EA964675D14 /* Pods_Runner.framework */; };
@@ -35,7 +37,7 @@
 		A1C0A60D74D94A4A0090E4F1 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0A60B74D94A4A0090E4F1 /* ShareViewController.swift */; };
 		A1C0A620B4D94A4A0090E4F1 /* SharedTransferInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0A622B4D94A4A0090E4F1 /* SharedTransferInbox.swift */; };
 		A1C0A621B4D94A4A0090E4F1 /* SharedTransferInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1C0A622B4D94A4A0090E4F1 /* SharedTransferInbox.swift */; };
-		EB56B0CEE0BB1240DAB16392 /* Pods_RiftShareExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D41B1C22276254799F6858C6 /* Pods_RiftShareExtension.framework */; };
+		D3B50AB762D147D3A0E9B912 /* SendFilesBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3B50AB662D147D3A0E9B912 /* SendFilesBridge.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -89,6 +91,7 @@
 /* Begin PBXFileReference section */
 		0019B959DACE81E684FA41A5 /* Pods-RiftShareExtension.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RiftShareExtension.debug.xcconfig"; path = "Target Support Files/Pods-RiftShareExtension/Pods-RiftShareExtension.debug.xcconfig"; sourceTree = "<group>"; };
 		03D71A3BD142C57DB7C0C175 /* Pods-Runner.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.release.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.release.xcconfig"; sourceTree = "<group>"; };
+		0DF8C4A586252207A645F2A5 /* Pods-Runner-RiftShareExtension.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner-RiftShareExtension.debug.xcconfig"; path = "Target Support Files/Pods-Runner-RiftShareExtension/Pods-Runner-RiftShareExtension.debug.xcconfig"; sourceTree = "<group>"; };
 		314A26C08EBD1EA964675D14 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -100,12 +103,14 @@
 		33CC10F52044A3C60003C045 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
 		33CC10F72044A3C60003C045 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Runner/Info.plist; sourceTree = "<group>"; };
 		33CC11122044BFA00003C045 /* MainFlutterWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainFlutterWindow.swift; sourceTree = "<group>"; };
+		7D4A6A7C9F3C4BBF8B778101 /* MacOSMediaPlaybackBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSMediaPlaybackBridge.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
 		33E51913231747F40026EE4D /* DebugProfile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DebugProfile.entitlements; sourceTree = "<group>"; };
 		33E51914231749380026EE4D /* Release.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.entitlements; path = Release.entitlements; sourceTree = "<group>"; };
 		33E5194F232828860026EE4D /* AppInfo.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = AppInfo.xcconfig; sourceTree = "<group>"; };
+		34A40F4EE86E65F35EA5B531 /* Pods_Runner_RiftShareExtension.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner_RiftShareExtension.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		43E2BBDFBF38CB3B679B08D7 /* Pods-Runner.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.profile.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.profile.xcconfig"; sourceTree = "<group>"; };
 		4E0141682C255CAF9C2E5EA9 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
@@ -122,8 +127,10 @@
 		A202ECC51AAC01467B4F415A /* Pods-RunnerTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.debug.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.debug.xcconfig"; sourceTree = "<group>"; };
 		B5613EB5D966A8D60589EA93 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		D35D5180BF4E0630A78D0520 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
-		D41B1C22276254799F6858C6 /* Pods_RiftShareExtension.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RiftShareExtension.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		D3B50AB662D147D3A0E9B912 /* SendFilesBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SendFilesBridge.swift; sourceTree = "<group>"; };
 		F001F0A944130819D59CEE94 /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
+		F4DAB096CA492F3BE70E8D23 /* Pods-Runner-RiftShareExtension.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner-RiftShareExtension.release.xcconfig"; path = "Target Support Files/Pods-Runner-RiftShareExtension/Pods-Runner-RiftShareExtension.release.xcconfig"; sourceTree = "<group>"; };
+		FCC3008FA05521983B657D87 /* Pods-Runner-RiftShareExtension.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner-RiftShareExtension.profile.xcconfig"; path = "Target Support Files/Pods-Runner-RiftShareExtension/Pods-Runner-RiftShareExtension.profile.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -148,7 +155,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EB56B0CEE0BB1240DAB16392 /* Pods_RiftShareExtension.framework in Frameworks */,
+				5A22525EA42D13B46A11DE85 /* Pods_Runner_RiftShareExtension.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -226,7 +233,9 @@
 			children = (
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
+				7D4A6A7C9F3C4BBF8B778101 /* MacOSMediaPlaybackBridge.swift */,
 				A1C0A605B4D94A4A0090E4F1 /* PermissionsBridge.swift */,
+				D3B50AB662D147D3A0E9B912 /* SendFilesBridge.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -258,7 +267,7 @@
 			children = (
 				314A26C08EBD1EA964675D14 /* Pods_Runner.framework */,
 				4E0141682C255CAF9C2E5EA9 /* Pods_RunnerTests.framework */,
-				D41B1C22276254799F6858C6 /* Pods_RiftShareExtension.framework */,
+				34A40F4EE86E65F35EA5B531 /* Pods_Runner_RiftShareExtension.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -275,6 +284,9 @@
 				0019B959DACE81E684FA41A5 /* Pods-RiftShareExtension.debug.xcconfig */,
 				955145522CFB2FDEE584356F /* Pods-RiftShareExtension.release.xcconfig */,
 				831EA53FBB5F43503E94550F /* Pods-RiftShareExtension.profile.xcconfig */,
+				0DF8C4A586252207A645F2A5 /* Pods-Runner-RiftShareExtension.debug.xcconfig */,
+				F4DAB096CA492F3BE70E8D23 /* Pods-Runner-RiftShareExtension.release.xcconfig */,
+				FCC3008FA05521983B657D87 /* Pods-Runner-RiftShareExtension.profile.xcconfig */,
 			);
 			name = Pods;
 			path = Pods;
@@ -478,7 +490,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-RiftShareExtension-checkManifestLockResult.txt",
+				"$(DERIVED_FILE_DIR)/Pods-Runner-RiftShareExtension-checkManifestLockResult.txt",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -578,9 +590,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
+				7D4A6A7D9F3C4BBF8B778101 /* MacOSMediaPlaybackBridge.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 				A1C0A606B4D94A4A0090E4F1 /* PermissionsBridge.swift in Sources */,
+				D3B50AB762D147D3A0E9B912 /* SendFilesBridge.swift in Sources */,
 				A1C0A620B4D94A4A0090E4F1 /* SharedTransferInbox.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -859,8 +873,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = Runner/DebugProfile.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = Runner/DebugUnsigned.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = Runner/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -910,12 +925,13 @@
 		};
 		A1C0A61874D94A4A0090E4F1 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0019B959DACE81E684FA41A5 /* Pods-RiftShareExtension.debug.xcconfig */;
+			baseConfigurationReference = 0DF8C4A586252207A645F2A5 /* Pods-Runner-RiftShareExtension.debug.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = RiftShareExtension/RiftShareExtension.entitlements;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = RiftShareExtension/DebugUnsigned.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = RiftShareExtension/Info.plist;
@@ -935,7 +951,7 @@
 		};
 		A1C0A61974D94A4A0090E4F1 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 955145522CFB2FDEE584356F /* Pods-RiftShareExtension.release.xcconfig */;
+			baseConfigurationReference = F4DAB096CA492F3BE70E8D23 /* Pods-Runner-RiftShareExtension.release.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;
@@ -960,7 +976,7 @@
 		};
 		A1C0A61A74D94A4A0090E4F1 /* Profile */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 831EA53FBB5F43503E94550F /* Pods-RiftShareExtension.profile.xcconfig */;
+			baseConfigurationReference = FCC3008FA05521983B657D87 /* Pods-Runner-RiftShareExtension.profile.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;

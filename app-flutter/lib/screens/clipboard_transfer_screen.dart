@@ -15,10 +15,12 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
 enum _HistorySection {
   clipboard,
+  notifications,
   send,
   incomingOffers,
   transferActivity,
@@ -62,6 +64,7 @@ class ClipboardTransferScreen extends StatefulWidget {
 class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   static const _legacyQueueCoordinator = LegacySendQueueCoordinator();
   final List<Map<String, dynamic>> _clipboardOffers = [];
+  final List<Map<String, dynamic>> _notifications = [];
   final List<Map<String, dynamic>> _incomingFileOffers = [];
   final List<Map<String, dynamic>> _fileTransfers = [];
   final List<Map<String, dynamic>> _trustedPeers = [];
@@ -70,6 +73,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationActionResultSub;
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
   StreamSubscription<Map<String, dynamic>>? _fileProgressSub;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
@@ -78,6 +85,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   StreamSubscription<bool>? _connectionChangedSub;
 
   bool _isRefreshing = false;
+  bool _isRefreshingNotifications = false;
   bool _isRefreshingFileOffers = false;
   bool _isRefreshingTransfers = false;
   bool _isRefreshingPeers = false;
@@ -95,6 +103,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     super.initState();
     widget.routeNotifier?.addListener(_handleExternalRoute);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _handleExternalRoute();
       _bindStreams();
       unawaited(_restoreStagedQueue());
       _refreshAll();
@@ -106,6 +115,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     widget.routeNotifier?.removeListener(_handleExternalRoute);
     _clipboardOfferSub?.cancel();
     _clipboardExpiredSub?.cancel();
+    _notificationPostedSub?.cancel();
+    _notificationUpdatedSub?.cancel();
+    _notificationRemovedSub?.cancel();
+    _notificationActionResultSub?.cancel();
     _fileOfferSub?.cancel();
     _fileProgressSub?.cancel();
     _fileCompletedSub?.cancel();
@@ -123,6 +136,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
     final nextSection = switch (route) {
       NotificationRoute.historyClipboard => _HistorySection.clipboard,
+      NotificationRoute.historyNotifications => _HistorySection.notifications,
       NotificationRoute.historySend => _HistorySection.send,
       NotificationRoute.historyIncomingOffers => _HistorySection.incomingOffers,
       NotificationRoute.historyTransferActivity =>
@@ -145,6 +159,27 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _clipboardExpiredSub = client.onClipboardExpired.listen((_) {
       if (mounted) {
         unawaited(_refreshClipboardOffers());
+      }
+    });
+    _notificationPostedSub = client.onNotificationPosted.listen((event) {
+      if (mounted) {
+        unawaited(_refreshNotifications());
+      }
+    });
+    _notificationUpdatedSub = client.onNotificationUpdated.listen((_) {
+      if (mounted) {
+        unawaited(_refreshNotifications());
+      }
+    });
+    _notificationRemovedSub = client.onNotificationRemoved.listen((_) {
+      if (mounted) {
+        unawaited(_refreshNotifications());
+      }
+    });
+    _notificationActionResultSub =
+        client.onNotificationActionResult.listen((_) {
+      if (mounted) {
+        unawaited(_refreshNotifications());
       }
     });
     _fileOfferSub = client.onFileOffer.listen((_) {
@@ -192,6 +227,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     try {
       await Future.wait<void>([
         _refreshClipboardOffers(),
+        _refreshNotifications(),
         _refreshFileOffers(),
         _refreshTransfers(),
         _refreshTrustedPeers(),
@@ -305,6 +341,43 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     }
   }
 
+  Future<void> _refreshNotifications() async {
+    final client = context.read<JsonRpcRiftClient>();
+    setState(() => _isRefreshingNotifications = true);
+    try {
+      final result = await client.listNotifications();
+      final notifications = List<Map<String, dynamic>>.from(
+        (result['notifications'] as List? ?? const <dynamic>[]).map(
+          (item) => Map<String, dynamic>.from(item as Map),
+        ),
+      ).where((record) {
+        final sourceDeviceId = record['sourceDeviceId']?.toString();
+        return _matchesDeviceFilter(sourceDeviceId);
+      }).toList(growable: false);
+
+      notifications.sort((a, b) {
+        final aTime = DateTime.tryParse(a['postedAt']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bTime = DateTime.tryParse(b['postedAt']?.toString() ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return bTime.compareTo(aTime);
+      });
+
+      if (!mounted) return;
+      setState(() {
+        _notifications
+          ..clear()
+          ..addAll(notifications.take(20));
+      });
+    } catch (_) {
+      if (!mounted) return;
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingNotifications = false);
+      }
+    }
+  }
+
   Future<void> _refreshTransfers() async {
     final client = context.read<JsonRpcRiftClient>();
     setState(() => _isRefreshingTransfers = true);
@@ -388,6 +461,39 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     return '${deviceId.substring(0, 12)}...';
   }
 
+  Future<void> _performNotificationAction(
+    Map<String, dynamic> notification,
+    String action,
+  ) async {
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      await client.performNotificationAction(
+        notificationId: notification['notificationId']?.toString() ?? '',
+        action: action,
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            action == 'open'
+                ? 'Notification opened on Android.'
+                : 'Notification dismissed on Android.',
+          ),
+        ),
+      );
+      unawaited(_refreshNotifications());
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      );
+    }
+  }
+
   void _reconcileStagedQueueWithTrustedPeers() {
     if (!mounted) {
       return;
@@ -449,7 +555,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _applyTransferProgress(event);
   }
 
-  Future<void> _handleLegacyTransferCompleted(Map<String, dynamic> event) async {
+  Future<void> _handleLegacyTransferCompleted(
+      Map<String, dynamic> event) async {
     if (!await _queueMode.isLegacyLocalQueueMode()) {
       return;
     }
@@ -614,8 +721,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return;
     }
 
-    final resumableByPeer =
-        await _queueMode.groupRecoverableLegacyFilesByPeer(
+    final resumableByPeer = await _queueMode.groupRecoverableLegacyFilesByPeer(
       files: recoverableFiles,
       isPeerOnline: (deviceId) {
         final peer = _fileCapablePeers.cast<Map<String, dynamic>?>().firstWhere(
@@ -837,6 +943,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       );
     }
     try {
+      if (Platform.isMacOS) {
+        final requests = await MacOSSendFiles.pickSendFiles();
+        return _PickSendFilesResult(requests: requests);
+      }
       final result = await FilePicker.platform.pickFiles(
         allowMultiple: true,
         withData: false,
@@ -1101,6 +1211,33 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return;
     }
     setState(() {});
+  }
+
+  Future<void> _cancelStagedFile(SendQueueEntry file) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _sendQueue.cancelItem(file);
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            file.status == SendQueueStatus.sending
+                ? 'Cancelled ${file.fileName}.'
+                : 'Removed ${file.fileName} from the queue.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      );
+    }
   }
 
   Future<void> _clearFinishedStagedFiles() async {
@@ -1536,6 +1673,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         children: [
           _buildSectionChip(theme, _HistorySection.clipboard, 'Clipboard'),
           const SizedBox(width: 8),
+          _buildSectionChip(
+            theme,
+            _HistorySection.notifications,
+            'Notifications',
+          ),
+          const SizedBox(width: 8),
           _buildSectionChip(theme, _HistorySection.send, 'Send File'),
           const SizedBox(width: 8),
           _buildSectionChip(
@@ -1625,6 +1768,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     switch (_activeSection) {
       case _HistorySection.clipboard:
         return _buildClipboardHistorySection(theme);
+      case _HistorySection.notifications:
+        return _buildNotificationsSection(theme);
       case _HistorySection.send:
         return _buildFileSendSection(theme);
       case _HistorySection.incomingOffers:
@@ -1742,6 +1887,104 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         : 'in $value$unitLabel';
   }
 
+  Widget _buildNotificationsSection(ThemeData theme) {
+    return _buildSectionCard(
+      theme: theme,
+      title: 'Android Notifications',
+      subtitle:
+          'Mirrored from trusted Android devices. Open and dismiss actions are sent back to Android.',
+      isLoading: _isRefreshingNotifications,
+      onRefresh: _refreshNotifications,
+      child: _notifications.isEmpty
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'No mirrored Android notifications yet.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            )
+          : Column(
+              children: _notifications.map((notification) {
+                final title = notification['title']?.toString().trim();
+                final body = notification['bodyPreview']?.toString().trim();
+                final appName = notification['appName']?.toString() ?? 'App';
+                final packageName = notification['packageName']?.toString() ??
+                    'unknown.package';
+                final sourceName = _peerDisplayName(
+                    notification['sourceDeviceId']?.toString());
+                final isRemoved = notification['isRemoved'] == true;
+                final canOpen =
+                    !isRemoved && notification['isOpenable'] == true;
+                final canDismiss =
+                    !isRemoved && notification['isDismissible'] == true;
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title == null || title.isEmpty ? appName : title,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '$appName • $packageName • $sourceName',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        if (body != null && body.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(body),
+                        ],
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            FilledButton.tonalIcon(
+                              onPressed: canOpen
+                                  ? () => _performNotificationAction(
+                                        notification,
+                                        'open',
+                                      )
+                                  : null,
+                              icon: const Icon(Icons.open_in_new),
+                              label: const Text('Open'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: canDismiss
+                                  ? () => _performNotificationAction(
+                                        notification,
+                                        'dismiss',
+                                      )
+                                  : null,
+                              icon: const Icon(Icons.close),
+                              label: Text(isRemoved ? 'Removed' : 'Dismiss'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(growable: false),
+            ),
+    );
+  }
+
   Widget _buildFileSendSection(ThemeData theme) {
     final peers = _fileCapablePeers;
     final activeOutgoingTransfers = _activeOutgoingTransfers;
@@ -1752,124 +1995,125 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           'Hai bên đều có thể chủ động gửi. Mục này chỉ hiện peer đang trusted và có capability file.transfer.',
       isLoading: _isRefreshingPeers,
       onRefresh: _refreshTrustedPeers,
-      child: peers.isEmpty
-          ? Text(
-              'No trusted peer currently advertises file.transfer.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+      child: Column(
+        children: [
+          if (activeOutgoingTransfers.isNotEmpty) ...[
+            _buildOutgoingTransferBanner(theme, activeOutgoingTransfers),
+            const SizedBox(height: 12),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _addFilesToSendQueue,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Files'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _sendQueue.items.any(
+                  (file) => file.status == SendQueueStatus.sent,
+                )
+                    ? () => unawaited(_clearFinishedStagedFiles())
+                    : null,
+                child: const Text('Clear Sent'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildStagedFilesList(theme),
+          const SizedBox(height: 12),
+          if (peers.isEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'No trusted peer currently advertises file.transfer. Staged files will remain in the queue until a compatible peer is available.',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
               ),
             )
-          : Column(
-              children: [
-                if (activeOutgoingTransfers.isNotEmpty) ...[
-                  _buildOutgoingTransferBanner(theme, activeOutgoingTransfers),
-                  const SizedBox(height: 12),
-                ],
-                Row(
+          else
+            ...peers.map((peer) {
+              final deviceId = peer['deviceId']?.toString();
+              final showSendingSpinner = deviceId != null &&
+                  _legacySendingFilePeerIds.contains(deviceId);
+              final isSending = deviceId != null &&
+                  (showSendingSpinner ||
+                      _hasActiveOutgoingTransferForPeer(deviceId));
+              final summary = deviceId == null || deviceId.isEmpty
+                  ? const SendQueuePeerSummary(
+                      eligibleCount: 0,
+                      unassignedCount: 0,
+                      waitingCount: 0,
+                      failedCount: 0,
+                    )
+                  : _peerQueueSummary(deviceId);
+              return Container(
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
                   children: [
+                    Icon(
+                      _platformIcon(peer['platform']?.toString()),
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _addFilesToSendQueue,
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add Files'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _peerDisplayName(deviceId),
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                          Text(
+                            peer['platform']?.toString().toUpperCase() ??
+                                'DEVICE',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            summary.detailLabel(),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: _sendQueue.items.any(
-                        (file) => file.status == SendQueueStatus.sent,
-                      )
-                          ? () => unawaited(_clearFinishedStagedFiles())
-                          : null,
-                      child: const Text('Clear Sent'),
+                    FilledButton.icon(
+                      onPressed: isSending || summary.eligibleCount == 0
+                          ? null
+                          : () => _sendStagedFilesToPeer(peer),
+                      icon: showSendingSpinner
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              isSending ? Icons.sync : Icons.upload_file,
+                            ),
+                      label: Text(
+                        isSending ? 'Sending...' : summary.actionLabel(),
+                      ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                _buildStagedFilesList(theme),
-                const SizedBox(height: 12),
-                ...peers.map((peer) {
-                  final deviceId = peer['deviceId']?.toString();
-                  final showSendingSpinner = deviceId != null &&
-                      _legacySendingFilePeerIds.contains(deviceId);
-                  final isSending = deviceId != null &&
-                      (showSendingSpinner ||
-                          _hasActiveOutgoingTransferForPeer(deviceId));
-                  final summary = deviceId == null || deviceId.isEmpty
-                      ? const SendQueuePeerSummary(
-                          eligibleCount: 0,
-                          unassignedCount: 0,
-                          waitingCount: 0,
-                          failedCount: 0,
-                        )
-                      : _peerQueueSummary(deviceId);
-                  return Container(
-                    margin: const EdgeInsets.only(top: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          _platformIcon(peer['platform']?.toString()),
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _peerDisplayName(deviceId),
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                              Text(
-                                peer['platform']?.toString().toUpperCase() ??
-                                    'DEVICE',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                summary.detailLabel(),
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        FilledButton.icon(
-                          onPressed: isSending || summary.eligibleCount == 0
-                              ? null
-                              : () => _sendStagedFilesToPeer(peer),
-                          icon: showSendingSpinner
-                              ? const SizedBox(
-                                  width: 14,
-                                  height: 14,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : Icon(
-                                  isSending ? Icons.sync : Icons.upload_file,
-                                ),
-                          label: Text(
-                            isSending
-                                ? 'Sending...'
-                                : summary.actionLabel(),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
+              );
+            }),
+        ],
+      ),
     );
   }
 
@@ -1938,19 +2182,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               byteSize: file.byteSize,
               bytesTransferred: file.bytesTransferred,
               status: file.status,
-              targetLabel: file.targetDeviceId == null ||
-                      file.targetDeviceId!.isEmpty
-                  ? null
-                  : _peerDisplayName(file.targetDeviceId),
+              targetLabel:
+                  file.targetDeviceId == null || file.targetDeviceId!.isEmpty
+                      ? null
+                      : _peerDisplayName(file.targetDeviceId),
               errorMessage: file.errorMessage,
               isWaitingForReconnect: file.autoRetryWhenPeerAvailable,
               canRetarget: _hasUnavailableTarget(file),
             ),
           )
           .toList(growable: false),
-      onRemove: (index) => _removeStagedFile(_sendQueue.items[index]),
+      onCancel: (index) => _cancelStagedFile(_sendQueue.items[index]),
       onRetry: (index) => _retryFailedStagedFile(_sendQueue.items[index]),
-      onRetarget: (index) => _chooseDeviceForStagedFile(_sendQueue.items[index]),
+      onRetarget: (index) =>
+          _chooseDeviceForStagedFile(_sendQueue.items[index]),
     );
   }
 

@@ -42,6 +42,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
+  final List<Map<String, dynamic>> notifications = <Map<String, dynamic>>[];
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> queueItems;
   final List<Map<String, Object>> clipboardNotifications =
@@ -58,9 +59,11 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   ];
   final List<Map<String, String>> offeredFiles = <Map<String, String>>[];
   final List<Object> offerFileFailures = <Object>[];
-  final List<Map<String, String>> assignedQueueTargets = <Map<String, String>>[];
+  final List<Map<String, String>> assignedQueueTargets =
+      <Map<String, String>>[];
   final List<String> retriedQueueItems = <String>[];
   final List<String> removedQueueItems = <String>[];
+  final List<String> cancelledTransfers = <String>[];
   bool _isConnected;
 
   @override
@@ -72,6 +75,22 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onClipboardExpired =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationPosted =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationUpdated =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationRemoved =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationActionResult =>
       const Stream<Map<String, dynamic>>.empty();
 
   @override
@@ -104,6 +123,15 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   Future<dynamic> listIncomingFileOffers() async => {'offers': []};
 
   @override
+  Future<dynamic> listNotifications() async => {
+        'notifications': notifications,
+        'policy': {
+          'enabled': true,
+          'blacklistedPackages': <String>[],
+        },
+      };
+
+  @override
   Future<dynamic> listTrustedPeers() async => {
         'peers': trustedPeers,
       };
@@ -125,6 +153,19 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       'contentBase64': contentBase64,
     });
     return const <String, Object>{'ok': true};
+  }
+
+  @override
+  Future<dynamic> performNotificationAction({
+    required String notificationId,
+    required String action,
+  }) async {
+    return {
+      'operationId': 'notification-op-1',
+      'notificationId': notificationId,
+      'action': action,
+      'state': 'Pending',
+    };
   }
 
   @override
@@ -164,7 +205,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       'queueItemId': queueItemId,
       'targetDeviceId': targetDeviceId,
     });
-    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    final item =
+        queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
     item['targetDeviceId'] = targetDeviceId;
     item['status'] = 'dispatching';
     return item;
@@ -173,7 +215,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> retrySendQueueItem(String queueItemId) async {
     retriedQueueItems.add(queueItemId);
-    final item = queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
+    final item =
+        queueItems.firstWhere((entry) => entry['queueItemId'] == queueItemId);
     item['status'] = 'dispatching';
     return item;
   }
@@ -185,6 +228,15 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
     return {
       'queueItemId': queueItemId,
       'removed': true,
+    };
+  }
+
+  @override
+  Future<dynamic> cancelFileTransfer(String transferId) async {
+    cancelledTransfers.add(transferId);
+    return {
+      'transferId': transferId,
+      'cancelled': true,
     };
   }
 
@@ -232,10 +284,14 @@ void main() {
 
   testWidgets('Transfer activity hides folder action for direct-open flow',
       (WidgetTester tester) async {
-    await tester.pumpWidget(buildScreen(revealInFolder: false));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
+    final routeNotifier =
+        ValueNotifier<String?>(NotificationRoute.historyTransferActivity);
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        routeNotifier: routeNotifier,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('report.pdf'), findsOneWidget);
@@ -251,10 +307,14 @@ void main() {
 
   testWidgets('Transfer activity shows folder action for desktop flow',
       (WidgetTester tester) async {
-    await tester.pumpWidget(buildScreen(revealInFolder: true));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
+    final routeNotifier =
+        ValueNotifier<String?>(NotificationRoute.historyTransferActivity);
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        routeNotifier: routeNotifier,
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('report.pdf'), findsOneWidget);
@@ -283,11 +343,10 @@ void main() {
       buildScreen(
         revealInFolder: true,
         client: client,
+        routeNotifier:
+            ValueNotifier<String?>(NotificationRoute.historyTransferActivity),
       ),
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Transfer Activity'));
     await tester.pumpAndSettle();
 
     expect(find.text('clip.mp4'), findsOneWidget);
@@ -565,4 +624,89 @@ void main() {
     expect(find.text('demo-1.txt'), findsNothing);
   });
 
+  testWidgets('Send tab keeps daemon-backed queued files visible without peers',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'waiting_for_target',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    )..trustedPeers = const <Map<String, dynamic>>[];
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('demo-1.txt'), findsOneWidget);
+    expect(find.text('Add Files'), findsOneWidget);
+    expect(
+      find.textContaining(
+        'No trusted peer currently advertises file.transfer.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Send tab cancels active daemon-backed transfer',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'sending',
+          'targetDeviceId': 'rift-peer-1',
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': 'op-1',
+          'lastTransferId': 'transfer-1',
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.stop_circle_outlined));
+    await tester.pumpAndSettle();
+
+    expect(client.removedQueueItems, ['queue-1']);
+    expect(find.text('demo-1.txt'), findsNothing);
+  });
 }

@@ -11,6 +11,7 @@ import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
 import '../crypto/base32_utils.dart';
 import 'frame_codec.dart';
+import 'peer_write_gate.dart';
 
 class TransportImpl implements Transport {
   final IdentityManager _identityManager;
@@ -20,6 +21,7 @@ class TransportImpl implements Transport {
   final Map<String, SecureSocket> _peers = {};
   final Map<String, bool> _peerSocketIsServer = {};
   final Map<String, Uint8List> _peerCerts = {};
+  final Map<String, PeerWriteGate> _peerWriteGates = {};
   final Set<String> _authenticatedPeers = {};
   final Map<String, Timer> _unauthenticatedTimeouts = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
@@ -95,6 +97,7 @@ class TransportImpl implements Transport {
     }
     _peers.clear();
     _peerCerts.clear();
+    _peerWriteGates.clear();
     await _messageController.close();
     await _disconnectController.close();
   }
@@ -230,6 +233,7 @@ class TransportImpl implements Transport {
       _peers[peerDeviceId] = socket;
       _peerSocketIsServer[peerDeviceId] = isServer;
       _peerCerts[peerDeviceId] = peerCert.der;
+      _peerWriteGates.putIfAbsent(peerDeviceId, PeerWriteGate.new);
       RiftLog.info(
         '[TLS] Registered socket for peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
       );
@@ -288,6 +292,7 @@ class TransportImpl implements Transport {
     _peers.remove(peerDeviceId);
     _peerSocketIsServer.remove(peerDeviceId);
     _peerCerts.remove(peerDeviceId);
+    _peerWriteGates.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
     if (!_disconnectController.isClosed) {
       _disconnectController.add(peerDeviceId);
@@ -331,6 +336,7 @@ class TransportImpl implements Transport {
     if (socket == null) {
       throw StateError('Peer $deviceId is not connected');
     }
+    final writeGate = _peerWriteGates.putIfAbsent(deviceId, PeerWriteGate.new);
     RiftLog.info(
       '[TLS] transport.sendMessage peerDeviceId=$deviceId '
       'bytes=${message.length} remote=${socket.remoteAddress.address}:${socket.remotePort}',
@@ -353,9 +359,20 @@ class TransportImpl implements Transport {
     // - framing only needs the length prefix
     final frame = RiftFrameCodec.encodeBytes(message);
     try {
-      socket.add(frame);
-      await socket.flush();
-      RiftLog.info('[TLS] transport.sendMessage flushed peerDeviceId=$deviceId');
+      await writeGate.run(() async {
+        final currentSocket = _peers[deviceId];
+        if (currentSocket == null || !identical(currentSocket, socket)) {
+          throw StateError(
+            'Peer $deviceId is no longer connected on the current socket',
+          );
+        }
+
+        currentSocket.add(frame);
+        await currentSocket.flush();
+        RiftLog.info(
+          '[TLS] transport.sendMessage flushed peerDeviceId=$deviceId',
+        );
+      });
     } on SocketException {
       disconnect(deviceId);
       rethrow;

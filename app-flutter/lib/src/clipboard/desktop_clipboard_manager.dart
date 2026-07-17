@@ -265,18 +265,27 @@ class DesktopClipboardManager {
     }
 
     final startedAt = DateTime.now();
-    await _client.notifyClipboardChange(
-      contentType: payload.contentType,
-      byteSize: payload.byteSize,
-      sha256: payload.sha256Hex,
-      contentBase64: payload.contentBase64,
-    );
-    final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
-    _log.info(
-      'Sent ${payload.contentType} clipboard payload '
-      '(${payload.byteSize} bytes) in ${elapsedMs}ms.',
-    );
-    _emitStatus(_sentStatusForContentType(payload.contentType));
+    try {
+      await _client.notifyClipboardChange(
+        contentType: payload.contentType,
+        byteSize: payload.byteSize,
+        sha256: payload.sha256Hex,
+        contentBase64: payload.contentBase64,
+      );
+      final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
+      _log.info(
+        'Sent ${payload.contentType} clipboard payload '
+        '(${payload.byteSize} bytes) in ${elapsedMs}ms.',
+      );
+      _emitStatus(_sentStatusForContentType(payload.contentType));
+    } catch (error, stackTrace) {
+      _log.warning(
+        'Failed to send ${payload.contentType} clipboard payload via IPC.',
+        error,
+        stackTrace,
+      );
+      _emitStatus('Clipboard sync unavailable.');
+    }
   }
 
   Future<void> _resyncOffers() async {

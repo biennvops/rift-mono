@@ -41,4 +41,19 @@ public interface IRiftApi
         int offset = 0);
     Task<ListOperationsResult> ListOperationsAsync(int limit = 50, int offset = 0);
     Task<OperationRecord> GetOperationAsync(string operationId);
+    Task<NotifyLocalNotificationEventResult> NotifyLocalNotificationEventAsync(
+        string eventType,
+        string notificationId,
+        string? packageName = null,
+        string? appName = null,
+        string? title = null,
+        string? bodyPreview = null,
+        string? postedAt = null,
+        bool? isDismissible = null,
+        bool? isOpenable = null,
+        string? sourcePlatform = null,
+        string? removedAt = null);
+    Task<ListNotificationsResult> ListNotificationsAsync();
+    Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action);
+    Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string[] blacklistedPackages);
 }

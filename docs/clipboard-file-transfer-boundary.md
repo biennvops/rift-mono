@@ -2,9 +2,9 @@
 
 Status: supporting implementation note.
 
-This document records the current repository reality and the recommended
-delivery boundary between clipboard continuity, file transfer, folder transfer,
-and application data exchange.
+This document records the current repository reality and the delivery boundary
+between clipboard continuity, file transfer, folder transfer, and application
+data exchange.
 
 It exists to keep follow-up implementation work aligned across:
 
@@ -18,17 +18,16 @@ It exists to keep follow-up implementation work aligned across:
 
 ## 1. Current Repository State
 
-The repository currently supports one mature continuity flow and one partially
-landed extension:
+The repository currently supports one mature continuity flow and one landed
+authenticated extension:
 
 1. Clipboard continuity is the normative MVP.
-2. File transfer already has substantial implementation in both daemons and the
-   Flutter client, but is not yet fully folded into the normative protocol and
-   IPC specifications.
+2. File transfer is implemented in both daemons and the Flutter client and is
+   specified in the normative protocol and IPC documents as an optional
+   capability.
 
-The current clipboard path is effectively text-first in the app integration
-layer even though the protocol envelope already carries generic bytes plus a
-`contentType`.
+The current clipboard path supports `text/plain` as the required interoperable
+format and `image/png` as the current binary clipboard format.
 
 ## 2. Delivery Boundary
 
@@ -91,63 +90,11 @@ Examples that would require separate design:
 - app-owned sandbox payloads
 - structured state sync
 
-## 3. Recommended Implementation Order
+## 3. Non-Goals
 
-Work should proceed in this order:
-
-1. Preserve and stabilize text clipboard behavior.
-2. Extend clipboard to support image content.
-3. Fold `file.transfer` into the normative protocol and IPC specs.
-4. Add folder transfer only after file transfer is specification-complete.
-5. Defer application data exchange until concrete use cases exist.
-
-This order keeps the MVP narrow while reusing the architecture already present
-in the repository.
-
-## 4. Immediate Work Plan
-
-The next implementation steps should follow this sequence.
-
-### Step 1: Spec Clarification
-
-Update the normative docs so they no longer imply that clipboard is text-only.
-
-Required follow-ups:
-
-- define the allowed clipboard content types for the next increment
-- specify hash and byte semantics for binary clipboard payloads
-- document interoperability behavior when a peer does not support the same
-  clipboard content type
-
-### Step 2: File Transfer Normalization
-
-Promote the implemented `file.transfer` behavior from repository reality to
-documented contract by updating:
-
-- `spec/doc/protocol.md`
-- `spec/doc/ipc.md`
-
-The existing proposal document should remain a drafting aid until the normative
-spec text lands.
-
-### Step 3: Platform Integration for Image Clipboard
-
-Implement image clipboard end to end:
-
-- desktop clipboard read/write integration in `app-flutter/`
-- Android clipboard capture/application integration
-- daemon-side validation and fetch/apply support
-- interop and regression tests
-
-## 5. Non-Goals for the Next Increment
-
-The next increment should not attempt to:
+This boundary does not imply work on:
 
 - merge file transfer into clipboard
 - support recursive folder transfer
 - support arbitrary application state handoff
-- redesign the operation model beyond what image clipboard and file transfer
-  require
-
-Keeping these out of scope reduces protocol churn and limits cross-platform
-behavioral risk.
+- redesign the operation model beyond what clipboard and file transfer require

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
 import 'package:logging/logging.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -56,6 +57,51 @@ class JsonRpcRiftClient {
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onClipboardExpired =>
       _clipboardExpiredController.stream;
+
+  late final _notificationPostedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onNotificationPosted =>
+      _notificationPostedController.stream;
+
+  late final _notificationUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onNotificationUpdated =>
+      _notificationUpdatedController.stream;
+
+  late final _notificationRemovedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onNotificationRemoved =>
+      _notificationRemovedController.stream;
+
+  late final _notificationActionResultController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onNotificationActionResult =>
+      _notificationActionResultController.stream;
+
+  late final _mediaPlaybackPostedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
+      _mediaPlaybackPostedController.stream;
+
+  late final _mediaPlaybackUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackUpdated =>
+      _mediaPlaybackUpdatedController.stream;
+
+  late final _mediaPlaybackRemovedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
+      _mediaPlaybackRemovedController.stream;
+
+  late final _mediaPlaybackActionResultController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackActionResult =>
+      _mediaPlaybackActionResultController.stream;
+
+  late final _mediaPlaybackActionRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onMediaPlaybackActionRequest =>
+      _mediaPlaybackActionRequestController.stream;
 
   late final _fileOfferController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -156,7 +202,6 @@ class JsonRpcRiftClient {
     'TrustedDeviceId': 'trustedDeviceId',
     'PersistedAt': 'persistedAt',
     'Removed': 'removed',
-    'RemovedAt': 'removedAt',
     'RevokedAt': 'revokedAt',
     'Revoked': 'revoked',
     'Rejected': 'rejected',
@@ -178,6 +223,7 @@ class JsonRpcRiftClient {
     'OperationType': 'operationType',
     'State': 'state',
     'SourceDeviceId': 'sourceDeviceId',
+    'SourcePlatform': 'sourcePlatform',
     'DestinationDeviceId': 'destinationDeviceId',
     'CreatedAt': 'createdAt',
     'UpdatedAt': 'updatedAt',
@@ -210,6 +256,38 @@ class JsonRpcRiftClient {
     'Verified': 'verified',
     'Offers': 'offers',
     'BroadcastTo': 'broadcastTo',
+    'RequestId': 'requestId',
+    'Notifications': 'notifications',
+    'NotificationId': 'notificationId',
+    'PackageName': 'packageName',
+    'AppName': 'appName',
+    'Title': 'title',
+    'BodyPreview': 'bodyPreview',
+    'PostedAt': 'postedAt',
+    'IsDismissible': 'isDismissible',
+    'IsOpenable': 'isOpenable',
+    'IsRemoved': 'isRemoved',
+    'RemovedAt': 'removedAt',
+    'Icon': 'icon',
+    'Action': 'action',
+    'Success': 'success',
+    'BlacklistedPackages': 'blacklistedPackages',
+    'Enabled': 'enabled',
+    'Policy': 'policy',
+    'PlaybackId': 'playbackId',
+    'Playbacks': 'playbacks',
+    'AppId': 'appId',
+    'Artist': 'artist',
+    'Album': 'album',
+    'Artwork': 'artwork',
+    'PlaybackState': 'playbackState',
+    'PositionMs': 'positionMs',
+    'DurationMs': 'durationMs',
+    'CanPlay': 'canPlay',
+    'CanPause': 'canPause',
+    'CanSkipNext': 'canSkipNext',
+    'CanSkipPrevious': 'canSkipPrevious',
+    'CanSeek': 'canSeek',
   };
 
   static Map<String, dynamic> _canonicalizeMap(Map<String, dynamic> input) {
@@ -320,6 +398,37 @@ class JsonRpcRiftClient {
     final raw = error.toString();
     return raw.contains('JSON-RPC error -32601') ||
         raw.toLowerCase().contains('method not found');
+  }
+
+  Never _throwNotConnected(String method, [dynamic parameters]) {
+    final error = StateError('Not connected to daemon');
+    _log.warning('RPC request failed before send: $method params=$parameters');
+    debugPrint(
+      '[JsonRpcRiftClient] RPC request failed before send: $method params=$parameters error=$error',
+    );
+    throw error;
+  }
+
+  Future<dynamic> _sendRequest(String method, [dynamic parameters]) async {
+    final client = _client;
+    if (!_isConnected || client == null) {
+      _throwNotConnected(method, parameters);
+    }
+
+    try {
+      final response = await client.sendRequest(method, parameters);
+      return _canonicalizeResult(response);
+    } catch (error, stackTrace) {
+      _log.severe(
+        'RPC request failed: $method params=$parameters error=$error',
+        error,
+        stackTrace,
+      );
+      debugPrint(
+        '[JsonRpcRiftClient] RPC request failed: $method params=$parameters error=$error',
+      );
+      rethrow;
+    }
   }
 
   void _emitIfValid(
@@ -480,6 +589,129 @@ class JsonRpcRiftClient {
           _asMap(params),
           _clipboardExpiredController,
           requiredStringKeys: const ['offerId'],
+        );
+      });
+      _client!.registerMethod('rift.onNotificationPosted',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onNotificationPosted',
+          _asMap(params),
+          _notificationPostedController,
+          requiredStringKeys: const [
+            'notificationId',
+            'sourceDeviceId',
+            'packageName',
+            'appName',
+            'postedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onNotificationUpdated',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onNotificationUpdated',
+          _asMap(params),
+          _notificationUpdatedController,
+          requiredStringKeys: const [
+            'notificationId',
+            'sourceDeviceId',
+            'packageName',
+            'appName',
+            'postedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onNotificationRemoved',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onNotificationRemoved',
+          _asMap(params),
+          _notificationRemovedController,
+          requiredStringKeys: const ['notificationId', 'sourceDeviceId'],
+        );
+      });
+      _client!.registerMethod('rift.onNotificationActionResult',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onNotificationActionResult',
+          _asMap(params),
+          _notificationActionResultController,
+          requiredStringKeys: const [
+            'notificationId',
+            'action',
+            'operationId',
+            'state',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackPosted',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackPosted',
+          _asMap(params),
+          _mediaPlaybackPostedController,
+          requiredStringKeys: const [
+            'playbackId',
+            'sourceDeviceId',
+            'appId',
+            'appName',
+            'playbackState',
+            'updatedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackUpdated',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackUpdated',
+          _asMap(params),
+          _mediaPlaybackUpdatedController,
+          requiredStringKeys: const [
+            'playbackId',
+            'sourceDeviceId',
+            'appId',
+            'appName',
+            'playbackState',
+            'updatedAt',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackRemoved',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackRemoved',
+          _asMap(params),
+          _mediaPlaybackRemovedController,
+          requiredStringKeys: const ['playbackId', 'sourceDeviceId'],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackActionResult',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackActionResult',
+          _asMap(params),
+          _mediaPlaybackActionResultController,
+          requiredStringKeys: const [
+            'playbackId',
+            'action',
+            'operationId',
+            'state',
+          ],
+        );
+      });
+      _client!.registerMethod('rift.onMediaPlaybackActionRequest',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onMediaPlaybackActionRequest',
+          _asMap(params),
+          _mediaPlaybackActionRequestController,
+          requiredStringKeys: const [
+            'requestId',
+            'playbackId',
+            'sourceDeviceId',
+            'requestingDeviceId',
+            'action',
+          ],
         );
       });
       _client!.registerMethod('rift.onFileOffer', (json_rpc.Parameters params) {
@@ -669,6 +901,15 @@ class JsonRpcRiftClient {
     await _securityEventController.close();
     await _clipboardOfferController.close();
     await _clipboardExpiredController.close();
+    await _notificationPostedController.close();
+    await _notificationUpdatedController.close();
+    await _notificationRemovedController.close();
+    await _notificationActionResultController.close();
+    await _mediaPlaybackPostedController.close();
+    await _mediaPlaybackUpdatedController.close();
+    await _mediaPlaybackRemovedController.close();
+    await _mediaPlaybackActionResultController.close();
+    await _mediaPlaybackActionRequestController.close();
     await _fileOfferController.close();
     await _fileTransferProgressController.close();
     await _fileTransferCompletedController.close();
@@ -677,41 +918,108 @@ class JsonRpcRiftClient {
   }
 
   Future<dynamic> getDeviceInfo() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.getDeviceInfo');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.getDeviceInfo');
   }
 
   Future<dynamic> listDiscoveredPeers() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listDiscoveredPeers');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listDiscoveredPeers');
   }
 
   Future<dynamic> listTrustedPeers() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
+    return _sendRequest('rift.listTrustedPeers');
+  }
+
+  Future<dynamic> notifyLocalNotificationEvent({
+    required String eventType,
+    required Map<String, Object?> payload,
+  }) async {
+    return _sendRequest('rift.notifyLocalNotificationEvent', {
+      'eventType': eventType,
+      ...payload,
+    });
+  }
+
+  Future<dynamic> listNotifications() async {
+    return _sendRequest('rift.listNotifications');
+  }
+
+  Future<dynamic> notifyLocalMediaPlaybackEvent({
+    required String eventType,
+    required Map<String, Object?> payload,
+  }) async {
+    return _sendRequest('rift.notifyLocalMediaPlaybackEvent', {
+      'eventType': eventType,
+      ...payload,
+    });
+  }
+
+  Future<dynamic> listMediaPlayback() async {
+    return _sendRequest('rift.listMediaPlayback');
+  }
+
+  Future<dynamic> getMediaPlayback(String playbackId) async {
+    return _sendRequest('rift.getMediaPlayback', {
+      'playbackId': playbackId,
+    });
+  }
+
+  Future<dynamic> performMediaPlaybackAction({
+    required String playbackId,
+    required String action,
+    int? positionMs,
+  }) async {
+    final params = <String, dynamic>{
+      'playbackId': playbackId,
+      'action': action,
+    };
+    if (positionMs != null) {
+      params['positionMs'] = positionMs;
     }
-    final r = await _client!.sendRequest('rift.listTrustedPeers');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.performMediaPlaybackAction', params);
+  }
+
+  Future<dynamic> reportLocalMediaPlaybackActionHandled({
+    required String requestId,
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    return _sendRequest('rift.reportLocalMediaPlaybackActionHandled', {
+      'requestId': requestId,
+      'success': success,
+      if (failureReason != null) 'failureReason': failureReason,
+      if (message != null) 'message': message,
+    });
+  }
+
+  Future<dynamic> performNotificationAction({
+    required String notificationId,
+    required String action,
+  }) async {
+    return _sendRequest('rift.performNotificationAction', {
+      'notificationId': notificationId,
+      'action': action,
+    });
+  }
+
+  Future<dynamic> updateNotificationSyncPolicy({
+    required bool enabled,
+    required List<String> blacklistedPackages,
+  }) async {
+    return _sendRequest('rift.updateNotificationSyncPolicy', {
+      'enabled': enabled,
+      'blacklistedPackages': blacklistedPackages,
+    });
   }
 
   Future<dynamic> listOperations({
     int? limit,
     int? offset,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final params = <String, dynamic>{};
     if (limit != null) params['limit'] = limit;
     if (offset != null) params['offset'] = offset;
-    final r = await _client!.sendRequest('rift.listOperations', params);
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listOperations', params);
   }
 
   Future<dynamic> queryEventLog({
@@ -722,9 +1030,6 @@ class JsonRpcRiftClient {
     int limit = 100,
     int offset = 0,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final params = <String, dynamic>{
       'limit': limit,
       'offset': offset,
@@ -741,44 +1046,29 @@ class JsonRpcRiftClient {
     if (since != null && since.isNotEmpty) {
       params['since'] = since;
     }
-    final r = await _client!.sendRequest('rift.queryEventLog', params);
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.queryEventLog', params);
   }
 
   Future<dynamic> startDiscovery() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.startDiscovery').timeout(
-          const Duration(seconds: 15),
-          onTimeout: () =>
-              throw TimeoutException('Discovery request timed out'),
-        );
-    return _canonicalizeResult(r);
+    final r = await _sendRequest('rift.startDiscovery').timeout(
+      const Duration(seconds: 15),
+      onTimeout: () => throw TimeoutException('Discovery request timed out'),
+    );
+    return r;
   }
 
   Future<dynamic> stopDiscovery() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.stopDiscovery');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.stopDiscovery');
   }
 
   Future<dynamic> startPairing(String deviceId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final pending = _pendingStartPairings[deviceId];
     if (pending != null) {
       _log.info('Joining in-flight startPairing request for $deviceId');
       return pending;
     }
 
-    final future =
-        _client!.sendRequest('rift.startPairing', {'deviceId': deviceId}).then(
-      _canonicalizeResult,
-    );
+    final future = _sendRequest('rift.startPairing', {'deviceId': deviceId});
     _pendingStartPairings[deviceId] = future;
     try {
       return await future;
@@ -790,9 +1080,6 @@ class JsonRpcRiftClient {
   }
 
   Future<dynamic> startPairingByEndpoint(String address, int port) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final key = '$address:$port';
     final pending = _pendingEndpointPairings[key];
     if (pending != null) {
@@ -800,10 +1087,10 @@ class JsonRpcRiftClient {
       return pending;
     }
 
-    final future = _client!.sendRequest('rift.startPairingByEndpoint', {
+    final future = _sendRequest('rift.startPairingByEndpoint', {
       'address': address,
       'port': port,
-    }).then(_canonicalizeResult);
+    });
     _pendingEndpointPairings[key] = future;
     try {
       return await future;
@@ -815,52 +1102,29 @@ class JsonRpcRiftClient {
   }
 
   Future<dynamic> approvePairing(String deviceId, String fingerprint) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.approvePairing', {
+    return _sendRequest('rift.approvePairing', {
       'deviceId': deviceId,
       'fingerprint': fingerprint,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> rejectPairing(String deviceId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!
-        .sendRequest('rift.rejectPairing', {'deviceId': deviceId});
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.rejectPairing', {'deviceId': deviceId});
   }
 
   Future<dynamic> revokeTrust(String deviceId, String reason) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.revokeTrust', {
+    return _sendRequest('rift.revokeTrust', {
       'deviceId': deviceId,
       'reason': reason,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> unblockPeer(String deviceId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r =
-        await _client!.sendRequest('rift.unblockPeer', {'deviceId': deviceId});
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.unblockPeer', {'deviceId': deviceId});
   }
 
   Future<dynamic> resetRevokedPeer(String deviceId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!
-        .sendRequest('rift.resetRevokedPeer', {'deviceId': deviceId});
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.resetRevokedPeer', {'deviceId': deviceId});
   }
 
   Future<dynamic> notifyClipboardChange({
@@ -869,35 +1133,23 @@ class JsonRpcRiftClient {
     required String sha256,
     required String contentBase64,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.notifyClipboardChange', {
+    return _sendRequest('rift.notifyClipboardChange', {
       'contentType': contentType,
       'byteSize': byteSize,
       'sha256': sha256,
       'contentBase64': contentBase64,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> listClipboardOffers() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listClipboardOffers');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listClipboardOffers');
   }
 
   Future<dynamic> fetchClipboardContent(String offerId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest(
+    return _sendRequest(
       'rift.fetchClipboardContent',
       {'offerId': offerId},
     );
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> offerFile({
@@ -906,9 +1158,6 @@ class JsonRpcRiftClient {
     String? fileName,
     String? mediaType,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final params = <String, dynamic>{
       'targetDeviceId': targetDeviceId,
       'localPath': localPath,
@@ -919,8 +1168,7 @@ class JsonRpcRiftClient {
     if (mediaType != null && mediaType.isNotEmpty) {
       params['mediaType'] = mediaType;
     }
-    final r = await _client!.sendRequest('rift.offerFile', params);
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.offerFile', params);
   }
 
   Future<bool> supportsSendQueue() async {
@@ -948,9 +1196,6 @@ class JsonRpcRiftClient {
     String? targetDeviceId,
     String? origin,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final params = <String, dynamic>{
       'localPath': localPath,
     };
@@ -966,68 +1211,49 @@ class JsonRpcRiftClient {
     if (origin != null && origin.isNotEmpty) {
       params['origin'] = origin;
     }
-    final r = await _client!.sendRequest('rift.enqueueFileSend', params);
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.enqueueFileSend', params);
   }
 
   Future<dynamic> listSendQueue() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listSendQueue');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listSendQueue');
   }
 
   Future<dynamic> getSendQueueItem(String queueItemId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.getSendQueueItem', {
+    return _sendRequest('rift.getSendQueueItem', {
       'queueItemId': queueItemId,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> assignSendQueueTarget({
     required String queueItemId,
     required String targetDeviceId,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.assignSendQueueTarget', {
+    return _sendRequest('rift.assignSendQueueTarget', {
       'queueItemId': queueItemId,
       'targetDeviceId': targetDeviceId,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> retrySendQueueItem(String queueItemId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.retrySendQueueItem', {
+    return _sendRequest('rift.retrySendQueueItem', {
       'queueItemId': queueItemId,
     });
-    return _canonicalizeResult(r);
+  }
+
+  Future<dynamic> cancelFileTransfer(String transferId) async {
+    return _sendRequest('rift.cancelFileTransfer', {
+      'transferId': transferId,
+    });
   }
 
   Future<dynamic> removeSendQueueItem(String queueItemId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.removeSendQueueItem', {
+    return _sendRequest('rift.removeSendQueueItem', {
       'queueItemId': queueItemId,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> listIncomingFileOffers() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listIncomingFileOffers');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listIncomingFileOffers');
   }
 
   Future<dynamic> acceptFileOffer({
@@ -1035,15 +1261,11 @@ class JsonRpcRiftClient {
     required String destinationPath,
     bool overwrite = false,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.acceptFileOffer', {
+    return _sendRequest('rift.acceptFileOffer', {
       'transferId': transferId,
       'destinationPath': destinationPath,
       'overwrite': overwrite,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> rejectFileOffer({
@@ -1051,9 +1273,6 @@ class JsonRpcRiftClient {
     required String failureReason,
     String? message,
   }) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
     final params = <String, dynamic>{
       'transferId': transferId,
       'failureReason': failureReason,
@@ -1061,33 +1280,20 @@ class JsonRpcRiftClient {
     if (message != null && message.isNotEmpty) {
       params['message'] = message;
     }
-    final r = await _client!.sendRequest('rift.rejectFileOffer', params);
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.rejectFileOffer', params);
   }
 
   Future<dynamic> listFileTransfers() async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.listFileTransfers');
-    return _canonicalizeResult(r);
+    return _sendRequest('rift.listFileTransfers');
   }
 
   Future<dynamic> getOperation(String operationId) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest('rift.getOperation', {
+    return _sendRequest('rift.getOperation', {
       'operationId': operationId,
     });
-    return _canonicalizeResult(r);
   }
 
   Future<dynamic> invokeRpc(String method, [dynamic parameters]) async {
-    if (!_isConnected || _client == null) {
-      throw StateError('Not connected to daemon');
-    }
-    final r = await _client!.sendRequest(method, parameters);
-    return _canonicalizeResult(r);
+    return _sendRequest(method, parameters);
   }
 }

@@ -17,6 +17,17 @@ public sealed class DeviceInfoResult
     public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
 }
 
+public static class DaemonCapabilities
+{
+    public static readonly CapabilityInfo ClipboardOfferFetch = new() { Name = "clipboard.offer_fetch", Version = 1 };
+    public static readonly CapabilityInfo FileTransfer = new() { Name = "file.transfer", Version = 1 };
+    public static readonly CapabilityInfo MediaPlayback = new() { Name = "media.playback", Version = 1 };
+    public static readonly CapabilityInfo NotificationSync = new() { Name = "notification.sync", Version = 1 };
+    public static readonly CapabilityInfo PresenceBasic = new() { Name = "presence.basic", Version = 1 };
+    public static readonly CapabilityInfo OperationLifecycle = new() { Name = "operation.lifecycle", Version = 1 };
+    public static readonly CapabilityInfo SecurityEventLog = new() { Name = "security.event_log", Version = 1 };
+}
+
 public sealed class QueryEventLogResult
 {
     public IReadOnlyList<SecurityEventRecord> Events { get; init; } = [];

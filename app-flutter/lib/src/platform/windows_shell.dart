@@ -1,11 +1,14 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class WindowsShell {
   static const MethodChannel _channel = MethodChannel('rift/windows/shell');
+  @visibleForTesting
+  static bool? debugIsWindowsOverride;
 
-  static bool get isSupported => Platform.isWindows;
+  static bool get isSupported => debugIsWindowsOverride ?? Platform.isWindows;
 
   static Future<bool> showTransferNotification({
     required String title,

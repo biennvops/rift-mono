@@ -1,12 +1,14 @@
-import Foundation
 import Cocoa
 import CryptoKit
 import FlutterMacOS
-import UniformTypeIdentifiers
+import Foundation
 import UserNotifications
 
 final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
   static let channelName = "rift.permissions"
+  private static let mirroredNotificationBaseCategory = "rift.mirroredNotification"
+  private static let mirroredNotificationOpenAction = "open"
+  private static let mirroredNotificationDismissAction = "dismiss"
   private static let shared = PermissionsBridge()
   private static var channel: FlutterMethodChannel?
   private static var pendingAction: [String: Any]?
@@ -16,7 +18,64 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     Self.channel = channel
     channel.setMethodCallHandler(Self.shared.handle)
     UNUserNotificationCenter.current().delegate = Self.shared
+    Self.registerNotificationCategories()
     Self.flushPendingActionIfNeeded()
+  }
+
+  private static func registerNotificationCategories() {
+    let openAction = UNNotificationAction(
+      identifier: mirroredNotificationOpenAction,
+      title: "Open",
+      options: []
+    )
+    let dismissAction = UNNotificationAction(
+      identifier: mirroredNotificationDismissAction,
+      title: "Dismiss",
+      options: []
+    )
+    let categories: Set<UNNotificationCategory> = [
+      UNNotificationCategory(
+        identifier: mirroredNotificationBaseCategory,
+        actions: [],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).open",
+        actions: [openAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).dismiss",
+        actions: [dismissAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+      UNNotificationCategory(
+        identifier: "\(mirroredNotificationBaseCategory).openDismiss",
+        actions: [openAction, dismissAction],
+        intentIdentifiers: [],
+        options: []
+      ),
+    ]
+    UNUserNotificationCenter.current().setNotificationCategories(categories)
+  }
+
+  private static func categoryIdentifier(
+    supportsOpen: Bool,
+    supportsDismiss: Bool
+  ) -> String {
+    if supportsOpen && supportsDismiss {
+      return "\(mirroredNotificationBaseCategory).openDismiss"
+    }
+    if supportsOpen {
+      return "\(mirroredNotificationBaseCategory).open"
+    }
+    if supportsDismiss {
+      return "\(mirroredNotificationBaseCategory).dismiss"
+    }
+    return mirroredNotificationBaseCategory
   }
 
   static func dispatchOpenFiles(_ paths: [String]) {
@@ -41,6 +100,16 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     }
   }
 
+  private static func dispatchPayload(_ payload: [String: Any]) {
+    if let channel = Self.channel {
+      DispatchQueue.main.async {
+        channel.invokeMethod("notificationActivated", arguments: payload)
+      }
+    } else {
+      Self.pendingAction = payload
+    }
+  }
+
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "notification.getStatus":
@@ -56,19 +125,8 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     }
   }
 
-  private static func dispatchPayload(_ payload: [String: Any]) {
-    if let channel = Self.channel {
-      DispatchQueue.main.async {
-        channel.invokeMethod("notificationActivated", arguments: payload)
-      }
-    } else {
-      Self.pendingAction = payload
-    }
-  }
-
   private func getNotificationStatus(result: @escaping FlutterResult) {
     UNUserNotificationCenter.current().getNotificationSettings { settings in
-      // 0 = notDetermined, 1 = denied, 2 = authorized
       let status: String
       switch settings.authorizationStatus {
       case .notDetermined:
@@ -85,9 +143,17 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
   }
 
   private func requestNotification(result: @escaping FlutterResult) {
-    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+    UNUserNotificationCenter.current().requestAuthorization(
+      options: [.alert, .badge, .sound]
+    ) { granted, error in
       if let error = error {
-        result(FlutterError(code: "notification_request_failed", message: error.localizedDescription, details: nil))
+        result(
+          FlutterError(
+            code: "notification_request_failed",
+            message: error.localizedDescription,
+            details: nil
+          )
+        )
         return
       }
       result(granted)
@@ -100,20 +166,26 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
     let body = dict?["body"] as? String ?? ""
     let route = dict?["route"] as? String
     let payload = dict?["payload"] as? [String: Any]
+    let actions = dict?["actions"] as? [[String: Any]] ?? []
 
     let content = UNMutableNotificationContent()
     content.title = title
     content.body = body
     content.sound = .default
-    if let route {
+    if let route = route {
       var userInfo: [AnyHashable: Any] = ["route": route]
-      if let payload {
+      if let payload = payload {
         for (key, value) in payload {
           userInfo[key] = value
         }
       }
       content.userInfo = userInfo
     }
+    let actionIds = Set(actions.compactMap { $0["id"] as? String })
+    content.categoryIdentifier = Self.categoryIdentifier(
+      supportsOpen: actionIds.contains(Self.mirroredNotificationOpenAction),
+      supportsDismiss: actionIds.contains(Self.mirroredNotificationDismissAction)
+    )
 
     let request = UNNotificationRequest(
       identifier: UUID().uuidString,
@@ -123,7 +195,13 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
 
     UNUserNotificationCenter.current().add(request) { error in
       if let error = error {
-        result(FlutterError(code: "notification_show_failed", message: error.localizedDescription, details: nil))
+        result(
+          FlutterError(
+            code: "notification_show_failed",
+            message: error.localizedDescription,
+            details: nil
+          )
+        )
         return
       }
       result(true)
@@ -148,10 +226,13 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       }
       payload[stringKey] = value
     }
-
-    DispatchQueue.main.async {
-      PermissionsBridge.channel?.invokeMethod("notificationActivated", arguments: payload)
+    if response.actionIdentifier == Self.mirroredNotificationOpenAction {
+      payload["notificationAction"] = Self.mirroredNotificationOpenAction
+    } else if response.actionIdentifier == Self.mirroredNotificationDismissAction {
+      payload["notificationAction"] = Self.mirroredNotificationDismissAction
     }
+
+    Self.dispatchPayload(payload)
     completionHandler()
   }
 }
@@ -189,7 +270,8 @@ final class DesktopClipboardBridge {
     }
 
     if let text = pasteboard.string(forType: .string),
-       let data = text.data(using: .utf8) {
+       let data = text.data(using: .utf8)
+    {
       logReadIfChanged(contentType: "text/plain", data: data)
       result([
         "contentType": "text/plain",
@@ -208,7 +290,13 @@ final class DesktopClipboardBridge {
       let contentType = dict["contentType"] as? String,
       let typedData = dict["bytes"] as? FlutterStandardTypedData
     else {
-      result(FlutterError(code: "invalid_args", message: "contentType and bytes are required", details: nil))
+      result(
+        FlutterError(
+          code: "invalid_args",
+          message: "contentType and bytes are required",
+          details: nil
+        )
+      )
       return
     }
 
@@ -229,7 +317,11 @@ final class DesktopClipboardBridge {
 
       let pasteboard = NSPasteboard.general
       let applied = pasteboard.writeObjects([item])
-      NSLog("Rift clipboard bridge: wrote text/plain payload (%lu bytes) success=%@", typedData.data.count, applied.description)
+      NSLog(
+        "Rift clipboard bridge: wrote text/plain payload (%lu bytes) success=%@",
+        typedData.data.count,
+        applied.description
+      )
       result(applied)
     case "image/png":
       let item = NSPasteboardItem()
@@ -241,7 +333,11 @@ final class DesktopClipboardBridge {
 
       let pasteboard = NSPasteboard.general
       let applied = pasteboard.writeObjects([item])
-      NSLog("Rift clipboard bridge: wrote image/png payload (%lu bytes) success=%@", typedData.data.count, applied.description)
+      NSLog(
+        "Rift clipboard bridge: wrote image/png payload (%lu bytes) success=%@",
+        typedData.data.count,
+        applied.description
+      )
       result(applied)
     default:
       NSLog("Rift clipboard bridge: unsupported write content type %@", contentType)

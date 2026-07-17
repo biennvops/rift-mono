@@ -8,14 +8,16 @@ The IPC API is the only interface through which a client application interacts w
 
 ## 1. Transport Independence
 
-The IPC contract is defined independently of transport. In v0.1-draft, two transport bindings exist:
+The IPC contract is defined independently of transport. In v0.1-draft, four transport bindings exist:
 
 | Platform | Transport                | Notes                                                        |
 | -------- | ------------------------ | ------------------------------------------------------------ |
 | Windows  | Named pipe               | Flutter client connects to the riftd Windows Service         |
+| macOS    | Unix domain socket       | Flutter client connects to the `daemon-cs` macOS host        |
+| Linux    | Unix domain socket       | Flutter client connects to the `daemon-cs` Linux host        |
 | Android  | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
 
-Future transports (Unix domain sockets on macOS/Linux, in-process channels on iOS) require only a new transport binding, not changes to this contract.
+Future transports such as in-process channels on iOS require only a new transport binding, not changes to this contract.
 
 All transports carry JSON-RPC 2.0 messages. Each message is a single JSON object. Framing (length-prefix, newline-delimited, or transport-native) is transport-specific and outside this specification.
 
@@ -99,7 +101,8 @@ Returns the local device's identity information.
     { "name": "clipboard.offer_fetch", "version": 1 },
     { "name": "presence.basic", "version": 1 },
     { "name": "operation.lifecycle", "version": 1 },
-    { "name": "security.event_log", "version": 1 }
+    { "name": "security.event_log", "version": 1 },
+    { "name": "notification.sync", "version": 1 }
   ]
 }
 ```
@@ -544,6 +547,25 @@ Removes a durable send queue item.
 | ------------- | ------------- | -------- | ------------------ |
 | `queueItemId` | UUIDv4 string | Yes      | The queue item     |
 
+#### `rift.cancelFileTransfer`
+
+Cancels an in-flight file transfer initiated or accepted by the local daemon.
+
+**Params:**
+
+| Field        | Type          | Required | Description            |
+| ------------ | ------------- | -------- | ---------------------- |
+| `transferId` | UUIDv4 string | Yes      | The active transfer    |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "cancelled": true
+}
+```
+
 #### `rift.acceptFileOffer`
 
 Accepts an incoming file offer and selects the destination path locally.
@@ -587,7 +609,114 @@ Rejects an incoming file offer.
 }
 ```
 
-### 4.7 Presence
+### 4.7 Notification Sync
+
+#### `rift.listNotifications`
+
+Returns the locally cached mirrored notification inbox plus the current local notification-sync policy.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "notifications": [
+    {
+      "notificationId": "android:com.example.chat:42",
+      "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "sourcePlatform": "android",
+      "packageName": "com.example.chat",
+      "appName": "Example Chat",
+      "title": "Riley",
+      "bodyPreview": "See you at 6?",
+      "postedAt": "2026-07-14T09:58:00Z",
+      "isDismissible": true,
+      "isOpenable": true
+    }
+  ],
+  "policy": {
+    "enabled": true,
+    "blacklistedPackages": ["com.bank.example"]
+  }
+}
+```
+
+#### `rift.performNotificationAction`
+
+Requests a remote action against a mirrored notification when the source marked that action as available.
+
+**Params:**
+
+| Field            | Type   | Required | Description                                 |
+| ---------------- | ------ | -------- | ------------------------------------------- |
+| `notificationId` | string | Yes      | Android-origin stable notification ID       |
+| `action`         | string | Yes      | Closed vocabulary: `open` or `dismiss`      |
+
+**Result:**
+
+```json
+{
+  "operationId": "018f2f9a-8b7c-4a4b-9c0d-666666666667",
+  "notificationId": "android:com.example.chat:42",
+  "action": "open",
+  "state": "Pending"
+}
+```
+
+**Errors:** `-32003` if `notification.sync` is unavailable, `-32009` if the mirrored notification no longer exists, `-32010` if local policy denies the action.
+
+#### `rift.updateNotificationSyncPolicy`
+
+Updates the local notification-sync policy. In v1, the default policy is enabled with a package blacklist.
+
+**Params:**
+
+| Field                 | Type             | Required | Description                                   |
+| --------------------- | ---------------- | -------- | --------------------------------------------- |
+| `enabled`             | boolean          | Yes      | Whether Android notification sync is enabled  |
+| `blacklistedPackages` | array of strings | Yes      | Android package names excluded from syncing   |
+
+**Result:**
+
+```json
+{
+  "enabled": true,
+  "blacklistedPackages": ["com.bank.example"]
+}
+```
+
+#### `rift.notifyLocalNotificationEvent`
+
+Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers, including desktop and Android sinks.
+
+`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
+
+#### `rift.listMediaPlayback`
+
+Returns the locally cached mirrored media playback state.
+
+**Params:** none.
+
+#### `rift.getMediaPlayback`
+
+Returns one mirrored playback record by `playbackId`.
+
+**Params:** `playbackId` string.
+
+#### `rift.performMediaPlaybackAction`
+
+Requests a remote media playback action.
+
+**Params:** `playbackId` string, `action` string, optional `positionMs` integer for `seek`.
+
+#### `rift.notifyLocalMediaPlaybackEvent`
+
+Submits a locally observed or locally generated media playback event into the daemon so it can update the local playback cache and mirror the event to trusted peers.
+
+`posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
+
+### 4.8 Presence
 
 #### `rift.getPeerPresence`
 
@@ -612,7 +741,7 @@ Returns presence information for a specific trusted peer.
 
 **Errors:** `-32009` if peer not found, `-32004` if peer not trusted.
 
-### 4.8 Operations
+### 4.9 Operations
 
 #### `rift.listOperations`
 
@@ -674,7 +803,7 @@ Returns details for a single operation, including its transition history.
 
 **Errors:** `-32009` if operation not found.
 
-### 4.9 Event Log
+### 4.10 Event Log
 
 #### `rift.queryEventLog`
 
@@ -724,6 +853,14 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onTrustChanged`        | `{ "deviceId", "previousState", "newState", "reason?" }`                               | Trust state transitioned             |
 | `rift.onClipboardOffer`      | `{ "offerId", "sourceDeviceId", "contentType", "byteSize", "sha256", "expiresInMs" }`  | New clipboard offer from a peer      |
 | `rift.onClipboardExpired`    | `{ "offerId" }`                                                                        | Clipboard offer expired              |
+| `rift.onNotificationPosted`  | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification posted         |
+| `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
+| `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
+| `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
+| `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
+| `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |
+| `rift.onMediaPlaybackRemoved` | `{ "playbackId", "sourceDeviceId", "removedAt?" }` | Mirrored playback removed |
+| `rift.onMediaPlaybackActionResult` | `{ "playbackId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote playback action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
 | `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |

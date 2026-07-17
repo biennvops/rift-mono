@@ -347,6 +347,8 @@ public sealed class WorkerTests
         }
 
         public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasProtectedSession(string peerDeviceId) => false;
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -387,6 +389,8 @@ public sealed class WorkerTests
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public bool HasActiveSession(string peerDeviceId) => false;
+        public bool HasProtectedSession(string peerDeviceId) => false;
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }

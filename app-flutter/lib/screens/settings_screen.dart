@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,8 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../constants.dart';
 import 'event_log_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
+import '../src/platform/notification_route.dart';
+import '../src/platform/windows_shell.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -17,16 +22,38 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
+  static const _androidTestNotificationPackage = 'com.example.app_flutter';
+  static const _androidTestNotificationAppName = 'Rift';
+  static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
+  static const _desktopTestNotificationAppName = 'Rift Desktop';
   Map<String, dynamic>? _deviceInfo;
   bool _isLoading = true;
   String? _error;
   String _notificationPermissionStatus = 'unknown';
+  String _notificationAccessStatus = 'unknown';
   bool _clipboardNotificationsEnabled = false;
+  bool _notificationSyncEnabled = true;
+  final TextEditingController _notificationBlacklistController =
+      TextEditingController();
+  Timer? _notificationPolicyDebounceTimer;
+
+  bool get _isDesktopPlatform =>
+      WindowsShell.isSupported ||
+      LinuxNotifications.isSupported ||
+      Platform.isMacOS;
 
   @override
   void initState() {
     super.initState();
     _fetchDeviceInfo();
+  }
+
+  @override
+  void dispose() {
+    _notificationPolicyDebounceTimer?.cancel();
+    _notificationBlacklistController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchDeviceInfo() async {
@@ -40,13 +67,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
       final data = await client.getDeviceInfo();
       final notificationStatus = await _loadNotificationPermissionStatus();
+      final notificationAccessStatus = await _loadNotificationAccessStatus();
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
         _deviceInfo = data as Map<String, dynamic>?;
         _notificationPermissionStatus = notificationStatus;
+        _notificationAccessStatus = notificationAccessStatus;
         _clipboardNotificationsEnabled =
             prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
+        _notificationSyncEnabled =
+            prefs.getBool(AppPrefs.notificationSyncEnabled) ?? true;
+        _notificationBlacklistController.text =
+            (prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
+                    const <String>[])
+                .join('\n');
         _isLoading = false;
       });
     } catch (e) {
@@ -68,17 +103,191 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return 'unknown';
   }
 
+  Future<String> _loadNotificationAccessStatus() async {
+    if (AndroidShell.isSupported) {
+      return AndroidShell.getNotificationListenerAccessStatus();
+    }
+    return 'unknown';
+  }
+
   Future<void> _openNotificationSettings() async {
     final theme = Theme.of(context);
-    final success = Platform.isAndroid
-        ? await AndroidShell.openNotificationSettings()
-        : false;
+    bool success = false;
+    if (AndroidShell.isSupported) {
+      success = await AndroidShell.openNotificationSettings();
+    } else if (Platform.isMacOS) {
+      try {
+        final direct = await Process.run('open', <String>[
+          'x-apple.systempreferences:com.apple.preference.notifications',
+        ]);
+        success = direct.exitCode == 0;
+        if (!success) {
+          final fallback = await Process.run('open', <String>[
+            '-b',
+            'com.apple.systempreferences',
+          ]);
+          success = fallback.exitCode == 0;
+        }
+      } catch (_) {
+        success = false;
+      }
+    }
     if (!mounted || success) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           'Unable to open notification settings on ${Platform.operatingSystem}.',
           style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _requestMacOSNotifications() async {
+    final granted = await MacOSNotifications.request();
+    final status = await _loadNotificationPermissionStatus();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _notificationPermissionStatus = status;
+    });
+    if (granted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Notifications were not enabled. You can allow them in System Settings > Notifications.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openNotificationAccessSettings() async {
+    final success = AndroidShell.isSupported
+        ? await AndroidShell.openNotificationListenerSettings()
+        : false;
+    if (!mounted || success) return;
+    final theme = Theme.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Unable to open Android notification access settings.',
+          style: TextStyle(color: theme.colorScheme.onInverseSurface),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showTestNotification() async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    final success = await AndroidShell.showTestNotification();
+    if (success) {
+      final now = DateTime.now().toUtc();
+      try {
+        await client.notifyLocalNotificationEvent(
+          eventType: 'posted',
+          payload: <String, Object?>{
+            'notificationId':
+                'android:$_androidTestNotificationPackage:test:${now.microsecondsSinceEpoch}',
+            'packageName': _androidTestNotificationPackage,
+            'appName': _androidTestNotificationAppName,
+            'title': 'Rift test notification',
+            'bodyPreview': 'If you see this notification, sync is working.',
+            'postedAt': now.toIso8601String(),
+            'isDismissible': true,
+            'isOpenable': true,
+          },
+        );
+      } catch (error) {
+        debugPrint(
+          '[Notification Sync] Failed to mirror Android test notification: $error',
+        );
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Sent Android test notification.'
+              : 'Unable to send test notification. Enable app notifications first.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDesktopTestNotification() async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    final now = DateTime.now().toUtc();
+    final title = 'Rift desktop test notification';
+    final body = 'Desktop notification sync is active for trusted peers.';
+    bool shown = false;
+
+    if (WindowsShell.isSupported) {
+      shown = await WindowsShell.showNotification(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    } else if (LinuxNotifications.isSupported) {
+      shown = await LinuxNotifications.show(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    } else if (Platform.isMacOS) {
+      shown = await MacOSNotifications.show(
+        title: title,
+        body: body,
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+    }
+
+    if (shown) {
+      try {
+        await client.notifyLocalNotificationEvent(
+          eventType: 'posted',
+          payload: <String, Object?>{
+            'notificationId':
+                'desktop:$_desktopTestNotificationPackage:test:${now.microsecondsSinceEpoch}',
+            'sourcePlatform': Platform.isWindows
+                ? 'windows'
+                : Platform.isMacOS
+                    ? 'macos'
+                    : 'linux',
+            'packageName': _desktopTestNotificationPackage,
+            'appName': _desktopTestNotificationAppName,
+            'title': title,
+            'bodyPreview': body,
+            'postedAt': now.toIso8601String(),
+            'isDismissible': false,
+            'isOpenable': false,
+          },
+        );
+      } catch (error) {
+        debugPrint(
+          '[Notification Sync] Failed to mirror desktop test notification: $error',
+        );
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          shown
+              ? 'Sent desktop test notification.'
+              : 'Unable to send desktop test notification on this platform.',
         ),
       ),
     );
@@ -93,14 +302,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  bool get _canOpenNotificationSettings => Platform.isAndroid;
+  List<String> _notificationBlacklistPackages() {
+    return _notificationBlacklistController.text
+        .split(RegExp(r'[\n,]'))
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+  }
+
+  Future<void> _persistNotificationSyncPolicy() async {
+    final blacklist = _notificationBlacklistPackages();
+    await persistNotificationSyncPolicyPreferences(
+      enabled: _notificationSyncEnabled,
+      blacklistedPackages: blacklist,
+    );
+    if (!mounted) {
+      return;
+    }
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    if (!client.isConnected) {
+      return;
+    }
+    try {
+      await client.updateNotificationSyncPolicy(
+        enabled: _notificationSyncEnabled,
+        blacklistedPackages: blacklist,
+      );
+    } catch (error) {
+      if (JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      );
+    }
+  }
+
+  void _scheduleNotificationSyncPolicyPersist() {
+    _notificationPolicyDebounceTimer?.cancel();
+    _notificationPolicyDebounceTimer = Timer(
+      _notificationPolicyDebounce,
+      _persistNotificationSyncPolicy,
+    );
+  }
+
+  bool get _canManageNotificationSettings =>
+      AndroidShell.isSupported || Platform.isMacOS;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
 
+  bool get _notificationAccessAuthorized =>
+      _notificationAccessStatus == 'authorized';
+
   IconData get _notificationPermissionIcon => _notificationsAuthorized
       ? Icons.check_circle
       : _notificationPermissionStatus == 'denied'
+          ? Icons.cancel
+          : Icons.info;
+
+  IconData get _notificationAccessIcon => _notificationAccessAuthorized
+      ? Icons.check_circle
+      : _notificationAccessStatus == 'denied'
           ? Icons.cancel
           : Icons.info;
 
@@ -111,14 +378,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ? theme.colorScheme.error
               : theme.colorScheme.outline;
 
+  Color _notificationAccessColor(ThemeData theme) =>
+      _notificationAccessAuthorized
+          ? theme.colorScheme.secondary
+          : _notificationAccessStatus == 'denied'
+              ? theme.colorScheme.error
+              : theme.colorScheme.outline;
+
   String get _notificationPermissionSubtitle {
     switch (_notificationPermissionStatus) {
       case 'authorized':
         return 'System notifications enabled';
       case 'denied':
         return 'System notifications are off';
+      case 'notDetermined':
+        return Platform.isMacOS
+            ? 'Permission has not been requested yet'
+            : 'Notification permission not granted yet';
+      case 'unknown':
+        return Platform.isMacOS
+            ? 'Unable to read macOS notification permission state'
+            : 'Notification status unavailable on this platform';
       default:
-        return 'Notification status unavailable on this platform';
+        return 'Notification status: $_notificationPermissionStatus';
+    }
+  }
+
+  String get _notificationPermissionActionLabel {
+    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
+      return 'ALLOW';
+    }
+    return 'OPEN SETTINGS';
+  }
+
+  Future<void> _handleNotificationPermissionAction() async {
+    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
+      await _requestMacOSNotifications();
+      return;
+    }
+    await _openNotificationSettings();
+  }
+
+  String get _notificationAccessSubtitle {
+    if (!AndroidShell.isSupported) {
+      return 'Notification access is only required on Android';
+    }
+
+    switch (_notificationAccessStatus) {
+      case 'authorized':
+        return 'Android notification access enabled for sync';
+      case 'denied':
+        return 'Android notification access is off';
+      default:
+        return 'Notification access status unavailable';
     }
   }
 
@@ -258,7 +570,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
           if (_error != null) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -268,8 +579,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
           ],
-
-          // General Section
           _buildSectionHeader('General'),
           Container(
             decoration: BoxDecoration(
@@ -296,8 +605,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
-          // Identity Section
           _buildSectionHeader('Identity'),
           Container(
             decoration: BoxDecoration(
@@ -319,8 +626,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
-
-          // Permissions Section
           _buildSectionHeader('Permissions'),
           Container(
             decoration: BoxDecoration(
@@ -341,29 +646,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: _notificationPermissionColor(theme),
                   title: 'Notifications',
                   subtitle: _notificationPermissionSubtitle,
-                  trailing:
-                      !_notificationsAuthorized && _canOpenNotificationSettings
-                          ? ElevatedButton(
-                              onPressed: _openNotificationSettings,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: theme.colorScheme.primary,
-                                foregroundColor: theme.colorScheme.onPrimary,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                              ),
-                              child: const Text(
-                                'OPEN SETTINGS',
-                                style: TextStyle(
-                                  fontFamily: 'JetBrains Mono',
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            )
-                          : null,
+                  trailing: !_notificationsAuthorized &&
+                          _canManageNotificationSettings
+                      ? ElevatedButton(
+                          onPressed: _handleNotificationPermissionAction,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: theme.colorScheme.primary,
+                            foregroundColor: theme.colorScheme.onPrimary,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                          ),
+                          child: Text(
+                            _notificationPermissionActionLabel,
+                            style: const TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        )
+                      : null,
                 ),
+                if (AndroidShell.isSupported)
+                  _buildStatusRow(
+                    icon: _notificationAccessIcon,
+                    color: _notificationAccessColor(theme),
+                    title: 'Notification access',
+                    subtitle: _notificationAccessSubtitle,
+                    trailing: !_notificationAccessAuthorized
+                        ? ElevatedButton(
+                            onPressed: _openNotificationAccessSettings,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: theme.colorScheme.primary,
+                              foregroundColor: theme.colorScheme.onPrimary,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                            ),
+                            child: const Text(
+                              'OPEN SETTINGS',
+                              style: TextStyle(
+                                fontFamily: 'JetBrains Mono',
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          )
+                        : null,
+                  ),
                 _buildStatusRow(
                   icon: Icons.info,
                   color: theme.colorScheme.outline,
@@ -389,12 +722,77 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: _setClipboardNotificationsEnabled,
                   ),
                 ),
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    secondary: Icon(
+                      Icons.notifications_active,
+                      color: theme.colorScheme.outline,
+                    ),
+                    title: const Text('Android notification sync'),
+                    subtitle: Text(
+                      _notificationAccessAuthorized
+                          ? 'On by default. Mirror Android notifications to trusted desktop devices only.'
+                          : 'On by default, but Android notification access must be enabled before sync can work.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    value: _notificationSyncEnabled,
+                    onChanged: (enabled) async {
+                      setState(() {
+                        _notificationSyncEnabled = enabled;
+                      });
+                      await _persistNotificationSyncPolicy();
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: TextField(
+                    controller: _notificationBlacklistController,
+                    minLines: 2,
+                    maxLines: 4,
+                    onChanged: (_) {
+                      _scheduleNotificationSyncPolicyPersist();
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Notification blacklist',
+                      helperText:
+                          'One Android package per line. Blacklisted apps stay local.',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                if (AndroidShell.isSupported)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showTestNotification,
+                        icon: const Icon(Icons.notifications_active_outlined),
+                        label: const Text('Test notification'),
+                      ),
+                    ),
+                  ),
+                if (_isDesktopPlatform)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _showDesktopTestNotification,
+                        icon: const Icon(Icons.desktop_windows_outlined),
+                        label: const Text('Test desktop sync'),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
           const SizedBox(height: 32),
-
-          // Platform Specific Section
           _buildSectionHeader('System Checks'),
           Container(
             decoration: BoxDecoration(
@@ -498,7 +896,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           const SizedBox(height: 40),
-
           _buildSectionHeader('Trust Store'),
           OutlinedButton.icon(
             onPressed: () {},

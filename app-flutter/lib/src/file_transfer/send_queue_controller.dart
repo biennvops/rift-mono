@@ -37,6 +37,7 @@ class SendQueueController extends ChangeNotifier {
 
   final List<SendQueueEntry> _items = <SendQueueEntry>[];
   bool _hasRestored = false;
+  Future<void>? _restoreFuture;
   final JsonRpcRiftClient? _client;
   final bool _preferDaemonOnly;
   StreamSubscription<Map<String, dynamic>>? _sendQueueChangedSub;
@@ -98,6 +99,126 @@ class SendQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _mergeDaemonEntries(Iterable<SendQueueEntry> entries) {
+    var changed = false;
+    for (final entry in entries) {
+      final queueItemId = entry.queueItemId;
+      final existingIndex = _items.indexWhere((candidate) {
+        if (queueItemId != null &&
+            candidate.queueItemId != null &&
+            candidate.queueItemId == queueItemId) {
+          return true;
+        }
+        return candidate.localPath == entry.localPath;
+      });
+
+      if (existingIndex >= 0) {
+        _items[existingIndex] = entry;
+      } else {
+        _items.add(entry);
+      }
+      changed = true;
+    }
+
+    if (changed) {
+      notifyListeners();
+    }
+  }
+
+  Future<void> _hydrateMissingDaemonItems(
+    Iterable<String> queueItemIds,
+  ) async {
+    final client = _client;
+    if (client == null) {
+      return;
+    }
+
+    final missingIds = queueItemIds.where((queueItemId) {
+      return !_items.any((item) => item.queueItemId == queueItemId);
+    }).toList(growable: false);
+    if (missingIds.isEmpty) {
+      return;
+    }
+
+    final recovered = <SendQueueEntry>[];
+    for (final queueItemId in missingIds) {
+      try {
+        final payload = await client.getSendQueueItem(queueItemId);
+        if (payload is! Map) {
+          continue;
+        }
+        final entry = SendQueueEntry.fromDaemonQueueMap(
+          Map<String, dynamic>.from(payload),
+        );
+        if (entry != null) {
+          recovered.add(entry);
+        }
+      } catch (_) {
+        // Best effort: the enqueue already succeeded, so avoid surfacing a
+        // second error if the follow-up read is briefly stale.
+      }
+    }
+
+    if (recovered.isNotEmpty) {
+      _mergeDaemonEntries(recovered);
+    }
+  }
+
+  Future<SendQueueEntry?> _createProvisionalDaemonEntry(
+    Map<String, String> request, {
+    required String queueItemId,
+    String? status,
+    String? targetDeviceId,
+  }) async {
+    final localPath = request['localPath'];
+    if (localPath == null || localPath.isEmpty) {
+      return null;
+    }
+
+    final file = File(localPath);
+    if (!await file.exists()) {
+      return null;
+    }
+
+    final fallbackFileName = localPath.split(Platform.pathSeparator).last;
+    final fallbackMediaType = 'application/octet-stream';
+    final entry = SendQueueEntry(
+      queueItemId: queueItemId,
+      localPath: localPath,
+      fileName: request['fileName']?.trim().isNotEmpty == true
+          ? request['fileName']!.trim()
+          : fallbackFileName,
+      mediaType: request['mediaType']?.trim().isNotEmpty == true
+          ? request['mediaType']!.trim()
+          : fallbackMediaType,
+      byteSize: await file.length(),
+    );
+    entry.targetDeviceId = targetDeviceId;
+    entry.status = _queueStatusFromDaemon(status);
+    entry.autoRetryWhenPeerAvailable =
+        status?.toLowerCase() == 'waiting_for_peer';
+    return entry;
+  }
+
+  SendQueueStatus _queueStatusFromDaemon(String? status) {
+    switch (status?.toLowerCase()) {
+      case 'waiting_for_target':
+      case 'queued':
+      case 'waiting_for_peer':
+      case 'dispatching':
+        return SendQueueStatus.queued;
+      case 'sending':
+        return SendQueueStatus.sending;
+      case 'sent':
+        return SendQueueStatus.sent;
+      case 'failed':
+      case 'cancelled':
+        return SendQueueStatus.failed;
+      default:
+        return SendQueueStatus.queued;
+    }
+  }
+
   Future<bool> supportsDaemonQueue() async {
     await ensureRestored();
     return _canUseDaemonQueue();
@@ -111,15 +232,36 @@ class SendQueueController extends ChangeNotifier {
 
   Future<void> restore() async {
     if (_hasRestored) {
+      await refreshFromDaemonIfSupported();
       return;
     }
-    _hasRestored = true;
+
+    final inFlight = _restoreFuture;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+
+    final future = _restoreImpl();
+    _restoreFuture = future;
+    try {
+      await future;
+    } finally {
+      _restoreFuture = null;
+    }
+  }
+
+  Future<void> _restoreImpl() async {
+    if (_hasRestored) {
+      return;
+    }
 
     final client = _client;
     if (client != null) {
       try {
         if (await _canUseDaemonQueue()) {
           await _refreshFromDaemonQueue();
+          _hasRestored = true;
           return;
         }
       } catch (_) {
@@ -128,12 +270,14 @@ class SendQueueController extends ChangeNotifier {
     }
 
     if (_shouldSkipLegacyPersistence) {
+      _hasRestored = true;
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(AppPrefs.sendQueueState);
     if (raw == null || raw.trim().isEmpty) {
+      _hasRestored = true;
       return;
     }
 
@@ -142,6 +286,7 @@ class SendQueueController extends ChangeNotifier {
       decoded = jsonDecode(raw) as List<dynamic>;
     } catch (_) {
       await prefs.remove(AppPrefs.sendQueueState);
+      _hasRestored = true;
       return;
     }
 
@@ -161,6 +306,7 @@ class SendQueueController extends ChangeNotifier {
     _items
       ..clear()
       ..addAll(restored);
+    _hasRestored = true;
     await persist();
     notifyListeners();
   }
@@ -328,6 +474,20 @@ class SendQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> cancelItem(SendQueueEntry item) async {
+    await ensureRestored();
+
+    final client = _client;
+    if (client != null &&
+        item.transferId != null &&
+        item.transferId!.isNotEmpty &&
+        !(await _canUseDaemonQueue() && item.queueItemId != null)) {
+      await client.cancelFileTransfer(item.transferId!);
+    }
+
+    await removeItem(item);
+  }
+
   Future<SendQueueDispatchResult> dispatchToPeer(String deviceId) async {
     await ensureRestored();
 
@@ -389,6 +549,8 @@ class SendQueueController extends ChangeNotifier {
         if (await _canUseDaemonQueue()) {
           var added = 0;
           var skipped = 0;
+          final enqueuedQueueItemIds = <String>[];
+          final provisionalEntries = <SendQueueEntry>[];
           for (final request in requests) {
             final localPath = request['localPath'];
             if (localPath == null || localPath.isEmpty) {
@@ -396,17 +558,41 @@ class SendQueueController extends ChangeNotifier {
               continue;
             }
             try {
-              await client.enqueueFileSend(
+              final response = await client.enqueueFileSend(
                 localPath: localPath,
                 fileName: request['fileName'],
                 mediaType: request['mediaType'],
               );
+              if (response is Map) {
+                final queueItemId = response['queueItemId']?.toString();
+                if (queueItemId != null && queueItemId.isNotEmpty) {
+                  enqueuedQueueItemIds.add(queueItemId);
+                  final provisional = await _createProvisionalDaemonEntry(
+                    request,
+                    queueItemId: queueItemId,
+                    status: response['status']?.toString(),
+                    targetDeviceId: response['targetDeviceId']?.toString(),
+                  );
+                  if (provisional != null) {
+                    provisionalEntries.add(provisional);
+                  }
+                }
+              }
               added += 1;
             } catch (_) {
               skipped += 1;
             }
           }
           await _refreshFromDaemonQueue();
+          await _hydrateMissingDaemonItems(enqueuedQueueItemIds);
+          final stillMissingProvisional = provisionalEntries.where((entry) {
+            final queueItemId = entry.queueItemId;
+            if (queueItemId == null || queueItemId.isEmpty) {
+              return false;
+            }
+            return !_items.any((item) => item.queueItemId == queueItemId);
+          });
+          _mergeDaemonEntries(stillMissingProvisional);
           return SendQueueEnqueueResult(added: added, skipped: skipped);
         }
       } catch (error) {

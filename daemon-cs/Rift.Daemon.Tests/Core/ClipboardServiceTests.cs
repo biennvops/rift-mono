@@ -831,6 +831,14 @@ public sealed class ClipboardServiceTests : IDisposable
                 return AssumeConnectedByDefault || ActiveSessions.Contains(peerDeviceId);
             }
         }
+        public bool HasProtectedSession(string peerDeviceId)
+        {
+            lock (_gate)
+            {
+                return AssumeConnectedByDefault || ActiveSessions.Contains(peerDeviceId);
+            }
+        }
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }

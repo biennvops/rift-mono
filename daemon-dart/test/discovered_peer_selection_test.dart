@@ -90,6 +90,47 @@ void main() {
     );
 
     test(
+      'listDiscoveredPeers keeps existing primary for equal score endpoints',
+      () async {
+        final daemon = RiftDaemon(
+          storagePath: '/tmp/rift-daemon-test',
+          enableDiscovery: false,
+          enableTransport: false,
+        );
+
+        daemon.trackDiscoveredPeer(
+          DiscoveredPeer(
+            instanceId: 'inst-first',
+            address: '192.168.1.50',
+            port: 11112,
+            minVersion: '0.1-draft',
+            maxVersion: '0.1-draft',
+            deviceIdHint: 'rift-peer-stable-primary',
+          ),
+        );
+        daemon.trackDiscoveredPeer(
+          DiscoveredPeer(
+            instanceId: 'inst-second',
+            address: '10.10.0.20',
+            port: 11112,
+            minVersion: '0.1-draft',
+            maxVersion: '0.1-draft',
+            deviceIdHint: 'rift-peer-stable-primary',
+          ),
+        );
+
+        final peers = await daemon.listDiscoveredPeers();
+        final peer = peers.single;
+        final observedEndpoints = (peer['observedEndpoints'] as List)
+            .cast<Map<String, dynamic>>();
+
+        expect(peer['address'], '192.168.1.50');
+        expect(observedEndpoints.first['address'], '192.168.1.50');
+        expect(observedEndpoints.last['address'], '10.10.0.20');
+      },
+    );
+
+    test(
       'replaceExternalDiscoveredPeers expands observedEndpoints into alternates',
       () async {
         final daemon = RiftDaemon(

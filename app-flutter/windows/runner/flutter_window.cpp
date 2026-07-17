@@ -435,10 +435,7 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
                                           Utf16FromUtf8(destination));
         } else {
           std::string route;
-          std::string device_id;
-          std::string display_name;
-          std::string fingerprint;
-          int64_t expires_in_ms = -1;
+          flutter::EncodableMap payload;
 
           if (route_it != arguments->end()) {
             if (const auto* value = std::get_if<std::string>(&route_it->second)) {
@@ -448,49 +445,14 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
           const auto payload_it =
               arguments->find(flutter::EncodableValue("payload"));
           if (payload_it != arguments->end()) {
-            if (const auto* payload =
+            if (const auto* payload_map =
                     std::get_if<flutter::EncodableMap>(&payload_it->second)) {
-              const auto device_id_it =
-                  payload->find(flutter::EncodableValue("deviceId"));
-              const auto display_name_it =
-                  payload->find(flutter::EncodableValue("displayName"));
-              const auto fingerprint_it =
-                  payload->find(flutter::EncodableValue("fingerprint"));
-              const auto expires_in_ms_it =
-                  payload->find(flutter::EncodableValue("expiresInMs"));
-              if (device_id_it != payload->end()) {
-                if (const auto* value =
-                        std::get_if<std::string>(&device_id_it->second)) {
-                  device_id = *value;
-                }
-              }
-              if (display_name_it != payload->end()) {
-                if (const auto* value =
-                        std::get_if<std::string>(&display_name_it->second)) {
-                  display_name = *value;
-                }
-              }
-              if (fingerprint_it != payload->end()) {
-                if (const auto* value =
-                        std::get_if<std::string>(&fingerprint_it->second)) {
-                  fingerprint = *value;
-                }
-              }
-              if (expires_in_ms_it != payload->end()) {
-                if (const auto* value =
-                        std::get_if<int32_t>(&expires_in_ms_it->second)) {
-                  expires_in_ms = *value;
-                } else if (const auto* value64 =
-                               std::get_if<int64_t>(&expires_in_ms_it->second)) {
-                  expires_in_ms = *value64;
-                }
-              }
+              payload = *payload_map;
             }
           }
-          shown = ShowNotification(
-              Utf16FromUtf8(*title), Utf16FromUtf8(*body), route, device_id,
-              display_name, fingerprint, expires_in_ms,
-              Utf16FromUtf8(destination));
+          shown = ShowNotification(Utf16FromUtf8(*title), Utf16FromUtf8(*body),
+                                   route, payload,
+                                   Utf16FromUtf8(destination));
         }
         result->Success(flutter::EncodableValue(shown));
       });
@@ -540,18 +502,15 @@ bool FlutterWindow::ShowTransferNotification(
     const std::wstring& title,
     const std::wstring& body,
     const std::wstring& destination_path) {
-  return ShowNotification(title, body, "history.transfer_activity", "", "", "",
-                          -1, destination_path);
+  return ShowNotification(title, body, "history.transfer_activity",
+                          flutter::EncodableMap(), destination_path);
 }
 
 bool FlutterWindow::ShowNotification(
     const std::wstring& title,
     const std::wstring& body,
     const std::string& route,
-    const std::string& device_id,
-    const std::string& display_name,
-    const std::string& fingerprint,
-    int64_t expires_in_ms,
+    const flutter::EncodableMap& payload,
     const std::wstring& destination_path) {
   if (GetHandle() == nullptr) {
     return false;
@@ -562,10 +521,7 @@ bool FlutterWindow::ShowNotification(
   }
 
   pending_notification_route_ = route;
-  pending_notification_device_id_ = device_id;
-  pending_notification_display_name_ = display_name;
-  pending_notification_fingerprint_ = fingerprint;
-  pending_notification_expires_in_ms_ = expires_in_ms;
+  pending_notification_payload_ = payload;
   pending_notification_destination_path_ = destination_path;
 
   NOTIFYICONDATAW icon_data = {};
@@ -591,21 +547,10 @@ void FlutterWindow::DispatchPendingNotificationAction() {
   flutter::EncodableMap payload = {
       {flutter::EncodableValue("route"),
        flutter::EncodableValue(pending_notification_route_)}};
-  if (!pending_notification_device_id_.empty()) {
-    payload[flutter::EncodableValue("deviceId")] =
-        flutter::EncodableValue(pending_notification_device_id_);
-  }
-  if (!pending_notification_display_name_.empty()) {
-    payload[flutter::EncodableValue("displayName")] =
-        flutter::EncodableValue(pending_notification_display_name_);
-  }
-  if (!pending_notification_fingerprint_.empty()) {
-    payload[flutter::EncodableValue("fingerprint")] =
-        flutter::EncodableValue(pending_notification_fingerprint_);
-  }
-  if (pending_notification_expires_in_ms_ >= 0) {
-    payload[flutter::EncodableValue("expiresInMs")] =
-        flutter::EncodableValue(pending_notification_expires_in_ms_);
+  for (const auto& entry : pending_notification_payload_) {
+    if (const auto* key = std::get_if<std::string>(&entry.first)) {
+      payload[flutter::EncodableValue(*key)] = entry.second;
+    }
   }
   if (!pending_notification_destination_path_.empty()) {
     payload[flutter::EncodableValue("destinationPath")] =

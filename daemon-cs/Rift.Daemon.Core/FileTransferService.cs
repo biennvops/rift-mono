@@ -341,6 +341,59 @@ public sealed class FileTransferService : IFileTransferService
         });
     }
 
+    public async Task<FileTransferInfo> CancelTransferAsync(
+        string transferId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(transferId))
+        {
+            throw new FileTransferFailureException("NotFound", -32009, "transferId is required.");
+        }
+
+        const string failureReason = "Cancelled";
+        const string message = "Transfer cancelled by local user.";
+
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        {
+            outgoing.SendCancellation.Cancel();
+            await TrySendCancelAsync(outgoing.TargetDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
+            TryTransitionFailure(outgoing.OperationId, failureReason);
+            await NotifyTransferFailedAsync(
+                outgoing.TransferId,
+                outgoing.OperationId,
+                "outgoing",
+                outgoing.TargetDeviceId,
+                outgoing.FileName,
+                outgoing.ByteSize,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
+            return ToTransferInfo(outgoing);
+        }
+
+        if (_incomingTransfers.TryGetValue(transferId, out var incoming))
+        {
+            await TrySendCancelAsync(incoming.SourceDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
+            _incomingTransfers.TryRemove(transferId, out _);
+            CleanupStagingDirectory(incoming.StagingDirectory);
+            TryTransitionFailure(incoming.OperationId, failureReason);
+            await NotifyTransferFailedAsync(
+                incoming.TransferId,
+                incoming.OperationId,
+                "incoming",
+                incoming.SourceDeviceId,
+                incoming.FileName,
+                incoming.ByteSize,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
+            return ToTransferInfo(incoming);
+        }
+
+        throw new FileTransferFailureException("NotFound", -32009, $"Transfer '{transferId}' was not found.");
+    }
+
     public async Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken)
     {
         EnsurePayloadIdentityMatches(offer.DeviceId, offer.PayloadSourceDeviceId, "file.offer");
@@ -910,6 +963,37 @@ public sealed class FileTransferService : IFileTransferService
         }
     }
 
+    private async Task TrySendCancelAsync(
+        string peerDeviceId,
+        string transferId,
+        string failureReason,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var envelope = new
+            {
+                rift = "0.1-draft",
+                type = "file.cancel",
+                messageId = Guid.NewGuid().ToString("D"),
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                payload = new
+                {
+                    transferId,
+                    failureReason,
+                    message
+                }
+            };
+
+            await SendProtectedMessageAsync(peerDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort file.cancel failed for {TransferId}.", transferId);
+        }
+    }
+
     private static byte[] EncodeEnvelope(object envelope)
     {
         return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
@@ -1028,9 +1112,13 @@ public sealed class FileTransferService : IFileTransferService
     {
         try
         {
-            await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
-            return;
+            if (_transport.HasProtectedSession(peerDeviceId))
+            {
+                await _transport.SendAsync(peerDeviceId, frameBody, cancellationToken).ConfigureAwait(false);
+                return;
+            }
         }
+
         catch (InvalidOperationException ex) when (IsNoOpenSessionError(ex))
         {
             _logger.LogDebug(ex, "No active session for peer {PeerDeviceId}. Trying trusted reconnect for file transfer.", peerDeviceId);
@@ -1042,7 +1130,7 @@ public sealed class FileTransferService : IFileTransferService
 
     private async Task EnsureConnectedForTrustedPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
     {
-        if (_transport.HasActiveSession(peerDeviceId))
+        if (_transport.HasProtectedSession(peerDeviceId))
         {
             return;
         }
@@ -1053,15 +1141,9 @@ public sealed class FileTransferService : IFileTransferService
             throw new FileTransferFailureException("Unauthorized", -32004, $"Peer '{peerDeviceId}' is not trusted.");
         }
 
-        if (peer.TrustedEndpoints.Count == 0)
-        {
-            await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
         var reconnectTask = _pendingTrustedReconnects.GetOrAdd(
             peerDeviceId,
-            _ => ReconnectTrustedPeerCoreAsync(peerDeviceId, peer, cancellationToken));
+            _ => ReconnectTrustedPeerAsync(peerDeviceId, peer, cancellationToken));
 
         try
         {
@@ -1074,6 +1156,22 @@ public sealed class FileTransferService : IFileTransferService
                 _pendingTrustedReconnects.TryRemove(peerDeviceId, out _);
             }
         }
+    }
+
+    private async Task ReconnectTrustedPeerAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
+    {
+        if (_transport.HasActiveSession(peerDeviceId))
+        {
+            await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (peer.TrustedEndpoints.Count == 0)
+        {
+            await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ReconnectTrustedPeerCoreAsync(peerDeviceId, peer, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)

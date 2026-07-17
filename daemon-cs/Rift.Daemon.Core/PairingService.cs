@@ -35,6 +35,8 @@ public sealed class PairingService : IPairingService
 
     public async Task<StartPairingResult> StartPairingAsync(string deviceId)
     {
+        var stateBeforeProtocolStart = _trustStore.GetPeer(deviceId)?.State;
+
         if (_pairingProtocolCoordinator is not null)
         {
             try
@@ -67,12 +69,23 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32008, $"Cannot start pairing from state '{peer.State}'.");
         }
 
+        var transitionedToPairingPending = false;
         if (peer.State == TrustState.Discovered && !_trustStore.TryTransition(deviceId, TrustState.PairingPending))
         {
             throw CreateRpcException(-32008, "Failed to transition peer into pairing_pending.");
         }
 
         if (peer.State == TrustState.Discovered)
+        {
+            transitionedToPairingPending = true;
+            peer.State = TrustState.PairingPending;
+        }
+        else if (stateBeforeProtocolStart == TrustState.Discovered && peer.State == TrustState.PairingPending)
+        {
+            transitionedToPairingPending = true;
+        }
+
+        if (transitionedToPairingPending)
         {
             await NotifyTrustChangedAsync(deviceId, "discovered", "pairing_pending", "Local pairing started.");
         }
@@ -134,20 +147,11 @@ public sealed class PairingService : IPairingService
             throw CreateRpcException(-32005, "Fingerprint mismatch.");
         }
 
-        if (!_trustStore.TryTransition(deviceId, TrustState.Trusted))
-        {
-            throw CreateRpcException(-32008, "Failed to persist trusted state.");
-        }
-
         var persistedAt = DateTimeOffset.UtcNow;
         if (_pairingProtocolCoordinator is not null)
         {
             await _pairingProtocolCoordinator.NotifyLocalPairingApprovedAsync(deviceId);
         }
-
-        await LogEventAsync(SecurityEventTypes.PairingCompleted, deviceId, SecurityEventOutcome.Success, null);
-        await NotifyTrustChangedAsync(deviceId, "pairing_pending", "trusted", "Pairing approved locally.");
-        await NotifyPairingCompleteAsync(deviceId, expectedFingerprint, persistedAt.ToString("O"));
 
         return new ApprovePairingResult
         {

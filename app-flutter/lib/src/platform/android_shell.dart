@@ -1,11 +1,14 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class AndroidShell {
   static const MethodChannel _channel = MethodChannel('rift/android/shell');
+  @visibleForTesting
+  static bool? debugIsAndroidOverride;
 
-  static bool get isSupported => Platform.isAndroid;
+  static bool get isSupported => debugIsAndroidOverride ?? Platform.isAndroid;
 
   static Future<bool> showNotification({
     required String title,
@@ -68,7 +71,56 @@ class AndroidShell {
     if (!isSupported) {
       return false;
     }
-    final result = await _channel.invokeMethod<bool>('openNotificationSettings');
+    final result =
+        await _channel.invokeMethod<bool>('openNotificationSettings');
+    return result ?? false;
+  }
+
+  static Future<String> getNotificationListenerAccessStatus() async {
+    if (!isSupported) {
+      return 'unknown';
+    }
+    final result = await _channel.invokeMethod<String>(
+      'getNotificationListenerAccessStatus',
+    );
+    return result ?? 'unknown';
+  }
+
+  static Future<bool> openNotificationListenerSettings() async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>(
+      'openNotificationListenerSettings',
+    );
+    return result ?? false;
+  }
+
+  static Future<bool> showTestNotification() async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('showTestNotification');
+    return result ?? false;
+  }
+
+  static Future<bool> showMediaPlayback({
+    required Map<String, Object?> playback,
+  }) async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('showMediaPlayback', {
+      'playback': playback,
+    });
+    return result ?? false;
+  }
+
+  static Future<bool> clearMediaPlayback() async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('clearMediaPlayback');
     return result ?? false;
   }
 

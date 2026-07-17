@@ -22,10 +22,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
+import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
+import 'src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'src/platform/macos_send_files.dart';
+import 'src/platform/linux_notifications.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -182,6 +186,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
   StreamSubscription<bool>? _connectionChangedSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
@@ -193,8 +200,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       ValueNotifier<String?>(null);
   final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
       <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> _pendingNotificationSyncEvents =
+      <Map<String, dynamic>>[];
+  bool _isFlushingNotificationSyncEvents = false;
+  final List<Map<String, String>> _pendingDesktopNotificationActions =
+      <Map<String, String>>[];
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
+  AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -213,6 +226,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(context.read<SendQueueController>().ensureRestored());
       _bindPlatformNotificationActions();
+      _bindMediaPlayback();
       _bindPairingRequests();
       _bindNotifications();
       _bindClipboardChannel();
@@ -278,9 +292,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   Future<void> _bindPlatformNotificationActions() async {
     WindowsShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
+    LinuxNotifications.setMethodCallHandler(
+      _handlePlatformNotificationMethodCall,
+    );
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    if (Platform.isMacOS) {
+      MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
+    }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
 
     if (Platform.isAndroid) {
@@ -307,20 +327,106 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(_flushPendingExternalClipboardPayloads());
+        unawaited(_flushPendingNotificationSyncEvents());
+        unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
+        unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
   }
 
+  Future<void> _reapplyNotificationSyncPolicy(JsonRpcRiftClient client) async {
+    try {
+      await pushSavedNotificationSyncPolicy(client);
+    } catch (error) {
+      if (JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        return;
+      }
+      debugPrint(
+        '[Notification Sync] Failed to reapply saved policy after reconnect: $error',
+      );
+    }
+  }
+
   Future<dynamic> _handlePlatformNotificationMethodCall(MethodCall call) async {
-    if (call.method != 'notificationActivated') {
+    final mediaPlaybackResult =
+        await _androidRemoteMediaPlayback?.handlePlatformMethodCall(call);
+    if (mediaPlaybackResult != null) {
+      return mediaPlaybackResult;
+    }
+
+    if (call.method == 'notificationActivated') {
+      final arguments = call.arguments;
+      if (arguments is Map) {
+        _handleNotificationActionPayload(Map<String, dynamic>.from(arguments));
+      }
       return null;
     }
-    final arguments = call.arguments;
-    if (arguments is Map) {
-      _handleNotificationActionPayload(Map<String, dynamic>.from(arguments));
+
+    if (call.method == 'notificationSyncEvent') {
+      final arguments = call.arguments;
+      if (arguments is Map) {
+        await _submitNativeNotificationSyncEvent(
+          Map<String, dynamic>.from(arguments),
+        );
+      }
     }
     return null;
+  }
+
+  void _bindMediaPlayback() {
+    final client = context.read<JsonRpcRiftClient>();
+    if (Platform.isAndroid) {
+      _androidRemoteMediaPlayback = AndroidRemoteMediaPlaybackCoordinator(client);
+      unawaited(_androidRemoteMediaPlayback!.start());
+    }
+  }
+
+  Future<dynamic> _handleMacOSSendFilesMethodCall(MethodCall call) async {
+    if (call.method != MacOSSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = MacOSSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  Future<bool?> _confirmIncomingFileOffer({
+    required String fileName,
+    required String sourceDeviceId,
+    required String destinationPath,
+  }) async {
+    final context = _navigatorKey.currentContext;
+    if (context == null || !mounted) {
+      return true;
+    }
+
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Accept file transfer?'),
+        content: Text(
+          'Receive $fileName from $sourceDeviceId?\n\n'
+          'Destination:\n$destinationPath',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Accept'),
+          ),
+        ],
+      ),
+    );
   }
 
   String? _externalClipboardFingerprint(Map<String, dynamic> payload) {
@@ -376,6 +482,37 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       }
     }
     _pendingExternalClipboardPayloads.add(Map<String, dynamic>.from(payload));
+  }
+
+  // A stable signature for a native notification-sync event so we never queue
+  // the same event twice (e.g. re-queued by a failed direct send *and* handed
+  // to the flush path on reconnect). posted/updated carry postedAt; removed
+  // carries removedAt — either disambiguates repeats for the same id.
+  String? _notificationSyncEventSignature(Map<String, dynamic> event) {
+    final eventType = event['eventType']?.toString();
+    final notificationId = event['notificationId']?.toString();
+    if (eventType == null ||
+        eventType.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      return null;
+    }
+    final timestamp =
+        (event['postedAt'] ?? event['removedAt'])?.toString() ?? '';
+    return '$eventType\n$notificationId\n$timestamp';
+  }
+
+  void _enqueueNotificationSyncEvent(Map<String, dynamic> event) {
+    final signature = _notificationSyncEventSignature(event);
+    if (signature != null) {
+      final alreadyQueued = _pendingNotificationSyncEvents.any(
+        (queued) => _notificationSyncEventSignature(queued) == signature,
+      );
+      if (alreadyQueued) {
+        return;
+      }
+    }
+    _pendingNotificationSyncEvents.add(Map<String, dynamic>.from(event));
   }
 
   Future<void> _submitExternalClipboardPayload(
@@ -438,6 +575,67 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
+  Future<void> _submitNativeNotificationSyncEvent(
+    Map<String, dynamic> event,
+  ) async {
+    final eventType = event['eventType']?.toString();
+    final notificationId = event['notificationId']?.toString();
+    if (eventType == null ||
+        eventType.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      return;
+    }
+
+    // Always append to the FIFO queue and drain in order, even when connected.
+    // Sending inline here while the flush path drains the backlog could let a
+    // newer event (e.g. "removed") overtake an older queued one (its "posted"),
+    // leaving a stale mirrored record on the daemon.
+    _enqueueNotificationSyncEvent(event);
+    await _flushPendingNotificationSyncEvents();
+  }
+
+  Future<void> _flushPendingNotificationSyncEvents() async {
+    if (_isFlushingNotificationSyncEvents) {
+      return;
+    }
+    final client = context.read<JsonRpcRiftClient>();
+    _isFlushingNotificationSyncEvents = true;
+    try {
+      while (_pendingNotificationSyncEvents.isNotEmpty) {
+        if (!client.isConnected) {
+          client.connect().catchError((Object error, StackTrace stackTrace) {
+            debugPrint(
+              '[Notification Sync] Failed to reconnect for native event send: $error',
+            );
+          });
+          // Leave the backlog intact; the reconnect will re-trigger the flush
+          // via onConnectionChanged.
+          return;
+        }
+
+        // Peek without removing so a mid-flight failure keeps the event queued
+        // in its original position, preserving ordering.
+        final event = _pendingNotificationSyncEvents.first;
+        final eventType = event['eventType']?.toString() ?? '';
+        try {
+          await client.notifyLocalNotificationEvent(
+            eventType: eventType,
+            payload: Map<String, Object?>.from(event),
+          );
+          _pendingNotificationSyncEvents.removeAt(0);
+        } catch (error) {
+          debugPrint(
+            '[Notification Sync] Failed to submit native notification event: $error',
+          );
+          return;
+        }
+      }
+    } finally {
+      _isFlushingNotificationSyncEvents = false;
+    }
+  }
+
   Future<void> _flushPendingExternalClipboardPayloads() async {
     if (_pendingExternalClipboardPayloads.isEmpty) {
       return;
@@ -454,6 +652,18 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   void _handleNotificationActionPayload(Map<String, dynamic> payload) {
     final route = payload['route']?.toString();
+    final notificationAction = payload['notificationAction']?.toString();
+    final notificationId = payload['notificationId']?.toString();
+    if (notificationAction != null &&
+        notificationId != null &&
+        notificationId.isNotEmpty) {
+      unawaited(
+        _submitDesktopNotificationAction(
+          notificationId: notificationId,
+          action: notificationAction,
+        ),
+      );
+    }
     if (route == null || route.isEmpty) {
       return;
     }
@@ -477,6 +687,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
+      case NotificationRoute.historyNotifications:
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:
@@ -532,10 +743,87 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     // If anything still couldn't be enqueued (e.g., file disappeared), re-buffer
     // so we don't lose the user's intent — they'll see it once the daemon
     // recovers and can act on it.
-    if (result.skipped > 0 && !_pendingSharedSendItems.contains(pending.first)) {
+    if (result.skipped > 0 &&
+        !_pendingSharedSendItems.contains(pending.first)) {
       debugPrint(
         '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
       );
+    }
+  }
+
+  void _queuePendingDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+  }) {
+    final alreadyQueued = _pendingDesktopNotificationActions.any(
+      (candidate) =>
+          candidate['notificationId'] == notificationId &&
+          candidate['action'] == action,
+    );
+    if (alreadyQueued) {
+      return;
+    }
+    _pendingDesktopNotificationActions.add(<String, String>{
+      'notificationId': notificationId,
+      'action': action,
+    });
+  }
+
+  Future<bool> _submitDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+    bool queueIfUnavailable = true,
+  }) async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
+      client.connect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[Notification Sync] Failed to reconnect for notification action: $error',
+        );
+      });
+      return false;
+    }
+
+    try {
+      await client.performNotificationAction(
+        notificationId: notificationId,
+        action: action,
+      );
+      return true;
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to perform mirrored notification action: $error',
+      );
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
+      return false;
+    }
+  }
+
+  Future<void> _flushPendingDesktopNotificationActions() async {
+    while (_pendingDesktopNotificationActions.isNotEmpty) {
+      final action = Map<String, String>.from(
+        _pendingDesktopNotificationActions.first,
+      );
+      final submitted = await _submitDesktopNotificationAction(
+        notificationId: action['notificationId'] ?? '',
+        action: action['action'] ?? '',
+        queueIfUnavailable: false,
+      );
+      if (!submitted) {
+        break;
+      }
+      _pendingDesktopNotificationActions.removeAt(0);
     }
   }
 
@@ -612,7 +900,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _fileFailedSub?.cancel();
     _clipboardOfferSub?.cancel();
     _clipboardExpiredSub?.cancel();
+    _notificationPostedSub?.cancel();
+    _notificationUpdatedSub?.cancel();
+    _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
+    unawaited(_androidRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
@@ -646,17 +938,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
-  Future<bool> _isWindowForeground() async {
-    if (!_enableDesktopShellIntegration) return true;
-    try {
-      final visible = await windowManager.isVisible();
-      final focused = await windowManager.isFocused();
-      return visible && focused;
-    } catch (_) {
-      return true;
-    }
-  }
-
   void _maybeNotify(String title, String body) {
     _maybeNotifyWithRoute(title: title, body: body);
   }
@@ -672,10 +953,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     String? destinationPath,
   }) {
     unawaited(() async {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        final foreground = await _isWindowForeground();
-        if (foreground) return;
-      }
       try {
         if (Platform.isWindows &&
             destinationPath != null &&
@@ -719,10 +996,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     Map<String, Object?>? payload,
   }) {
     unawaited(() async {
-      if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
-        final foreground = await _isWindowForeground();
-        if (foreground) return;
-      }
       try {
         if (Platform.isAndroid && route != null) {
           await AndroidShell.showNotification(
@@ -744,12 +1017,117 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
+        if (Platform.isLinux && route != null) {
+          await LinuxNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            destinationPath: destinationPath,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isMacOS) {
           await MacOSNotifications.show(
             title: title,
             body: body,
             route: route,
             payload: payload,
+          );
+        }
+      } catch (_) {
+        // Best-effort: depends on user permission and runner support.
+      }
+    }());
+  }
+
+  List<DesktopNotificationAction> _buildMirroredNotificationActions(
+    Map<String, dynamic> event,
+  ) {
+    final actions = <DesktopNotificationAction>[];
+    if (event['isOpenable'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'open', title: 'Open'),
+      );
+    }
+    if (event['isDismissible'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'dismiss', title: 'Dismiss'),
+      );
+    }
+    return actions;
+  }
+
+  void _showMirroredNotificationPreview(Map<String, dynamic> event) {
+    final notificationId = event['notificationId']?.toString();
+    if (notificationId == null || notificationId.isEmpty) {
+      return;
+    }
+    final title = event['title']?.toString().trim();
+    final body = event['bodyPreview']?.toString().trim();
+    final appName = event['appName']?.toString().trim();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    final mirroredPayload = <String, Object?>{
+      'route': NotificationRoute.historyNotifications,
+      'notificationId': notificationId,
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty)
+        'sourceDeviceId': sourceDeviceId,
+      if (appName != null && appName.isNotEmpty) 'appName': appName,
+      'isOpenable': event['isOpenable'] == true,
+      'isDismissible': event['isDismissible'] == true,
+    };
+    final mirroredActions = _buildMirroredNotificationActions(event);
+    final notificationTitle = (title != null && title.isNotEmpty)
+        ? title
+        : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
+    final notificationBody = [
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
+      if (body != null && body.isNotEmpty) body,
+    ].join(' • ');
+
+    unawaited(() async {
+      try {
+        if (Platform.isAndroid) {
+          final sourcePlatform = event['sourcePlatform']?.toString();
+          if (sourcePlatform != 'windows' &&
+              sourcePlatform != 'macos' &&
+              sourcePlatform != 'linux') {
+            return;
+          }
+          await AndroidShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
+        if (Platform.isWindows) {
+          await WindowsShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
+        if (Platform.isLinux) {
+          await LinuxNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
+          );
+          return;
+        }
+        if (Platform.isMacOS) {
+          await MacOSNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
           );
         }
       } catch (_) {
@@ -889,6 +1267,20 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       // Intentionally left empty to avoid noisy notifications
     });
 
+    _notificationPostedSub = client.onNotificationPosted.listen((event) {
+      _showMirroredNotificationPreview(event);
+    });
+
+    _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
+      // History UI refreshes from its own stream binding; updates do not raise a
+      // second native popup to avoid noisy duplicates.
+    });
+
+    _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
+      // Native notifications are best-effort previews; removal only updates the
+      // in-app history state.
+    });
+
     _fileOfferSub = client.onFileOffer.listen((event) {
       final fileName = event['fileName']?.toString() ?? 'file';
       final sourceDeviceId =
@@ -958,6 +1350,31 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         );
       }
 
+      final shouldAccept = await _confirmIncomingFileOffer(
+        fileName: fileName,
+        sourceDeviceId: sourceDeviceId,
+        destinationPath: destinationPath,
+      );
+      if (shouldAccept != true) {
+        await client.rejectFileOffer(
+          transferId: transferId,
+          failureReason: 'PolicyDenied',
+          message: 'User declined incoming file transfer.',
+        );
+        _scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text('Declined $fileName from $sourceDeviceId')),
+        );
+        return;
+      }
+
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Receiving $fileName from $sourceDeviceId...\n'
+            'Saved to: $destinationPath',
+          ),
+        ),
+      );
       _maybeNotify(
           'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 
@@ -985,6 +1402,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _autoAcceptingTransferIds.remove(transferId);
     }
   }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(

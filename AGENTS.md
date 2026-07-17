@@ -1,8 +1,35 @@
-# AGENTS.md
+# Rift engineering rules
 
-This file provides guidance to AI agents when working with code in this repository.
+## Verification
+- After any code change, run the project's verification command, and show the output.
+- Do not claim a task complete unless tests pass and lint is clean.
+- If verification commands are unclear, ask before proceeding.
+- Transform tasks into verifiable goals. 'Fix the bug' becomes 'write a test that reproduces it, then make it pass.' 'Refactor X' becomes 'ensure tests pass before and after.'
 
-## Project Overview
+## Boundaries
+- Ask before any of: destructive shell commands (rm -rf, git push --force, db drops), adding new dependencies, modifying CI/infrastructure, touching .env or secrets.
+- Before destructive actions, ensure changes are committed to git first - git is the backup. If git isn't appropriate, ask before proceeding.
+- Prefer editing existing files over creating new ones.
+- Do not add comments that restate what the code does. Comments are only for *why* something non-obvious is done - never for *what* the code is doing. Generally, use as few comments as possible and keep the code as self-explanatory or self-documented as possible.
+
+## Simplicity
+- Write the minimum code that solves the problem. No features beyond what was asked. No abstractions for single-use code. No configurability that wasn't requested. No error handling for impossible scenarios. If you wrote 200 lines and it could be 50, rewrite it.
+
+## Surgical changes
+- Touch only what's needed for the task. Don't improve adjacent code, comments, or formatting. Don't refactor things that aren't broken. Match existing style even if you'd do it differently. If you notice unrelated dead code, mention it - don't delete it. Every changed line should trace to the user's request.
+
+## Workflow
+- For non-trivial tasks: restate the goal, ask one clarifying question only if a major ambiguity would change the implementation, write a short plan (3-7 bullets), wait for approval, then implement.
+- If multiple interpretations of the request exist, present them and ask - don't pick silently. Push back when a simpler approach exists or when something seems wrong.
+- If the task is exploratory or prototyping, prefer speed and don't over-clarify; if the task is production code, follow the simplicity and surgical-change rules strictly.
+- Commit small. One logical change per commit. Follow the project's commit format if one exists; otherwise use conventional commits (feat:, fix:, refactor:, etc.).
+- When adding native Android changes, prefer `flutter build apk` over raw Gradle.
+- When you finish, summarize what changed in plain text - do not cat or re-print files.
+- At the end of non-trivial sessions, suggest 1-3 additions to the project AGENTS.md based on mistakes or rediscoveries from this session.
+
+---
+
+## Rift Overview
 
 Rift is a security-first, local-first, cross-platform device continuity platform. It uses a protocol-first development approach: the written protocol specification (`spec/doc/protocol.md`) is the source of truth, and two independent daemon implementations must conform to it.
 
@@ -36,15 +63,6 @@ Rift is a security-first, local-first, cross-platform device continuity platform
 
 **Protocol term:** "Operation" is the protocol-level term for cross-device actions. Avoid unqualified "Intent" on Android to prevent collision with `android.content.Intent`.
 
-## Security Model Context
-
-The protocol design specifically mitigates three KDE Connect vulnerability classes:
-- CVE-2025-66270 (identity switching) — device ID derived from Ed25519 key, validated on every message
-- CVE-2025-32900 (device spoofing) — device info exchanged only over authenticated TLS
-- CVE-2025-32898 (weak verification) — pairing uses full Ed25519 fingerprint, not short codes
-
-The Dart daemon's custom X.509 ASN.1 parser is a known high-risk component (required because dart:io doesn't expose cert extensions). It must fail closed on all malformed input and is subject to dedicated fuzz testing.
-
 ## Protocol Conventions
 
 - Wire framing: 4-byte big-endian length prefix + UTF-8 JSON object, max 32 MiB
@@ -57,5 +75,4 @@ The Dart daemon's custom X.509 ASN.1 parser is a known high-risk component (requ
 ## Documentation Rules
 
 - Treat `README.md`, `AGENTS.md`, `spec/doc/*.md`, `spec/decisions/*.md`, curated files under `docs/`, and concise component `README.md` files as the canonical documentation surface.
-- Treat `docs/archive/` as historical context only, not current source of truth.
 - Current delivery status, roadmap, and task ownership live in GitHub Projects, not repo markdown.

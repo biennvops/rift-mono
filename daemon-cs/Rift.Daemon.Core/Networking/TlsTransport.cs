@@ -256,6 +256,17 @@ public sealed class TlsTransport : ITransport, IDisposable
         return SessionRegistrationResult.Conflict;
     }
 
+    internal bool ShouldAllowProtectedTraffic(string deviceId)
+    {
+        if (_trustStore is null)
+        {
+            return false;
+        }
+
+        var peer = _trustStore.GetPeer(deviceId);
+        return peer?.State == TrustState.Trusted;
+    }
+
     private async Task CompleteSessionHandshakeAsync(ActiveSession session, X509Certificate2 remoteCert, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Session bootstrap starting for peer {DeviceId}. Sending session.hello.", session.DeviceId);
@@ -306,8 +317,9 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.IsInitiator,
             ReadNegotiationFramePayloadAsync,
             cancellationToken);
-        _logger.LogInformation("Capability negotiation completed for peer {DeviceId}. AllowsProtectedTraffic={AllowsProtectedTraffic}.", session.DeviceId, SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities));
-        session.AllowsProtectedTraffic = SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities);
+        var allowsProtectedTraffic = ShouldAllowProtectedTraffic(session.DeviceId);
+        _logger.LogInformation("Capability negotiation completed for peer {DeviceId}. AllowsProtectedTraffic={AllowsProtectedTraffic}.", session.DeviceId, allowsProtectedTraffic);
+        session.AllowsProtectedTraffic = allowsProtectedTraffic;
         session.PeerContext = new SessionPeerContext(
             session.DeviceId,
             session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
@@ -412,7 +424,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+            if (IsExpectedSessionTermination(ex, cancellationToken))
+            {
+                _logger.LogDebug(ex, "Session loop ended for peer {DeviceId}.", deviceId);
+            }
+            else
+            {
+                _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+            }
         }
         finally
         {
@@ -629,6 +648,37 @@ public sealed class TlsTransport : ITransport, IDisposable
         return totalRead;
     }
 
+    private static bool IsExpectedSessionTermination(Exception ex, CancellationToken cancellationToken)
+    {
+        if (ex is OperationCanceledException)
+        {
+            return true;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        if (ex is IOException ioEx)
+        {
+            if (ioEx.InnerException is SocketException socketEx)
+            {
+                if (socketEx.SocketErrorCode is SocketError.OperationAborted or SocketError.Interrupted)
+                {
+                    return true;
+                }
+            }
+
+            if (ioEx.Message.Contains("Operation canceled", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool RemoteCertificateValidationCallback(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
     {
         // For Rift, we do not require the certificate to be signed by a trusted CA.
@@ -676,7 +726,9 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException("PayloadTooLarge");
                  
             var frame = RiftFrame.Encode(frameBody.Span);
-            await session.Stream.WriteAsync(frame, cancellationToken);
+            await session.WriteGate.RunAsync(
+                writeCancellationToken => session.Stream.WriteAsync(frame, writeCancellationToken).AsTask(),
+                cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -687,6 +739,39 @@ public sealed class TlsTransport : ITransport, IDisposable
     public bool HasActiveSession(string peerDeviceId)
     {
         return _sessions.TryGetValue(peerDeviceId, out var session) && session.IsAuthenticated;
+    }
+
+    public bool HasProtectedSession(string peerDeviceId)
+    {
+        return _sessions.TryGetValue(peerDeviceId, out var session) &&
+            session.IsAuthenticated &&
+            session.AllowsProtectedTraffic;
+    }
+
+    public void RefreshSessionAuthorization(string peerDeviceId)
+    {
+        if (!_sessions.TryGetValue(peerDeviceId, out var session) || !session.IsAuthenticated)
+        {
+            return;
+        }
+
+        var allowsProtectedTraffic = ShouldAllowProtectedTraffic(peerDeviceId);
+        if (session.AllowsProtectedTraffic == allowsProtectedTraffic)
+        {
+            return;
+        }
+
+        session.AllowsProtectedTraffic = allowsProtectedTraffic;
+        session.PeerContext = new SessionPeerContext(
+            session.DeviceId,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic);
+
+        SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+            peerDeviceId,
+            isOnline: true,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic));
     }
 
     public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId)
@@ -775,6 +860,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
         public bool AllowsProtectedTraffic { get; set; }
         public SessionPeerContext PeerContext { get; set; }
+        public SessionWriteGate WriteGate { get; } = new();
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
@@ -790,6 +876,7 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         public void Dispose()
         {
+            WriteGate.Dispose();
             Stream.Dispose();
             Client.Dispose();
         }

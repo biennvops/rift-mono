@@ -46,19 +46,3 @@ Examples:
 
 They may describe structure, workflows, and constraints, but should defer
 normative statements to the spec and ADR layers.
-
-## Archival
-
-Archival docs are retained historical context and must not be treated as
-current guidance.
-
-Examples:
-
-- plans
-- spike reports
-- code reviews
-- milestone notes
-- audit writeups
-
-Archival material lives under `docs/archive/` and should be clearly labeled as
-non-canonical.

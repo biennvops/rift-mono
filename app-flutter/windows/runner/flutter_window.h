@@ -40,10 +40,7 @@ class FlutterWindow : public Win32Window {
       const std::wstring& title,
       const std::wstring& body,
       const std::string& route,
-      const std::string& device_id,
-      const std::string& display_name,
-      const std::string& fingerprint,
-      int64_t expires_in_ms,
+      const flutter::EncodableMap& payload,
       const std::wstring& destination_path);
   void DispatchPendingNotificationAction();
 
@@ -64,10 +61,7 @@ class FlutterWindow : public Win32Window {
   bool shell_notification_icon_registered_ = false;
   std::wstring pending_notification_destination_path_;
   std::string pending_notification_route_;
-  std::string pending_notification_device_id_;
-  std::string pending_notification_display_name_;
-  std::string pending_notification_fingerprint_;
-  int64_t pending_notification_expires_in_ms_ = -1;
+  flutter::EncodableMap pending_notification_payload_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

@@ -164,9 +164,23 @@ public sealed class SendQueueService : ISendQueueService
         return GetRequiredItem(queueItemId).ToInfo();
     }
 
-    public Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId, CancellationToken cancellationToken)
+    public async Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var item = GetRequiredItem(queueItemId);
+        if (_fileTransferService is not null &&
+            item.Status is "dispatching" or "sending" &&
+            !string.IsNullOrWhiteSpace(item.LastTransferId))
+        {
+            try
+            {
+                await _fileTransferService.CancelTransferAsync(item.LastTransferId!, cancellationToken).ConfigureAwait(false);
+            }
+            catch (FileTransferFailureException ex) when (string.Equals(ex.FailureReason, "NotFound", StringComparison.Ordinal))
+            {
+            }
+        }
+
         var removed = false;
         lock (_lock)
         {
@@ -189,11 +203,11 @@ public sealed class SendQueueService : ISendQueueService
         }, CancellationToken.None);
         _store?.DeleteItem(queueItemId);
 
-        return Task.FromResult(new RemoveSendQueueItemResult
+        return new RemoveSendQueueItemResult
         {
             QueueItemId = queueItemId,
             Removed = true
-        });
+        };
     }
 
     private MutableSendQueueItem GetRequiredItem(string queueItemId)
@@ -464,7 +478,7 @@ public sealed class SendQueueService : ISendQueueService
 
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
-        if (!args.IsOnline)
+        if (!args.IsOnline || !args.AllowsProtectedTraffic)
         {
             return;
         }

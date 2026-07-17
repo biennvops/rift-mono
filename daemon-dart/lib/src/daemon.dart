@@ -25,6 +25,8 @@ import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
+import 'package:daemon_dart/src/media_playback/media_playback_manager.dart';
+import 'package:daemon_dart/src/media_playback/media_playback_models.dart';
 import 'package:daemon_dart/src/operation/operation_manager.dart';
 import 'package:daemon_dart/src/operation/operation_models.dart';
 import 'package:path/path.dart' as p;
@@ -55,8 +57,15 @@ class _DiscoveredPeerRecord {
 
   List<DiscoveredPeer> get orderedPeers {
     final peers = peersByInstanceId.values.toList(growable: false);
-    peers.sort(_compareDiscoveredPeers);
-    return peers;
+    final grouped = <int, List<DiscoveredPeer>>{};
+    for (final peer in peers) {
+      grouped
+          .putIfAbsent(_endpointScore(peer.address), () => <DiscoveredPeer>[])
+          .add(peer);
+    }
+
+    final scores = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [for (final score in scores) ...grouped[score]!];
   }
 
   DiscoveredPeer? get primaryPeer =>
@@ -73,16 +82,19 @@ class _DiscoveredPeerRecord {
       .toList(growable: false);
 }
 
-int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
-  final scoreCompare = _endpointScore(
-    b.address,
-  ).compareTo(_endpointScore(a.address));
-  if (scoreCompare != 0) return scoreCompare;
+class _NotificationSyncPolicy {
+  bool enabled;
+  List<String> blacklistedPackages;
 
-  final addressCompare = a.address.compareTo(b.address);
-  if (addressCompare != 0) return addressCompare;
+  _NotificationSyncPolicy({
+    this.enabled = true,
+    List<String>? blacklistedPackages,
+  }) : blacklistedPackages = List<String>.from(blacklistedPackages ?? const []);
 
-  return a.port.compareTo(b.port);
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'blacklistedPackages': List<String>.from(blacklistedPackages),
+  };
 }
 
 int _endpointScore(String address) {
@@ -353,6 +365,10 @@ class RiftDaemon {
   ClipboardProtocolHandler? _clipboardHandler;
   FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
+  MediaPlaybackManager? _mediaPlaybackManager;
+  StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
+  final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
+  _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
@@ -439,6 +455,7 @@ class RiftDaemon {
         _identityManager!.deviceId,
       );
       _operationManager = OperationManager();
+      _mediaPlaybackManager = MediaPlaybackManager();
       _fileTransferService = FileTransferService(
         sessionManager: _sessionManager!,
         trustStore: _trustStore!,
@@ -517,6 +534,40 @@ class RiftDaemon {
           ),
         );
       });
+
+      _notificationSyncMessageSub = _sessionManager!.onMessage.listen(
+        _handleNotificationSyncProtocolMessage,
+      );
+      _sessionManager!.onMessage.listen(_handleMediaPlaybackProtocolMessage);
+
+      _mediaPlaybackManager!.onPosted.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackPosted',
+          'params': record.toJson(),
+        });
+      });
+      _mediaPlaybackManager!.onUpdated.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackUpdated',
+          'params': record.toJson(),
+        });
+      });
+      _mediaPlaybackManager!.onRemoved.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackRemoved',
+          'params': record.toJson(),
+        });
+      });
+      _mediaPlaybackManager!.onActionResult.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackActionResult',
+          'params': event,
+        });
+      });
     }
 
     if (enableDiscovery) {
@@ -566,7 +617,427 @@ class RiftDaemon {
     }
   }
 
+  List<String> _normalizeNotificationSyncBlacklist(Object? value) {
+    if (value == null) {
+      return const <String>[];
+    }
+    if (value is! List) {
+      throw ArgumentError.value(
+        value,
+        'blacklistedPackages',
+        'must be a list of strings',
+      );
+    }
+
+    final normalized = <String>{};
+    for (final entry in value) {
+      if (entry is! String) {
+        throw ArgumentError.value(
+          value,
+          'blacklistedPackages',
+          'must be a list of strings',
+        );
+      }
+      final trimmed = entry.trim();
+      if (trimmed.isNotEmpty) {
+        normalized.add(trimmed);
+      }
+    }
+    return normalized.toList(growable: false)..sort();
+  }
+
+  Future<Map<String, dynamic>> _updateNotificationSyncPolicy({
+    required bool enabled,
+    required List<String> blacklistedPackages,
+  }) async {
+    _notificationSyncPolicy = _NotificationSyncPolicy(
+      enabled: enabled,
+      blacklistedPackages: blacklistedPackages,
+    );
+    return _notificationSyncPolicy.toJson();
+  }
+
+  Map<String, dynamic> _listMediaPlaybackState() {
+    return _mediaPlaybackManager?.listStateJson() ?? {'playbacks': <dynamic>[]};
+  }
+
+  Future<Map<String, dynamic>> _handleLocalMediaPlaybackEvent(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final eventType = RpcUtils.requireStringParam(params, 'eventType');
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final record = MediaPlaybackRecord(
+      playbackId: playbackId,
+      sourceDeviceId: _identityManager!.deviceId,
+      sourcePlatform: params['sourcePlatform'] as String?,
+      appId: RpcUtils.requireStringParam(params, 'appId'),
+      appName: RpcUtils.requireStringParam(params, 'appName'),
+      title: params['title'] as String?,
+      artist: params['artist'] as String?,
+      album: params['album'] as String?,
+      artwork: params['artwork'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(params['artwork'] as Map<String, dynamic>)
+          : null,
+      playbackState: RpcUtils.requireStringParam(params, 'playbackState'),
+      positionMs: RpcUtils.requireIntParam(params, 'positionMs'),
+      durationMs: params['durationMs'] as int?,
+      canPlay: params['canPlay'] as bool? ?? false,
+      canPause: params['canPause'] as bool? ?? false,
+      canSkipNext: params['canSkipNext'] as bool? ?? false,
+      canSkipPrevious: params['canSkipPrevious'] as bool? ?? false,
+      canSeek: params['canSeek'] as bool? ?? false,
+      updatedAt: RpcUtils.requireStringParam(params, 'updatedAt'),
+    );
+    return _mediaPlaybackManager!.notifyLocalEvent(eventType, record);
+  }
+
+  Map<String, dynamic> _listNotificationSyncState() {
+    final notifications =
+        _notificationSyncRecords.values.toList(growable: false)..sort((a, b) {
+          final aPostedAt = a['postedAt'] as String? ?? '';
+          final bPostedAt = b['postedAt'] as String? ?? '';
+          return bPostedAt.compareTo(aPostedAt);
+        });
+    return {
+      'notifications': notifications,
+      'policy': _notificationSyncPolicy.toJson(),
+    };
+  }
+
+  String _notificationRecordKey(String sourceDeviceId, String notificationId) =>
+      '$sourceDeviceId\n$notificationId';
+
+  Map<String, dynamic> _normalizeNotificationRecord(
+    Map<String, dynamic> params, {
+    required String notificationId,
+    required String sourceDeviceId,
+  }) {
+    final record = <String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      if (params['sourcePlatform'] is String &&
+          (params['sourcePlatform'] as String).isNotEmpty)
+        'sourcePlatform': params['sourcePlatform'],
+      'packageName': RpcUtils.requireStringParam(params, 'packageName'),
+      'appName': RpcUtils.requireStringParam(params, 'appName'),
+      if (params['title'] is String && (params['title'] as String).isNotEmpty)
+        'title': params['title'],
+      if (params['bodyPreview'] is String &&
+          (params['bodyPreview'] as String).isNotEmpty)
+        'bodyPreview': params['bodyPreview'],
+      'postedAt': RpcUtils.requireStringParam(params, 'postedAt'),
+    };
+
+    final isDismissible = params['isDismissible'];
+    final isOpenable = params['isOpenable'];
+    if (isDismissible is! bool || isOpenable is! bool) {
+      throw ArgumentError.value(
+        params,
+        'isDismissible/isOpenable',
+        'must be booleans',
+      );
+    }
+    record['isDismissible'] = isDismissible;
+    record['isOpenable'] = isOpenable;
+    return record;
+  }
+
+  bool _isNotificationBlacklisted(String packageName) {
+    return _notificationSyncPolicy.blacklistedPackages.contains(packageName);
+  }
+
+  Future<List<String>> _broadcastNotificationSyncEnvelope({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) async {
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final ctx = _sessionManager!.getContext(peer.deviceId);
+        if (ctx == null || !ctx.hasCapability('notification.sync')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': messageType,
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': payload,
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[NotificationSync] Could not send $messageType to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return broadcastTo;
+  }
+
+  Future<Map<String, dynamic>> _handleLocalNotificationSyncEvent(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final eventType = RpcUtils.requireStringParam(params, 'eventType');
+    final notificationId = RpcUtils.requireStringParam(
+      params,
+      'notificationId',
+    );
+    final localDeviceId = _identityManager!.deviceId;
+
+    switch (eventType) {
+      case 'posted':
+      case 'updated':
+        final record = _normalizeNotificationRecord(
+          params,
+          notificationId: notificationId,
+          sourceDeviceId: localDeviceId,
+        );
+
+        _notificationSyncRecords[_notificationRecordKey(
+              localDeviceId,
+              notificationId,
+            )] =
+            record;
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': eventType == 'posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+
+        var broadcastTo = const <String>[];
+        final packageName = record['packageName'] as String;
+        if (_notificationSyncPolicy.enabled &&
+            !_isNotificationBlacklisted(packageName)) {
+          broadcastTo = await _broadcastNotificationSyncEnvelope(
+            messageType: eventType == 'posted'
+                ? 'notification.posted'
+                : 'notification.updated',
+            payload: record,
+          );
+        }
+
+        return {
+          'notificationId': notificationId,
+          'broadcastTo': broadcastTo,
+          'suppressed':
+              !_notificationSyncPolicy.enabled ||
+              _isNotificationBlacklisted(packageName),
+        };
+      case 'removed':
+        final removedPayload = <String, dynamic>{
+          'notificationId': notificationId,
+          'sourceDeviceId': localDeviceId,
+          if (params['removedAt'] is String &&
+              (params['removedAt'] as String).isNotEmpty)
+            'removedAt': params['removedAt'],
+        };
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(localDeviceId, notificationId),
+        );
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': removedPayload,
+        });
+
+        final broadcastTo = await _broadcastNotificationSyncEnvelope(
+          messageType: 'notification.removed',
+          payload: removedPayload,
+        );
+        return {'notificationId': notificationId, 'broadcastTo': broadcastTo};
+      default:
+        throw ArgumentError.value(
+          eventType,
+          'eventType',
+          'must be posted, updated, or removed',
+        );
+    }
+  }
+
+  Future<void> _handleNotificationSyncProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'] as String?;
+    if (type == null || !type.startsWith('notification.')) {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'notification.sync',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      return;
+    }
+
+    final payload = message.payload['payload'];
+    if (payload is! Map<String, dynamic>) {
+      RiftLog.warn(
+        '[NotificationSync] Missing payload for $type from ${message.peerDeviceId}',
+      );
+      return;
+    }
+
+    switch (type) {
+      case 'notification.posted':
+      case 'notification.updated':
+        final record = _normalizeNotificationRecord(
+          payload,
+          notificationId: RpcUtils.requireStringParam(
+            payload,
+            'notificationId',
+          ),
+          sourceDeviceId: RpcUtils.requireStringParam(
+            payload,
+            'sourceDeviceId',
+          ),
+        );
+        if (record['sourceDeviceId'] != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords[_notificationRecordKey(
+              record['sourceDeviceId'] as String,
+              record['notificationId'] as String,
+            )] =
+            record;
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': type == 'notification.posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+        return;
+      case 'notification.removed':
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        if (sourceDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(sourceDeviceId, notificationId),
+        );
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': <String, dynamic>{
+            'notificationId': notificationId,
+            'sourceDeviceId': sourceDeviceId,
+            if (payload['removedAt'] is String &&
+                (payload['removedAt'] as String).isNotEmpty)
+              'removedAt': payload['removedAt'],
+          },
+        });
+        return;
+      default:
+        return;
+    }
+  }
+
+  Future<void> _handleMediaPlaybackProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'] as String?;
+    if (type == null || !type.startsWith('media.playback')) {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'media.playback',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      return;
+    }
+
+    final payload = message.payload['payload'];
+    if (payload is! Map<String, dynamic>) {
+      return;
+    }
+    if (payload['sourceDeviceId'] != message.peerDeviceId) {
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+      );
+      return;
+    }
+
+    if (type == 'media.playbackActionResult') {
+      _mediaPlaybackManager!.addActionResult(payload);
+      return;
+    }
+
+    final record = MediaPlaybackRecord(
+      playbackId: RpcUtils.requireStringParam(payload, 'playbackId'),
+      sourceDeviceId: RpcUtils.requireStringParam(payload, 'sourceDeviceId'),
+      sourcePlatform: payload['sourcePlatform'] as String?,
+      appId: RpcUtils.requireStringParam(payload, 'appId'),
+      appName: RpcUtils.requireStringParam(payload, 'appName'),
+      title: payload['title'] as String?,
+      artist: payload['artist'] as String?,
+      album: payload['album'] as String?,
+      artwork: payload['artwork'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(
+              payload['artwork'] as Map<String, dynamic>,
+            )
+          : null,
+      playbackState: payload['playbackState'] as String? ?? 'stopped',
+      positionMs: payload['positionMs'] as int? ?? 0,
+      durationMs: payload['durationMs'] as int?,
+      canPlay: payload['canPlay'] as bool? ?? false,
+      canPause: payload['canPause'] as bool? ?? false,
+      canSkipNext: payload['canSkipNext'] as bool? ?? false,
+      canSkipPrevious: payload['canSkipPrevious'] as bool? ?? false,
+      canSeek: payload['canSeek'] as bool? ?? false,
+      updatedAt: payload['updatedAt'] as String? ?? '',
+      removedAt: payload['removedAt'] as String?,
+    );
+
+    switch (type) {
+      case 'media.playbackPosted':
+        _mediaPlaybackManager!.notifyLocalEvent('posted', record);
+        return;
+      case 'media.playbackUpdated':
+        _mediaPlaybackManager!.notifyLocalEvent('updated', record);
+        return;
+      case 'media.playbackRemoved':
+        _mediaPlaybackManager!.notifyLocalEvent('removed', record);
+        return;
+      default:
+        return;
+    }
+  }
+
   Future<void> stop() async {
+    await _notificationSyncMessageSub?.cancel();
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
@@ -942,6 +1413,31 @@ class RiftDaemon {
           'broadcastTo': broadcastTo,
         };
 
+      case 'rift.notifyLocalNotificationEvent':
+        return _handleLocalNotificationSyncEvent(params);
+
+      case 'rift.notifyLocalMediaPlaybackEvent':
+        return _handleLocalMediaPlaybackEvent(params);
+
+      case 'rift.listNotifications':
+        return _listNotificationSyncState();
+
+      case 'rift.listMediaPlayback':
+        return _listMediaPlaybackState();
+
+      case 'rift.updateNotificationSyncPolicy':
+        final enabled = params['enabled'];
+        if (enabled is! bool) {
+          throw ArgumentError.value(enabled, 'enabled', 'must be a boolean');
+        }
+        final blacklist = _normalizeNotificationSyncBlacklist(
+          params['blacklistedPackages'],
+        );
+        return _updateNotificationSyncPolicy(
+          enabled: enabled,
+          blacklistedPackages: blacklist,
+        );
+
       case 'rift.listClipboardOffers':
         _requireTransportServices();
         // Return both local and incoming offers to show unified history
@@ -1105,6 +1601,10 @@ class RiftDaemon {
         );
       case 'rift.getOperation':
         return getOperation(RpcUtils.requireStringParam(params, 'operationId'));
+      case 'rift.cancelFileTransfer':
+        return _fileTransferService!.cancelTransfer(
+          RpcUtils.requireStringParam(params, 'transferId'),
+        );
       case 'rift.startDiscovery':
         _requireDiscoveryServices();
         await _discoveryService!.startDiscovery();

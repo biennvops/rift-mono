@@ -1,8 +1,6 @@
 # Rift Daemon (C#/.NET)
 
-`daemon-cs` is the shared C#/.NET daemon implementation for Windows, macOS, and
-Linux. It hosts one protocol core behind platform-specific service and IPC
-entrypoints.
+`daemon-cs` is the shared C#/.NET daemon implementation for Windows, macOS, and Linux. It hosts one protocol core behind platform-specific service and IPC entrypoints.
 
 ## Scope
 

@@ -62,6 +62,88 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OfferFileAsync_ReconnectsWhenOnlyUnprotectedSessionExists()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "127.0.0.1",
+                    Port = 7777,
+                    LastSuccessAt = DateTimeOffset.UtcNow,
+                    Source = "test"
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.HasActiveSessionValue = true;
+        _transport.HasProtectedSessionValue = false;
+
+        var path = CreateTempFile("hello");
+        try
+        {
+            await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
+
+            Assert.Equal(["rift-peer"], _transport.DisconnectedPeers);
+            Assert.Equal([("127.0.0.1", 7777)], _transport.ConnectAttempts);
+            Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "file.offer");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task OfferFileAsync_ConcurrentReconnectOnlyDisconnectsOnce()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "127.0.0.1",
+                    Port = 7777,
+                    LastSuccessAt = DateTimeOffset.UtcNow,
+                    Source = "test"
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.HasActiveSessionValue = true;
+        _transport.HasProtectedSessionValue = false;
+        _transport.ConnectDelay = TimeSpan.FromMilliseconds(50);
+
+        var pathOne = CreateTempFile("hello-one");
+        var pathTwo = CreateTempFile("hello-two");
+        try
+        {
+            await Task.WhenAll(
+                _service.OfferFileAsync("rift-peer", pathOne, "demo-one.txt", "text/plain", CancellationToken.None),
+                _service.OfferFileAsync("rift-peer", pathTwo, "demo-two.txt", "text/plain", CancellationToken.None));
+
+            Assert.Equal(["rift-peer"], _transport.DisconnectedPeers);
+            Assert.Equal([("127.0.0.1", 7777)], _transport.ConnectAttempts);
+        }
+        finally
+        {
+            File.Delete(pathOne);
+            File.Delete(pathTwo);
+        }
+    }
+
+    [Fact]
     public async Task AcceptFileOfferAsync_SendsAcceptMessage()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -784,12 +866,26 @@ public sealed class FileTransferServiceTests : IDisposable
         }
 
         public List<(string PeerDeviceId, string Type, JsonElement Payload)> SentMessages { get; } = [];
+        public List<(string Host, int Port)> ConnectAttempts { get; } = [];
+        public List<string> DisconnectedPeers { get; } = [];
         public bool BlockChunkSends { get; set; }
         public int BlockedChunkSendCount { get; private set; }
+        public bool HasActiveSessionValue { get; set; } = true;
+        public bool HasProtectedSessionValue { get; set; } = true;
+        public TimeSpan ConnectDelay { get; set; } = TimeSpan.Zero;
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
+        public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            ConnectAttempts.Add((host, port));
+            if (ConnectDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(ConnectDelay, cancellationToken);
+            }
+            HasActiveSessionValue = true;
+            HasProtectedSessionValue = true;
+        }
 
         public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
             Task.FromResult("rift-peer");
@@ -809,11 +905,21 @@ public sealed class FileTransferServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public bool HasActiveSession(string peerDeviceId) => true;
+        public bool HasActiveSession(string peerDeviceId) => HasActiveSessionValue;
+
+        public bool HasProtectedSession(string peerDeviceId) => HasProtectedSessionValue;
+
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
 
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
 
-        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+        {
+            DisconnectedPeers.Add(peerDeviceId);
+            HasActiveSessionValue = false;
+            HasProtectedSessionValue = false;
+            return Task.CompletedTask;
+        }
 
         public void ReleaseBlockedChunkSends()
         {
