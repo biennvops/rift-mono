@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../widgets/rift_snackbar.dart';
 
 class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
@@ -448,8 +449,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error: $e')),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Error: $e',
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -463,8 +466,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final confirmed = await _showBlockBottomSheet(displayName);
     if (!confirmed || !mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Block not implemented in daemon yet')),
+    RiftSnackbar.show(
+      context: context,
+      message: 'Block not implemented in daemon yet',
+      type: RiftSnackbarType.warning,
     );
   }
 

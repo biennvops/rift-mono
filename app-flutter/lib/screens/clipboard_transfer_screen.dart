@@ -17,6 +17,7 @@ import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
+import '../widgets/rift_snackbar.dart';
 
 enum _HistorySection {
   clipboard,
@@ -474,22 +475,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            action == 'open'
-                ? 'Notification opened on Android.'
-                : 'Notification dismissed on Android.',
-          ),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: action == 'open'
+            ? 'Notification opened on Android.'
+            : 'Notification dismissed on Android.',
+        type: RiftSnackbarType.success,
       );
       unawaited(_refreshNotifications());
     } catch (error) {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      RiftSnackbar.show(
+        context: context,
+        message: JsonRpcRiftClient.formatDisplayError(error),
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -878,39 +879,75 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
             }
 
             return AlertDialog(
-              title: const Text('Send File'),
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(
+                'Send File',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'Could not open the native file picker. Please specify the file details manually.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: pathController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Local path',
                         hintText: '/home/you/Downloads/example.mp4',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                       autofocus: true,
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: nameController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Display file name (optional)',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: typeController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Media type',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                     ),
                     if (validationError != null) ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       Text(
                         validationError!,
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -923,6 +960,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
+                  style: FilledButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                   onPressed: submit,
                   child: const Text('Send'),
                 ),
@@ -1043,12 +1085,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     }
     if (requests.isEmpty) {
       if (pickResult.skippedFileNames.isNotEmpty) {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'Could not read ${pickResult.skippedFileNames.length} selected file(s).',
-            ),
-          ),
+        RiftSnackbar.showWithState(
+          messenger: messenger,
+          message: 'Could not read ${pickResult.skippedFileNames.length} selected file(s).',
+          type: RiftSnackbarType.error,
         );
       }
       return;
@@ -1073,10 +1113,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     }
 
     if (result.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text('No new file was added to the send queue.'),
-        ),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: 'No new file was added to the send queue.',
+        type: RiftSnackbarType.warning,
       );
       return;
     }
@@ -1086,18 +1126,16 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         _activeSection = _HistorySection.send;
       }
     });
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          [
-            '$successPrefix ${result.added} file(s) in the send queue.',
-            if (result.skipped > 0)
-              'Skipped ${result.skipped} duplicate/unavailable item(s).',
-            if (skippedUnreadableCount > 0)
-              'Could not read $skippedUnreadableCount selected file(s).',
-          ].join(' '),
-        ),
-      ),
+    RiftSnackbar.showWithState(
+      messenger: messenger,
+      message: [
+        '$successPrefix ${result.added} file(s) in the send queue.',
+        if (result.skipped > 0)
+          'Skipped ${result.skipped} duplicate/unavailable item(s).',
+        if (skippedUnreadableCount > 0)
+          'Could not read $skippedUnreadableCount selected file(s).',
+      ].join(' '),
+      type: RiftSnackbarType.info,
     );
   }
 
@@ -1112,12 +1150,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final queuedFiles = _eligibleFilesForPeer(deviceId);
     if (queuedFiles.isEmpty) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'No queued file is ready to send to ${_peerDisplayName(deviceId)}.',
-          ),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: 'No queued file is ready to send to ${_peerDisplayName(deviceId)}.',
+        type: RiftSnackbarType.warning,
       );
       return;
     }
@@ -1153,19 +1189,19 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (submitted > 0) {
         setState(() => _activeSection = _HistorySection.transferActivity);
       } else {
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              'No file was submitted to ${_peerDisplayName(deviceId)}.',
-            ),
-          ),
+        RiftSnackbar.showWithState(
+          messenger: messenger,
+          message: 'No file was submitted to ${_peerDisplayName(deviceId)}.',
+          type: RiftSnackbarType.warning,
         );
       }
       await _refreshTransfers();
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: JsonRpcRiftClient.formatDisplayError(e),
+        type: RiftSnackbarType.error,
       );
     } finally {
       if (mounted && isLegacyMode) {
@@ -1205,14 +1241,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     );
   }
 
-  Future<void> _removeStagedFile(SendQueueEntry file) async {
-    await _sendQueue.removeItem(file);
-    if (!mounted) {
-      return;
-    }
-    setState(() {});
-  }
-
   Future<void> _cancelStagedFile(SendQueueEntry file) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -1221,21 +1249,21 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         return;
       }
       setState(() {});
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            file.status == SendQueueStatus.sending
-                ? 'Cancelled ${file.fileName}.'
-                : 'Removed ${file.fileName} from the queue.',
-          ),
-        ),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: file.status == SendQueueStatus.sending
+            ? 'Cancelled ${file.fileName}.'
+            : 'Removed ${file.fileName} from the queue.',
+        type: RiftSnackbarType.info,
       );
     } catch (error) {
       if (!mounted) {
         return;
       }
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: JsonRpcRiftClient.formatDisplayError(error),
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -1283,12 +1311,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         setState(() {
           _activeSection = _HistorySection.send;
         });
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'File moved back to queue. Choose a peer to send it again.',
-            ),
-          ),
+        RiftSnackbar.showWithState(
+          messenger: messenger,
+          message: 'File moved back to queue. Choose a peer to send it again.',
+          type: RiftSnackbarType.info,
         );
       },
       onPeerUnavailable: (peerDeviceId) {
@@ -1306,12 +1332,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           file.bytesTransferred = 0;
         });
         unawaited(_persistStagedQueue());
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              '${_peerDisplayName(peerDeviceId)} is no longer available for file transfer.',
-            ),
-          ),
+        RiftSnackbar.showWithState(
+          messenger: messenger,
+          message: '${_peerDisplayName(peerDeviceId)} is no longer available for file transfer.',
+          type: RiftSnackbarType.error,
         );
       },
       onLegacySubmitted: (staged) {
@@ -1327,14 +1351,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     if (!mounted || handledByCallback || deviceId == null || deviceId.isEmpty) {
       return;
     }
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          success
-              ? 'Retry queued for ${file.fileName}.'
-              : 'Retry failed for ${file.fileName}.',
-        ),
-      ),
+    RiftSnackbar.showWithState(
+      messenger: messenger,
+      message: success
+          ? 'Retry queued for ${file.fileName}.'
+          : 'Retry failed for ${file.fileName}.',
+      type: success ? RiftSnackbarType.success : RiftSnackbarType.error,
     );
   }
 
@@ -1351,12 +1373,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         return;
       }
       setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Choose a device below to send ${file.fileName} again.',
-          ),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Choose a device below to send ${file.fileName} again.',
+        type: RiftSnackbarType.info,
       );
     }());
   }
@@ -1374,8 +1394,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       }
     } catch (error) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text('Could not open saved file: $error')),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: 'Could not open saved file: $error',
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -1415,24 +1437,50 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
             }
 
             return AlertDialog(
-              title: const Text('Save Incoming File'),
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(
+                'Save Incoming File',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'Could not open the native file picker. Please specify the destination path manually.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: destinationController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Destination path',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                       autofocus: true,
                     ),
                     if (validationError != null) ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       Text(
                         validationError!,
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -1445,6 +1493,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
+                  style: FilledButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                   onPressed: submit,
                   child: const Text('Accept'),
                 ),
@@ -1500,8 +1553,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       await _refreshTransfers();
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: JsonRpcRiftClient.formatDisplayError(e),
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -1522,8 +1577,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       await _refreshTransfers();
     } catch (e) {
       if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(e))),
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: JsonRpcRiftClient.formatDisplayError(e),
+        type: RiftSnackbarType.error,
       );
     }
   }

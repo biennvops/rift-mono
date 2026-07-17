@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
+import '../widgets/rift_snackbar.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -377,11 +378,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       }
       if (!client.isConnected) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'Daemon is still starting. Try discovery again in a moment.'),
-          ),
+        RiftSnackbar.show(
+          context: context,
+          message: 'Daemon is still starting. Try discovery again in a moment.',
+          type: RiftSnackbarType.warning,
         );
         return;
       }
@@ -403,10 +403,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
       await _loadData();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(JsonRpcRiftClient.formatDisplayError(e)),
-          ),
+        RiftSnackbar.show(
+          context: context,
+          message: JsonRpcRiftClient.formatDisplayError(e),
+          type: RiftSnackbarType.error,
         );
       }
     } finally {
@@ -451,16 +451,40 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             }
 
             return AlertDialog(
-              title: const Text('Pair by IP'),
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Text(
+                'Pair by IP',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Text(
+                      'Enter the IPv4 address and port of the peer device.',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     TextField(
                       controller: addressController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'IPv4 address',
                         hintText: '10.53.38.174',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                       keyboardType: TextInputType.number,
                       autofocus: true,
@@ -469,18 +493,26 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: portController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Port',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        filled: true,
+                        fillColor: Theme.of(context).colorScheme.surface,
                       ),
                       keyboardType: TextInputType.number,
                       onSubmitted: (_) => submit(),
                     ),
                     if (validationError != null) ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 8),
                       Text(
                         validationError!,
                         style: TextStyle(
-                            color: Theme.of(context).colorScheme.error),
+                          color: Theme.of(context).colorScheme.error,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ],
                   ],
@@ -492,6 +524,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                   child: const Text('Cancel'),
                 ),
                 FilledButton(
+                  style: FilledButton.styleFrom(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
                   onPressed: submit,
                   child: const Text('Pair'),
                 ),
@@ -1114,21 +1151,19 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         if (detailResult['action'] == 'forgotten' && deviceId != null) {
           final forgottenDisplayName =
               detailResult['displayName']?.toString() ?? titleText;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '$forgottenDisplayName da duoc xoa khoi danh sach da tin cay. Khi thiet bi xuat hien lai, ban co the pair tu dau.',
-              ),
-            ),
+          RiftSnackbar.show(
+            context: context,
+            message: '$forgottenDisplayName removed.',
+            type: RiftSnackbarType.info,
           );
         }
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(JsonRpcRiftClient.formatDisplayError(e)),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: JsonRpcRiftClient.formatDisplayError(e),
+        type: RiftSnackbarType.error,
       );
     }
   }

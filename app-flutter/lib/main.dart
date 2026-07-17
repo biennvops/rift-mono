@@ -26,6 +26,7 @@ import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
+import 'widgets/rift_snackbar.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
@@ -1361,20 +1362,25 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           failureReason: 'PolicyDenied',
           message: 'User declined incoming file transfer.',
         );
-        _scaffoldMessengerKey.currentState?.showSnackBar(
-          SnackBar(content: Text('Declined $fileName from $sourceDeviceId')),
-        );
+        final messenger = _scaffoldMessengerKey.currentState;
+        if (messenger != null) {
+          RiftSnackbar.showWithState(
+            messenger: messenger,
+            message: 'Declined $fileName from $sourceDeviceId',
+            type: RiftSnackbarType.info,
+          );
+        }
         return;
       }
 
-      _scaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Receiving $fileName from $sourceDeviceId...\n'
-            'Saved to: $destinationPath',
-          ),
-        ),
-      );
+      final messenger = _scaffoldMessengerKey.currentState;
+      if (messenger != null) {
+        RiftSnackbar.showWithState(
+          messenger: messenger,
+          message: 'Receiving $fileName from $sourceDeviceId...\nSaved to: $destinationPath',
+          type: RiftSnackbarType.info,
+        );
+      }
       _maybeNotify(
           'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
 

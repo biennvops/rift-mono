@@ -13,6 +13,7 @@ import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
 import '../src/platform/windows_shell.dart';
+import '../widgets/rift_snackbar.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -111,7 +112,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openNotificationSettings() async {
-    final theme = Theme.of(context);
     bool success = false;
     if (AndroidShell.isSupported) {
       success = await AndroidShell.openNotificationSettings();
@@ -133,13 +133,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     }
     if (!mounted || success) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          'Unable to open notification settings on ${Platform.operatingSystem}.',
-          style: TextStyle(color: theme.colorScheme.onInverseSurface),
-        ),
-      ),
+    RiftSnackbar.show(
+      context: context,
+      message: 'Unable to open notification settings on ${Platform.operatingSystem}.',
+      type: RiftSnackbarType.error,
     );
   }
 
@@ -155,12 +152,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (granted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Notifications were not enabled. You can allow them in System Settings > Notifications.',
-        ),
-      ),
+    RiftSnackbar.show(
+      context: context,
+      message: 'Notifications were not enabled. You can allow them in System Settings > Notifications.',
+      type: RiftSnackbarType.warning,
     );
   }
 
@@ -169,15 +164,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? await AndroidShell.openNotificationListenerSettings()
         : false;
     if (!mounted || success) return;
-    final theme = Theme.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          'Unable to open Android notification access settings.',
-          style: TextStyle(color: theme.colorScheme.onInverseSurface),
-        ),
-      ),
+    RiftSnackbar.show(
+      context: context,
+      message: 'Unable to open Android notification access settings.',
+      type: RiftSnackbarType.error,
     );
   }
 
@@ -210,14 +200,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          success
-              ? 'Sent Android test notification.'
-              : 'Unable to send test notification. Enable app notifications first.',
-        ),
-      ),
+    RiftSnackbar.show(
+      context: context,
+      message: success
+          ? 'Sent Android test notification.'
+          : 'Unable to send test notification. Enable app notifications first.',
+      type: success ? RiftSnackbarType.success : RiftSnackbarType.warning,
     );
   }
 
@@ -282,14 +270,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) {
       return;
     }
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          shown
-              ? 'Sent desktop test notification.'
-              : 'Unable to send desktop test notification on this platform.',
-        ),
-      ),
+    RiftSnackbar.show(
+      context: context,
+      message: shown
+          ? 'Sent desktop test notification.'
+          : 'Unable to send desktop test notification on this platform.',
+      type: shown ? RiftSnackbarType.success : RiftSnackbarType.warning,
     );
   }
 
@@ -336,8 +322,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      RiftSnackbar.show(
+        context: context,
+        message: JsonRpcRiftClient.formatDisplayError(error),
+        type: RiftSnackbarType.error,
       );
     }
   }

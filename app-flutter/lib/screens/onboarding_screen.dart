@@ -5,6 +5,7 @@ import 'background_sync_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/android_shell.dart';
 import '../src/platform/macos_notifications.dart';
+import '../widgets/rift_snackbar.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({super.key});
@@ -143,22 +144,24 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       if (e.code == -32010 &&
           data is Map &&
           (data['policy']?.toString() == 'local_network')) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
-            ),
-          ),
+        RiftSnackbar.show(
+          context: context,
+          message: 'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
+          type: RiftSnackbarType.error,
         );
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start discovery: ${e.message}')),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Failed to start discovery: ${e.message}',
+        type: RiftSnackbarType.error,
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to start discovery: $e')),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Failed to start discovery: $e',
+        type: RiftSnackbarType.error,
       );
     }
   }
@@ -181,12 +184,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       });
     }
     if (!granted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Notifications are disabled. You can enable them later in System Settings > Notifications.',
-          ),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Notifications are disabled. You can enable them later in System Settings > Notifications.',
+        type: RiftSnackbarType.warning,
       );
       _nextPage();
       return;
@@ -196,22 +197,18 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       final opened = await AndroidShell.openNotificationListenerSettings();
       if (!mounted) return;
       if (!opened) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Unable to open Android notification access settings. You can enable it later in Settings.',
-            ),
-          ),
+        RiftSnackbar.show(
+          context: context,
+          message: 'Unable to open Android notification access settings. You can enable it later in Settings.',
+          type: RiftSnackbarType.warning,
         );
         _nextPage();
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Enable Rift notification access in the Android settings screen, then return to continue.',
-          ),
-        ),
+      RiftSnackbar.show(
+        context: context,
+        message: 'Enable Rift notification access in the Android settings screen, then return to continue.',
+        type: RiftSnackbarType.info,
       );
       return;
     }
