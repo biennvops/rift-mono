@@ -776,22 +776,25 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
   }
 
-  Future<void> _submitDesktopNotificationAction({
+  Future<bool> _submitDesktopNotificationAction({
     required String notificationId,
     required String action,
+    bool queueIfUnavailable = true,
   }) async {
     final client = context.read<JsonRpcRiftClient>();
     if (!client.isConnected) {
-      _queuePendingDesktopNotificationAction(
-        notificationId: notificationId,
-        action: action,
-      );
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
       client.connect().catchError((Object error, StackTrace stackTrace) {
         debugPrint(
           '[Notification Sync] Failed to reconnect for notification action: $error',
         );
       });
-      return;
+      return false;
     }
 
     try {
@@ -799,26 +802,35 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         notificationId: notificationId,
         action: action,
       );
+      return true;
     } catch (error) {
       debugPrint(
         '[Notification Sync] Failed to perform mirrored notification action: $error',
       );
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
+      return false;
     }
   }
 
   Future<void> _flushPendingDesktopNotificationActions() async {
-    if (_pendingDesktopNotificationActions.isEmpty) {
-      return;
-    }
-    final pending = List<Map<String, String>>.from(
-      _pendingDesktopNotificationActions,
-    );
-    _pendingDesktopNotificationActions.clear();
-    for (final action in pending) {
-      await _submitDesktopNotificationAction(
+    while (_pendingDesktopNotificationActions.isNotEmpty) {
+      final action = Map<String, String>.from(
+        _pendingDesktopNotificationActions.first,
+      );
+      final submitted = await _submitDesktopNotificationAction(
         notificationId: action['notificationId'] ?? '',
         action: action['action'] ?? '',
+        queueIfUnavailable: false,
       );
+      if (!submitted) {
+        break;
+      }
+      _pendingDesktopNotificationActions.removeAt(0);
     }
   }
 
