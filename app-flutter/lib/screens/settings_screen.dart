@@ -22,6 +22,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
   static const _androidTestNotificationPackage = 'com.example.app_flutter';
   static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
@@ -35,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _notificationSyncEnabled = true;
   final TextEditingController _notificationBlacklistController =
       TextEditingController();
+  Timer? _notificationPolicyDebounceTimer;
 
   bool get _isDesktopPlatform =>
       WindowsShell.isSupported ||
@@ -49,6 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
+    _notificationPolicyDebounceTimer?.cancel();
     _notificationBlacklistController.dispose();
     super.dispose();
   }
@@ -338,6 +341,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
       );
     }
+  }
+
+  void _scheduleNotificationSyncPolicyPersist() {
+    _notificationPolicyDebounceTimer?.cancel();
+    _notificationPolicyDebounceTimer = Timer(
+      _notificationPolicyDebounce,
+      _persistNotificationSyncPolicy,
+    );
   }
 
   bool get _canManageNotificationSettings =>
@@ -745,7 +756,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     minLines: 2,
                     maxLines: 4,
                     onChanged: (_) {
-                      unawaited(_persistNotificationSyncPolicy());
+                      _scheduleNotificationSyncPolicyPersist();
                     },
                     decoration: const InputDecoration(
                       labelText: 'Notification blacklist',

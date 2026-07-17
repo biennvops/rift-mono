@@ -253,18 +253,76 @@ void main() {
     await tester.tap(notificationSyncTile);
     await tester.pump();
 
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Notification blacklist'),
-      'com.bank.example',
-    );
-    await tester.pump();
-
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getBool(AppPrefs.notificationSyncEnabled), isFalse);
     expect(
       prefs.getStringList(AppPrefs.notificationSyncBlacklist),
+      <String>[],
+    );
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Notification blacklist'),
+      'com.bank.example',
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncBlacklist),
       ['com.bank.example'],
     );
+  });
+
+  testWidgets('SettingsScreen debounces notification blacklist updates',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    final blacklistField =
+        find.widgetWithText(TextField, 'Notification blacklist');
+    await tester.dragUntilVisible(
+      blacklistField,
+      find.byType(ListView),
+      const Offset(0, -200),
+    );
+
+    await tester.enterText(blacklistField, 'com.example.one');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.enterText(
+      blacklistField,
+      'com.example.one\ncom.example.two',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    verifyNever(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        blacklistedPackages: any(named: 'blacklistedPackages'),
+      ),
+    );
+
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+
+    expect(
+      (await SharedPreferences.getInstance())
+          .getStringList(AppPrefs.notificationSyncBlacklist),
+      ['com.example.one', 'com.example.two'],
+    );
+    verify(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: true,
+        blacklistedPackages: ['com.example.one', 'com.example.two'],
+      ),
+    ).called(1);
   });
 
   testWidgets('SettingsScreen exposes Android notification actions',
