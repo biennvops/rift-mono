@@ -275,6 +275,7 @@ class JsonRpcRiftClient {
     'Enabled': 'enabled',
     'Policy': 'policy',
     'PlaybackId': 'playbackId',
+    'Playbacks': 'playbacks',
     'AppId': 'appId',
     'Artist': 'artist',
     'Album': 'album',

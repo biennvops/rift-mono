@@ -133,7 +133,27 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             PlaybackId = normalized.PlaybackId,
             BroadcastTo = await BroadcastAsync(
                 string.Equals(eventType, "posted", StringComparison.Ordinal) ? "media.playbackPosted" : "media.playbackUpdated",
-                normalized,
+                new
+                {
+                    playbackId = normalized.PlaybackId,
+                    sourceDeviceId = normalized.SourceDeviceId,
+                    sourcePlatform = normalized.SourcePlatform,
+                    appId = normalized.AppId,
+                    appName = normalized.AppName,
+                    title = normalized.Title,
+                    artist = normalized.Artist,
+                    album = normalized.Album,
+                    artwork = normalized.Artwork,
+                    playbackState = normalized.PlaybackState,
+                    positionMs = normalized.PositionMs,
+                    durationMs = normalized.DurationMs,
+                    canPlay = normalized.CanPlay,
+                    canPause = normalized.CanPause,
+                    canSkipNext = normalized.CanSkipNext,
+                    canSkipPrevious = normalized.CanSkipPrevious,
+                    canSeek = normalized.CanSeek,
+                    updatedAt = normalized.UpdatedAt
+                },
                 cancellationToken).ConfigureAwait(false)
         };
     }
