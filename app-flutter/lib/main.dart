@@ -965,14 +965,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         if (Platform.isWindows &&
             destinationPath != null &&
             destinationPath.trim().isNotEmpty) {
-          final shown = await WindowsShell.showTransferNotification(
+          await WindowsShell.showTransferNotification(
             title: title,
             body: body,
             destinationPath: destinationPath,
           );
-          if (shown) {
-            await _mirrorDesktopNotificationToPeers(title: title, body: body);
-          }
           return;
         }
         if (Platform.isAndroid &&
@@ -1019,72 +1016,37 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           return;
         }
         if (Platform.isWindows && route != null) {
-          final shown = await WindowsShell.showNotification(
+          await WindowsShell.showNotification(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
             payload: payload,
           );
-          if (shown) {
-            await _mirrorDesktopNotificationToPeers(title: title, body: body);
-          }
           return;
         }
         if (Platform.isLinux && route != null) {
-          final shown = await LinuxNotifications.show(
+          await LinuxNotifications.show(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
             payload: payload,
           );
-          if (shown) {
-            await _mirrorDesktopNotificationToPeers(title: title, body: body);
-          }
           return;
         }
         if (Platform.isMacOS) {
-          final shown = await MacOSNotifications.show(
+          await MacOSNotifications.show(
             title: title,
             body: body,
             route: route,
             payload: payload,
           );
-          if (shown) {
-            await _mirrorDesktopNotificationToPeers(title: title, body: body);
-          }
         }
       } catch (_) {
         // Best-effort: depends on user permission and runner support.
       }
     }());
-  }
-
-  Future<void> _mirrorDesktopNotificationToPeers({
-    required String title,
-    required String body,
-  }) async {
-    if (!(Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-      return;
-    }
-    final now = DateTime.now().toUtc();
-    await _submitNativeNotificationSyncEvent(<String, dynamic>{
-      'eventType': 'posted',
-      'notificationId': 'desktop:rift:${now.microsecondsSinceEpoch}',
-      'packageName': 'dev.rift.desktop',
-      'appName': 'Rift',
-      'title': title,
-      'bodyPreview': body,
-      'postedAt': now.toIso8601String(),
-      'isDismissible': false,
-      'isOpenable': false,
-      'sourcePlatform': Platform.isWindows
-          ? 'windows'
-          : Platform.isMacOS
-              ? 'macos'
-              : 'linux',
-    });
   }
 
   List<DesktopNotificationAction> _buildMirroredNotificationActions(

@@ -12,6 +12,7 @@ import java.util.TimeZone
 class RiftNotificationListenerService : NotificationListenerService() {
     companion object {
         private const val tag = "RiftNotifListener"
+        private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
     }
 
     override fun onListenerConnected() {
@@ -20,7 +21,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName == packageName) {
+        if (sbn.packageName == packageName && !isSyncTestNotification(sbn)) {
             return
         }
         val payload = buildPostedPayload(sbn) ?: return
@@ -32,7 +33,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        if (sbn.packageName == packageName) {
+        if (sbn.packageName == packageName && !isSyncTestNotification(sbn)) {
             return
         }
         NotificationSyncRelay.markNotificationRemoved(this, sbn.key)
@@ -82,6 +83,9 @@ class RiftNotificationListenerService : NotificationListenerService() {
             "isOpenable" to (sbn.notification.contentIntent != null),
         )
     }
+
+    private fun isSyncTestNotification(sbn: StatusBarNotification): Boolean =
+        sbn.notification.extras?.getBoolean(syncTestExtraKey, false) == true
 
     private fun formatUtcTimestamp(epochMillis: Long): String {
         val formatter =

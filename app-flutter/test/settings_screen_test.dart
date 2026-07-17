@@ -365,7 +365,10 @@ void main() {
     expect(captured['packageName'], 'com.example.app_flutter');
     expect(captured['appName'], 'Rift');
     expect(captured['title'], 'Rift test notification');
-    expect(captured['bodyPreview'], contains('Notification sync'));
+    expect(
+      captured['bodyPreview'],
+      'If you see this notification, sync is working.',
+    );
     expect(captured['isDismissible'], isTrue);
     expect(captured['isOpenable'], isTrue);
   });

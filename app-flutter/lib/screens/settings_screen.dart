@@ -195,8 +195,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'packageName': _androidTestNotificationPackage,
             'appName': _androidTestNotificationAppName,
             'title': 'Rift test notification',
-            'bodyPreview':
-                'Android notifications are enabled. Notification sync still also requires notification access.',
+            'bodyPreview': 'If you see this notification, sync is working.',
             'postedAt': now.toIso8601String(),
             'isDismissible': true,
             'isOpenable': true,

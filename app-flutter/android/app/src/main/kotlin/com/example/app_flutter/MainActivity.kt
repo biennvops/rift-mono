@@ -36,6 +36,7 @@ class MainActivity: FlutterActivity() {
     companion object {
         private const val notificationChannelId = "rift.events"
         private const val notificationChannelName = "Rift activity"
+        private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
         private const val notificationIntentRouteKey = "rift.notification.route"
         private const val notificationIntentDestinationPathKey = "rift.notification.destinationPath"
         private const val notificationIntentPayloadPrefix = "rift.notification.payload."
@@ -454,10 +455,11 @@ class MainActivity: FlutterActivity() {
 
         return showNotification(
             title = "Rift test notification",
-            body = "Android notifications are enabled. Notification sync still also requires notification access.",
+            body = "If you see this notification, sync is working.",
             route = "history.notifications",
             destinationPath = null,
             payload = mapOf("testNotification" to true),
+            isSyncTestNotification = true,
         )
     }
 
@@ -467,6 +469,7 @@ class MainActivity: FlutterActivity() {
         route: String,
         destinationPath: String?,
         payload: Map<*, *>?,
+        isSyncTestNotification: Boolean = false,
     ): Boolean {
         val intent =
             Intent(this, MainActivity::class.java).apply {
@@ -503,6 +506,11 @@ class MainActivity: FlutterActivity() {
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setContentIntent(pendingIntent)
+                .addExtras(
+                    Bundle().apply {
+                        putBoolean(syncTestExtraKey, isSyncTestNotification)
+                    },
+                )
                 .build()
 
         return try {
