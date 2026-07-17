@@ -214,6 +214,24 @@ public class RiftApiHandler : IRiftApi
         }
     }
 
+    [JsonRpcMethod("rift.cancelFileTransfer")]
+    public async Task<CancelFileTransferResult> CancelFileTransferAsync(string transferId)
+    {
+        try
+        {
+            var info = await _fileTransferService.CancelTransferAsync(transferId, CancellationToken.None);
+            return new CancelFileTransferResult
+            {
+                TransferId = info.TransferId,
+                Cancelled = true
+            };
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.listIncomingFileOffers")]
     public Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync() =>
         _fileTransferService.ListIncomingFileOffersAsync();
@@ -612,6 +630,7 @@ public class RiftApiHandler : IRiftApi
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw CreateNotConfiguredException();
+        public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();

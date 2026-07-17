@@ -63,6 +63,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       <Map<String, String>>[];
   final List<String> retriedQueueItems = <String>[];
   final List<String> removedQueueItems = <String>[];
+  final List<String> cancelledTransfers = <String>[];
   bool _isConnected;
 
   @override
@@ -227,6 +228,15 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
     return {
       'queueItemId': queueItemId,
       'removed': true,
+    };
+  }
+
+  @override
+  Future<dynamic> cancelFileTransfer(String transferId) async {
+    cancelledTransfers.add(transferId);
+    return {
+      'transferId': transferId,
+      'cancelled': true,
     };
   }
 
@@ -657,5 +667,46 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Send tab cancels active daemon-backed transfer',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'sending',
+          'targetDeviceId': 'rift-peer-1',
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': 'op-1',
+          'lastTransferId': 'transfer-1',
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.stop_circle_outlined));
+    await tester.pumpAndSettle();
+
+    expect(client.removedQueueItems, ['queue-1']);
+    expect(find.text('demo-1.txt'), findsNothing);
   });
 }

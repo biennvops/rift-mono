@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   Widget buildPanel(
     List<SendQueueItemData> items, {
-    void Function(int index)? onRemove,
+    void Function(int index)? onCancel,
     void Function(int index)? onRetry,
     void Function(int index)? onRetarget,
   }) {
@@ -13,7 +13,7 @@ void main() {
       home: Scaffold(
         body: SendQueuePanel(
           items: items,
-          onRemove: onRemove ?? (_) {},
+          onCancel: onCancel ?? (_) {},
           onRetry: onRetry ?? (_) {},
           onRetarget: onRetarget ?? (_) {},
         ),
@@ -82,7 +82,8 @@ void main() {
     expect(retriedIndex, 0);
   });
 
-  testWidgets('SendQueuePanel shows waiting label for reconnectable queued item',
+  testWidgets(
+      'SendQueuePanel shows waiting label for reconnectable queued item',
       (WidgetTester tester) async {
     await tester.pumpWidget(
       buildPanel(
@@ -92,7 +93,8 @@ void main() {
             mediaType: 'text/plain',
             byteSize: 64,
             status: SendQueueStatus.queued,
-            errorMessage: 'Connection lost. Waiting to retry when peer is available again.',
+            errorMessage:
+                'Connection lost. Waiting to retry when peer is available again.',
             isWaitingForReconnect: true,
           ),
         ],
@@ -135,5 +137,34 @@ void main() {
     await tester.pump();
 
     expect(retargetedIndex, 0);
+  });
+
+  testWidgets('SendQueuePanel exposes Cancel action for active transfer',
+      (WidgetTester tester) async {
+    var cancelledIndex = -1;
+
+    await tester.pumpWidget(
+      buildPanel(
+        const [
+          SendQueueItemData(
+            fileName: 'active.txt',
+            mediaType: 'text/plain',
+            byteSize: 128,
+            bytesTransferred: 64,
+            status: SendQueueStatus.sending,
+          ),
+        ],
+        onCancel: (index) {
+          cancelledIndex = index;
+        },
+      ),
+    );
+
+    expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.stop_circle_outlined));
+    await tester.pump();
+
+    expect(cancelledIndex, 0);
   });
 }

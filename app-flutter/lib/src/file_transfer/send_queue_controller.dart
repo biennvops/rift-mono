@@ -231,6 +231,11 @@ class SendQueueController extends ChangeNotifier {
   }
 
   Future<void> restore() async {
+    if (_hasRestored) {
+      await refreshFromDaemonIfSupported();
+      return;
+    }
+
     final inFlight = _restoreFuture;
     if (inFlight != null) {
       await inFlight;
@@ -467,6 +472,20 @@ class SendQueueController extends ChangeNotifier {
     _items.remove(item);
     await persist();
     notifyListeners();
+  }
+
+  Future<void> cancelItem(SendQueueEntry item) async {
+    await ensureRestored();
+
+    final client = _client;
+    if (client != null &&
+        item.transferId != null &&
+        item.transferId!.isNotEmpty &&
+        !(await _canUseDaemonQueue() && item.queueItemId != null)) {
+      await client.cancelFileTransfer(item.transferId!);
+    }
+
+    await removeItem(item);
   }
 
   Future<SendQueueDispatchResult> dispatchToPeer(String deviceId) async {

@@ -340,6 +340,42 @@ class FileTransferService {
         .toList(growable: false);
   }
 
+  Future<Map<String, dynamic>> cancelTransfer(String transferId) async {
+    if (transferId.trim().isEmpty) {
+      throw const RiftNotFoundException('transferId is required.');
+    }
+
+    const failureReason = 'Cancelled';
+    const message = 'Transfer cancelled by local user.';
+
+    final outgoing = _outgoingTransfers[transferId];
+    if (outgoing != null) {
+      outgoing.cancelRequested = true;
+      await _trySendCancel(
+        outgoing.targetDeviceId,
+        transferId,
+        failureReason,
+        message,
+      );
+      await _failOutgoingTransfer(outgoing, failureReason, message);
+      return {'transferId': transferId, 'cancelled': true};
+    }
+
+    final incoming = _incomingTransfers[transferId];
+    if (incoming != null) {
+      await _trySendCancel(
+        incoming.sourceDeviceId,
+        transferId,
+        failureReason,
+        message,
+      );
+      await _failIncomingTransfer(incoming, failureReason, message);
+      return {'transferId': transferId, 'cancelled': true};
+    }
+
+    throw RiftNotFoundException("Transfer '$transferId' was not found.");
+  }
+
   Future<void> _handleMessage(ProtocolMessage msg) async {
     final type = msg.payload['type'] as String?;
     if (type == null || !type.startsWith('file.')) {
@@ -700,6 +736,9 @@ class FileTransferService {
       var offset = 0;
       var chunkIndex = 0;
       while (offset < transfer.byteSize) {
+        if (transfer.cancelRequested) {
+          throw const RiftException(-32010, 'Transfer cancelled.');
+        }
         final remaining = transfer.byteSize - offset;
         final nextChunkSize = remaining < chunkSize ? remaining : chunkSize;
         final bytes = await raf.read(nextChunkSize);
@@ -744,6 +783,10 @@ class FileTransferService {
       rethrow;
     } finally {
       await raf.close();
+    }
+
+    if (transfer.cancelRequested) {
+      throw const RiftException(-32010, 'Transfer cancelled.');
     }
 
     await _sessionManager.sendMessage(transfer.targetDeviceId, {
@@ -997,6 +1040,7 @@ class _OutgoingTransferState {
   int bytesTransferred = 0;
   String state;
   String? failureReason;
+  bool cancelRequested = false;
 
   _OutgoingTransferState({
     required this.transferId,

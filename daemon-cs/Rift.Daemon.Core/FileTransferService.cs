@@ -341,6 +341,59 @@ public sealed class FileTransferService : IFileTransferService
         });
     }
 
+    public async Task<FileTransferInfo> CancelTransferAsync(
+        string transferId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(transferId))
+        {
+            throw new FileTransferFailureException("NotFound", -32009, "transferId is required.");
+        }
+
+        const string failureReason = "Cancelled";
+        const string message = "Transfer cancelled by local user.";
+
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        {
+            outgoing.SendCancellation.Cancel();
+            await TrySendCancelAsync(outgoing.TargetDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
+            TryTransitionFailure(outgoing.OperationId, failureReason);
+            await NotifyTransferFailedAsync(
+                outgoing.TransferId,
+                outgoing.OperationId,
+                "outgoing",
+                outgoing.TargetDeviceId,
+                outgoing.FileName,
+                outgoing.ByteSize,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
+            return ToTransferInfo(outgoing);
+        }
+
+        if (_incomingTransfers.TryGetValue(transferId, out var incoming))
+        {
+            await TrySendCancelAsync(incoming.SourceDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
+            _incomingTransfers.TryRemove(transferId, out _);
+            CleanupStagingDirectory(incoming.StagingDirectory);
+            TryTransitionFailure(incoming.OperationId, failureReason);
+            await NotifyTransferFailedAsync(
+                incoming.TransferId,
+                incoming.OperationId,
+                "incoming",
+                incoming.SourceDeviceId,
+                incoming.FileName,
+                incoming.ByteSize,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
+            return ToTransferInfo(incoming);
+        }
+
+        throw new FileTransferFailureException("NotFound", -32009, $"Transfer '{transferId}' was not found.");
+    }
+
     public async Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken)
     {
         EnsurePayloadIdentityMatches(offer.DeviceId, offer.PayloadSourceDeviceId, "file.offer");
@@ -907,6 +960,37 @@ public sealed class FileTransferService : IFileTransferService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to notify failure for file transfer {TransferId}.", transferId);
+        }
+    }
+
+    private async Task TrySendCancelAsync(
+        string peerDeviceId,
+        string transferId,
+        string failureReason,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var envelope = new
+            {
+                rift = "0.1-draft",
+                type = "file.cancel",
+                messageId = Guid.NewGuid().ToString("D"),
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                payload = new
+                {
+                    transferId,
+                    failureReason,
+                    message
+                }
+            };
+
+            await SendProtectedMessageAsync(peerDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort file.cancel failed for {TransferId}.", transferId);
         }
     }
 

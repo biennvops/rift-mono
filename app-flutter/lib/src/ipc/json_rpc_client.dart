@@ -1240,6 +1240,12 @@ class JsonRpcRiftClient {
     });
   }
 
+  Future<dynamic> cancelFileTransfer(String transferId) async {
+    return _sendRequest('rift.cancelFileTransfer', {
+      'transferId': transferId,
+    });
+  }
+
   Future<dynamic> removeSendQueueItem(String queueItemId) async {
     return _sendRequest('rift.removeSendQueueItem', {
       'queueItemId': queueItemId,

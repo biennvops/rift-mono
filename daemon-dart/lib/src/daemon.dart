@@ -59,14 +59,13 @@ class _DiscoveredPeerRecord {
     final peers = peersByInstanceId.values.toList(growable: false);
     final grouped = <int, List<DiscoveredPeer>>{};
     for (final peer in peers) {
-      grouped.putIfAbsent(_endpointScore(peer.address), () => <DiscoveredPeer>[])
+      grouped
+          .putIfAbsent(_endpointScore(peer.address), () => <DiscoveredPeer>[])
           .add(peer);
     }
 
     final scores = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
-    return [
-      for (final score in scores) ...grouped[score]!,
-    ];
+    return [for (final score in scores) ...grouped[score]!];
   }
 
   DiscoveredPeer? get primaryPeer =>
@@ -969,7 +968,10 @@ class RiftDaemon {
     }
 
     try {
-      _sessionManager!.requireCapability(message.peerDeviceId, 'media.playback');
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'media.playback',
+      );
     } catch (error) {
       RiftLog.warn(
         '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $error',
@@ -1003,7 +1005,9 @@ class RiftDaemon {
       artist: payload['artist'] as String?,
       album: payload['album'] as String?,
       artwork: payload['artwork'] is Map<String, dynamic>
-          ? Map<String, dynamic>.from(payload['artwork'] as Map<String, dynamic>)
+          ? Map<String, dynamic>.from(
+              payload['artwork'] as Map<String, dynamic>,
+            )
           : null,
       playbackState: payload['playbackState'] as String? ?? 'stopped',
       positionMs: payload['positionMs'] as int? ?? 0,
@@ -1597,6 +1601,10 @@ class RiftDaemon {
         );
       case 'rift.getOperation':
         return getOperation(RpcUtils.requireStringParam(params, 'operationId'));
+      case 'rift.cancelFileTransfer':
+        return _fileTransferService!.cancelTransfer(
+          RpcUtils.requireStringParam(params, 'transferId'),
+        );
       case 'rift.startDiscovery':
         _requireDiscoveryServices();
         await _discoveryService!.startDiscovery();

@@ -36,6 +36,12 @@ public sealed class RemoveSendQueueItemResult
     public bool Removed { get; init; }
 }
 
+public sealed class CancelFileTransferResult
+{
+    public string TransferId { get; init; } = string.Empty;
+    public bool Cancelled { get; init; }
+}
+
 public sealed class SendQueueFailureException(string failureReason, int errorCode, string message) : Exception(message)
 {
     public string FailureReason { get; } = failureReason;

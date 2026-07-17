@@ -128,6 +128,10 @@ public interface IFileTransferService
 
     Task<ListFileTransfersResult> ListFileTransfersAsync();
 
+    Task<FileTransferInfo> CancelTransferAsync(
+        string transferId,
+        CancellationToken cancellationToken);
+
     Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken);
 
     Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken);

@@ -545,6 +545,25 @@ Removes a durable send queue item.
 | ------------- | ------------- | -------- | ------------------ |
 | `queueItemId` | UUIDv4 string | Yes      | The queue item     |
 
+#### `rift.cancelFileTransfer`
+
+Cancels an in-flight file transfer initiated or accepted by the local daemon.
+
+**Params:**
+
+| Field        | Type          | Required | Description            |
+| ------------ | ------------- | -------- | ---------------------- |
+| `transferId` | UUIDv4 string | Yes      | The active transfer    |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "cancelled": true
+}
+```
+
 #### `rift.acceptFileOffer`
 
 Accepts an incoming file offer and selects the destination path locally.

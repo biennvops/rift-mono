@@ -1213,6 +1213,33 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     setState(() {});
   }
 
+  Future<void> _cancelStagedFile(SendQueueEntry file) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _sendQueue.cancelItem(file);
+      if (!mounted) {
+        return;
+      }
+      setState(() {});
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            file.status == SendQueueStatus.sending
+                ? 'Cancelled ${file.fileName}.'
+                : 'Removed ${file.fileName} from the queue.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      messenger.showSnackBar(
+        SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+      );
+    }
+  }
+
   Future<void> _clearFinishedStagedFiles() async {
     final sentItems = _sendQueue.items
         .where((file) => file.status == SendQueueStatus.sent)
@@ -2165,7 +2192,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
             ),
           )
           .toList(growable: false),
-      onRemove: (index) => _removeStagedFile(_sendQueue.items[index]),
+      onCancel: (index) => _cancelStagedFile(_sendQueue.items[index]),
       onRetry: (index) => _retryFailedStagedFile(_sendQueue.items[index]),
       onRetarget: (index) =>
           _chooseDeviceForStagedFile(_sendQueue.items[index]),
