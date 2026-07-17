@@ -190,6 +190,16 @@ public sealed class SqliteTrustStore(DatabaseContext databaseContext) : ITrustSt
         command.ExecuteNonQuery();
     }
 
+    public void UpdateDisplayName(string deviceId, string newDisplayName)
+    {
+        using var connection = databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Peers SET DisplayName = $displayName WHERE DeviceId = $deviceId;";
+        command.Parameters.AddWithValue("$deviceId", deviceId);
+        command.Parameters.AddWithValue("$displayName", newDisplayName);
+        command.ExecuteNonQuery();
+    }
+
     private static bool IsValidTransition(TrustState currentState, TrustState newState)
     {
         return (currentState, newState) switch

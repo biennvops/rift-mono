@@ -1312,10 +1312,65 @@ class RiftDaemon {
     if (method == null) {
       throw UnsupportedError('Method not found: null');
     }
-
     switch (method) {
       case 'rift.getDeviceInfo':
         return getDeviceInfo();
+      case 'rift.setDisplayName':
+        final displayName = RpcUtils.requireStringParam(params, 'displayName');
+        final identityManager = _identityManager!;
+        final trustStore = _trustStore;
+        final oldName = identityManager.displayName;
+        await identityManager.setDisplayName(displayName);
+
+        if (trustStore != null) {
+          try {
+            await trustStore.appendSecurityEvent(SecurityEventRecord(
+              eventId: const Uuid().v4(),
+              eventType: 'identity.updated',
+              severity: 'info',
+              localDeviceId: identityManager.deviceId,
+              timestamp: DateTime.now().toUtc(),
+              outcome: 'success',
+              details: {
+                'oldDisplayName': oldName,
+                'newDisplayName': displayName,
+                'source': 'local',
+              },
+            ));
+          } catch (e) {
+            RiftLog.warn('Failed to append security event for identity update: $e');
+          }
+        }
+
+        final envelope = {
+          'rift': '0.1-draft',
+          'type': 'identity.update',
+          'messageId': const Uuid().v4(),
+          'sourceDeviceId': _identityManager!.deviceId,
+          'payload': {
+            'deviceId': _identityManager!.deviceId,
+            'displayName': displayName,
+          },
+        };
+
+        if (_trustStore != null && _sessionManager != null) {
+          try {
+            final peers = await _trustStore!.getAllPeers();
+            for (final peer in peers) {
+              if (peer.state == TrustState.trusted) {
+                try {
+                  await _sessionManager!.sendMessage(peer.deviceId, envelope);
+                } catch (e) {
+                  // Ignore broadcast errors
+                }
+              }
+            }
+          } catch (e) {
+            RiftLog.warn('Failed to broadcast identity.update: $e');
+          }
+        }
+
+        return {'displayName': displayName};
       case 'rift.listTrustedPeers':
         return {'peers': await listTrustedPeers()};
       case 'rift.listPeersByState':

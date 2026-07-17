@@ -39,6 +39,7 @@ public interface IIdentityManager
     /// Gets the generated local device display name exposed to the UI and peers.
     /// </summary>
     string GetDisplayName();
+    void SetDisplayName(string name);
 
     /// <summary>
     /// Verifies an Ed25519 signature using the given public key.

@@ -17,6 +17,11 @@ public sealed class DeviceInfoResult
     public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
 }
 
+public sealed class SetDisplayNameResult
+{
+    public string DisplayName { get; init; } = string.Empty;
+}
+
 public static class DaemonCapabilities
 {
     public static readonly CapabilityInfo ClipboardOfferFetch = new() { Name = "clipboard.offer_fetch", Version = 1 };
@@ -62,6 +67,7 @@ public sealed class GetPeerPresenceResult
 public interface IDaemonInfoService
 {
     DeviceInfoResult GetDeviceInfo();
+    SetDisplayNameResult SetDisplayName(string displayName);
 
     Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query);
 

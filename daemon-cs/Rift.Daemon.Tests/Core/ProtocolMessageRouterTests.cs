@@ -73,7 +73,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _securityEventLog,
             null,
             NullLogger<NotificationSyncService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _trustStore, _securityEventLog, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService);
     }
 
     [Fact]

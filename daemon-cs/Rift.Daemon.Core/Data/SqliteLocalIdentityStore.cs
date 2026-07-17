@@ -22,7 +22,7 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt
+            SELECT Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt, CustomDisplayName
             FROM LocalIdentity
             WHERE Id = 1;
             """;
@@ -60,6 +60,9 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                     WindowsProtectedTlsCertificatePrefix,
                     UnixProtectedTlsCertificatePrefix,
                     out tlsPfxLegacy),
+            CustomDisplayName = reader.GetOrdinal("CustomDisplayName") >= 0 && !reader.IsDBNull(reader.GetOrdinal("CustomDisplayName")) 
+                ? (string)reader["CustomDisplayName"] 
+                : null,
             CreatedAt = DateTimeOffset.Parse((string)reader["CreatedAt"])
         };
 
@@ -88,12 +91,13 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt)
-            VALUES (1, $privateKey, $publicKey, $tlsCertificatePfx, $createdAt)
+            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CustomDisplayName, CreatedAt)
+            VALUES (1, $privateKey, $publicKey, $tlsCertificatePfx, $customDisplayName, $createdAt)
             ON CONFLICT(Id) DO UPDATE SET
                 Ed25519PrivateKey = excluded.Ed25519PrivateKey,
                 Ed25519PublicKey = excluded.Ed25519PublicKey,
                 TlsCertificatePfx = excluded.TlsCertificatePfx,
+                CustomDisplayName = excluded.CustomDisplayName,
                 CreatedAt = excluded.CreatedAt;
             """;
         command.Parameters.AddWithValue(
@@ -109,6 +113,7 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 identity.TlsCertificatePfx,
                 WindowsProtectedTlsCertificatePrefix,
                 UnixProtectedTlsCertificatePrefix) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$customDisplayName", (object?)identity.CustomDisplayName ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", identity.CreatedAt.ToString("O"));
         command.ExecuteNonQuery();
     }

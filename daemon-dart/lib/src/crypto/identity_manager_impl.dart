@@ -75,7 +75,20 @@ class IdentityManagerImpl implements IdentityManager {
     // Device ID: 'rift-' + first 32 chars of lowercase Base32(SHA-256(pubkey))
     final base32Str = Base32Utils.encode(_fingerprintBytes!).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
-    _displayName = _deriveDisplayName(_fingerprintBytes!);
+    
+    var customNameFile = File(p.join(storagePath, 'custom_display_name.txt'));
+    if (await customNameFile.exists()) {
+      _displayName = await customNameFile.readAsString();
+    } else {
+      _displayName = _deriveDisplayName(_fingerprintBytes!);
+    }
+  }
+
+  @override
+  Future<void> setDisplayName(String name) async {
+    _displayName = name;
+    var customNameFile = File(p.join(storagePath, 'custom_display_name.txt'));
+    await customNameFile.writeAsString(name, flush: true);
   }
 
   @override

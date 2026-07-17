@@ -52,6 +52,12 @@ public class RiftApiHandler : IRiftApi
     public Task<DeviceInfoResult> GetDeviceInfoAsync() =>
         Task.FromResult(_daemonInfoService.GetDeviceInfo());
 
+    [JsonRpcMethod("rift.setDisplayName")]
+    public Task<SetDisplayNameResult> SetDisplayNameAsync(string displayName)
+    {
+        return Task.FromResult(_daemonInfoService.SetDisplayName(displayName));
+    }
+
     [JsonRpcMethod("rift.listDiscoveredPeers")]
     public Task<ListDiscoveredPeersResult> ListDiscoveredPeersAsync() =>
         Task.FromResult(_daemonInfoService.ListDiscoveredPeers());
@@ -547,6 +553,7 @@ public class RiftApiHandler : IRiftApi
     private sealed class UnsupportedDaemonInfoService : IDaemonInfoService
     {
         public DeviceInfoResult GetDeviceInfo() => throw CreateNotConfiguredException();
+        public SetDisplayNameResult SetDisplayName(string displayName) => throw CreateNotConfiguredException();
 
         public Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query) => throw CreateNotConfiguredException();
 

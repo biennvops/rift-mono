@@ -50,6 +50,9 @@ class _FakeTrustStore implements TrustStore {
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
 
   @override
+  Future<void> updateDisplayName(String deviceId, String displayName) async {}
+
+  @override
   Future<void> upsertPeer(PeerRecord record) async {
     _peers[record.deviceId] = record;
   }

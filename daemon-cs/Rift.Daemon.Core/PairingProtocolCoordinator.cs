@@ -384,7 +384,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var approvedAt = _timeProvider.GetUtcNow().ToString("O");
         await SendProtocolMessageAsync(resolvedDeviceId, "pairing.approve", new
         {
-            approvedAt
+            approvedAt,
+            displayName = _identityManager.GetDisplayName()
         }, cancellationToken);
         _logger.LogInformation("Sent pairing.approve to peer {DeviceId}.", resolvedDeviceId);
 
@@ -483,7 +484,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 await HandlePairingStartAsync(peerDeviceId, payloadElement, cancellationToken);
                 break;
             case "pairing.approve":
-                await HandlePairingApproveAsync(peerDeviceId, cancellationToken);
+                await HandlePairingApproveAsync(peerDeviceId, payloadElement, cancellationToken);
                 break;
             case "pairing.reject":
                 await HandlePairingRejectAsync(peerDeviceId);
@@ -590,7 +591,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }
     }
 
-    private async Task HandlePairingApproveAsync(string peerDeviceId, CancellationToken cancellationToken)
+    private async Task HandlePairingApproveAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
     {
         var peer = _trustStore.GetPeer(peerDeviceId);
         if (peer is null)
@@ -604,6 +605,16 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
         state.MarkRemoteApproved();
         await TrySendPairingCompleteAsync(peerDeviceId, state, _timeProvider.GetUtcNow().ToString("O"), cancellationToken);
+        
+        var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
+            ? NormalizeRemoteDisplayName(displayNameElement.GetString())
+            : null;
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            peer.DisplayName = displayName;
+            peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+            _trustStore.SavePeer(peer);
+        }
     }
 
     private async Task HandlePairingRejectAsync(string peerDeviceId)
@@ -657,6 +668,16 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         state.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs));
         var persistedAt = payload.GetProperty("persistedAt").GetString() ?? _timeProvider.GetUtcNow().ToString("O");
         state.MarkRemoteCompletionReceived(persistedAt);
+        
+        var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
+            ? NormalizeRemoteDisplayName(displayNameElement.GetString())
+            : null;
+        if (!string.IsNullOrWhiteSpace(displayName))
+        {
+            peer.DisplayName = displayName;
+            peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+            _trustStore.SavePeer(peer);
+        }
 
         if (peer.State == TrustState.Trusted)
         {
@@ -829,7 +850,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         await SendProtocolMessageAsync(deviceId, "pairing.complete", new
         {
             trustedDeviceId = _identityManager.GetDeviceId(),
-            persistedAt
+            persistedAt,
+            displayName = _identityManager.GetDisplayName()
         }, cancellationToken);
     }
 

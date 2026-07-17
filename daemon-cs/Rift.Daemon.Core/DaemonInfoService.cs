@@ -37,6 +37,58 @@ public sealed class DaemonInfoService(
         };
     }
 
+    public SetDisplayNameResult SetDisplayName(string displayName)
+    {
+        identityManager.SetDisplayName(displayName);
+        
+        _ = securityEventLog.LogEventAsync(new SecurityEventRecord
+        {
+            EventType = SecurityEventTypes.IdentityUpdated,
+            Severity = SecurityEventSeverity.Info,
+            LocalDeviceId = identityManager.GetDeviceId(),
+            Outcome = SecurityEventOutcome.Success,
+            Details = new Dictionary<string, object>
+            {
+                { "displayName", displayName },
+                { "source", "local" }
+            }
+        });
+        
+        _ = Task.Run(async () =>
+        {
+            var connectedPeers = trustStore.GetAllPeers().Where(p => p.State == TrustState.Trusted);
+            var envelope = new
+            {
+                rift = "0.1-draft",
+                type = "identity.update",
+                messageId = Guid.NewGuid().ToString("D"),
+                sourceDeviceId = identityManager.GetDeviceId(),
+                payload = new
+                {
+                    deviceId = identityManager.GetDeviceId(),
+                    displayName = displayName
+                }
+            };
+            var payloadBytes = System.Text.Encoding.UTF8.GetBytes(System.Text.Json.JsonSerializer.Serialize(envelope));
+            foreach (var peer in connectedPeers)
+            {
+                if (transport.HasProtectedSession(peer.DeviceId))
+                {
+                    try
+                    {
+                        await transport.SendAsync(peer.DeviceId, payloadBytes, CancellationToken.None);
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore broadcast failure
+                    }
+                }
+            }
+        });
+
+        return new SetDisplayNameResult { DisplayName = displayName };
+    }
+
     public async Task<QueryEventLogResult> QueryEventLogAsync(SecurityEventQuery query)
     {
         var events = await securityEventLog.QueryEventsAsync(query);

@@ -229,7 +229,10 @@ class PairingManager {
         'type': 'pairing.approve',
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
-        'payload': {'approvedAt': now.toIso8601String()},
+        'payload': {
+          'approvedAt': now.toIso8601String(),
+          'displayName': identityManager.displayName,
+        },
       });
 
       await sessionManager.sendMessage(peerDeviceId, {
@@ -241,6 +244,7 @@ class PairingManager {
         'payload': {
           'trustedDeviceId': identityManager.deviceId,
           'persistedAt': now.toIso8601String(),
+          'displayName': identityManager.displayName,
         },
       });
     } catch (e) {
@@ -486,6 +490,20 @@ class PairingManager {
         final displayName =
             payload['displayName'] as String? ?? 'Unknown Device';
 
+        if (payload['displayName'] != null && (payload['displayName'] as String).isNotEmpty) {
+          final updatedRecord = PeerRecord(
+            deviceId: record.deviceId,
+            displayName: payload['displayName'] as String,
+            certDer: record.certDer,
+            state: record.state,
+            pairedAt: record.pairedAt,
+            updatedAt: record.updatedAt,
+            lastSeenAt: record.lastSeenAt,
+            trustedEndpoints: record.trustedEndpoints,
+          );
+          await trustStore.upsertPeer(updatedRecord);
+        }
+
         // Emit event to UI to show popup
         onIpcEvent({
           'jsonrpc': '2.0',
@@ -526,6 +544,23 @@ class PairingManager {
         });
 
         final record = await trustStore.getPeer(peerDeviceId);
+        if (record != null) {
+          final displayName = approvePayload['displayName'] as String?;
+          if (displayName != null && displayName.isNotEmpty) {
+            final updatedRecord = PeerRecord(
+              deviceId: record.deviceId,
+              displayName: displayName,
+              certDer: record.certDer,
+              state: record.state,
+              pairedAt: record.pairedAt,
+              updatedAt: record.updatedAt,
+              lastSeenAt: record.lastSeenAt,
+              trustedEndpoints: record.trustedEndpoints,
+            );
+            await trustStore.upsertPeer(updatedRecord);
+          }
+        }
+        
         if (record?.state == TrustState.pairingPending) {
           _startTimeoutTimer(peerDeviceId);
         }
@@ -571,6 +606,21 @@ class PairingManager {
         if (trustedDeviceId != peerDeviceId) {
           await _rejectPairing(peerDeviceId);
           return;
+        }
+
+        final displayName = completePayload['displayName'] as String?;
+        if (displayName != null && displayName.isNotEmpty) {
+          final updatedRecord = PeerRecord(
+            deviceId: record.deviceId,
+            displayName: displayName,
+            certDer: record.certDer,
+            state: record.state,
+            pairedAt: record.pairedAt,
+            updatedAt: record.updatedAt,
+            lastSeenAt: record.lastSeenAt,
+            trustedEndpoints: record.trustedEndpoints,
+          );
+          await trustStore.upsertPeer(updatedRecord);
         }
 
         if (record.state == TrustState.pairingPending) {

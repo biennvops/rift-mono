@@ -309,6 +309,21 @@ class TrustStoreImpl implements TrustStore {
   }
 
   @override
+  Future<void> updateDisplayName(String deviceId, String displayName) async {
+    _ensureInitialized();
+    final stmt = _db!.prepare('''
+      UPDATE peers 
+      SET display_name = ?
+      WHERE device_id = ?
+    ''');
+    try {
+      stmt.execute([displayName, deviceId]);
+    } finally {
+      stmt.dispose();
+    }
+  }
+
+  @override
   Future<void> deletePeer(String deviceId) async {
     _ensureInitialized();
     final stmt = _db!.prepare('DELETE FROM peers WHERE device_id = ?');

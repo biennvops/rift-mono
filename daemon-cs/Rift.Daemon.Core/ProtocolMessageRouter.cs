@@ -7,6 +7,8 @@ namespace Rift.Daemon.Core;
 public sealed class ProtocolMessageRouter(
     IPairingProtocolCoordinator pairingProtocolCoordinator,
     IPresenceService presenceService,
+    ITrustStore trustStore,
+    ISecurityEventLog securityEventLog,
     IClipboardService clipboardService,
     IFileTransferService fileTransferService,
     IMediaPlaybackSyncService mediaPlaybackSyncService,
@@ -42,6 +44,34 @@ public sealed class ProtocolMessageRouter(
             }
 
             await pairingProtocolCoordinator.HandleMessageAsync(peerDeviceId, payload, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "identity.update", StringComparison.Ordinal))
+        {
+            if (!session.AllowsProtectedTraffic)
+            {
+                throw new UnauthorizedAccessException($"Session for '{session.PeerDeviceId}' is not authorized for protected traffic.");
+            }
+
+            var identityPayload = root.GetProperty("payload");
+            var displayName = identityPayload.TryGetProperty("displayName", out var displayNameElement) ? displayNameElement.GetString() : null;
+            if (displayName != null)
+            {
+                trustStore.UpdateDisplayName(peerDeviceId, displayName);
+                _ = securityEventLog.LogEventAsync(new SecurityEventRecord
+                {
+                    EventType = SecurityEventTypes.IdentityUpdated,
+                    Severity = SecurityEventSeverity.Info,
+                    LocalDeviceId = string.Empty, // Will be filled by log
+                    PeerDeviceId = peerDeviceId,
+                    Outcome = SecurityEventOutcome.Success,
+                    Details = new Dictionary<string, object>
+                    {
+                        { "displayName", displayName }
+                    }
+                });
+            }
             return;
         }
 

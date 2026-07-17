@@ -6,6 +6,7 @@ abstract class IdentityManager {
   Uint8List getDeviceFingerprint();
   String get deviceId;
   String get displayName;
+  Future<void> setDisplayName(String name);
   String get tlsCertificatePem;
   /// DER-encoded form of the local TLS certificate.
   /// Used by session_manager to bind PoP proofs to this device's own cert.

@@ -58,6 +58,11 @@ public interface ITrustStore
     IEnumerable<PeerIdentity> GetAllPeers();
 
     /// <summary>
+    /// Updates the display name for a peer.
+    /// </summary>
+    void UpdateDisplayName(string deviceId, string newDisplayName);
+
+    /// <summary>
     /// Attempts to update the state of a peer ensuring a valid state machine transition.
     /// </summary>
     bool TryTransition(string deviceId, TrustState newState);

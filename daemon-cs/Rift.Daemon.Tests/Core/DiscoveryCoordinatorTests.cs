@@ -245,6 +245,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         public byte[] SignEd25519(byte[] data) => throw new NotImplementedException();
         public string GetFingerprint() => "local-fingerprint";
         public string GetDisplayName() => "Windows Desktop 01";
+        public void SetDisplayName(string name) { }
         public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature) => throw new NotImplementedException();
     }
 }

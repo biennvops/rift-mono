@@ -569,6 +569,8 @@ class SessionManager {
         return;
       } else if (type == 'presence.update') {
         await _handlePresenceUpdate(ctx, msg, jsonMap);
+      } else if (type == 'identity.update') {
+        await _handleIdentityUpdate(ctx, msg, jsonMap);
       } else {
         _messageController.add(
           ProtocolMessage(msg.peerDeviceId, msg.peerCertDer, jsonMap),
@@ -1464,6 +1466,37 @@ class SessionManager {
     _resetOfflineTimeout(ctx);
 
     _presenceUpdateController.add(ctx);
+  }
+
+  Future<void> _handleIdentityUpdate(
+    SessionContext ctx,
+    TransportMessage msg,
+    Map<String, dynamic> jsonMap,
+  ) async {
+    final payload = jsonMap['payload'] as Map<String, dynamic>?;
+    if (payload == null) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'MalformedMessage',
+        'Missing payload in identity.update',
+      );
+      return;
+    }
+    
+    final displayName = payload['displayName'] as String?;
+    if (displayName != null) {
+      await _trustStore.updateDisplayName(ctx.peerDeviceId, displayName);
+      await _trustStore.appendSecurityEvent(SecurityEventRecord(
+        eventId: const Uuid().v4(),
+        eventType: 'identity.updated',
+        severity: 'info',
+        localDeviceId: _identityManager.deviceId,
+        peerDeviceId: ctx.peerDeviceId,
+        timestamp: DateTime.now().toUtc(),
+        outcome: 'success',
+        details: {'displayName': displayName},
+      ));
+    }
   }
 
   Future<bool> _isPeerAllowedForSession(String peerDeviceId) async {

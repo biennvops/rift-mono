@@ -105,6 +105,9 @@ class FakeIdentityManager implements IdentityManager {
   String get tlsPrivateKeyPem => '';
   @override
   Future<void> dispose() async {}
+
+  @override
+  Future<void> setDisplayName(String displayName) async {}
   @override
   Future<void> initialize() async {}
   @override

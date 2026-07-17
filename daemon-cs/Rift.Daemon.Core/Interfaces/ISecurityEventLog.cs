@@ -26,6 +26,7 @@ public static class SecurityEventTypes
     public const string PairingRejected = "pairing.rejected";
     public const string TrustTransitioned = "trust.transitioned";
     public const string TrustRemoved = "trust.removed";
+    public const string IdentityUpdated = "identity.updated";
     public const string AuthFailed = "auth.failed";
     public const string AuthIdentityProofFailed = "auth.identity_proof_failed";
     public const string ConnectionEstablished = "connection.established";

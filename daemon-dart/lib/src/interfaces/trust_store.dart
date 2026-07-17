@@ -207,6 +207,7 @@ abstract class TrustStore {
   Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt});
   Future<void> deletePeer(String deviceId);
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt);
+  Future<void> updateDisplayName(String deviceId, String displayName);
   Future<void> appendSecurityEvent(SecurityEventRecord record);
   Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query);
   Future<int> countSecurityEvents(SecurityEventQuery query);

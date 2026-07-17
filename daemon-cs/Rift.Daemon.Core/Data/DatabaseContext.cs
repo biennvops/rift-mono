@@ -48,6 +48,7 @@ public sealed class DatabaseContext
                 Ed25519PrivateKey BLOB NULL,
                 Ed25519PublicKey BLOB NOT NULL,
                 TlsCertificatePfx BLOB NULL,
+                CustomDisplayName TEXT NULL,
                 CreatedAt TEXT NOT NULL
             );
 
@@ -111,6 +112,7 @@ public sealed class DatabaseContext
         command.ExecuteNonQuery();
 
         EnsureColumnExists(connection, "LocalIdentity", "TlsCertificatePfx", "BLOB NULL");
+        EnsureColumnExists(connection, "LocalIdentity", "CustomDisplayName", "TEXT NULL");
         EnsureLocalIdentitySecretColumnsNullable(connection);
         EnsureColumnExists(connection, "Peers", "DisplayName", "TEXT NULL");
         EnsureColumnExists(connection, "Peers", "Platform", "TEXT NOT NULL DEFAULT 'unknown'");
@@ -194,11 +196,12 @@ public sealed class DatabaseContext
                 Ed25519PrivateKey BLOB NULL,
                 Ed25519PublicKey BLOB NOT NULL,
                 TlsCertificatePfx BLOB NULL,
+                CustomDisplayName TEXT NULL,
                 CreatedAt TEXT NOT NULL
             );
 
-            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt)
-            SELECT Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CreatedAt
+            INSERT INTO LocalIdentity (Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CustomDisplayName, CreatedAt)
+            SELECT Id, Ed25519PrivateKey, Ed25519PublicKey, TlsCertificatePfx, CustomDisplayName, CreatedAt
             FROM LocalIdentity__old;
 
             DROP TABLE LocalIdentity__old;

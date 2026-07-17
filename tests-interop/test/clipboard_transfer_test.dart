@@ -40,6 +40,8 @@ class FakeTrustStore implements TrustStore {
   @override
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
   @override
+  Future<void> updateDisplayName(String deviceId, String displayName) async {}
+  @override
   Future<void> appendSecurityEvent(SecurityEventRecord record) async {}
   @override
   Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query) async => [];
@@ -112,6 +114,8 @@ class FakeTransport implements Transport {
 class FakeIdentityManager implements IdentityManager {
   @override
   String get displayName => 'Fake Device';
+  @override
+  Future<void> setDisplayName(String name) async {}
 
   final String _deviceId;
   final SimpleKeyPair _keyPair;

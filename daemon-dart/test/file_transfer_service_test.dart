@@ -104,6 +104,9 @@ class FakeIdentityManager implements IdentityManager {
 
   @override
   Future<void> dispose() async {}
+
+  @override
+  Future<void> setDisplayName(String displayName) async {}
 }
 
 class FakeTrustStore implements TrustStore {
@@ -142,6 +145,9 @@ class FakeTrustStore implements TrustStore {
 
   @override
   Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+
+  @override
+  Future<void> updateDisplayName(String deviceId, String displayName) async {}
 
   @override
   Future<void> appendSecurityEvent(SecurityEventRecord record) async {}

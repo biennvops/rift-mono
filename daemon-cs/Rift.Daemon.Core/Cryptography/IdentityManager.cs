@@ -24,6 +24,7 @@ public class IdentityManager : IIdentityManager
     private volatile Ed25519PublicKeyParameters _ed25519PublicKey = null!;
     private volatile Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
     private volatile X509Certificate2 _tlsCertificate = null!;
+    private string? _customDisplayName;
     private readonly object _syncRoot = new();
 
     public IdentityManager(ILocalIdentityStore? localIdentityStore = null)
@@ -60,6 +61,8 @@ public class IdentityManager : IIdentityManager
                 {
                     _tlsCertificate = LoadPersistedTlsCertificate(persistedIdentity.TlsCertificatePfx, _ed25519PublicKey);
                 }
+                
+                _customDisplayName = persistedIdentity.CustomDisplayName;
             }
             else
             {
@@ -91,6 +94,7 @@ public class IdentityManager : IIdentityManager
             Ed25519PrivateKey = _ed25519PrivateKey.GetEncoded(),
             Ed25519PublicKey = _ed25519PublicKey.GetEncoded(),
             TlsCertificatePfx = ExportPersistedTlsCertificate(_tlsCertificate),
+            CustomDisplayName = _customDisplayName,
             CreatedAt = createdAt
         });
     }
@@ -175,7 +179,18 @@ public class IdentityManager : IIdentityManager
     public string GetDisplayName()
     {
         EnsureIdentityInitialized();
-        return DeriveDisplayName(_ed25519PublicKey.GetEncoded());
+        return _customDisplayName ?? DeriveDisplayName(_ed25519PublicKey.GetEncoded());
+    }
+
+    public void SetDisplayName(string name)
+    {
+        EnsureIdentityInitialized();
+        lock (_syncRoot)
+        {
+            _customDisplayName = name;
+            var persistedIdentity = _localIdentityStore?.GetIdentity();
+            PersistIdentity(persistedIdentity?.CreatedAt ?? DateTimeOffset.UtcNow);
+        }
     }
     
     public static string DeriveDeviceId(byte[] edKeyBytes)

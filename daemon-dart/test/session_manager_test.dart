@@ -84,6 +84,9 @@ class FakeTrustStore implements TrustStore {
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
   @override Future<void> deletePeer(String deviceId) async {}
   @override Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
+
+  @override
+  Future<void> updateDisplayName(String deviceId, String displayName) async {}
   @override Future<void> appendSecurityEvent(SecurityEventRecord record) async {}
   @override Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query) async => [];
   @override Future<int> countSecurityEvents(SecurityEventQuery query) async => 0;
@@ -99,6 +102,9 @@ class FakeIdentityManager implements IdentityManager {
   @override Uint8List get tlsCertificateDer => Uint8List.fromList(List.generate(64, (i) => i & 0xFF));
   @override String get tlsPrivateKeyPem => '';
   @override Future<void> dispose() async {}
+
+  @override
+  Future<void> setDisplayName(String displayName) async {}
   @override Future<void> initialize() async {}
   @override Future<String> generateIdentityProof(Uint8List c, Uint8List l) async => 'a' * 128;
 }

@@ -758,9 +758,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
     final String rawDisplayName = peer['displayName']?.toString() ?? '';
     final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
-    final String titleText = rawDisplayName.isNotEmpty
-        ? rawDisplayName
-        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final String titleText = trustState == 'trusted'
+        ? (rawDisplayName.isNotEmpty ? rawDisplayName : 'Unknown Device')
+        : (rawDisplayName.isNotEmpty ? rawDisplayName : (shortId.isNotEmpty ? shortId : 'Unknown Device'));
 
     // Màn A Design uses surface-container-lowest for Trusted, surface-container-low for Discovered, and surface-container for Blocked
     Color cardBg;
@@ -815,7 +815,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
                                 decorationColor: theme.colorScheme.error,
                               ),
                             ),
-                            if (deviceIdStr.isNotEmpty) ...[
+                            if (deviceIdStr.isNotEmpty && trustState == 'trusted') ...[
                               const SizedBox(height: 2),
                               Text(
                                 deviceIdStr,
@@ -1311,23 +1311,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          FloatingActionButton.extended(
-            heroTag: 'pairByIpFab',
-            onPressed: _showManualPairDialog,
-            backgroundColor: theme.colorScheme.secondaryContainer,
-            foregroundColor: theme.colorScheme.onSecondaryContainer,
-            elevation: 0,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            icon: const Icon(Icons.router),
-            label: Text(
-              'Pair by IP',
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: theme.colorScheme.onSecondaryContainer,
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
+
           FloatingActionButton.extended(
             heroTag: 'discoverFab',
             onPressed: _isTogglingDiscovery ? null : _toggleDiscovery,

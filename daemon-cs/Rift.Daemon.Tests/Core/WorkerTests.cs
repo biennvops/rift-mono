@@ -424,6 +424,7 @@ public sealed class WorkerTests
 
         public void RevokePeer(string deviceId, string revocationEvidence) => throw new NotImplementedException();
         public void DeletePeer(string deviceId) => throw new NotImplementedException();
+        public void UpdateDisplayName(string deviceId, string newDisplayName) => throw new NotImplementedException();
     }
 
     private sealed class ListLogger<T> : ILogger<T>

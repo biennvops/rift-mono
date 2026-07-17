@@ -432,6 +432,10 @@ file as complete.
 
 Removal messages are advisory. Local trust state is authoritative and MUST NOT depend on receiving a peer's `trust.remove`.
 
+`identity.update` payload fields: `deviceId` device ID, `displayName` string. 
+
+Sent by a trusted peer to inform others that its display name has changed. Receivers MUST update their local trust store and UI to reflect the new display name.
+
 ### 7.9 Error Messages
 
 `error` payload fields: `failureReason`, optional `refMessageId`, optional `message` string, optional `details` object.

@@ -419,6 +419,14 @@ public sealed class SendQueueServiceTests
 
         public void DeletePeer(string deviceId) => _peers.Remove(deviceId);
 
+        public void UpdateDisplayName(string deviceId, string newDisplayName)
+        {
+            if (_peers.TryGetValue(deviceId, out var peer))
+            {
+                peer.DisplayName = newDisplayName;
+            }
+        }
+
         public IEnumerable<PeerIdentity> GetAllPeers() => _peers.Values;
 
         public bool TryTransition(string deviceId, TrustState newState)

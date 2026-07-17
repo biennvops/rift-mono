@@ -921,6 +921,10 @@ class JsonRpcRiftClient {
     return _sendRequest('rift.getDeviceInfo');
   }
 
+  Future<dynamic> setDisplayName(String displayName) async {
+    return _sendRequest('rift.setDisplayName', {'displayName': displayName});
+  }
+
   Future<dynamic> listDiscoveredPeers() async {
     return _sendRequest('rift.listDiscoveredPeers');
   }

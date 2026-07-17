@@ -580,7 +580,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: 'Device name',
                   subtitle: displayName,
                   trailing: Icon(Icons.edit, color: theme.colorScheme.outline),
-                  onTap: () {},
+                  onTap: () {
+                    _showEditDeviceNameDialog(displayName);
+                  },
+                ),
+                _buildListTile(
+                  title: 'Pair by IP',
+                  subtitle: 'Manually pair with a device using its IP address',
+                  trailing: Icon(Icons.router, color: theme.colorScheme.outline),
+                  onTap: () {
+                    _showManualPairDialog();
+                  },
                 ),
                 _buildListTile(
                   title: 'Theme',
@@ -937,5 +947,180 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  void _showEditDeviceNameDialog(String currentName) {
+    final controller = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Edit Device Name'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'Device Name',
+              hintText: 'Enter new device name',
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCEL'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final newName = controller.text.trim();
+                if (newName.isNotEmpty) {
+                  Navigator.pop(context);
+                  await _setDeviceName(newName);
+                }
+              },
+              child: const Text('SAVE'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _setDeviceName(String newName) async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    try {
+      await client.setDisplayName(newName);
+      await _fetchDeviceInfo(); // Refresh to get the new name
+    } catch (e) {
+      if (!mounted) return;
+      RiftSnackbar.show(
+        context: context,
+        message: 'Failed to update device name: ${JsonRpcRiftClient.formatDisplayError(e)}',
+        type: RiftSnackbarType.error,
+      );
+    }
+  }
+
+  void _showManualPairDialog() {
+    final controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Pair by IP'),
+          content: TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'IP Address:Port',
+              hintText: 'e.g. 192.168.1.5:9140',
+            ),
+            autofocus: true,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCEL'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final input = controller.text.trim();
+                if (input.isEmpty) return;
+                
+                final parts = input.split(':');
+                if (parts.length != 2) {
+                  RiftSnackbar.show(
+                    context: context,
+                    message: 'Invalid format. Use IP:PORT',
+                    type: RiftSnackbarType.error,
+                  );
+                  return;
+                }
+                
+                final address = parts[0];
+                final port = int.tryParse(parts[1]);
+                if (port == null) {
+                  RiftSnackbar.show(
+                    context: context,
+                    message: 'Invalid port number.',
+                    type: RiftSnackbarType.error,
+                  );
+                  return;
+                }
+                
+                Navigator.pop(context);
+                _performManualPair(address, port);
+              },
+              child: const Text('PAIR'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _performManualPair(String address, int port) async {
+    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
+    try {
+      final result = await client.startPairingByEndpoint(address, port);
+      if (!mounted) return;
+      
+      final confirm = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Confirm Pairing'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Device ID: ${result['deviceId']}'),
+                const SizedBox(height: 8),
+                const Text('Does this fingerprint match the other device?'),
+                const SizedBox(height: 8),
+                Text(
+                  '${result['peerFingerprint']}',
+                  style: const TextStyle(
+                    fontFamily: 'JetBrains Mono',
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('REJECT'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('MATCH'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirm == true) {
+        await client.approvePairing(
+          result['deviceId'] as String,
+          result['peerFingerprint'] as String,
+        );
+        if (!mounted) return;
+        RiftSnackbar.show(
+          context: context,
+          message: 'Pairing successful!',
+          type: RiftSnackbarType.success,
+        );
+      } else {
+        await client.rejectPairing(result['deviceId'] as String);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      RiftSnackbar.show(
+        context: context,
+        message: 'Manual pairing failed: ${JsonRpcRiftClient.formatDisplayError(e)}',
+        type: RiftSnackbarType.error,
+      );
+    }
   }
 }

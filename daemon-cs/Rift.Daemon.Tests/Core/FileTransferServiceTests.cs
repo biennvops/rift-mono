@@ -767,6 +767,7 @@ public sealed class FileTransferServiceTests : IDisposable
         public string GetFingerprint() => "FAKE-FINGERPRINT";
 
         public string GetDisplayName() => "Windows Desktop 01";
+        public void SetDisplayName(string name) { }
 
         public bool VerifyEd25519(byte[] publicKey, byte[] data, byte[] signature) => true;
     }
@@ -780,6 +781,14 @@ public sealed class FileTransferServiceTests : IDisposable
         public PeerIdentity? GetPeer(string deviceId) => _peers.TryGetValue(deviceId, out var peer) ? peer : null;
         
         public void DeletePeer(string deviceId) => _peers.Remove(deviceId);
+
+        public void UpdateDisplayName(string deviceId, string newDisplayName)
+        {
+            if (_peers.TryGetValue(deviceId, out var peer))
+            {
+                peer.DisplayName = newDisplayName;
+            }
+        }
 
         public IEnumerable<PeerIdentity> GetAllPeers() => _peers.Values;
 
