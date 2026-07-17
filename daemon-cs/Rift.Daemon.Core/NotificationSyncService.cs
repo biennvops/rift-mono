@@ -104,6 +104,19 @@ public sealed class NotificationSyncService : INotificationSyncService
         var normalizedNotification = NormalizeLocalNotification(notification);
         ValidateNotification(normalizedNotification);
 
+        var suppressed = IsNotificationSuppressed(normalizedNotification.PackageName);
+        if (suppressed &&
+            (string.Equals(normalizedEventType, "posted", StringComparison.Ordinal) ||
+             string.Equals(normalizedEventType, "updated", StringComparison.Ordinal)))
+        {
+            return new NotifyLocalNotificationEventResult
+            {
+                NotificationId = normalizedNotification.NotificationId,
+                BroadcastTo = [],
+                Suppressed = true
+            };
+        }
+
         if (string.Equals(normalizedEventType, "posted", StringComparison.Ordinal))
         {
             await HandleNotificationPostedAsync(normalizedNotification, cancellationToken).ConfigureAwait(false);
@@ -117,15 +130,25 @@ public sealed class NotificationSyncService : INotificationSyncService
             throw new NotificationSyncFailureException("Notification eventType must be posted, updated, or removed.", -32602);
         }
 
-        var suppressed = IsNotificationSuppressed(normalizedNotification.PackageName);
-        var broadcastTo = suppressed
-            ? []
-            : await BroadcastNotificationAsync(
-                string.Equals(normalizedEventType, "posted", StringComparison.Ordinal)
-                    ? "notification.posted"
-                    : "notification.updated",
-                normalizedNotification,
-                cancellationToken).ConfigureAwait(false);
+        var broadcastTo = await BroadcastNotificationAsync(
+            string.Equals(normalizedEventType, "posted", StringComparison.Ordinal)
+                ? "notification.posted"
+                : "notification.updated",
+            new
+            {
+                notificationId = normalizedNotification.NotificationId,
+                sourceDeviceId = normalizedNotification.SourceDeviceId,
+                sourcePlatform = normalizedNotification.SourcePlatform,
+                packageName = normalizedNotification.PackageName,
+                appName = normalizedNotification.AppName,
+                title = normalizedNotification.Title,
+                bodyPreview = normalizedNotification.BodyPreview,
+                postedAt = normalizedNotification.PostedAt,
+                isDismissible = normalizedNotification.IsDismissible,
+                isOpenable = normalizedNotification.IsOpenable,
+                icon = normalizedNotification.Icon
+            },
+            cancellationToken).ConfigureAwait(false);
 
         return new NotifyLocalNotificationEventResult
         {

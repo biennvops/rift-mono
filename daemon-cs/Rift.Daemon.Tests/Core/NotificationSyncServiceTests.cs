@@ -186,6 +186,43 @@ public sealed class NotificationSyncServiceTests : IDisposable
         Assert.False(result.Suppressed);
         Assert.Contains("rift-peer", result.BroadcastTo);
         Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted");
+        var payload = Assert.Single(_transport.Payloads.Where(sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted"));
+        Assert.True(payload.Payload.TryGetProperty("notificationId", out _));
+        Assert.False(payload.Payload.TryGetProperty("NotificationId", out _));
+    }
+
+    [Fact]
+    public async Task HandleLocalNotificationEventAsync_DoesNotStoreOrBroadcastSuppressedNotifications()
+    {
+        await _service.UpdateNotificationSyncPolicyAsync(
+            enabled: true,
+            blacklistedPackages: ["dev.rift.desktop"],
+            cancellationToken: CancellationToken.None);
+
+        var result = await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            new NotificationSyncRecord
+            {
+                NotificationId = "desktop-suppressed-1",
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                SourcePlatform = "windows",
+                PackageName = "dev.rift.desktop",
+                AppName = "Rift Desktop",
+                Title = "Desktop test",
+                BodyPreview = "Should stay local",
+                PostedAt = "2026-07-16T10:00:00Z",
+                IsDismissible = false,
+                IsOpenable = false
+            },
+            null,
+            CancellationToken.None);
+
+        var notifications = await _service.ListNotificationsAsync(CancellationToken.None);
+
+        Assert.True(result.Suppressed);
+        Assert.Empty(result.BroadcastTo);
+        Assert.Empty(notifications.Notifications);
+        Assert.DoesNotContain(_ipcNotificationService.Events, evt => evt.Method == "rift.onNotificationPosted");
     }
 
     public void Dispose()
@@ -234,6 +271,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         public HashSet<string> ActivePeers { get; } = new(StringComparer.Ordinal);
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public List<(string PeerDeviceId, string Type, JsonElement Payload)> Payloads { get; } = [];
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -251,7 +289,9 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public virtual Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(frameBody);
-            SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            var type = document.RootElement.GetProperty("type").GetString() ?? string.Empty;
+            SentMessages.Add((peerDeviceId, type));
+            Payloads.Add((peerDeviceId, type, document.RootElement.GetProperty("payload").Clone()));
             return Task.CompletedTask;
         }
 
@@ -269,7 +309,9 @@ public sealed class NotificationSyncServiceTests : IDisposable
             CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(frameBody);
-            SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            var type = document.RootElement.GetProperty("type").GetString() ?? string.Empty;
+            SentMessages.Add((peerDeviceId, type));
+            Payloads.Add((peerDeviceId, type, document.RootElement.GetProperty("payload").Clone()));
             _sendStarted.TrySetResult();
             await Task.Delay(50, cancellationToken);
         }
