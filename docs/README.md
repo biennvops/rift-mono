@@ -13,6 +13,7 @@ reference material, not sprint history.
 - `../spec/decisions/README.md` - architecture decision record index
 - `../AGENTS.md` - agent-facing repo guidance
 - `macos-permissions.md` - focused platform notes for macOS runtime behavior
+- `macOS`/`Windows`/`Linux` - useful tips and tricks for each platform
 
 ## Supporting Docs
 

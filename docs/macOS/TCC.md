@@ -11,11 +11,7 @@ System Settings -> Privacy & Security -> Local Network -> enable "Rift Daemon"
 The system prompt typically appears only once. If you denied it, you usually must re-enable it
 in Settings.
 
-Reset (global):
-
-```bash
-tccutil reset LocalNetwork
-```
+Currently there's no way to reset Local Network access once an app's in the list.
 
 ## Notifications
 
