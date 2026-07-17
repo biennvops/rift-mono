@@ -207,7 +207,6 @@ private struct MediaPlaybackSnapshot {
 
 private final class MediaRemoteController {
   func fetchSnapshot(completion: @escaping (MediaPlaybackSnapshot?) -> Void) {
-    MPNowPlayingInfoCenter.default().playbackState = .stopped
     let metadata = MPNowPlayingInfoCenter.default().nowPlayingInfo
     guard let metadata else {
       completion(nil)
