@@ -726,7 +726,9 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException("PayloadTooLarge");
                  
             var frame = RiftFrame.Encode(frameBody.Span);
-            await session.Stream.WriteAsync(frame, cancellationToken);
+            await session.WriteGate.RunAsync(
+                writeCancellationToken => session.Stream.WriteAsync(frame, writeCancellationToken).AsTask(),
+                cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -858,6 +860,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
         public bool AllowsProtectedTraffic { get; set; }
         public SessionPeerContext PeerContext { get; set; }
+        public SessionWriteGate WriteGate { get; } = new();
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
@@ -873,6 +876,7 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         public void Dispose()
         {
+            WriteGate.Dispose();
             Stream.Dispose();
             Client.Dispose();
         }
