@@ -6,6 +6,7 @@ import 'package:nsd/nsd.dart' as nsd;
 import '../core/rift_log.dart';
 import '../interfaces/discovery_service.dart';
 import 'discovery_peer_tracker.dart';
+import 'fallback_interface_snapshot.dart';
 
 class DiscoveryServiceImpl implements DiscoveryService {
   final int port;
@@ -26,6 +27,9 @@ class DiscoveryServiceImpl implements DiscoveryService {
   RawDatagramSocket? _fallbackListener;
   Timer? _fallbackCleanupTimer;
   final _fallbackPeers = <String, ({DiscoveredPeer peer, DateTime lastSeen})>{};
+  final _fallbackPingTargets = <String, DateTime>{};
+  List<FallbackInterfaceSnapshot> _cachedInterfaces = const [];
+  DateTime _cachedInterfacesRefreshedAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   DiscoveryServiceImpl({
     required this.port,
@@ -57,6 +61,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _registration = registration;
 
     if (_fallbackAdvertiserSocket == null) {
+      await _refreshCachedInterfacesIfNeeded(force: true);
       await _startFallbackAdvertiser();
     }
   }
@@ -85,6 +90,8 @@ class DiscoveryServiceImpl implements DiscoveryService {
         _,
       ) async {
         try {
+          await _refreshCachedInterfacesIfNeeded();
+
           // 1. Send to global broadcast (might route to mobile data on hotspot)
           _fallbackAdvertiserSocket?.send(
             bytes,
@@ -92,27 +99,30 @@ class DiscoveryServiceImpl implements DiscoveryService {
             9141,
           );
 
-          // 2. Iterate network interfaces and send to /24 subnet broadcasts
-          // This ensures the packet goes out the WiFi hotspot interface.
-          final interfaces = await NetworkInterface.list(
-            type: InternetAddressType.IPv4,
-          );
-          for (final interface in interfaces) {
-            for (final addr in interface.addresses) {
-              final parts = addr.address.split('.');
-              if (parts.length == 4) {
-                parts[3] = '255';
-                final bcast = parts.join('.');
-                _fallbackAdvertiserSocket?.send(
-                  bytes,
-                  InternetAddress(bcast),
-                  9141,
-                );
-              }
+          // Reuse recently observed fallback peers as unicast targets to keep
+          // hotspot discovery working without relying on incorrect /24 guesses.
+          final cutoff = DateTime.now().subtract(const Duration(seconds: 30));
+          final expiredTargets = <String>[];
+          for (final entry in _fallbackPingTargets.entries) {
+            if (entry.value.isBefore(cutoff)) {
+              expiredTargets.add(entry.key);
+              continue;
             }
+
+            _fallbackAdvertiserSocket?.send(
+              bytes,
+              InternetAddress(entry.key),
+              9141,
+            );
           }
+          for (final address in expiredTargets) {
+            _fallbackPingTargets.remove(address);
+          }
+
         } catch (e) {
           RiftLog.debug('[Discovery] UDP Fallback broadcast failed: $e');
+          _cachedInterfacesRefreshedAt =
+              DateTime.fromMillisecondsSinceEpoch(0);
         }
       });
     } catch (e) {
@@ -221,6 +231,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
 
       final existing = _fallbackPeers[instanceId];
       _fallbackPeers[instanceId] = (peer: peer, lastSeen: DateTime.now());
+      _fallbackPingTargets[d.address.address] = DateTime.now();
 
       if (existing == null ||
           existing.peer.address != peer.address ||
@@ -323,6 +334,7 @@ class DiscoveryServiceImpl implements DiscoveryService {
     _fallbackListener?.close();
     _fallbackListener = null;
     _fallbackPeers.clear();
+    _fallbackPingTargets.clear();
   }
 
   @override
@@ -331,5 +343,22 @@ class DiscoveryServiceImpl implements DiscoveryService {
     await stopDiscovery();
     await _peerStreamController.close();
     await _peerLostController.close();
+  }
+
+  Future<void> _refreshCachedInterfacesIfNeeded({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        _cachedInterfaces.isNotEmpty &&
+        now.difference(_cachedInterfacesRefreshedAt) <
+            const Duration(seconds: 30)) {
+      return;
+    }
+
+    _cachedInterfaces =
+        await FallbackInterfaceSnapshotEnumerator.enumerateIPv4();
+    _cachedInterfacesRefreshedAt = now;
+    RiftLog.debug(
+      '[Discovery] Refreshed ${_cachedInterfaces.length} fallback interfaces',
+    );
   }
 }

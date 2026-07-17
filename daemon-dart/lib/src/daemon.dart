@@ -57,8 +57,16 @@ class _DiscoveredPeerRecord {
 
   List<DiscoveredPeer> get orderedPeers {
     final peers = peersByInstanceId.values.toList(growable: false);
-    peers.sort(_compareDiscoveredPeers);
-    return peers;
+    final grouped = <int, List<DiscoveredPeer>>{};
+    for (final peer in peers) {
+      grouped.putIfAbsent(_endpointScore(peer.address), () => <DiscoveredPeer>[])
+          .add(peer);
+    }
+
+    final scores = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [
+      for (final score in scores) ...grouped[score]!,
+    ];
   }
 
   DiscoveredPeer? get primaryPeer =>
@@ -88,18 +96,6 @@ class _NotificationSyncPolicy {
     'enabled': enabled,
     'blacklistedPackages': List<String>.from(blacklistedPackages),
   };
-}
-
-int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
-  final scoreCompare = _endpointScore(
-    b.address,
-  ).compareTo(_endpointScore(a.address));
-  if (scoreCompare != 0) return scoreCompare;
-
-  final addressCompare = a.address.compareTo(b.address);
-  if (addressCompare != 0) return addressCompare;
-
-  return a.port.compareTo(b.port);
 }
 
 int _endpointScore(String address) {
