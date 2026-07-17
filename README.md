@@ -37,6 +37,3 @@ The canonical documentation surface for engineers and agents is:
 - `spec/decisions/*.md`
 - curated files under `docs/`
 - concise component `README.md` files
-
-Historical plans, reviews, milestone notes, and audit writeups are archived
-under `docs/archive/` and are not current source of truth.

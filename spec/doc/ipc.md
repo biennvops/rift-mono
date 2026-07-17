@@ -8,14 +8,16 @@ The IPC API is the only interface through which a client application interacts w
 
 ## 1. Transport Independence
 
-The IPC contract is defined independently of transport. In v0.1-draft, two transport bindings exist:
+The IPC contract is defined independently of transport. In v0.1-draft, four transport bindings exist:
 
 | Platform | Transport                | Notes                                                        |
 | -------- | ------------------------ | ------------------------------------------------------------ |
 | Windows  | Named pipe               | Flutter client connects to the riftd Windows Service         |
+| macOS    | Unix domain socket       | Flutter client connects to the `daemon-cs` macOS host        |
+| Linux    | Unix domain socket       | Flutter client connects to the `daemon-cs` Linux host        |
 | Android  | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
 
-Future transports (Unix domain sockets on macOS/Linux, in-process channels on iOS) require only a new transport binding, not changes to this contract.
+Future transports such as in-process channels on iOS require only a new transport binding, not changes to this contract.
 
 All transports carry JSON-RPC 2.0 messages. Each message is a single JSON object. Framing (length-prefix, newline-delimited, or transport-native) is transport-specific and outside this specification.
 
