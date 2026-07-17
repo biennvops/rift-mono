@@ -810,6 +810,23 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
+        public Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(
+            string requestId,
+            bool success,
+            string? failureReason,
+            string? message,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ReportHandledMediaPlaybackActionResult
+            {
+                RequestId = requestId,
+                PlaybackId = "playback-1",
+                Action = "play",
+                Success = success
+            });
+
         public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;

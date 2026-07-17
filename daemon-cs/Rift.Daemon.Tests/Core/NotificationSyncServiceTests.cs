@@ -186,7 +186,9 @@ public sealed class NotificationSyncServiceTests : IDisposable
         Assert.False(result.Suppressed);
         Assert.Contains("rift-peer", result.BroadcastTo);
         Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted");
-        var payload = Assert.Single(_transport.Payloads.Where(sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted"));
+        var payload = Assert.Single(
+            _transport.Payloads,
+            sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted");
         Assert.True(payload.Payload.TryGetProperty("notificationId", out _));
         Assert.False(payload.Payload.TryGetProperty("NotificationId", out _));
     }
