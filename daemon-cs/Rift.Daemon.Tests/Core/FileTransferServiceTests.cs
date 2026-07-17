@@ -101,6 +101,49 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OfferFileAsync_ConcurrentReconnectOnlyDisconnectsOnce()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "127.0.0.1",
+                    Port = 7777,
+                    LastSuccessAt = DateTimeOffset.UtcNow,
+                    Source = "test"
+                }
+            ]
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.HasActiveSessionValue = true;
+        _transport.HasProtectedSessionValue = false;
+        _transport.ConnectDelay = TimeSpan.FromMilliseconds(50);
+
+        var pathOne = CreateTempFile("hello-one");
+        var pathTwo = CreateTempFile("hello-two");
+        try
+        {
+            await Task.WhenAll(
+                _service.OfferFileAsync("rift-peer", pathOne, "demo-one.txt", "text/plain", CancellationToken.None),
+                _service.OfferFileAsync("rift-peer", pathTwo, "demo-two.txt", "text/plain", CancellationToken.None));
+
+            Assert.Equal(["rift-peer"], _transport.DisconnectedPeers);
+            Assert.Equal([("127.0.0.1", 7777)], _transport.ConnectAttempts);
+        }
+        finally
+        {
+            File.Delete(pathOne);
+            File.Delete(pathTwo);
+        }
+    }
+
+    [Fact]
     public async Task AcceptFileOfferAsync_SendsAcceptMessage()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -829,15 +872,19 @@ public sealed class FileTransferServiceTests : IDisposable
         public int BlockedChunkSendCount { get; private set; }
         public bool HasActiveSessionValue { get; set; } = true;
         public bool HasProtectedSessionValue { get; set; } = true;
+        public TimeSpan ConnectDelay { get; set; } = TimeSpan.Zero;
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
+        public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
         {
             ConnectAttempts.Add((host, port));
+            if (ConnectDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(ConnectDelay, cancellationToken);
+            }
             HasActiveSessionValue = true;
             HasProtectedSessionValue = true;
-            return Task.CompletedTask;
         }
 
         public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>

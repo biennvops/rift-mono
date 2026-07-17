@@ -1057,20 +1057,9 @@ public sealed class FileTransferService : IFileTransferService
             throw new FileTransferFailureException("Unauthorized", -32004, $"Peer '{peerDeviceId}' is not trusted.");
         }
 
-        if (_transport.HasActiveSession(peerDeviceId))
-        {
-            await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
-        }
-
-        if (peer.TrustedEndpoints.Count == 0)
-        {
-            await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
         var reconnectTask = _pendingTrustedReconnects.GetOrAdd(
             peerDeviceId,
-            _ => ReconnectTrustedPeerCoreAsync(peerDeviceId, peer, cancellationToken));
+            _ => ReconnectTrustedPeerAsync(peerDeviceId, peer, cancellationToken));
 
         try
         {
@@ -1083,6 +1072,22 @@ public sealed class FileTransferService : IFileTransferService
                 _pendingTrustedReconnects.TryRemove(peerDeviceId, out _);
             }
         }
+    }
+
+    private async Task ReconnectTrustedPeerAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
+    {
+        if (_transport.HasActiveSession(peerDeviceId))
+        {
+            await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (peer.TrustedEndpoints.Count == 0)
+        {
+            await ReconnectTrustedPeerViaDiscoveryAsync(peerDeviceId, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await ReconnectTrustedPeerCoreAsync(peerDeviceId, peer, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
