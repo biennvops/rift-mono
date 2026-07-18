@@ -317,7 +317,7 @@ void main() {
     });
     await tester.pump();
 
-    expect(find.text('Thiết bị đã kết nối'), findsOneWidget);
+    expect(find.text('Pairing complete'), findsOneWidget);
   });
 
   testWidgets('PairingScreen requester reject returns to previous screen',
@@ -417,7 +417,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Open'), findsOneWidget);
-    expect(find.text('Thiết bị đã kết nối'), findsNothing);
+    expect(find.text('Pairing complete'), findsNothing);
   });
 
   testWidgets(

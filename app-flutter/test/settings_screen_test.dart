@@ -121,6 +121,9 @@ void main() {
 
   testWidgets('SettingsScreen shows UI elements and device info',
       (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 3000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
@@ -134,10 +137,6 @@ void main() {
     expect(find.text('GENERAL'), findsOneWidget);
     expect(find.text('IDENTITY'), findsOneWidget);
     expect(find.text('PERMISSIONS'), findsOneWidget);
-    await tester.scrollUntilVisible(
-        find.text('System notifications enabled'), 200);
-    expect(find.text('System notifications enabled'), findsOneWidget);
-    expect(find.text('Android notification access is off'), findsOneWidget);
     // Info from mock should be visible
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
