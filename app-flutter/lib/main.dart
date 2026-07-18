@@ -27,6 +27,7 @@ import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'widgets/rift_snackbar.dart';
+import 'widgets/premium_dialog.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
@@ -176,13 +177,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       Duration(seconds: 2);
 
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  final GlobalKey<_AppShellState> _appShellKey = GlobalKey<_AppShellState>();
+  final GlobalKey<AppShellState> _appShellKey = GlobalKey<AppShellState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
   StreamSubscription<Map<String, dynamic>>? _pairingCompleteSub;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  bool _isResolvingPath = false;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
@@ -195,6 +197,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
   final Set<String> _autoAcceptingTransferIds = <String>{};
+  final Set<String> _reservedIncomingPaths = <String>{};
   final ValueNotifier<String?> _historyRouteNotifier =
       ValueNotifier<String?>(null);
   final ValueNotifier<String?> _sharedClipboardTextNotifier =
@@ -408,24 +411,161 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return true;
     }
 
+    bool autoAccept = false;
     return showDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Accept file transfer?'),
-        content: Text(
-          'Receive $fileName from $sourceDeviceId?\n\n'
-          'Destination:\n$destinationPath',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Decline'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Accept'),
-          ),
-        ],
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setState) {
+          return PremiumDialog(
+            title: 'Incoming File',
+            subtitle: 'A trusted peer wants to send you a file.',
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // File Name
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.insert_drive_file, size: 20, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'File',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            fileName,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Sender
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.person, size: 20, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'From',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            sourceDeviceId,
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Destination
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.folder, size: 20, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Save to',
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            destinationPath,
+                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      autoAccept = !autoAccept;
+                    });
+                  },
+                  behavior: HitTestBehavior.opaque,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: Checkbox(
+                          value: autoAccept,
+                          onChanged: (val) {
+                            setState(() {
+                              autoAccept = val == true;
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Always auto-accept files from this device',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            cancelText: 'Decline',
+            confirmText: 'Accept',
+            onCancel: () => Navigator.of(dialogContext).pop(false),
+            onConfirm: () async {
+              if (autoAccept) {
+                final prefs = await SharedPreferences.getInstance();
+                final list = prefs.getStringList(AppPrefs.autoAcceptDeviceIds) ?? <String>[];
+                if (!list.contains(sourceDeviceId)) {
+                  list.add(sourceDeviceId);
+                  await prefs.setStringList(AppPrefs.autoAcceptDeviceIds, list);
+                }
+              }
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop(true);
+              }
+            },
+          );
+        },
       ),
     );
   }
@@ -844,8 +984,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     _activePairingDeviceId = deviceId;
     navigator
-        .push(
-      MaterialPageRoute<void>(
+        .push<dynamic>(
+      MaterialPageRoute<dynamic>(
         builder: (_) => PairingScreen(
           initialDeviceId: deviceId,
           initialDisplayName: payload['displayName']?.toString(),
@@ -856,9 +996,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         ),
       ),
     )
-        .whenComplete(() {
-      if (mounted && _activePairingDeviceId == deviceId) {
-        _activePairingDeviceId = null;
+        .then((result) {
+      if (mounted) {
+        if (result == 'history') {
+          _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historyClipboard);
+        } else if (result == 'devices') {
+          _appShellKey.currentState?.showRoute(NotificationRoute.devices);
+        }
+        if (_activePairingDeviceId == deviceId) {
+          _activePairingDeviceId = null;
+        }
       }
     });
   }
@@ -1343,20 +1490,46 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     _autoAcceptingTransferIds.add(transferId);
     final client = context.read<JsonRpcRiftClient>();
+    String? destinationPath;
     try {
-      final destinationPath = await buildDefaultIncomingFilePath(fileName);
+      // Synchronize path resolution to prevent concurrent duplicate paths
+      while (_isResolvingPath) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      _isResolvingPath = true;
+      try {
+        destinationPath = await buildDefaultIncomingFilePath(
+          fileName,
+          reservedPaths: _reservedIncomingPaths,
+        );
+        if (destinationPath != null && destinationPath.isNotEmpty) {
+          _reservedIncomingPaths.add(destinationPath);
+        }
+      } finally {
+        _isResolvingPath = false;
+      }
+      
       if (destinationPath == null || destinationPath.isEmpty) {
         throw const FileSystemException(
           'Could not resolve a public Downloads/Rift save location.',
         );
       }
 
-      final shouldAccept = await _confirmIncomingFileOffer(
-        fileName: fileName,
-        sourceDeviceId: sourceDeviceId,
-        destinationPath: destinationPath,
-      );
-      if (shouldAccept != true) {
+      bool shouldAccept = false;
+      final prefs = await SharedPreferences.getInstance();
+      final autoAcceptDevices = prefs.getStringList(AppPrefs.autoAcceptDeviceIds) ?? <String>[];
+      
+      if (autoAcceptDevices.contains(sourceDeviceId)) {
+        shouldAccept = true;
+      } else {
+        shouldAccept = await _confirmIncomingFileOffer(
+          fileName: fileName,
+          sourceDeviceId: sourceDeviceId,
+          destinationPath: destinationPath,
+        ) ?? false;
+      }
+
+      if (!shouldAccept) {
         await client.rejectFileOffer(
           transferId: transferId,
           failureReason: 'PolicyDenied',
@@ -1406,6 +1579,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
     } finally {
       _autoAcceptingTransferIds.remove(transferId);
+      if (destinationPath != null) {
+        // We do not remove it immediately because the file needs time to be written by the daemon.
+        // It will be cleared when the app restarts, or we can just leave it reserved for the session.
+      }
     }
   }
 
@@ -1481,6 +1658,39 @@ ThemeData _buildRiftTheme() {
       labelSmall: jetBrainsStyle.copyWith(
           fontSize: 11, fontWeight: FontWeight.w400, height: 14 / 11),
     ),
+    dialogTheme: DialogThemeData(
+      backgroundColor: colorScheme.surfaceContainerHigh,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+      ),
+      titleTextStyle: inter.headlineMedium?.copyWith(
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        color: colorScheme.onSurface,
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(4),
+      ),
+      filled: true,
+      fillColor: colorScheme.surface,
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+        ),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(4),
+        ),
+        side: BorderSide(color: colorScheme.primary, width: 1),
+      ),
+    ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: colorScheme.surface,
       indicatorColor: colorScheme.secondaryContainer,
@@ -1515,10 +1725,10 @@ class AppShell extends StatefulWidget {
   });
 
   @override
-  State<AppShell> createState() => _AppShellState();
+  State<AppShell> createState() => AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class AppShellState extends State<AppShell> {
   int _currentIndex = 0;
 
   late final List<Widget> _screens = [

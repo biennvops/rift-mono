@@ -557,6 +557,10 @@ class SendQueueController extends ChangeNotifier {
               skipped += 1;
               continue;
             }
+            if (_items.any((item) => item.localPath == localPath)) {
+              skipped += 1;
+              continue;
+            }
             try {
               final response = await client.enqueueFileSend(
                 localPath: localPath,

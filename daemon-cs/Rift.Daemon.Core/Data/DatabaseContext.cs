@@ -117,6 +117,7 @@ public sealed class DatabaseContext
         EnsureColumnExists(connection, "Peers", "DisplayName", "TEXT NULL");
         EnsureColumnExists(connection, "Peers", "Platform", "TEXT NOT NULL DEFAULT 'unknown'");
         EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
+        EnsureColumnExists(connection, "SendQueueItems", "Origin", "TEXT NULL");
     }
 
     public SqliteConnection CreateOpenConnection()

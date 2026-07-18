@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../constants.dart';
 
 const MethodChannel _androidShellChannel = MethodChannel('rift/android/shell');
 
@@ -27,6 +29,14 @@ String joinPlatformPath(String a, String b) {
 }
 
 Future<Directory?> resolveIncomingDownloadsDirectory() async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final customPath = prefs.getString(AppPrefs.defaultDownloadPath);
+    if (customPath != null && customPath.trim().isNotEmpty) {
+      return Directory(customPath);
+    }
+  } catch (_) {}
+
   try {
     if (Platform.isAndroid) {
       final publicDownloadsPath =
@@ -76,7 +86,10 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
   }
 }
 
-Future<String?> buildDefaultIncomingFilePath(String fileName) async {
+Future<String?> buildDefaultIncomingFilePath(
+  String fileName, {
+  Set<String>? reservedPaths,
+}) async {
   final downloadsDir = await resolveIncomingDownloadsDirectory();
   if (downloadsDir == null) {
     return null;
@@ -85,7 +98,7 @@ Future<String?> buildDefaultIncomingFilePath(String fileName) async {
   await downloadsDir.create(recursive: true);
   final sanitizedFileName = sanitizeIncomingFileName(fileName);
   var candidate = File(joinPlatformPath(downloadsDir.path, sanitizedFileName));
-  if (!candidate.existsSync()) {
+  if (!candidate.existsSync() && !(reservedPaths?.contains(candidate.path) ?? false)) {
     return candidate.path;
   }
 
@@ -99,7 +112,7 @@ Future<String?> buildDefaultIncomingFilePath(String fileName) async {
   for (var i = 1; i <= 999; i += 1) {
     candidate =
         File(joinPlatformPath(downloadsDir.path, '$stem ($i)$extension'));
-    if (!candidate.existsSync()) {
+    if (!candidate.existsSync() && !(reservedPaths?.contains(candidate.path) ?? false)) {
       return candidate.path;
     }
   }
