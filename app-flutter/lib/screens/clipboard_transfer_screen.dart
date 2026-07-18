@@ -18,6 +18,7 @@ import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 import '../widgets/rift_snackbar.dart';
+import '../widgets/premium_dialog.dart';
 
 enum _HistorySection {
   clipboard,
@@ -86,10 +87,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   StreamSubscription<bool>? _connectionChangedSub;
 
   bool _isRefreshing = false;
-  bool _isRefreshingNotifications = false;
-  bool _isRefreshingFileOffers = false;
-  bool _isRefreshingTransfers = false;
-  bool _isRefreshingPeers = false;
   _HistorySection _activeSection = _HistorySection.clipboard;
 
   bool get _revealCompletedTransfersInFolder =>
@@ -315,7 +312,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Future<void> _refreshFileOffers() async {
     final client = context.read<JsonRpcRiftClient>();
-    setState(() => _isRefreshingFileOffers = true);
     try {
       final result = await client.listIncomingFileOffers();
       final offers = List<Map<String, dynamic>>.from(
@@ -335,16 +331,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-    } finally {
-      if (mounted) {
-        setState(() => _isRefreshingFileOffers = false);
-      }
     }
   }
 
   Future<void> _refreshNotifications() async {
     final client = context.read<JsonRpcRiftClient>();
-    setState(() => _isRefreshingNotifications = true);
     try {
       final result = await client.listNotifications();
       final notifications = List<Map<String, dynamic>>.from(
@@ -372,16 +363,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       });
     } catch (_) {
       if (!mounted) return;
-    } finally {
-      if (mounted) {
-        setState(() => _isRefreshingNotifications = false);
-      }
     }
   }
 
   Future<void> _refreshTransfers() async {
     final client = context.read<JsonRpcRiftClient>();
-    setState(() => _isRefreshingTransfers = true);
     try {
       final result = await client.listFileTransfers();
       final transfers = List<Map<String, dynamic>>.from(
@@ -398,19 +384,21 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         _fileTransfers
           ..clear()
           ..addAll(transfers);
+          
+        final activeTransferIds = transfers
+            .map((t) => t['transferId']?.toString())
+            .where((id) => id != null)
+            .toSet();
+        _incomingFileOffers.removeWhere((offer) =>
+            activeTransferIds.contains(offer['transferId']?.toString()));
       });
     } catch (_) {
       if (!mounted) return;
-    } finally {
-      if (mounted) {
-        setState(() => _isRefreshingTransfers = false);
-      }
     }
   }
 
   Future<void> _refreshTrustedPeers() async {
     final client = context.read<JsonRpcRiftClient>();
-    setState(() => _isRefreshingPeers = true);
     try {
       final result = await client.listTrustedPeers();
       final peers = List<Map<String, dynamic>>.from(
@@ -432,10 +420,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       unawaited(_resumeRecoverableQueue());
     } catch (_) {
       if (!mounted) return;
-    } finally {
-      if (mounted) {
-        setState(() => _isRefreshingPeers = false);
-      }
     }
   }
 
@@ -823,12 +807,17 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   List<Map<String, dynamic>> get _fileCapablePeers {
     return _trustedPeers.where((peer) {
       final trustState = peer['trustState']?.toString();
+      if (trustState != 'trusted') return false;
+
+      final capabilitiesList = peer['capabilities'] as List?;
+      if (capabilitiesList == null || capabilitiesList.isEmpty) {
+        return true;
+      }
+
       final capabilities = List<String>.from(
-        (peer['capabilities'] as List? ?? const <dynamic>[]).map(
-          (item) => item.toString(),
-        ),
+        capabilitiesList.map((item) => item.toString()),
       );
-      return trustState == 'trusted' && capabilities.contains('file.transfer');
+      return capabilities.contains('file.transfer');
     }).toList(growable: false);
   }
 
@@ -878,97 +867,46 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               });
             }
 
-            return AlertDialog(
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Text(
-                'Send File',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Could not open the native file picker. Please specify the file details manually.',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: pathController,
-                      decoration: InputDecoration(
-                        labelText: 'Local path',
-                        hintText: '/home/you/Downloads/example.mp4',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                      autofocus: true,
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: nameController,
-                      decoration: InputDecoration(
-                        labelText: 'Display file name (optional)',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: typeController,
-                      decoration: InputDecoration(
-                        labelText: 'Media type',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        validationError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+            return PremiumDialog(
+              title: 'Send File',
+              subtitle: 'Could not open the native file picker. Please specify the file details manually.',
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PremiumTextField(
+                    controller: pathController,
+                    label: 'Local path',
+                    hint: '/home/you/Downloads/example.mp4',
+                    autofocus: true,
                   ),
-                  onPressed: submit,
-                  child: const Text('Send'),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  PremiumTextField(
+                    controller: nameController,
+                    label: 'Display file name (optional)',
+                  ),
+                  const SizedBox(height: 12),
+                  PremiumTextField(
+                    controller: typeController,
+                    label: 'Media type',
+                  ),
+                  if (validationError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      validationError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              cancelText: 'Cancel',
+              confirmText: 'Send',
+              onCancel: () => Navigator.of(dialogContext).pop(),
+              onConfirm: submit,
             );
           },
         );
@@ -1436,72 +1374,35 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               Navigator.of(dialogContext).pop(path);
             }
 
-            return AlertDialog(
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Text(
-                'Save Incoming File',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Could not open the native file picker. Please specify the destination path manually.',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: destinationController,
-                      decoration: InputDecoration(
-                        labelText: 'Destination path',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                      autofocus: true,
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        validationError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+            return PremiumDialog(
+              title: 'Save Incoming File',
+              subtitle: 'Could not open the native file picker. Please specify the destination path manually.',
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  PremiumTextField(
+                    controller: destinationController,
+                    label: 'Destination path',
+                    autofocus: true,
                   ),
-                  onPressed: submit,
-                  child: const Text('Accept'),
-                ),
-              ],
+                  if (validationError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      validationError!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              cancelText: 'Cancel',
+              confirmText: 'Accept',
+              onCancel: () => Navigator.of(dialogContext).pop(),
+              onConfirm: submit,
             );
           },
         );
@@ -1683,27 +1584,27 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: Text(
-          title,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.primary,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        backgroundColor: theme.colorScheme.surface,
-        foregroundColor: theme.colorScheme.primary,
-        elevation: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: theme.colorScheme.outlineVariant, height: 1),
-        ),
-      ),
       body: RefreshIndicator(
         onRefresh: _refreshAll,
         child: ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
           children: [
+            Text(
+              title,
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.onSurface,
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Transfers, clipboard, and notifications.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
             if (_isRefreshing)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
@@ -1838,10 +1739,15 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildClipboardHistorySection(ThemeData theme) {
     if (_clipboardOffers.isEmpty) {
-      return Text(
-        'No recent clipboard items from trusted devices yet.',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        alignment: Alignment.center,
+        child: Text(
+          'No recent clipboard items from trusted devices yet.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
         ),
       );
     }
@@ -1864,7 +1770,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(4),
             border: Border.all(
               color: theme.colorScheme.outlineVariant,
             ),
@@ -1945,25 +1851,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   }
 
   Widget _buildNotificationsSection(ThemeData theme) {
-    return _buildSectionCard(
-      theme: theme,
-      title: 'Android Notifications',
-      subtitle:
-          'Mirrored from trusted Android devices. Open and dismiss actions are sent back to Android.',
-      isLoading: _isRefreshingNotifications,
-      onRefresh: _refreshNotifications,
-      child: _notifications.isEmpty
-          ? Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                'No mirrored Android notifications yet.',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            )
-          : Column(
-              children: _notifications.map((notification) {
+    if (_notifications.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        alignment: Alignment.center,
+        child: Text(
+          'No mirrored Android notifications yet.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Column(
+      children: _notifications.map((notification) {
                 final title = notification['title']?.toString().trim();
                 final body = notification['bodyPreview']?.toString().trim();
                 final appName = notification['appName']?.toString() ?? 'App';
@@ -1977,16 +1880,16 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                 final canDismiss =
                     !isRemoved && notification['isDismissible'] == true;
 
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: theme.colorScheme.outlineVariant),
+                return Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
                   ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
+                  child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
@@ -2035,52 +1938,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                         ),
                       ],
                     ),
-                  ),
                 );
               }).toList(growable: false),
-            ),
     );
   }
 
   Widget _buildFileSendSection(ThemeData theme) {
     final peers = _fileCapablePeers;
     final activeOutgoingTransfers = _activeOutgoingTransfers;
-    return _buildSectionCard(
-      theme: theme,
-      title: 'Send File / Video',
-      subtitle:
-          'Hai bên đều có thể chủ động gửi. Mục này chỉ hiện peer đang trusted và có capability file.transfer.',
-      isLoading: _isRefreshingPeers,
-      onRefresh: _refreshTrustedPeers,
-      child: Column(
-        children: [
+    return Column(
+      children: [
           if (activeOutgoingTransfers.isNotEmpty) ...[
             _buildOutgoingTransferBanner(theme, activeOutgoingTransfers),
             const SizedBox(height: 12),
           ],
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _addFilesToSendQueue,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Files'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton(
-                onPressed: _sendQueue.items.any(
-                  (file) => file.status == SendQueueStatus.sent,
-                )
-                    ? () => unawaited(_clearFinishedStagedFiles())
-                    : null,
-                child: const Text('Clear Sent'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _buildStagedFilesList(theme),
-          const SizedBox(height: 12),
           if (peers.isEmpty)
             Align(
               alignment: Alignment.centerLeft,
@@ -2108,11 +1979,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                     )
                   : _peerQueueSummary(deviceId);
               return Container(
-                margin: const EdgeInsets.only(top: 12),
+                margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainer,
-                  borderRadius: BorderRadius.circular(8),
+                  color: theme.colorScheme.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
                 ),
                 child: Row(
                   children: [
@@ -2169,8 +2041,30 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                 ),
               );
             }),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _addFilesToSendQueue,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Files'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: _sendQueue.items.any(
+                  (file) => file.status == SendQueueStatus.sent,
+                )
+                    ? () => unawaited(_clearFinishedStagedFiles())
+                    : null,
+                child: const Text('Clear Sent'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildStagedFilesList(theme),
         ],
-      ),
     );
   }
 
@@ -2196,7 +2090,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(4),
         border: Border.all(
           color: theme.colorScheme.secondary.withValues(alpha: 0.35),
         ),
@@ -2258,20 +2152,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildIncomingFileOffersSection(ThemeData theme) {
     final offers = _incomingFileOffers;
-    return _buildSectionCard(
-      theme: theme,
-      title: 'Incoming Offers',
-      isLoading: _isRefreshingFileOffers,
-      onRefresh: _refreshFileOffers,
-      child: offers.isEmpty
-          ? Text(
-              'Không có lời mời nhận file/video trong bộ lọc này.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            )
-          : Column(
-              children: offers.map((offer) {
+    if (offers.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        alignment: Alignment.center,
+        child: Text(
+          'No incoming file offers in this section.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Column(
+      children: offers.map((offer) {
                 final sourceDeviceId = offer['sourceDeviceId']?.toString();
                 final mediaType = offer['mediaType']?.toString() ??
                     'application/octet-stream';
@@ -2279,8 +2175,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   margin: const EdgeInsets.only(top: 12),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainer,
-                    borderRadius: BorderRadius.circular(8),
+                    color: theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2336,26 +2233,27 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   ),
                 );
               }).toList(growable: false),
-            ),
     );
   }
 
   Widget _buildTransferActivitySection(ThemeData theme) {
     final transfers = _fileTransfers;
-    return _buildSectionCard(
-      theme: theme,
-      title: 'Transfer Activity',
-      isLoading: _isRefreshingTransfers,
-      onRefresh: _refreshTransfers,
-      child: transfers.isEmpty
-          ? Text(
-              'Không có hoạt động file/video trong bộ lọc này.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            )
-          : Column(
-              children: transfers.take(12).map((transfer) {
+    if (transfers.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        alignment: Alignment.center,
+        child: Text(
+          'No file transfer activity in this section.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Column(
+      children: transfers.take(12).map((transfer) {
                 final mediaType = transfer['mediaType']?.toString() ??
                     'application/octet-stream';
                 final byteSize =
@@ -2378,8 +2276,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   margin: const EdgeInsets.only(top: 12),
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainer,
-                    borderRadius: BorderRadius.circular(8),
+                    color: theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2487,66 +2386,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                   ),
                 );
               }).toList(growable: false),
-            ),
     );
   }
 
-  Widget _buildSectionCard({
-    required ThemeData theme,
-    required String title,
-    String? subtitle,
-    required Widget child,
-    required bool isLoading,
-    required Future<void> Function() onRefresh,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  title,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-              ),
-              if (isLoading)
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else
-                IconButton(
-                  onPressed: onRefresh,
-                  icon: const Icon(Icons.refresh),
-                  tooltip: 'Refresh $title',
-                ),
-            ],
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-          const SizedBox(height: 8),
-          child,
-        ],
-      ),
-    );
-  }
 }

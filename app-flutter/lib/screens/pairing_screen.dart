@@ -675,7 +675,7 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                   const SizedBox(height: 24),
                   Text(
-                    'Thiết bị đã kết nối',
+                    'Pairing complete',
                     style: theme.textTheme.headlineMedium?.copyWith(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.bold,
@@ -690,7 +690,7 @@ class _PairingScreenState extends State<PairingScreen> {
                       children: [
                         const TextSpan(
                             text:
-                                'Kênh truyền tin đã được thiết lập an toàn với '),
+                                'Secure communication channel established with '),
                         TextSpan(
                           text: _displayName ?? _deviceId ?? 'Unknown',
                           style: TextStyle(
@@ -800,8 +800,8 @@ class _PairingScreenState extends State<PairingScreen> {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Bắt đầu ngay',
+                      onPressed: () => Navigator.of(context).pop('history'),
+                      child: const Text('Start now',
                           style: TextStyle(
                               fontWeight: FontWeight.bold, fontSize: 16)),
                     ),
@@ -817,8 +817,8 @@ class _PairingScreenState extends State<PairingScreen> {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8)),
                       ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Về danh sách',
+                      onPressed: () => Navigator.of(context).pop('devices'),
+                      child: const Text('Back to list',
                           style: TextStyle(
                               fontWeight: FontWeight.bold, fontSize: 16)),
                     ),

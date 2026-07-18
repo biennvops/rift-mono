@@ -203,10 +203,10 @@ class _EventLogScreenState extends State<EventLogScreen> {
       description = reason ?? 'Operation failed';
     } else if (_isSecurityEvent(event)) {
       category = 'Security';
-      color = theme.colorScheme.error; // Match HTML for security
+      color = theme.colorScheme.secondary;
       icon = Icons.security;
       if (eventType.startsWith('auth')) {
-        description = reason ?? 'Authentication check failed';
+        description = reason ?? 'Authentication check successful';
       } else if (reason != null && reason.isNotEmpty) {
         description = reason;
       } else if (eventType.startsWith('trust')) {
@@ -335,6 +335,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
                     Text(
                       eventType,
                       style: theme.textTheme.labelMedium?.copyWith(
+                        fontFamily: 'JetBrains Mono',
                         color: theme.colorScheme.onSurface,
                         fontWeight: FontWeight.bold,
                       ),
@@ -365,34 +366,32 @@ class _EventLogScreenState extends State<EventLogScreen> {
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(Icons.shield, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
-            Text(
-              'Event Log',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: theme.colorScheme.surface,
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.settings, color: theme.colorScheme.onSurfaceVariant),
-            onPressed: () {},
+        iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+        titleSpacing: 0,
+        title: Text(
+          'Event Log',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.onSurface,
+            letterSpacing: -0.5,
           ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5), height: 1),
         ),
       ),
       body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            child: Text(
+              'Full system activity timeline.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
           // Filter Chips
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

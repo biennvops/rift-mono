@@ -219,7 +219,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               Icon(Icons.warning, size: 48, color: theme.colorScheme.error),
               const SizedBox(height: 16),
               Text(
-                'Quên thiết bị $displayName?',
+                'Forget $displayName?',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.bold,
@@ -230,7 +230,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
-                  'Thiết bị sẽ bị xóa khỏi danh sách đã tin cậy trên máy này. Khi thấy lại nó trong danh sách khám phá, bạn có thể pair lại từ đầu.',
+                  'This device will be removed from your trusted list. If you see it again in the discovery list, you can pair it again from scratch.',
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
@@ -285,7 +285,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   ),
                   icon: const Icon(Icons.delete_forever),
                   label: const Text(
-                    'Quên thiết bị',
+                    'Forget device',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -304,7 +304,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     ),
                   ),
                   child: const Text(
-                    'Hủy',
+                    'Cancel',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -364,7 +364,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Chặn $displayName?',
+                'Block $displayName?',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.bold,
@@ -373,7 +373,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Thiết bị bị chặn vĩnh viễn. Mọi kết nối từ khóa Ed25519 này sẽ bị từ chối tự động.',
+                'This device will be blocked permanently. All connections from this Ed25519 key will be automatically rejected.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
@@ -393,7 +393,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     ),
                   ),
                   child: const Text(
-                    'Chặn vĩnh viễn',
+                    'Block permanently',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -412,7 +412,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     ),
                   ),
                   child: const Text(
-                    'Hủy',
+                    'Cancel',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -752,7 +752,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     ),
                   ),
                   child: const Text(
-                    'Quên thiết bị',
+                    'Forget device',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),
@@ -768,7 +768,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     ),
                   ),
                   child: const Text(
-                    'Chặn',
+                    'Block',
                     style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                 ),

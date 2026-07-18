@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:file_picker/file_picker.dart';
 
 import '../constants.dart';
 import 'event_log_screen.dart';
@@ -14,6 +15,7 @@ import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
 import '../src/platform/windows_shell.dart';
 import '../widgets/rift_snackbar.dart';
+import '../widgets/premium_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -38,6 +40,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _notificationBlacklistController =
       TextEditingController();
   Timer? _notificationPolicyDebounceTimer;
+  String? _defaultDownloadPath;
 
   bool get _isDesktopPlatform =>
       WindowsShell.isSupported ||
@@ -83,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             (prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
                     const <String>[])
                 .join('\n');
+        _defaultDownloadPath = prefs.getString(AppPrefs.defaultDownloadPath);
         _isLoading = false;
       });
     } catch (e) {
@@ -545,19 +549,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+        titleSpacing: 0,
+        title: Text(
+          'Settings',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.onSurface,
+            letterSpacing: -0.5,
+          ),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
         children: [
-          Text(
-            'Settings',
-            style: theme.textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 32),
           if (_error != null) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -893,7 +898,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
-          const SizedBox(height: 40),
+
+          const SizedBox(height: 32),
+          _buildSectionHeader('File Transfer'),
+          Container(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                _buildListTile(
+                  title: 'Default Download Location',
+                  subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
+                  trailing: Icon(Icons.folder_open, color: theme.colorScheme.outline),
+                  onTap: _pickDefaultDownloadPath,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 32),
           _buildSectionHeader('Trust Store'),
           OutlinedButton.icon(
             onPressed: () {},
@@ -954,32 +979,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Edit Device Name'),
-          content: TextField(
+        return PremiumDialog(
+          title: 'Edit Device Name',
+          subtitle: 'Change how this device appears to others on the network.',
+          content: PremiumTextField(
             controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'Device Name',
-              hintText: 'Enter new device name',
-            ),
+            label: 'Device Name',
+            hint: 'Enter new device name',
             autofocus: true,
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('CANCEL'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final newName = controller.text.trim();
-                if (newName.isNotEmpty) {
-                  Navigator.pop(context);
-                  await _setDeviceName(newName);
-                }
-              },
-              child: const Text('SAVE'),
-            ),
-          ],
+          cancelText: 'CANCEL',
+          confirmText: 'SAVE',
+          onCancel: () => Navigator.pop(context),
+          onConfirm: () async {
+            final newName = controller.text.trim();
+            if (newName.isNotEmpty) {
+              Navigator.pop(context);
+              await _setDeviceName(newName);
+            }
+          },
         );
       },
     );
@@ -1000,59 +1018,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _pickDefaultDownloadPath() async {
+    try {
+      final selectedDirectory = await FilePicker.platform.getDirectoryPath();
+      if (selectedDirectory != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(AppPrefs.defaultDownloadPath, selectedDirectory);
+        if (mounted) {
+          setState(() {
+            _defaultDownloadPath = selectedDirectory;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        RiftSnackbar.show(
+          context: context,
+          message: 'Failed to pick directory: $e',
+          type: RiftSnackbarType.error,
+        );
+      }
+    }
+  }
+
   void _showManualPairDialog() {
     final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Pair by IP'),
-          content: TextField(
+        return PremiumDialog(
+          title: 'Pair by IP',
+          subtitle: 'Enter the IPv4 address and port of the peer device.',
+          content: PremiumTextField(
             controller: controller,
-            decoration: const InputDecoration(
-              labelText: 'IP Address:Port',
-              hintText: 'e.g. 192.168.1.5:9140',
-            ),
+            label: 'IP Address:Port',
+            hint: 'e.g. 192.168.1.5:9140',
             autofocus: true,
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('CANCEL'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final input = controller.text.trim();
-                if (input.isEmpty) return;
-                
-                final parts = input.split(':');
-                if (parts.length != 2) {
-                  RiftSnackbar.show(
-                    context: context,
-                    message: 'Invalid format. Use IP:PORT',
-                    type: RiftSnackbarType.error,
-                  );
-                  return;
-                }
-                
-                final address = parts[0];
-                final port = int.tryParse(parts[1]);
-                if (port == null) {
-                  RiftSnackbar.show(
-                    context: context,
-                    message: 'Invalid port number.',
-                    type: RiftSnackbarType.error,
-                  );
-                  return;
-                }
-                
-                Navigator.pop(context);
-                _performManualPair(address, port);
-              },
-              child: const Text('PAIR'),
-            ),
-          ],
+          cancelText: 'CANCEL',
+          confirmText: 'PAIR',
+          onCancel: () => Navigator.pop(context),
+          onConfirm: () {
+            final input = controller.text.trim();
+            if (input.isEmpty) return;
+            
+            final parts = input.split(':');
+            if (parts.length != 2) {
+              RiftSnackbar.show(
+                context: context,
+                message: 'Invalid format. Use IP:PORT',
+                type: RiftSnackbarType.error,
+              );
+              return;
+            }
+            
+            final address = parts[0];
+            final port = int.tryParse(parts[1]);
+            if (port == null) {
+              RiftSnackbar.show(
+                context: context,
+                message: 'Invalid port number.',
+                type: RiftSnackbarType.error,
+              );
+              return;
+            }
+            
+            Navigator.pop(context);
+            _performManualPair(address, port);
+          },
         );
+
       },
     );
   }

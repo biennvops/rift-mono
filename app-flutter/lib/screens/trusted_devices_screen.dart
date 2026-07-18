@@ -6,6 +6,8 @@ import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
+import '../main.dart';
+import '../src/platform/notification_route.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -418,147 +420,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
     }
   }
 
-  Future<void> _showManualPairDialog() async {
-    final addressController = TextEditingController();
-    final portController = TextEditingController(text: '11112');
-    String? validationError;
 
-    final result = await showDialog<({String address, int port})>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            void submit() {
-              final address = addressController.text.trim();
-              final portText = portController.text.trim();
-              final parsedPort = int.tryParse(portText);
-              final parsedAddress = InternetAddress.tryParse(address);
-              if (parsedAddress == null ||
-                  parsedAddress.type != InternetAddressType.IPv4) {
-                setDialogState(() {
-                  validationError = 'Enter a valid IPv4 address.';
-                });
-                return;
-              }
-              if (parsedPort == null || parsedPort <= 0 || parsedPort > 65535) {
-                setDialogState(() {
-                  validationError = 'Enter a TCP port between 1 and 65535.';
-                });
-                return;
-              }
-              Navigator.of(dialogContext)
-                  .pop((address: address, port: parsedPort));
-            }
-
-            return AlertDialog(
-              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              title: Text(
-                'Pair by IP',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurface,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Enter the IPv4 address and port of the peer device.',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: addressController,
-                      decoration: InputDecoration(
-                        labelText: 'IPv4 address',
-                        hintText: '10.53.38.174',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                      keyboardType: TextInputType.number,
-                      autofocus: true,
-                      onSubmitted: (_) => submit(),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: portController,
-                      decoration: InputDecoration(
-                        labelText: 'Port',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        filled: true,
-                        fillColor: Theme.of(context).colorScheme.surface,
-                      ),
-                      keyboardType: TextInputType.number,
-                      onSubmitted: (_) => submit(),
-                    ),
-                    if (validationError != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        validationError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  onPressed: submit,
-                  child: const Text('Pair'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    if (!mounted || result == null) {
-      return;
-    }
-
-    final client = context.read<JsonRpcRiftClient>();
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: PairingScreen(
-            initialEndpointAddress: result.address,
-            initialEndpointPort: result.port,
-            initialDisplayName: '${result.address}:${result.port}',
-            autoStart: true,
-          ),
-        ),
-      ),
-    );
-    await _loadData();
-  }
 
   String _trustStateLabel(String trustState) {
     switch (trustState) {
@@ -585,7 +447,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           title: Text(title),
           content: Text(message),
           actions: [
-            TextButton(
+            OutlinedButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
               child: const Text('Cancel'),
             ),
@@ -1116,8 +978,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
             'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
           );
         }
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(
+        final result = await Navigator.of(context).push<dynamic>(
+          MaterialPageRoute<dynamic>(
             builder: (_) => Provider<JsonRpcRiftClient>.value(
               value: client,
               child: PairingScreen(
@@ -1131,6 +993,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> {
           ),
         );
         await _loadData();
+        if (mounted) {
+          if (result == 'history') {
+            final appShellState = context.findAncestorStateOfType<AppShellState>();
+            appShellState?.showHistoryRoute(NotificationRoute.historyClipboard);
+          } else if (result == 'devices') {
+            final appShellState = context.findAncestorStateOfType<AppShellState>();
+            appShellState?.showRoute(NotificationRoute.devices);
+          }
+        }
         return;
       } else {
         final isOnline = peer['presence'] == 'online';

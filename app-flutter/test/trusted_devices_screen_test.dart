@@ -193,30 +193,7 @@ void main() {
     expect(find.text('Stop Adding'), findsOneWidget);
   });
 
-  testWidgets('TrustedDevicesScreen supports manual Pair by IP flow',
-      (WidgetTester tester) async {
-    final client = FakeJsonRpcRiftClient();
-    await tester.pumpWidget(MaterialApp(
-      home: Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: const TrustedDevicesScreen(),
-      ),
-    ));
-    await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Pair by IP'));
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField).at(0), '10.53.38.174');
-    await tester.enterText(find.byType(TextField).at(1), '9140');
-    await tester.tap(find.text('Pair'));
-    await tester.pump();
-    await tester.pumpAndSettle();
-
-    expect(client.manualPairAddress, '10.53.38.174');
-    expect(client.manualPairPort, 9140);
-    expect(find.text('Pairing with rift-manual-peer'), findsOneWidget);
-  });
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
       (WidgetTester tester) async {
