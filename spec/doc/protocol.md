@@ -149,6 +149,8 @@ Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.
 
 Both peers MUST present certificates. A successful TLS handshake is necessary but not sufficient for trust. Trusted peers are accepted by Ed25519 public-key match, not by certificate chain trust alone.
 
+When a second connection for the same authenticated peer arrives while an established authenticated session remains usable, implementations SHOULD retain the established session and close the duplicate. Cleanup for a rejected, replaced, or stale connection MUST NOT remove or close a different connection that currently owns the peer session.
+
 For pairing candidates, the TLS layer MAY provisionally accept a self-signed peer certificate only to complete the handshake and extract the Ed25519 extension. Before post-handshake Ed25519 verification succeeds, the peer may exchange only `session.hello`, `session.accept`, `session.reject`, and pairing messages.
 
 ### 5.2 Post-Handshake Ed25519 Verification
@@ -416,6 +418,12 @@ hash, `contentBase64` string, `isLastChunk` boolean.
 
 `file.cancel` payload fields: `transferId`, `failureReason`, optional `message`
 string.
+
+`file.resume` payload fields: `transferId`, `receivingDeviceId` device ID,
+`nextChunkIndex` non-negative integer, and `offset` non-negative integer. A
+receiver with a partial transfer sends `file.resume` after re-establishing an
+authenticated session. The sender MUST continue the original transfer from the
+requested chunk boundary rather than creating a new offer.
 
 File transfer content MUST remain on the authenticated peer session. Receivers
 MUST verify chunk bounds and integrity before accepting a chunk, and MUST

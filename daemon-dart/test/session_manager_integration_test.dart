@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
+import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:cryptography/cryptography.dart';
@@ -117,6 +118,17 @@ class FakeIdentityManager implements IdentityManager {
 }
 
 void main() {
+  test('duplicate connection retains an authenticated session', () {
+    expect(
+      TransportImpl.retainExistingSessionOnDuplicate(isAuthenticated: true),
+      isTrue,
+    );
+    expect(
+      TransportImpl.retainExistingSessionOnDuplicate(isAuthenticated: false),
+      isFalse,
+    );
+  });
+
   group('Session Manager Integration Tests', () {
     late FakeTransport transport1;
     late FakeTransport transport2;

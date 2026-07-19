@@ -124,6 +124,19 @@ class FailFirstChunkTransport extends FakeTransport {
   }
 }
 
+class FailSecondChunkTransport extends FakeTransport {
+  var _chunkCount = 0;
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List payload) async {
+    final decoded = json.decode(utf8.decode(payload)) as Map<String, dynamic>;
+    sentMessages.add(decoded);
+    if (decoded['type']?.toString() == 'file.chunk' && ++_chunkCount == 2) {
+      throw const SocketException('simulated connection reset');
+    }
+  }
+}
+
 class FakeIdentityManager implements IdentityManager {
   @override
   String get deviceId => 'rift-local';
@@ -563,7 +576,7 @@ void main() {
       await service.dispose();
       await sessionManager.dispose();
 
-      transport = FakeTransport();
+      transport = FailSecondChunkTransport();
       sessionManager = SessionManager(
         transport,
         FakeIdentityManager(),
@@ -591,6 +604,9 @@ void main() {
       );
       await localFile.writeAsString('a' * 600000);
 
+      final failedFuture = service.onTransferFailed.firstWhere(
+        (event) => event['failureReason'] == 'ConnectionLost',
+      );
       final result = await service.offerFile(
         targetDeviceId: 'rift-peer',
         localPath: localFile.path,
@@ -609,7 +625,7 @@ void main() {
           'chunkSize': 262144,
         },
       });
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await failedFuture.timeout(const Duration(seconds: 2));
 
       transport.sentMessages.removeWhere((message) => message['type'] == 'file.chunk');
       transport.sentMessages.removeWhere((message) => message['type'] == 'file.complete');

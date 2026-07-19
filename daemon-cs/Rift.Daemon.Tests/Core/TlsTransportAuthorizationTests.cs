@@ -220,6 +220,30 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public async Task RunSessionLifetimeCoreAsync_StaleCleanupDoesNotRaiseOfflineEvent()
+    {
+        const string remoteDeviceId = "rift-peer-replaced";
+        var states = new List<bool>();
+        _transport.SessionStateChanged += (_, args) =>
+        {
+            if (string.Equals(args.PeerDeviceId, remoteDeviceId, StringComparison.Ordinal))
+            {
+                states.Add(args.IsOnline);
+            }
+        };
+
+        await _transport.RunSessionLifetimeCoreAsync(
+            remoteDeviceId,
+            [new CapabilityDescriptor("presence.basic", 1)],
+            allowsProtectedTraffic: true,
+            _ => Task.CompletedTask,
+            () => false,
+            CancellationToken.None);
+
+        Assert.Equal([true], states);
+    }
+
+    [Fact]
     public async Task RunInboundSessionCoreAsync_WhenHandshakeFails_CleansUpSession()
     {
         var cleanupCalls = 0;
@@ -328,6 +352,26 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         Assert.True(_transport.HasProtectedSession(deviceId));
     }
 
+    [Fact]
+    public void RemoveSessionIfCurrent_StaleSessionCleanupPreservesReplacement()
+    {
+        const string deviceId = "rift-peer-reconnected";
+        var current = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic: true, ["file.transfer"]);
+        var stale = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic: true, ["file.transfer"]);
+        RegisterSession(deviceId, current);
+
+        var method = typeof(TlsTransport).GetMethod("RemoveSessionIfCurrent", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        method!.Invoke(_transport, [deviceId, stale]);
+
+        Assert.True(_transport.HasProtectedSession(deviceId));
+
+        method.Invoke(_transport, [deviceId, current]);
+
+        Assert.False(_transport.HasActiveSession(deviceId));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -367,7 +411,11 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     private void RegisterAuthenticatedSession(string deviceId, bool allowsProtectedTraffic, IReadOnlyList<string> selectedCapabilities)
     {
         var session = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic, selectedCapabilities);
+        RegisterSession(deviceId, session);
+    }
 
+    private void RegisterSession(string deviceId, object session)
+    {
         var sessionsField = typeof(TlsTransport).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(sessionsField);
         var sessions = sessionsField!.GetValue(_transport)!;
