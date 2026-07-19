@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreLocation
 import Flutter
 import MediaPlayer
@@ -17,6 +18,7 @@ import UserNotifications
   private var currentMediaPlaybackSourceDeviceId: String?
   private var currentMediaPlaybackId: String?
   private var currentMediaPlaybackState: String?
+  private var remoteMediaAudioPlayer: AVAudioPlayer?
   private var previewURL: NSURL?
   private var backgroundLocationManager: CLLocationManager?
   private var backgroundLocationActivationObserver: NSObjectProtocol?
@@ -101,6 +103,7 @@ import UserNotifications
     currentMediaPlaybackSourceDeviceId = sourceDeviceId
     currentMediaPlaybackId = playbackId
     currentMediaPlaybackState = playback["playbackState"] as? String
+    _ = startDevelopmentRemoteMediaSession()
 
     var nowPlayingInfo: [String: Any] = [:]
     let appName = playback["appName"] as? String
@@ -166,6 +169,84 @@ import UserNotifications
       MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
     updateMediaPlaybackCommandAvailability([:])
+    stopDevelopmentRemoteMediaSession()
+  }
+
+  private func startDevelopmentRemoteMediaSession() -> Bool {
+    guard Bundle.main.object(
+      forInfoDictionaryKey: "RiftDevRemoteMediaSessionEnabled"
+    ) as? Bool == true else {
+      return false
+    }
+    if remoteMediaAudioPlayer?.isPlaying == true {
+      return true
+    }
+
+    do {
+      let audioSession = AVAudioSession.sharedInstance()
+      try audioSession.setCategory(.playback, mode: .default, options: [])
+      try audioSession.setActive(true)
+      let player = try AVAudioPlayer(
+        data: Self.silentWaveData(),
+        fileTypeHint: AVFileType.wav.rawValue
+      )
+      player.numberOfLoops = -1
+      player.volume = 1
+      player.prepareToPlay()
+      guard player.play() else {
+        try? audioSession.setActive(false, options: .notifyOthersOnDeactivation)
+        return false
+      }
+      remoteMediaAudioPlayer = player
+      UIApplication.shared.beginReceivingRemoteControlEvents()
+      return true
+    } catch {
+      NSLog("Rift failed to start development remote media session: %@", error.localizedDescription)
+      return false
+    }
+  }
+
+  private func stopDevelopmentRemoteMediaSession() {
+    guard remoteMediaAudioPlayer != nil else {
+      return
+    }
+    remoteMediaAudioPlayer?.stop()
+    remoteMediaAudioPlayer = nil
+    UIApplication.shared.endReceivingRemoteControlEvents()
+    try? AVAudioSession.sharedInstance().setActive(
+      false,
+      options: .notifyOthersOnDeactivation
+    )
+  }
+
+  private static func silentWaveData() -> Data {
+    let sampleRate: UInt32 = 8_000
+    let sampleCount: UInt32 = 800
+    var data = Data()
+
+    func append(_ value: UInt16) {
+      var littleEndian = value.littleEndian
+      withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+    }
+    func append(_ value: UInt32) {
+      var littleEndian = value.littleEndian
+      withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+    }
+
+    data.append(contentsOf: "RIFF".utf8)
+    append(36 + sampleCount)
+    data.append(contentsOf: "WAVEfmt ".utf8)
+    append(UInt32(16))
+    append(UInt16(1))
+    append(UInt16(1))
+    append(sampleRate)
+    append(sampleRate)
+    append(UInt16(1))
+    append(UInt16(8))
+    data.append(contentsOf: "data".utf8)
+    append(sampleCount)
+    data.append(Data(repeating: 128, count: Int(sampleCount)))
+    return data
   }
 
   private func configureMediaPlaybackCommandTargetsIfNeeded() {
