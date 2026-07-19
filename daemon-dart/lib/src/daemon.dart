@@ -597,6 +597,7 @@ class RiftDaemon {
         if (peer.deviceIdHint == _identityManager!.deviceId) return;
         if (peer.deviceIdHint == null) return;
         trackDiscoveredPeer(peer);
+        unawaited(prefetchSessionForDiscoveredPeer(peer.deviceIdHint!));
         _forwardIpcEvent({
           'jsonrpc': '2.0',
           'method': 'rift.onPeerDiscovered',
