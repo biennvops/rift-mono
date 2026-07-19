@@ -158,6 +158,45 @@ public sealed class WorkerTests
     }
 
     [Fact]
+    public async Task TransportMessageReceived_SerializesMessagesFromSamePeer()
+    {
+        var ipcListener = new FakeIpcListener();
+        var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
+        var transport = new FakeTransport();
+        var protocolRouter = new BlockingProtocolMessageRouter();
+        var presenceService = new PresenceService();
+        var identityManager = new IdentityManager();
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            identityManager,
+            trustStore,
+            discoveryService,
+            transport,
+            protocolRouter,
+            presenceService);
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
+
+        transport.EmitMessageReceived("rift-peer-router", Encoding.UTF8.GetBytes("first"));
+        await protocolRouter.FirstMessageStarted;
+
+        transport.EmitMessageReceived("rift-peer-router", Encoding.UTF8.GetBytes("second"));
+        await Task.Delay(100);
+
+        Assert.Equal(1, protocolRouter.StartedCount);
+
+        protocolRouter.ReleaseFirstMessage();
+        await WaitUntilAsync(() => protocolRouter.Messages.Count == 2);
+
+        Assert.Equal(["first", "second"], protocolRouter.Messages.Select(message => message.Payload).ToArray());
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ObservesFaultedSiblingTaskWhenOtherTaskCompletesFirst()
     {
         var logger = new ListLogger<Worker>();
@@ -404,6 +443,34 @@ public sealed class WorkerTests
             Messages.Add(new RoutedMessage(session.PeerDeviceId, Encoding.UTF8.GetString(payload.Span)));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class BlockingProtocolMessageRouter : IProtocolMessageRouter
+    {
+        private readonly TaskCompletionSource _firstMessageStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstMessage = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _startedCount;
+
+        public List<RoutedMessage> Messages { get; } = [];
+        public Task FirstMessageStarted => _firstMessageStarted.Task;
+        public int StartedCount => Volatile.Read(ref _startedCount);
+
+        public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        {
+            var started = Interlocked.Increment(ref _startedCount);
+            if (started == 1)
+            {
+                _firstMessageStarted.TrySetResult();
+                await _releaseFirstMessage.Task.WaitAsync(cancellationToken);
+            }
+
+            lock (Messages)
+            {
+                Messages.Add(new RoutedMessage(session.PeerDeviceId, Encoding.UTF8.GetString(payload.Span)));
+            }
+        }
+
+        public void ReleaseFirstMessage() => _releaseFirstMessage.TrySetResult();
     }
 
     private sealed record SentMessage(string PeerDeviceId, string Type, IReadOnlyList<string> Capabilities);
