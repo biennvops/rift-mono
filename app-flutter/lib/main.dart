@@ -384,7 +384,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void _bindMediaPlayback() {
     final client = context.read<JsonRpcRiftClient>();
     if (Platform.isAndroid) {
-      _androidRemoteMediaPlayback = AndroidRemoteMediaPlaybackCoordinator(client);
+      _androidRemoteMediaPlayback =
+          AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
     }
   }
@@ -1297,7 +1298,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         body: '$fileName from $sourceDeviceId.',
         route: NotificationRoute.historyIncomingOffers,
       );
-      unawaited(_handleIncomingFileOffer(event));
+      if (!Platform.isIOS) {
+        unawaited(_handleIncomingFileOffer(event));
+      }
     });
 
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
