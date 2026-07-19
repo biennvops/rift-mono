@@ -9,6 +9,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.app.ActivityOptions
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -554,12 +555,22 @@ class MainActivity: FlutterActivity() {
                     }
                 }
             }
+        val pendingIntentOptions =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                ActivityOptions.makeBasic().apply {
+                    pendingIntentCreatorBackgroundActivityStartMode =
+                        ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                }.toBundle()
+            } else {
+                null
+            }
         val pendingIntent =
             PendingIntent.getActivity(
                 this,
                 route.hashCode(),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                pendingIntentOptions,
             )
 
         val notification =

@@ -696,20 +696,25 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           unawaited(_enqueueSharedSendItems(items));
         }
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRouteFromNotification(route);
         return;
       case NotificationRoute.historyClipboard:
       case NotificationRoute.historyNotifications:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRouteFromNotification(route);
         return;
       case NotificationRoute.pairing:
         _openIncomingPairingRequest(payload);
         return;
       case NotificationRoute.historyIncomingOffers:
       case NotificationRoute.historyTransferActivity:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRouteFromNotification(route);
         return;
     }
+  }
+
+  void _showHistoryRouteFromNotification(String route) {
+    _navigatorKey.currentState?.popUntil((candidate) => candidate.isFirst);
+    _appShellKey.currentState?.showHistoryRoute(route);
   }
 
   Future<void> _enqueueSharedSendItems(

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
+import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
@@ -547,6 +548,28 @@ void main() {
       <String, String>{'id': 'open', 'title': 'Open'},
       <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
     ]);
+  });
+
+  testWidgets(
+      'Android notification activation closes settings and opens notification history',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
+
+    await dispatchPlatformMethodCall(
+      'rift/android/shell',
+      const MethodCall('notificationActivated', <String, Object?>{
+        'route': 'history.notifications',
+      }),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(find.text('Notifications'), findsWidgets);
   });
 
   testWidgets(
