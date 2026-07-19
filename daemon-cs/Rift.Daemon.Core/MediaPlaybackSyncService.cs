@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
@@ -10,6 +12,28 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 {
     private const string RequiredCapability = "media.playback";
     private static readonly StringComparer Comparer = StringComparer.Ordinal;
+    private static readonly TimeSpan DefaultActionTimeout = TimeSpan.FromSeconds(30);
+    private static readonly Regex Rfc3339UtcTimestamp = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$",
+        RegexOptions.CultureInvariant);
+    private static readonly HashSet<string> FailureReasons = new(Comparer)
+    {
+        "PeerUnreachable",
+        "PeerRejected",
+        "OfferExpired",
+        "CapabilityUnavailable",
+        "ConnectionLost",
+        "Timeout",
+        "PolicyDenied",
+        "AuthenticationFailed",
+        "Unauthorized",
+        "HashMismatch",
+        "MalformedMessage",
+        "VersionMismatch",
+        "ProtocolError",
+        "PayloadTooLarge",
+        "InvalidTransition"
+    };
     private readonly Lock _gate = new();
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
@@ -19,10 +43,12 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly ILocalMediaPlaybackActionHandler? _localActionHandler;
     private readonly ILogger<MediaPlaybackSyncService> _logger;
+    private readonly TimeSpan _actionTimeout;
     private readonly Dictionary<string, MediaPlaybackRecord> _playbacks = new(Comparer);
     private readonly Dictionary<string, PendingPlaybackAction> _pendingActionsByOperationId = new(Comparer);
     private readonly Dictionary<string, string> _pendingActionKeys = new(Comparer);
     private readonly Dictionary<string, PendingIncomingMediaPlaybackAction> _pendingIncomingActionsByRequestId = new(Comparer);
+    private readonly Dictionary<string, Timer> _pendingIncomingActionTimers = new(Comparer);
 
     public MediaPlaybackSyncService(
         ITransport transport,
@@ -32,7 +58,8 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         ISecurityEventLog securityEventLog,
         IIpcNotificationService? ipcNotificationService = null,
         ILocalMediaPlaybackActionHandler? localActionHandler = null,
-        ILogger<MediaPlaybackSyncService>? logger = null)
+        ILogger<MediaPlaybackSyncService>? logger = null,
+        TimeSpan? actionTimeout = null)
     {
         _transport = transport;
         _presenceService = presenceService;
@@ -42,6 +69,44 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         _ipcNotificationService = ipcNotificationService;
         _localActionHandler = localActionHandler;
         _logger = logger ?? NullLogger<MediaPlaybackSyncService>.Instance;
+        _actionTimeout = actionTimeout ?? DefaultActionTimeout;
+    }
+
+    public async Task PublishLocalPlaybackToPeerAsync(
+        string peerDeviceId,
+        MediaPlaybackRecord playback,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = NormalizeLocalRecord(playback);
+        ValidateRecord(normalized);
+        if (!_transport.HasProtectedSession(peerDeviceId))
+        {
+            throw new MediaPlaybackSyncFailureException($"Peer '{peerDeviceId}' does not have a protected session.", -32003);
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
+            "media.playbackPosted",
+            CreatePlaybackPayload(normalized))));
+        await _transport.SendAsync(peerDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SendPeerErrorAsync(
+        string peerDeviceId,
+        string failureReason,
+        string? refMessageId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
+            "error",
+            new
+            {
+                failureReason,
+                refMessageId,
+                message
+            })));
+        await _transport.SendAsync(peerDeviceId, bytes, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken)
@@ -59,19 +124,24 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
     }
 
-    public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken)
+    public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(
+        string sourceDeviceId,
+        string playbackId,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(playbackId))
+        if (string.IsNullOrWhiteSpace(sourceDeviceId) || string.IsNullOrWhiteSpace(playbackId))
         {
-            throw new MediaPlaybackSyncFailureException("A playback ID is required.", -32009);
+            throw new MediaPlaybackSyncFailureException("A source device ID and playback ID are required.", -32009);
         }
 
         lock (_gate)
         {
-            var record = _playbacks.Values
-                .Where(playback => !playback.IsRemoved)
-                .FirstOrDefault(playback => string.Equals(playback.PlaybackId, playbackId, StringComparison.Ordinal));
+            var record = _playbacks.GetValueOrDefault(GetPlaybackKey(sourceDeviceId, playbackId));
+            if (record?.IsRemoved == true)
+            {
+                record = null;
+            }
             if (record is null)
             {
                 throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found.", -32009);
@@ -95,6 +165,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 
         if (string.Equals(eventType, "removed", StringComparison.Ordinal))
         {
+            ValidateOptionalAuditTimestamp(removedAt, "removedAt");
             var removed = new MediaPlaybackRemovedRecord
             {
                 PlaybackId = playback.PlaybackId,
@@ -136,65 +207,66 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             PlaybackId = normalized.PlaybackId,
             BroadcastTo = await BroadcastAsync(
                 string.Equals(eventType, "posted", StringComparison.Ordinal) ? "media.playbackPosted" : "media.playbackUpdated",
-                new
-                {
-                    playbackId = normalized.PlaybackId,
-                    sourceDeviceId = normalized.SourceDeviceId,
-                    sourcePlatform = normalized.SourcePlatform,
-                    appId = normalized.AppId,
-                    appName = normalized.AppName,
-                    title = normalized.Title,
-                    artist = normalized.Artist,
-                    album = normalized.Album,
-                    artwork = normalized.Artwork,
-                    playbackState = normalized.PlaybackState,
-                    positionMs = normalized.PositionMs,
-                    durationMs = normalized.DurationMs,
-                    canPlay = normalized.CanPlay,
-                    canPause = normalized.CanPause,
-                    canSkipNext = normalized.CanSkipNext,
-                    canSkipPrevious = normalized.CanSkipPrevious,
-                    canSeek = normalized.CanSeek,
-                    updatedAt = normalized.UpdatedAt
-                },
+                CreatePlaybackPayload(normalized),
                 cancellationToken).ConfigureAwait(false)
         };
     }
 
     public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(
+        string sourceDeviceId,
         string playbackId,
         string action,
         long? positionMs,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(playbackId))
+        if (string.IsNullOrWhiteSpace(sourceDeviceId) || string.IsNullOrWhiteSpace(playbackId))
         {
-            throw new MediaPlaybackSyncFailureException("A playback ID is required.", -32009);
+            throw new MediaPlaybackSyncFailureException("A source device ID and playback ID are required.", -32009);
         }
 
         var normalizedAction = NormalizeAction(action, positionMs);
         MediaPlaybackRecord playback;
         lock (_gate)
         {
-            playback = _playbacks.Values
-                .Where(record => !record.IsRemoved)
-                .FirstOrDefault(record => string.Equals(record.PlaybackId, playbackId, StringComparison.Ordinal))
-                ?? throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found.", -32009);
+            playback = _playbacks.GetValueOrDefault(GetPlaybackKey(sourceDeviceId, playbackId))!;
+            if (playback is null || playback.IsRemoved)
+            {
+                throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found for '{sourceDeviceId}'.", -32009);
+            }
         }
 
         EnsureActionAllowed(playback, normalizedAction);
         EnsurePeerCapability(playback.SourceDeviceId);
 
         var operationId = Guid.NewGuid().ToString("D");
-        _operationService.CreateOperation(operationId, ToOperationType(normalizedAction), _identityManager.GetDeviceId(), playback.SourceDeviceId);
-        _operationService.TransitionOperation(operationId, OperationState.Pending, details: CreateOperationDetails(playback, normalizedAction, positionMs));
+        var actionKey = GetPendingActionKey(playback.SourceDeviceId, playback.PlaybackId, normalizedAction);
         lock (_gate)
         {
-            _pendingActionsByOperationId[operationId] = new PendingPlaybackAction(operationId, playback.PlaybackId, playback.SourceDeviceId, normalizedAction);
-            _pendingActionKeys[GetPendingActionKey(playback.SourceDeviceId, playback.PlaybackId, normalizedAction)] = operationId;
+            if (_pendingActionKeys.ContainsKey(actionKey))
+            {
+                throw new MediaPlaybackSyncFailureException("A matching playback action is pending.", -32010);
+            }
+            _pendingActionKeys[actionKey] = operationId;
         }
-        _operationService.TransitionOperation(operationId, OperationState.Dispatched);
+
+        try
+        {
+            _operationService.CreateOperation(operationId, ToOperationType(normalizedAction), _identityManager.GetDeviceId(), playback.SourceDeviceId);
+            _operationService.TransitionOperation(operationId, OperationState.Pending, details: CreateOperationDetails(playback, normalizedAction, positionMs));
+            var pending = new PendingPlaybackAction(operationId, playback.PlaybackId, playback.SourceDeviceId, normalizedAction);
+            lock (_gate)
+            {
+                _pendingActionsByOperationId[operationId] = pending;
+            }
+            _operationService.TransitionOperation(operationId, OperationState.Dispatched);
+            pending.ExpiryTimer = new Timer(_ => ExpirePendingAction(operationId), null, _actionTimeout, Timeout.InfiniteTimeSpan);
+        }
+        catch
+        {
+            RemovePendingAction(operationId, playback.SourceDeviceId, playback.PlaybackId, normalizedAction)?.ExpiryTimer?.Dispose();
+            throw;
+        }
 
         try
         {
@@ -213,8 +285,12 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
         catch (Exception ex)
         {
-            RemovePendingAction(operationId, playback.SourceDeviceId, playback.PlaybackId, normalizedAction);
-            _operationService.TransitionOperation(operationId, OperationState.Failed, "PeerUnreachable");
+            var pending = RemovePendingAction(operationId, playback.SourceDeviceId, playback.PlaybackId, normalizedAction);
+            pending?.ExpiryTimer?.Dispose();
+            if (pending is not null)
+            {
+                _operationService.TransitionOperation(operationId, OperationState.Failed, "PeerUnreachable");
+            }
             throw new MediaPlaybackSyncFailureException($"Failed to send media playback action request: {ex.Message}", -32003);
         }
 
@@ -265,6 +341,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     public async Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ValidateOptionalAuditTimestamp(playback.RemovedAt, "removedAt");
         if (string.IsNullOrWhiteSpace(playback.PlaybackId) || string.IsNullOrWhiteSpace(playback.SourceDeviceId))
         {
             throw new InvalidOperationException("Media playback removal requires both sourceDeviceId and playbackId.");
@@ -335,10 +412,14 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         cancellationToken.ThrowIfCancellationRequested();
         if (!string.Equals(result.RequestingDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("media.playbackActionResult requestingDeviceId did not match the local device identity.");
+            throw new UnauthorizedAccessException("media.playbackActionResult requestingDeviceId did not match the local device identity.");
         }
 
         var action = NormalizeAction(result.Action, null, allowSeekWithoutPosition: true);
+        var failureReason = NormalizeFailureReason(
+            result.Success,
+            result.FailureReason,
+            invalidErrorCode: -32010);
         PendingPlaybackAction pending;
         lock (_gate)
         {
@@ -351,6 +432,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             _pendingActionKeys.Remove(key);
             _pendingActionsByOperationId.Remove(operationId);
         }
+        pending.ExpiryTimer?.Dispose();
 
         TryTransitionActive(pending.OperationId);
         if (result.Success)
@@ -362,7 +444,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             _operationService.TransitionOperation(
                 pending.OperationId,
                 OperationState.Failed,
-                string.IsNullOrWhiteSpace(result.FailureReason) ? "Rejected" : result.FailureReason,
+                failureReason,
                 string.IsNullOrWhiteSpace(result.Message) ? null : new Dictionary<string, object?> { ["message"] = result.Message });
         }
 
@@ -374,10 +456,10 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             operationId = pending.OperationId,
             state = result.Success ? "Done" : "Failed",
             success = result.Success,
-            failureReason = result.FailureReason,
+            failureReason,
             message = result.Message
         }).ConfigureAwait(false);
-        await LogEventAsync(SecurityEventTypes.MediaPlaybackActioned, result.SourceDeviceId, result.Success ? SecurityEventOutcome.Success : SecurityEventOutcome.Failure, result.FailureReason, new Dictionary<string, object?>
+        await LogEventAsync(SecurityEventTypes.MediaPlaybackActioned, result.SourceDeviceId, result.Success ? SecurityEventOutcome.Success : SecurityEventOutcome.Failure, failureReason, new Dictionary<string, object?>
         {
             ["playbackId"] = result.PlaybackId,
             ["action"] = action,
@@ -394,8 +476,13 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         {
             throw new InvalidOperationException("media.playbackActionRequest requires playbackId, sourceDeviceId, and requestingDeviceId.");
         }
+        if (!string.Equals(request.SourceDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("media.playbackActionRequest sourceDeviceId did not match the local device identity.");
+        }
 
         var action = NormalizeAction(request.Action, request.PositionMs);
+        ValidateOptionalAuditTimestamp(request.RequestedAt, "requestedAt");
         var requestId = Guid.NewGuid().ToString("D");
         var pending = new PendingIncomingMediaPlaybackAction
         {
@@ -407,34 +494,69 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             PositionMs = request.PositionMs
         };
 
+        MediaPlaybackRecord? localPlayback;
+        lock (_gate)
+        {
+            _playbacks.TryGetValue(GetPlaybackKey(request.SourceDeviceId, request.PlaybackId), out localPlayback);
+        }
+        if (localPlayback is null || localPlayback.IsRemoved || !IsActionAllowed(localPlayback, action))
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: localPlayback is null || localPlayback.IsRemoved
+                    ? "The local media playback was not found."
+                    : $"The local media playback does not allow action '{action}'.",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         lock (_gate)
         {
             _pendingIncomingActionsByRequestId[requestId] = pending;
+            _pendingIncomingActionTimers[requestId] = new Timer(
+                _ => _ = ExpireIncomingActionAsync(requestId),
+                null,
+                _actionTimeout,
+                Timeout.InfiniteTimeSpan);
         }
 
         if (_localActionHandler is not null)
         {
+            LocalMediaPlaybackActionResult result;
             try
             {
-                var result = await _localActionHandler.HandleActionAsync(pending, cancellationToken).ConfigureAwait(false);
-                await ReportHandledMediaPlaybackActionAsync(
-                    requestId,
-                    result.Success,
-                    result.FailureReason,
-                    result.Message,
-                    cancellationToken).ConfigureAwait(false);
+                result = await _localActionHandler.HandleActionAsync(pending, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Local media playback action handler failed for {Action} on {PlaybackId}.", action, request.PlaybackId);
-                await ReportHandledMediaPlaybackActionAsync(
-                    requestId,
-                    success: false,
-                    failureReason: "CapabilityUnavailable",
-                    message: ex.Message,
-                    cancellationToken).ConfigureAwait(false);
+                result = new LocalMediaPlaybackActionResult
+                {
+                    Success = false,
+                    FailureReason = "CapabilityUnavailable",
+                    Message = ex.Message
+                };
             }
 
+            var failureReason = NormalizeFailureReason(
+                result.Success,
+                result.FailureReason,
+                invalidErrorCode: null);
+            try
+            {
+                await ReportHandledMediaPlaybackActionAsync(
+                    requestId,
+                    result.Success,
+                    failureReason,
+                    result.Message,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (MediaPlaybackSyncFailureException ex) when (ex.ErrorCode == -32009)
+            {
+                // The monotonic timeout already completed this request.
+            }
             return;
         }
 
@@ -478,6 +600,11 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             throw new MediaPlaybackSyncFailureException("A media playback action request ID is required.", -32009);
         }
 
+        failureReason = NormalizeFailureReason(
+            success,
+            failureReason,
+            invalidErrorCode: -32602);
+
         PendingIncomingMediaPlaybackAction pending;
         lock (_gate)
         {
@@ -485,25 +612,20 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             {
                 throw new MediaPlaybackSyncFailureException($"Media playback action request '{requestId}' was not found.", -32009);
             }
-        }
-
-        var envelope = CreateEnvelope(
-            "media.playbackActionResult",
-            new
+            if (_pendingIncomingActionTimers.Remove(requestId, out var timer))
             {
-                playbackId = pending.PlaybackId,
-                sourceDeviceId = pending.SourceDeviceId,
-                requestingDeviceId = pending.RequestingDeviceId,
-                action = pending.Action,
-                success,
-                failureReason,
-                message
-            });
+                timer.Dispose();
+            }
+        }
 
         try
         {
-            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
-            await _transport.SendAsync(pending.RequestingDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+            await SendIncomingActionResultAsync(
+                pending,
+                success,
+                failureReason,
+                message,
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -534,20 +656,37 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         };
     }
 
+    private static string? NormalizeFailureReason(bool success, string? failureReason, int? invalidErrorCode)
+    {
+        if (failureReason is not null)
+        {
+            if (FailureReasons.Contains(failureReason))
+            {
+                return success ? null : failureReason;
+            }
+            if (invalidErrorCode.HasValue)
+            {
+                throw new MediaPlaybackSyncFailureException($"Invalid failureReason '{failureReason}'.", invalidErrorCode.Value);
+            }
+            return success ? null : "PeerRejected";
+        }
+        return success ? null : "PeerRejected";
+    }
+
+    private static bool IsActionAllowed(MediaPlaybackRecord playback, string action) => action switch
+    {
+        "play" => playback.CanPlay,
+        "pause" => playback.CanPause,
+        "togglePlayPause" => playback.CanPlay || playback.CanPause,
+        "next" => playback.CanSkipNext,
+        "previous" => playback.CanSkipPrevious,
+        "seek" => playback.CanSeek,
+        _ => false
+    };
+
     private void EnsureActionAllowed(MediaPlaybackRecord playback, string action)
     {
-        var allowed = action switch
-        {
-            "play" => playback.CanPlay,
-            "pause" => playback.CanPause,
-            "togglePlayPause" => playback.CanPlay || playback.CanPause,
-            "next" => playback.CanSkipNext,
-            "previous" => playback.CanSkipPrevious,
-            "seek" => playback.CanSeek,
-            _ => false
-        };
-
-        if (!allowed)
+        if (!IsActionAllowed(playback, action))
         {
             throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playback.PlaybackId}' does not allow action '{action}'.", -32010);
         }
@@ -603,14 +742,33 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             string.IsNullOrWhiteSpace(playback.SourceDeviceId) ||
             string.IsNullOrWhiteSpace(playback.AppId) ||
             string.IsNullOrWhiteSpace(playback.AppName) ||
-            string.IsNullOrWhiteSpace(playback.PlaybackState) ||
-            string.IsNullOrWhiteSpace(playback.UpdatedAt) ||
+            playback.PlaybackState is not ("playing" or "paused" or "stopped" or "buffering") ||
+            !IsRfc3339UtcTimestamp(playback.UpdatedAt) ||
             playback.PositionMs < 0 ||
             playback.DurationMs < 0)
         {
-            throw new InvalidOperationException("Mirrored media playback requires playbackId, sourceDeviceId, appId, appName, playbackState, non-negative positionMs/durationMs, and updatedAt.");
+            throw new InvalidOperationException("Mirrored media playback requires playbackId, sourceDeviceId, appId, appName, a valid playbackState, non-negative positionMs/durationMs, and an RFC 3339 updatedAt timestamp.");
         }
     }
+
+    private static void ValidateOptionalAuditTimestamp(string? value, string fieldName)
+    {
+        if (value is not null && !IsRfc3339UtcTimestamp(value))
+        {
+            throw new MediaPlaybackSyncFailureException(
+                $"{fieldName} must be a full RFC 3339 UTC timestamp.",
+                -32602);
+        }
+    }
+
+    private static bool IsRfc3339UtcTimestamp(string value) =>
+        Rfc3339UtcTimestamp.IsMatch(value) &&
+        DateTimeOffset.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var timestamp) &&
+        timestamp.Offset == TimeSpan.Zero;
 
     private MediaPlaybackRecord NormalizeLocalRecord(MediaPlaybackRecord playback)
     {
@@ -638,6 +796,28 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             RemovedAt = playback.RemovedAt
         };
     }
+
+    private static object CreatePlaybackPayload(MediaPlaybackRecord playback) => new
+    {
+        playbackId = playback.PlaybackId,
+        sourceDeviceId = playback.SourceDeviceId,
+        sourcePlatform = playback.SourcePlatform,
+        appId = playback.AppId,
+        appName = playback.AppName,
+        title = playback.Title,
+        artist = playback.Artist,
+        album = playback.Album,
+        artwork = playback.Artwork,
+        playbackState = playback.PlaybackState,
+        positionMs = playback.PositionMs,
+        durationMs = playback.DurationMs,
+        canPlay = playback.CanPlay,
+        canPause = playback.CanPause,
+        canSkipNext = playback.CanSkipNext,
+        canSkipPrevious = playback.CanSkipPrevious,
+        canSeek = playback.CanSeek,
+        updatedAt = playback.UpdatedAt
+    };
 
     private object CreateEnvelope(string type, object payload) => new
     {
@@ -673,6 +853,59 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
 
         return sentTo;
+    }
+
+    private async Task SendIncomingActionResultAsync(
+        PendingIncomingMediaPlaybackAction pending,
+        bool success,
+        string? failureReason,
+        string? message,
+        CancellationToken cancellationToken)
+    {
+        var envelope = CreateEnvelope(
+            "media.playbackActionResult",
+            new
+            {
+                playbackId = pending.PlaybackId,
+                sourceDeviceId = pending.SourceDeviceId,
+                requestingDeviceId = pending.RequestingDeviceId,
+                action = pending.Action,
+                success,
+                failureReason,
+                message
+            });
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope));
+        await _transport.SendAsync(pending.RequestingDeviceId, bytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ExpireIncomingActionAsync(string requestId)
+    {
+        PendingIncomingMediaPlaybackAction? pending;
+        lock (_gate)
+        {
+            if (!_pendingIncomingActionsByRequestId.Remove(requestId, out pending))
+            {
+                return;
+            }
+            if (_pendingIncomingActionTimers.Remove(requestId, out var timer))
+            {
+                timer.Dispose();
+            }
+        }
+
+        try
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "Timeout",
+                message: "The local media control client did not handle the request.",
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to expire incoming media playback action {RequestId}.", requestId);
+        }
     }
 
     private async Task NotifyIpcAsync(string method, object payload)
@@ -778,14 +1011,42 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         };
     }
 
-    private void RemovePendingAction(string operationId, string sourceDeviceId, string playbackId, string action)
+    private PendingPlaybackAction? RemovePendingAction(string operationId, string sourceDeviceId, string playbackId, string action)
     {
         lock (_gate)
         {
-            _pendingActionsByOperationId.Remove(operationId);
-            _pendingActionKeys.Remove(GetPendingActionKey(sourceDeviceId, playbackId, action));
+            _pendingActionsByOperationId.Remove(operationId, out var pending);
+            var actionKey = GetPendingActionKey(sourceDeviceId, playbackId, action);
+            if (_pendingActionKeys.GetValueOrDefault(actionKey) == operationId)
+            {
+                _pendingActionKeys.Remove(actionKey);
+            }
+            return pending;
         }
     }
 
-    private sealed record PendingPlaybackAction(string OperationId, string PlaybackId, string SourceDeviceId, string Action);
+    private void ExpirePendingAction(string operationId)
+    {
+        PendingPlaybackAction? pending;
+        lock (_gate)
+        {
+            if (!_pendingActionsByOperationId.Remove(operationId, out pending))
+            {
+                return;
+            }
+            var actionKey = GetPendingActionKey(pending.SourceDeviceId, pending.PlaybackId, pending.Action);
+            if (_pendingActionKeys.GetValueOrDefault(actionKey) == operationId)
+            {
+                _pendingActionKeys.Remove(actionKey);
+            }
+        }
+
+        pending.ExpiryTimer?.Dispose();
+        _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+    }
+
+    private sealed record PendingPlaybackAction(string OperationId, string PlaybackId, string SourceDeviceId, string Action)
+    {
+        public Timer? ExpiryTimer { get; set; }
+    }
 }

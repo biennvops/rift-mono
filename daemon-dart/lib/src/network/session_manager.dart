@@ -234,7 +234,8 @@ class SessionManager {
               stackTrace: st,
             );
             _transport.disconnect(msg.peerDeviceId);
-          }).whenComplete(() {
+          })
+          .whenComplete(() {
             if (identical(_inboundMessageTails[msg.peerDeviceId], next)) {
               _inboundMessageTails.remove(msg.peerDeviceId);
             }
@@ -315,6 +316,24 @@ class SessionManager {
       '[Session] sendMessage completed type=${payload['type']} peerDeviceId=$peerDeviceId',
     );
   }
+
+  Future<void> sendPeerError(
+    String peerDeviceId, {
+    required String failureReason,
+    String? refMessageId,
+    required String message,
+  }) => sendMessage(peerDeviceId, {
+    'rift': '0.1-draft',
+    'messageId': const Uuid().v4(),
+    'type': 'error',
+    'sourceDeviceId': _identityManager.deviceId,
+    'destinationDeviceId': peerDeviceId,
+    'payload': {
+      'failureReason': failureReason,
+      'refMessageId': ?refMessageId,
+      'message': message,
+    },
+  });
 
   void disconnectPeer(String peerDeviceId) {
     final waiter = _establishmentWaiters.remove(peerDeviceId);
@@ -613,11 +632,14 @@ class SessionManager {
       'destinationDeviceId': peerDeviceId,
       'payload': {'failureReason': failureReason, 'message': message},
     };
-    await _transport.sendMessage(
-      peerDeviceId,
-      Uint8List.fromList(utf8.encode(json.encode(payload))),
-    );
-    _transport.disconnect(peerDeviceId);
+    try {
+      await _transport.sendMessage(
+        peerDeviceId,
+        Uint8List.fromList(utf8.encode(json.encode(payload))),
+      );
+    } finally {
+      _transport.disconnect(peerDeviceId);
+    }
   }
 
   Future<void> _handleSessionHello(

@@ -957,18 +957,24 @@ class JsonRpcRiftClient {
     return _sendRequest('rift.listMediaPlayback');
   }
 
-  Future<dynamic> getMediaPlayback(String playbackId) async {
+  Future<dynamic> getMediaPlayback({
+    required String sourceDeviceId,
+    required String playbackId,
+  }) async {
     return _sendRequest('rift.getMediaPlayback', {
+      'sourceDeviceId': sourceDeviceId,
       'playbackId': playbackId,
     });
   }
 
   Future<dynamic> performMediaPlaybackAction({
+    required String sourceDeviceId,
     required String playbackId,
     required String action,
     int? positionMs,
   }) async {
     final params = <String, dynamic>{
+      'sourceDeviceId': sourceDeviceId,
       'playbackId': playbackId,
       'action': action,
     };
