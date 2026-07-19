@@ -3,19 +3,24 @@ import Flutter
 import QuickLook
 import Security
 import UIKit
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
   private var identityChannel: FlutterMethodChannel?
   private var documentsChannel: FlutterMethodChannel?
+  private var notificationsChannel: FlutterMethodChannel?
   private var previewURL: NSURL?
   private var backgroundLocationManager: CLLocationManager?
   private var backgroundLocationActivationObserver: NSObjectProtocol?
+  private var pendingNotificationAction: [String: Any]?
+  private var notificationCallbacksReady = false
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    UNUserNotificationCenter.current().delegate = self
     let launched = super.application(
       application,
       didFinishLaunchingWithOptions: launchOptions
@@ -154,6 +159,104 @@ import UIKit
       }
     }
     self.documentsChannel = documentsChannel
+
+    let notificationsChannel = FlutterMethodChannel(
+      name: "rift/ios/notifications",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    notificationsChannel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterError(code: "unavailable", message: "Rift is unavailable.", details: nil))
+        return
+      }
+
+      let notificationCenter = UNUserNotificationCenter.current()
+      switch call.method {
+      case "requestPermission":
+        notificationCenter.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+          DispatchQueue.main.async {
+            if let error {
+              result(FlutterError(code: "notification_permission", message: error.localizedDescription, details: nil))
+            } else {
+              result(granted)
+            }
+          }
+        }
+      case "showNotification":
+        guard let arguments = call.arguments as? [String: Any],
+              let title = arguments["title"] as? String,
+              let body = arguments["body"] as? String else {
+          result(FlutterError(code: "invalid_args", message: "title and body are required.", details: nil))
+          return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        var userInfo = arguments["payload"] as? [String: Any] ?? [:]
+        if let route = arguments["route"] as? String {
+          userInfo["route"] = route
+        }
+        if let destinationPath = arguments["destinationPath"] as? String {
+          userInfo["destinationPath"] = destinationPath
+        }
+        content.userInfo = userInfo
+        let request = UNNotificationRequest(
+          identifier: UUID().uuidString.lowercased(),
+          content: content,
+          trigger: nil
+        )
+        notificationCenter.add(request) { error in
+          DispatchQueue.main.async {
+            if let error {
+              result(FlutterError(code: "notification_show", message: error.localizedDescription, details: nil))
+            } else {
+              result(true)
+            }
+          }
+        }
+      case "consumeLaunchAction":
+        self.notificationCallbacksReady = true
+        result(self.pendingNotificationAction)
+        self.pendingNotificationAction = nil
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.notificationsChannel = notificationsChannel
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .list, .sound])
+    } else {
+      completionHandler([.alert, .sound])
+    }
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    var payload: [String: Any] = [:]
+    for (key, value) in response.notification.request.content.userInfo {
+      if let key = key as? String {
+        payload[key] = value
+      }
+    }
+
+    if notificationCallbacksReady {
+      notificationsChannel?.invokeMethod("notificationActivated", arguments: payload)
+    } else {
+      pendingNotificationAction = payload
+    }
+    completionHandler()
   }
 
   func numberOfPreviewItems(in controller: QLPreviewController) -> Int {

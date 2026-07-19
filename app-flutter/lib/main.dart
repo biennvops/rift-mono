@@ -30,6 +30,7 @@ import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
+import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
@@ -305,10 +306,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    IOSNotifications.setMethodCallHandler(
+      _handlePlatformNotificationMethodCall,
+    );
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
+
+    if (IOSNotifications.isSupported) {
+      await IOSNotifications.requestPermission();
+      final pendingAction = await IOSNotifications.consumeLaunchAction();
+      if (pendingAction != null) {
+        _handleNotificationActionPayload(pendingAction);
+      }
+    }
 
     if (Platform.isAndroid) {
       final pendingAction = await AndroidShell.consumeLaunchAction();
@@ -1005,6 +1017,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }) {
     unawaited(() async {
       try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            destinationPath: destinationPath,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isAndroid && route != null) {
           await AndroidShell.showNotification(
             title: title,
@@ -1095,6 +1117,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     unawaited(() async {
       try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
         if (Platform.isAndroid) {
           final sourcePlatform = event['sourcePlatform']?.toString();
           if (sourcePlatform != 'windows' &&
@@ -1380,18 +1411,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       } catch (error) {
         _maybeNotifyWithRoute(
           title: 'File save failed',
-          body: '$fileName was received but could not be added to Downloads: $error',
+          body:
+              '$fileName was received but could not be added to Downloads: $error',
           route: NotificationRoute.historyTransferActivity,
         );
         return;
       }
     }
 
-    final body = displayDestinationPath == null ||
-            displayDestinationPath.trim().isEmpty
-        ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
-        : '$fileName saved to $displayDestinationPath.';
-    _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    final body =
+        displayDestinationPath == null || displayDestinationPath.trim().isEmpty
+            ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
+            : '$fileName saved to $displayDestinationPath.';
+    if (!Platform.isIOS) {
+      _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    }
     _maybeNotifyCompletedTransfer(
       title: isIncoming ? 'File received' : 'File sent',
       body: body,

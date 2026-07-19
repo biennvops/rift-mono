@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
+import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,10 +45,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
@@ -148,7 +152,8 @@ void main() {
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
 
-  Future<void> dispatchPlatformMethodCall(String channel, MethodCall call) async {
+  Future<void> dispatchPlatformMethodCall(
+      String channel, MethodCall call) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final codec = const StandardMethodCodec();
@@ -188,10 +193,12 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     setMacOSNotificationBridgeOverride(true);
+    IOSNotifications.debugIsIOSOverride = false;
     WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
-    notificationPostedController = StreamController<Map<String, dynamic>>.broadcast();
+    notificationPostedController =
+        StreamController<Map<String, dynamic>>.broadcast();
     notificationUpdatedController =
         StreamController<Map<String, dynamic>>.broadcast();
     notificationRemovedController =
@@ -332,10 +339,16 @@ void main() {
     notificationUpdatedController.close();
     notificationRemovedController.close();
     setMacOSNotificationBridgeOverride(null);
+    IOSNotifications.debugIsIOSOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
       null,
     );
   });
@@ -364,7 +377,8 @@ void main() {
     expect(result, equals(mockDeviceInfo));
   });
 
-  testWidgets('HomeScreen auto-opens PairingScreen for incoming pairing request',
+  testWidgets(
+      'HomeScreen auto-opens PairingScreen for incoming pairing request',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
 
@@ -456,8 +470,7 @@ void main() {
     expect(consumedPendingShareItems, isTrue);
   });
 
-  testWidgets(
-      'RiftApp reapplies saved notification sync policy on reconnect',
+  testWidgets('RiftApp reapplies saved notification sync policy on reconnect',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({
       AppPrefs.notificationSyncEnabled: false,
@@ -527,6 +540,54 @@ void main() {
       <String, String>{'id': 'open', 'title': 'Open'},
       <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
     ]);
+  });
+
+  testWidgets('iOS requests permission and emits routed notifications',
+      (WidgetTester tester) async {
+    setMacOSNotificationBridgeOverride(false);
+    IOSNotifications.debugIsIOSOverride = true;
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
+      (call) async {
+        calls.add(call);
+        switch (call.method) {
+          case 'requestPermission':
+          case 'showNotification':
+            return true;
+          case 'consumeLaunchAction':
+            return null;
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-ios',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Hello iPhone',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    expect(calls.any((call) => call.method == 'requestPermission'), isTrue);
+    expect(calls.any((call) => call.method == 'consumeLaunchAction'), isTrue);
+    final showCall =
+        calls.lastWhere((call) => call.method == 'showNotification');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], NotificationRoute.historyNotifications);
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'rift-peer-1 • Hello iPhone');
   });
 
   testWidgets(
