@@ -1462,6 +1462,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   Future<String?> _pickDestinationPath(String suggestedFileName) async {
     try {
       final defaultPath = await _defaultDestinationPath(suggestedFileName);
+      if (Platform.isIOS) {
+        return defaultPath;
+      }
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save incoming file',
         fileName: suggestedFileName,
