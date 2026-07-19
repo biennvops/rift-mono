@@ -69,7 +69,7 @@ internal sealed class MacOSMediaPlaybackService(
             "togglePlayPause" => ["send", "2"],
             "next" => ["send", "4"],
             "previous" => ["send", "5"],
-            "seek" when request.PositionMs.HasValue => ["seek", request.PositionMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            "seek" when request.PositionMs.HasValue => ["seek", checked((request.PositionMs.Value * 1000L)).ToString(System.Globalization.CultureInfo.InvariantCulture)],
             _ => null
         };
 

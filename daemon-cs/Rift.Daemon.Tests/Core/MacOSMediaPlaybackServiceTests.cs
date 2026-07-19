@@ -22,20 +22,7 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
     [InlineData("previous")]
     public async Task HandleActionAsync_AcceptsNormalizedTransportActions(string action)
     {
-        var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");
-        await File.WriteAllTextAsync(
-            scriptPath,
-            "#!/usr/bin/perl\nuse strict;\nuse warnings;\nexit 0;\n");
-        File.SetUnixFileMode(
-            scriptPath,
-            UnixFileMode.UserRead |
-                UnixFileMode.UserWrite |
-                UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead |
-                UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead |
-                UnixFileMode.OtherExecute);
-
+        var scriptPath = await CreateSuccessfulAdapterScriptAsync();
         var frameworkPath = Path.Combine(_tempDirectory, "MediaRemoteAdapter.framework");
         Directory.CreateDirectory(frameworkPath);
 
@@ -58,6 +45,69 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
 
         Assert.True(result.Success);
         Assert.Null(result.FailureReason);
+    }
+
+    [Fact]
+    public async Task HandleActionAsync_ConvertsSeekPositionToMicroseconds()
+    {
+        var argsPath = Path.Combine(_tempDirectory, "adapter-args.txt");
+        var scriptPath = await CreateArgumentCapturingAdapterScriptAsync(argsPath);
+        var frameworkPath = Path.Combine(_tempDirectory, "MediaRemoteAdapter.framework");
+        Directory.CreateDirectory(frameworkPath);
+
+        Environment.SetEnvironmentVariable("RIFT_MEDIAREMOTE_SCRIPT", scriptPath);
+        Environment.SetEnvironmentVariable("RIFT_MEDIAREMOTE_FRAMEWORK", frameworkPath);
+
+        var service = new MacOSMediaPlaybackService(new StubServiceProvider(), NullLogger<MacOSMediaPlaybackService>.Instance);
+
+        var result = await service.HandleActionAsync(
+            new PendingIncomingMediaPlaybackAction
+            {
+                RequestId = Guid.NewGuid().ToString("D"),
+                SourceDeviceId = "rift-source",
+                RequestingDeviceId = "rift-requester",
+                PlaybackId = "playback-1",
+                Action = "seek",
+                PositionMs = 12_345,
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        var args = await File.ReadAllLinesAsync(argsPath);
+        Assert.Equal([frameworkPath, "seek", "12345000"], args);
+    }
+
+    private async Task<string> CreateSuccessfulAdapterScriptAsync()
+    {
+        var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");
+        await File.WriteAllTextAsync(
+            scriptPath,
+            "#!/usr/bin/perl\nuse strict;\nuse warnings;\nexit 0;\n");
+        SetExecutable(scriptPath);
+        return scriptPath;
+    }
+
+    private async Task<string> CreateArgumentCapturingAdapterScriptAsync(string argsPath)
+    {
+        var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");
+        await File.WriteAllTextAsync(
+            scriptPath,
+            $"#!/usr/bin/perl\nuse strict;\nuse warnings;\nmy $path = q{{{argsPath}}};\nopen(my $fh, '>', $path) or die $!;\nforeach my $arg (@ARGV) {{ print $fh $arg . \"\\n\"; }}\nclose($fh);\nexit 0;\n");
+        SetExecutable(scriptPath);
+        return scriptPath;
+    }
+
+    private static void SetExecutable(string scriptPath)
+    {
+        File.SetUnixFileMode(
+            scriptPath,
+            UnixFileMode.UserRead |
+                UnixFileMode.UserWrite |
+                UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead |
+                UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead |
+                UnixFileMode.OtherExecute);
     }
 
     public void Dispose()
