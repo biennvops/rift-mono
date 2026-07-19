@@ -1017,21 +1017,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
+        if (MacOSNotifications.supportsPendingShareHandoff) {
+          await MacOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isLinux && route != null) {
           await LinuxNotifications.show(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
-            payload: payload,
-          );
-          return;
-        }
-        if (Platform.isMacOS) {
-          await MacOSNotifications.show(
-            title: title,
-            body: body,
-            route: route,
             payload: payload,
           );
         }

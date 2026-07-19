@@ -9,6 +9,7 @@ void main() {
       environment: const {
         'TMPDIR': '/var/folders/example/T/',
       },
+      uidOverride: '501',
     );
 
     expect(paths, [
