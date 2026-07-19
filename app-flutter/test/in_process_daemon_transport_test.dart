@@ -1,17 +1,28 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:app_flutter/src/ipc/in_process_daemon_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeDaemon implements InProcessDaemon {
-  _FakeDaemon(this.onIpcEvent);
+  _FakeDaemon(
+    this.onIpcEvent, {
+    this.startError,
+    this.startGate,
+  });
 
   final void Function(Map<String, dynamic>) onIpcEvent;
+  final Object? startError;
+  final Future<void>? startGate;
   bool started = false;
   bool stopped = false;
 
   @override
   Future<void> start() async {
+    await startGate;
+    if (startError != null) {
+      throw startError!;
+    }
     started = true;
   }
 
@@ -41,6 +52,71 @@ class _FakeDaemon implements InProcessDaemon {
 }
 
 void main() {
+  test('cleans up after startup failure and allows retry', () async {
+    var attempts = 0;
+    late _FakeDaemon failedDaemon;
+    final transport = InProcessDaemonTransport(
+      storagePathProvider: () async => '/tmp/rift-test',
+      daemonFactory: (storagePath, onIpcEvent) {
+        attempts += 1;
+        final daemon = _FakeDaemon(
+          onIpcEvent,
+          startError: attempts == 1 ? StateError('startup failed') : null,
+        );
+        if (attempts == 1) {
+          failedDaemon = daemon;
+        }
+        return daemon;
+      },
+    );
+
+    await expectLater(transport.connect(), throwsStateError);
+    expect(failedDaemon.stopped, isTrue);
+
+    await transport.connect();
+    expect(attempts, 2);
+    await transport.disconnect();
+  });
+
+  test('shares one daemon startup across concurrent connect calls', () async {
+    final startGate = Completer<void>();
+    var daemonCount = 0;
+    final transport = InProcessDaemonTransport(
+      storagePathProvider: () async => '/tmp/rift-test',
+      daemonFactory: (storagePath, onIpcEvent) {
+        daemonCount += 1;
+        return _FakeDaemon(onIpcEvent, startGate: startGate.future);
+      },
+    );
+
+    final firstConnect = transport.connect();
+    final secondConnect = transport.connect();
+    await pumpEventQueue();
+    expect(daemonCount, 1);
+
+    startGate.complete();
+    await Future.wait([firstConnect, secondConnect]);
+    expect(daemonCount, 1);
+    await transport.disconnect();
+  });
+
+  test('stops the daemon when the client closes its channel', () async {
+    late _FakeDaemon daemon;
+    final transport = InProcessDaemonTransport(
+      storagePathProvider: () async => '/tmp/rift-test',
+      daemonFactory: (storagePath, onIpcEvent) {
+        daemon = _FakeDaemon(onIpcEvent);
+        return daemon;
+      },
+    );
+
+    final channel = await transport.connect();
+    await channel.sink.close();
+    await pumpEventQueue();
+
+    expect(daemon.stopped, isTrue);
+  });
+
   test('forwards daemon notifications and request responses', () async {
     late _FakeDaemon daemon;
     final transport = InProcessDaemonTransport(

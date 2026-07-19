@@ -56,6 +56,7 @@ class InProcessDaemonTransport implements IpcTransport {
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
   StreamSubscription<String>? _outgoingSubscription;
+  Future<StreamChannel<String>>? _connecting;
 
   InProcessDaemonTransport({
     Future<String> Function()? storagePathProvider,
@@ -83,27 +84,48 @@ class InProcessDaemonTransport implements IpcTransport {
   }
 
   @override
-  Future<StreamChannel<String>> connect() async {
-    if (_incoming != null && _outgoing != null) {
-      return StreamChannel<String>(_incoming!.stream, _outgoing!.sink);
+  Future<StreamChannel<String>> connect() {
+    if (_daemon != null && _incoming != null && _outgoing != null) {
+      return Future.value(
+        StreamChannel<String>(_incoming!.stream, _outgoing!.sink),
+      );
     }
 
-    final storagePath = await _storagePathProvider();
-    _incoming = StreamController<String>.broadcast();
-    _outgoing = StreamController<String>();
-    _daemon = _daemonFactory(storagePath, _handleDaemonEvent);
-    await _daemon!.start();
+    return _connecting ??= _connect();
+  }
 
-    _outgoingSubscription = _outgoing!.stream.listen(
-      (message) {
-        unawaited(_handleClientMessage(message));
-      },
-      onDone: () {
-        unawaited(disconnect());
-      },
-    );
+  Future<StreamChannel<String>> _connect() async {
+    try {
+      final storagePath = await _storagePathProvider();
+      _incoming = StreamController<String>.broadcast();
+      _outgoing = StreamController<String>.broadcast();
+      _daemon = _daemonFactory(storagePath, _handleDaemonEvent);
+      await _daemon!.start();
 
-    return StreamChannel<String>(_incoming!.stream, _outgoing!.sink);
+      _outgoingSubscription = _outgoing!.stream.listen(
+        (message) {
+          unawaited(_handleClientMessage(message));
+        },
+        onDone: () {
+          _outgoingSubscription = null;
+          unawaited(disconnect());
+        },
+      );
+
+      return StreamChannel<String>(_incoming!.stream, _outgoing!.sink);
+    } catch (_) {
+      try {
+        await _daemon?.stop();
+      } catch (_) {}
+      await _outgoing?.close();
+      await _incoming?.close();
+      _daemon = null;
+      _outgoing = null;
+      _incoming = null;
+      rethrow;
+    } finally {
+      _connecting = null;
+    }
   }
 
   void _handleDaemonEvent(Map<String, dynamic> event) {
