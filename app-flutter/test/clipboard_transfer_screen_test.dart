@@ -49,6 +49,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final List<Map<String, dynamic>> queueItems;
   final List<Map<String, Object>> clipboardNotifications =
       <Map<String, Object>>[];
+  final List<String> fetchedClipboardOfferIds = <String>[];
   List<Map<String, dynamic>> trustedPeers = [
     {
       'deviceId': 'rift-peer-1',
@@ -123,6 +124,17 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> listIncomingFileOffers() async => {'offers': []};
+
+  @override
+  Future<dynamic> fetchClipboardContent(String offerId) async {
+    fetchedClipboardOfferIds.add(offerId);
+    return {
+      'offerId': offerId,
+      'contentType': 'text/plain',
+      'contentBase64': 'aGVsbG8gZnJvbSBkZXNrdG9w',
+      'verified': true,
+    };
+  }
 
   @override
   Future<dynamic> listNotifications() async => {
@@ -267,6 +279,9 @@ void main() {
     bool? exportCompletedTransfersOverride,
     Future<void> Function(String path)? openFileOverride,
     Future<void> Function(String path)? exportFileOverride,
+    bool? iosClipboardActionsOverride,
+    Future<String?> Function()? readClipboardTextOverride,
+    Future<void> Function(String text)? writeClipboardTextOverride,
   }) {
     return MaterialApp(
       home: MultiProvider(
@@ -286,6 +301,9 @@ void main() {
           exportCompletedTransfersOverride: exportCompletedTransfersOverride,
           openFileOverride: openFileOverride,
           exportFileOverride: exportFileOverride,
+          iosClipboardActionsOverride: iosClipboardActionsOverride,
+          readClipboardTextOverride: readClipboardTextOverride,
+          writeClipboardTextOverride: writeClipboardTextOverride,
           pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
           sharedClipboardTextNotifier: sharedClipboardTextNotifier,
@@ -536,6 +554,65 @@ void main() {
     expect(find.text('Shared text'), findsNothing);
     expect(find.byType(TextField), findsNothing);
     expect(find.text('Send Clipboard Now'), findsNothing);
+  });
+
+  testWidgets('iOS sends clipboard text after explicit user action',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient();
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        client: client,
+        iosClipboardActionsOverride: true,
+        readClipboardTextOverride: () async => 'hello from iPhone',
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send Clipboard'));
+    await tester.pumpAndSettle();
+
+    expect(client.clipboardNotifications, hasLength(1));
+    expect(client.clipboardNotifications.single['contentType'], 'text/plain');
+    expect(client.clipboardNotifications.single['byteSize'], 17);
+    expect(
+      client.clipboardNotifications.single['contentBase64'],
+      'aGVsbG8gZnJvbSBpUGhvbmU=',
+    );
+    expect(find.text('Clipboard sent to trusted devices.'), findsOneWidget);
+  });
+
+  testWidgets('iOS copies incoming clipboard text after explicit user action',
+      (WidgetTester tester) async {
+    String? copiedText;
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-remote-1',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'text/plain',
+          'byteSize': 18,
+          'sha256': 'abc123',
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+    );
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        client: client,
+        iosClipboardActionsOverride: true,
+        writeClipboardTextOverride: (text) async => copiedText = text,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+
+    expect(client.fetchedClipboardOfferIds, ['offer-remote-1']);
+    expect(copiedText, 'hello from desktop');
+    expect(find.text('Copied to clipboard.'), findsOneWidget);
   });
 
   testWidgets('clipboard tab shows trusted device clipboard history',

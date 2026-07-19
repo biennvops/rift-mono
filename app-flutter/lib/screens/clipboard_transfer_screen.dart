@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -47,6 +50,9 @@ class ClipboardTransferScreen extends StatefulWidget {
   final bool? exportCompletedTransfersOverride;
   final Future<void> Function(String path)? openFileOverride;
   final Future<void> Function(String path)? exportFileOverride;
+  final bool? iosClipboardActionsOverride;
+  final Future<String?> Function()? readClipboardTextOverride;
+  final Future<void> Function(String text)? writeClipboardTextOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
@@ -59,6 +65,9 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.exportCompletedTransfersOverride,
     this.openFileOverride,
     this.exportFileOverride,
+    this.iosClipboardActionsOverride,
+    this.readClipboardTextOverride,
+    this.writeClipboardTextOverride,
     this.routeNotifier,
     this.sharedClipboardTextNotifier,
   });
@@ -103,6 +112,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       shouldRevealCompletedTransferDestination();
   bool get _exportCompletedTransfers =>
       widget.exportCompletedTransfersOverride ?? Platform.isIOS;
+  bool get _iosClipboardActions =>
+      widget.iosClipboardActionsOverride ?? Platform.isIOS;
   late final SendQueueController _sendQueueController;
   SendQueueController get _sendQueue => _sendQueueController;
   SendQueueModeCoordinator get _queueMode =>
@@ -511,6 +522,78 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return deviceId;
     }
     return '${deviceId.substring(0, 12)}...';
+  }
+
+  Future<void> _sendClipboardText() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final text = widget.readClipboardTextOverride != null
+          ? await widget.readClipboardTextOverride!()
+          : (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      if (text == null || text.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('The clipboard has no text to send.')),
+        );
+        return;
+      }
+
+      final bytes = utf8.encode(text);
+      await client.notifyClipboardChange(
+        contentType: 'text/plain',
+        byteSize: bytes.length,
+        sha256: sha256.convert(bytes).toString(),
+        contentBase64: base64Encode(bytes),
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Clipboard sent to trusted devices.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not send clipboard: '
+            '${JsonRpcRiftClient.formatDisplayError(error)}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _copyClipboardOffer(Map<String, dynamic> offer) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final offerId = offer['offerId']?.toString();
+    if (offerId == null || offerId.isEmpty) return;
+
+    try {
+      final result = await context
+          .read<JsonRpcRiftClient>()
+          .fetchClipboardContent(offerId);
+      if (result['verified'] != true) {
+        throw StateError('Clipboard content could not be verified.');
+      }
+      final contentBase64 = result['contentBase64']?.toString();
+      if (contentBase64 == null || contentBase64.isEmpty) {
+        throw StateError('Clipboard content was empty.');
+      }
+      final text = utf8.decode(base64Decode(contentBase64));
+      if (widget.writeClipboardTextOverride != null) {
+        await widget.writeClipboardTextOverride!(text);
+      } else {
+        await Clipboard.setData(ClipboardData(text: text));
+      }
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Copied to clipboard.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not copy clipboard item: $error')),
+      );
+    }
   }
 
   Future<void> _performNotificationAction(
@@ -1863,79 +1946,111 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildClipboardHistorySection(ThemeData theme) {
     if (_clipboardOffers.isEmpty) {
-      return Text(
-        'No recent clipboard items from trusted devices yet.',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_iosClipboardActions) ...[
+            FilledButton.icon(
+              onPressed: _sendClipboardText,
+              icon: const Icon(Icons.send),
+              label: const Text('Send Clipboard'),
+            ),
+            const SizedBox(height: 16),
+          ],
+          Text(
+            'No recent clipboard items from trusted devices yet.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       );
     }
 
     return Column(
-      children: _clipboardOffers.map((offer) {
-        final sourceDeviceId = offer['sourceDeviceId']?.toString();
-        final contentType = offer['contentType']?.toString() ?? '';
-        final isImage = contentType.startsWith('image/');
-        final mediaLabel = isImage ? 'Image' : 'Text';
-        final expiresAt =
-            DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
-        final expiresLabel = expiresAt == null
-            ? null
-            : 'Expires ${_formatRelativeTime(expiresAt)}';
-
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: theme.colorScheme.outlineVariant,
-            ),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_iosClipboardActions) ...[
+          FilledButton.icon(
+            onPressed: _sendClipboardText,
+            icon: const Icon(Icons.send),
+            label: const Text('Send Clipboard'),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                isImage ? Icons.image : Icons.notes,
-                color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: 16),
+        ],
+        ..._clipboardOffers.map((offer) {
+          final sourceDeviceId = offer['sourceDeviceId']?.toString();
+          final contentType = offer['contentType']?.toString() ?? '';
+          final isImage = contentType.startsWith('image/');
+          final mediaLabel = isImage ? 'Image' : 'Text';
+          final expiresAt =
+              DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
+          final expiresLabel = expiresAt == null
+              ? null
+              : 'Expires ${_formatRelativeTime(expiresAt)}';
+
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _peerDisplayName(sourceDeviceId),
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$mediaLabel • ${_formatSize(offer['byteSize'] as num? ?? 0)}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    if (expiresLabel != null) ...[
-                      const SizedBox(height: 4),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  isImage ? Icons.image : Icons.notes,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        expiresLabel,
+                        _peerDisplayName(sourceDeviceId),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$mediaLabel • ${_formatSize(offer['byteSize'] as num? ?? 0)}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
+                      if (expiresLabel != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          expiresLabel,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                      if (_iosClipboardActions && !isImage) ...[
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: () => _copyClipboardOffer(offer),
+                          icon: const Icon(Icons.copy),
+                          label: const Text('Copy'),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        );
-      }).toList(growable: false),
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 
