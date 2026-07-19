@@ -579,10 +579,16 @@ class RiftDaemon {
           _identityManager!.getDeviceFingerprint(),
         ),
       );
-      await _discoveryService!.startAdvertising();
-      if (await _shouldAutoStartDiscovery()) {
-        await _discoveryService!.startDiscovery();
-        _isDiscovering = true;
+      try {
+        await _discoveryService!.startAdvertising();
+        if (await _shouldAutoStartDiscovery()) {
+          await _discoveryService!.startDiscovery();
+          _isDiscovering = true;
+        }
+      } catch (e) {
+        RiftLog.warn(
+          '[Discovery] Startup failed; continuing without active discovery: $e',
+        );
       }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
@@ -1208,6 +1214,9 @@ class RiftDaemon {
     if (Platform.isAndroid) {
       return 'android';
     }
+    if (Platform.isIOS) {
+      return 'ios';
+    }
     if (Platform.isWindows) {
       return 'windows';
     }
@@ -1227,6 +1236,9 @@ class RiftDaemon {
 
     if (displayName.startsWith('Android ')) {
       return 'android';
+    }
+    if (displayName.startsWith('iOS ')) {
+      return 'ios';
     }
     if (displayName.startsWith('Windows ')) {
       return 'windows';
