@@ -167,6 +167,32 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void ListDiscoveredPeers_UsesScopedRemoteAddressForLinkLocalIpv6()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-link-local",
+            instanceName: "inst-link-local",
+            host: "fe80::18f1:f727:12a8:1b08",
+            port: 11112,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-link-local" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("fe80::18f1:f727:12a8:1b08%7"), 5353),
+            observedAddresses: ["fe80::18f1:f727:12a8:1b08"]));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal("fe80::18f1:f727:12a8:1b08%7", peer.Address);
+    }
+
+    [Fact]
     public void ListDiscoveredPeers_KeepsExistingPrimaryForEqualScoreEndpoints()
     {
         var coordinator = new DiscoveryCoordinator(

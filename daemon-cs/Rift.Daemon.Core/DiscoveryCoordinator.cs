@@ -227,6 +227,16 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
     private static string PreferAddress(string current, string candidate)
     {
+        if (IPAddress.TryParse(current, out var currentIp) &&
+            IPAddress.TryParse(candidate, out var candidateIp) &&
+            currentIp.IsIPv6LinkLocal &&
+            currentIp.ScopeId == 0 &&
+            candidateIp.IsIPv6LinkLocal &&
+            candidateIp.ScopeId != 0)
+        {
+            return candidate;
+        }
+
         return GetEndpointScore(candidate) > GetEndpointScore(current) ? candidate : current;
     }
 
