@@ -1488,16 +1488,27 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final destinationPath = await _pickDestinationPath(
       offer['fileName']?.toString() ?? 'incoming.bin',
     );
-    if (destinationPath == null || destinationPath.isEmpty || !mounted) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (destinationPath == null || destinationPath.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+            content: Text('Could not resolve an iOS save location.')),
+      );
       return;
     }
 
-    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(content: Text('Saving to $destinationPath...')),
+    );
     try {
-      await context.read<JsonRpcRiftClient>().acceptFileOffer(
+      await context
+          .read<JsonRpcRiftClient>()
+          .acceptFileOffer(
             transferId: transferId,
             destinationPath: destinationPath,
-          );
+          )
+          .timeout(const Duration(seconds: 15));
       if (!mounted) return;
       setState(() {
         _activeSection = _HistorySection.transferActivity;
