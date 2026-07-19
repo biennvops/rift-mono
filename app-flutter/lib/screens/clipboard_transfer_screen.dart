@@ -480,6 +480,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final client = context.read<JsonRpcRiftClient>();
     try {
       await client.performNotificationAction(
+        sourceDeviceId: notification['sourceDeviceId']?.toString() ?? '',
         notificationId: notification['notificationId']?.toString() ?? '',
         action: action,
       );

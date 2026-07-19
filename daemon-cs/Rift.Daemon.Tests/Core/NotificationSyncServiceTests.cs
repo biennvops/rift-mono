@@ -94,7 +94,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
         _transport.ActivePeers.Add("rift-peer");
         await _service.HandleNotificationPostedAsync(CreateNotification("notif-1", isOpenable: true), CancellationToken.None);
 
-        var result = await _service.PerformNotificationActionAsync("notif-1", "open", CancellationToken.None);
+        var result = await _service.PerformNotificationActionAsync("rift-peer", "notif-1", "open", CancellationToken.None);
 
         Assert.Equal("notif-1", result.NotificationId);
         Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.actionRequest");
@@ -114,6 +114,29 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PerformNotificationActionAsync_UsesSourceScopedIdentity()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(CreateNotification("shared-id", isOpenable: true), CancellationToken.None);
+        await _service.HandleNotificationPostedAsync(new NotificationSyncRecord
+        {
+            NotificationId = "shared-id",
+            SourceDeviceId = "rift-other-peer",
+            SourcePlatform = "android",
+            PackageName = "com.example.other",
+            AppName = "Other",
+            PostedAt = "2026-07-14T10:00:00Z",
+            IsOpenable = true
+        }, CancellationToken.None);
+
+        await _service.PerformNotificationActionAsync("rift-peer", "shared-id", "open", CancellationToken.None);
+
+        var sent = Assert.Single(_transport.SentMessages, message => message.Type == "notification.actionRequest");
+        Assert.Equal("rift-peer", sent.PeerDeviceId);
+    }
+
+    [Fact]
     public async Task PerformNotificationActionAsync_RejectsWhenPeerLacksCapability()
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["presence.basic"]);
@@ -121,7 +144,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
         await _service.HandleNotificationPostedAsync(CreateNotification("notif-1", isDismissible: true), CancellationToken.None);
 
         var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
-            _service.PerformNotificationActionAsync("notif-1", "dismiss", CancellationToken.None));
+            _service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
 
         Assert.Equal(-32003, ex.ErrorCode);
     }
@@ -142,7 +165,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
         delayedTransport.ActivePeers.Add("rift-peer");
         await service.HandleNotificationPostedAsync(CreateNotification("notif-race", isOpenable: true), CancellationToken.None);
 
-        var actionTask = service.PerformNotificationActionAsync("notif-race", "open", CancellationToken.None);
+        var actionTask = service.PerformNotificationActionAsync("rift-peer", "notif-race", "open", CancellationToken.None);
         await delayedTransport.WaitForSendStartedAsync();
         await service.HandleNotificationActionResultAsync(new NotificationActionResultRecord
         {
@@ -176,8 +199,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
                 Title = "Desktop test",
                 BodyPreview = "Hello peers",
                 PostedAt = "2026-07-16T10:00:00Z",
-                IsDismissible = false,
-                IsOpenable = false
+                IsDismissible = true,
+                IsOpenable = true
             },
             null,
             CancellationToken.None);
@@ -191,6 +214,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
             sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.posted");
         Assert.True(payload.Payload.TryGetProperty("notificationId", out _));
         Assert.False(payload.Payload.TryGetProperty("NotificationId", out _));
+        Assert.False(payload.Payload.GetProperty("isDismissible").GetBoolean());
+        Assert.False(payload.Payload.GetProperty("isOpenable").GetBoolean());
     }
 
     [Fact]

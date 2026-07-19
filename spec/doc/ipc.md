@@ -648,10 +648,11 @@ Requests a remote action against a mirrored notification when the source marked 
 
 **Params:**
 
-| Field            | Type   | Required | Description                                 |
-| ---------------- | ------ | -------- | ------------------------------------------- |
-| `notificationId` | string | Yes      | Android-origin stable notification ID       |
-| `action`         | string | Yes      | Closed vocabulary: `open` or `dismiss`      |
+| Field            | Type             | Required | Description                                      |
+| ---------------- | ---------------- | -------- | ------------------------------------------------ |
+| `sourceDeviceId` | device ID string | Yes      | Android device that originated the notification |
+| `notificationId` | string           | Yes      | Stable ID scoped to `sourceDeviceId`             |
+| `action`         | string           | Yes      | Closed vocabulary: `open` or `dismiss`           |
 
 **Result:**
 
@@ -665,6 +666,12 @@ Requests a remote action against a mirrored notification when the source marked 
 ```
 
 **Errors:** `-32003` if `notification.sync` is unavailable, `-32009` if the mirrored notification no longer exists, `-32010` if local policy denies the action.
+
+#### `rift.reportLocalNotificationActionHandled`
+
+Reports the result of an Android notification action delivered through `rift.onNotificationActionRequest`.
+
+**Params:** `requestId` string, `success` boolean, optional `failureReason` failure reason, optional `message` string.
 
 #### `rift.updateNotificationSyncPolicy`
 
@@ -864,7 +871,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onNotificationPosted`  | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification posted         |
 | `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
 | `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
-| `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
+| `rift.onNotificationActionResult` | `{ "notificationId", "sourceDeviceId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
+| `rift.onNotificationActionRequest` | `{ "requestId", "notificationId", "sourceDeviceId", "requestingDeviceId", "action" }` | Android-origin notification action to execute locally |
 | `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
 | `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |
 | `rift.onMediaPlaybackRemoved` | `{ "playbackId", "sourceDeviceId", "removedAt?" }` | Mirrored playback removed |

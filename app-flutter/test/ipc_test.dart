@@ -338,6 +338,9 @@ class MockTransport implements IpcTransport {
         case 'rift.performNotificationAction':
           _sendResult(id, performNotificationActionResult);
           break;
+        case 'rift.reportLocalNotificationActionHandled':
+          _sendResult(id, {'success': true});
+          break;
         case 'rift.updateNotificationSyncPolicy':
           _sendResult(id, updateNotificationSyncPolicyResult);
           break;
@@ -593,6 +596,7 @@ void main() {
       final updatedFuture = client.onNotificationUpdated.first;
       final removedFuture = client.onNotificationRemoved.first;
       final actionFuture = client.onNotificationActionResult.first;
+      final actionRequestFuture = client.onNotificationActionRequest.first;
 
       transport.emitNotification('rift.onNotificationPosted', {
         'NotificationId': 'notif-1',
@@ -623,10 +627,19 @@ void main() {
       });
       transport.emitNotification('rift.onNotificationActionResult', {
         'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
         'OperationId': 'operation-notification-1',
         'Action': 'open',
         'State': 'Done',
         'Success': true,
+      });
+
+      transport.emitNotification('rift.onNotificationActionRequest', {
+        'RequestId': 'request-notification-1',
+        'NotificationId': 'notif-local-1',
+        'SourceDeviceId': 'rift-local',
+        'RequestingDeviceId': 'rift-peer',
+        'Action': 'dismiss',
       });
 
       expect(await postedFuture, {
@@ -658,10 +671,18 @@ void main() {
       });
       expect(await actionFuture, {
         'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
         'operationId': 'operation-notification-1',
         'action': 'open',
         'state': 'Done',
         'success': true,
+      });
+      expect(await actionRequestFuture, {
+        'requestId': 'request-notification-1',
+        'notificationId': 'notif-local-1',
+        'sourceDeviceId': 'rift-local',
+        'requestingDeviceId': 'rift-peer',
+        'action': 'dismiss',
       });
     });
 
@@ -958,8 +979,15 @@ void main() {
       );
       final listed = await client.listNotifications();
       final actionResult = await client.performNotificationAction(
+        sourceDeviceId: 'rift-peer',
         notificationId: 'notif-1',
         action: 'open',
+      );
+      await client.reportLocalNotificationActionHandled(
+        requestId: 'request-notification-1',
+        success: false,
+        failureReason: 'CapabilityUnavailable',
+        message: 'Notification was removed.',
       );
       final policyResult = await client.updateNotificationSyncPolicy(
         enabled: true,
@@ -1003,8 +1031,24 @@ void main() {
             )
             .single['params'],
         {
+          'sourceDeviceId': 'rift-peer',
           'notificationId': 'notif-1',
           'action': 'open',
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] ==
+                  'rift.reportLocalNotificationActionHandled',
+            )
+            .single['params'],
+        {
+          'requestId': 'request-notification-1',
+          'success': false,
+          'failureReason': 'CapabilityUnavailable',
+          'message': 'Notification was removed.',
         },
       );
     });

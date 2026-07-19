@@ -30,6 +30,29 @@ class AndroidShell {
     return result ?? false;
   }
 
+  static Future<Map<String, dynamic>> performLocalNotificationAction({
+    required String notificationId,
+    required String action,
+  }) async {
+    if (!isSupported) {
+      return const <String, dynamic>{
+        'success': false,
+        'failureReason': 'CapabilityUnavailable',
+        'message': 'Android notification access is unavailable.',
+      };
+    }
+    final result = await _channel.invokeMethod<dynamic>(
+      'performLocalNotificationAction',
+      {'notificationId': notificationId, 'action': action},
+    );
+    return result is Map
+        ? Map<String, dynamic>.from(result)
+        : const <String, dynamic>{
+            'success': false,
+            'failureReason': 'CapabilityUnavailable',
+          };
+  }
+
   static Future<Map<dynamic, dynamic>?> prepareIncomingDownload(
     String fileName,
   ) async {

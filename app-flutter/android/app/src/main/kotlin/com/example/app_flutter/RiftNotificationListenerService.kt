@@ -1,6 +1,7 @@
 package com.example.app_flutter
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -13,11 +14,65 @@ class RiftNotificationListenerService : NotificationListenerService() {
     companion object {
         private const val tag = "RiftNotifListener"
         private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
+        @Volatile
+        private var activeInstance: RiftNotificationListenerService? = null
+
+        fun performAction(notificationId: String, action: String): Map<String, Any?> {
+            val service = activeInstance
+                ?: return failure("CapabilityUnavailable", "Notification access is unavailable.")
+            val notification = service.activeNotifications
+                ?.firstOrNull { it.key == notificationId }
+                ?: return failure("CapabilityUnavailable", "The notification is no longer active.")
+
+            return when (action) {
+                "dismiss" -> {
+                    if (!notification.isClearable) {
+                        failure("PolicyDenied", "The notification cannot be dismissed.")
+                    } else {
+                        service.cancelNotification(notification.key)
+                        mapOf("success" to true)
+                    }
+                }
+                "open" -> {
+                    val contentIntent = notification.notification.contentIntent
+                        ?: return failure("CapabilityUnavailable", "The notification cannot be opened.")
+                    try {
+                        contentIntent.send()
+                        mapOf("success" to true)
+                    } catch (error: PendingIntent.CanceledException) {
+                        failure("CapabilityUnavailable", error.message ?: "The notification action expired.")
+                    }
+                }
+                else -> failure("ProtocolError", "Unknown notification action '$action'.")
+            }
+        }
+
+        private fun failure(reason: String, message: String): Map<String, Any?> =
+            mapOf(
+                "success" to false,
+                "failureReason" to reason,
+                "message" to message,
+            )
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        activeInstance = this
         Log.i(tag, "Notification listener connected")
+    }
+
+    override fun onListenerDisconnected() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        super.onListenerDisconnected()
+    }
+
+    override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        super.onDestroy()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {

@@ -196,6 +196,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _notificationPostedSub;
   StreamSubscription<Map<String, dynamic>>? _notificationUpdatedSub;
   StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationActionRequestSub;
   StreamSubscription<bool>? _connectionChangedSub;
   String? _activePairingDeviceId;
   bool _clipboardServiceStarted = false;
@@ -660,12 +661,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void _handleNotificationActionPayload(Map<String, dynamic> payload) {
     final route = payload['route']?.toString();
     final notificationAction = payload['notificationAction']?.toString();
+    final sourceDeviceId = payload['sourceDeviceId']?.toString();
     final notificationId = payload['notificationId']?.toString();
     if (notificationAction != null &&
+        sourceDeviceId != null &&
+        sourceDeviceId.isNotEmpty &&
         notificationId != null &&
         notificationId.isNotEmpty) {
       unawaited(
         _submitDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: notificationAction,
         ),
@@ -759,11 +764,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   void _queuePendingDesktopNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) {
     final alreadyQueued = _pendingDesktopNotificationActions.any(
       (candidate) =>
+          candidate['sourceDeviceId'] == sourceDeviceId &&
           candidate['notificationId'] == notificationId &&
           candidate['action'] == action,
     );
@@ -771,12 +778,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return;
     }
     _pendingDesktopNotificationActions.add(<String, String>{
+      'sourceDeviceId': sourceDeviceId,
       'notificationId': notificationId,
       'action': action,
     });
   }
 
   Future<bool> _submitDesktopNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
     bool queueIfUnavailable = true,
@@ -785,6 +794,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (!client.isConnected) {
       if (queueIfUnavailable) {
         _queuePendingDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: action,
         );
@@ -799,6 +809,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     try {
       await client.performNotificationAction(
+        sourceDeviceId: sourceDeviceId,
         notificationId: notificationId,
         action: action,
       );
@@ -809,6 +820,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
       if (queueIfUnavailable) {
         _queuePendingDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: action,
         );
@@ -823,6 +835,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _pendingDesktopNotificationActions.first,
       );
       final submitted = await _submitDesktopNotificationAction(
+        sourceDeviceId: action['sourceDeviceId'] ?? '',
         notificationId: action['notificationId'] ?? '',
         action: action['action'] ?? '',
         queueIfUnavailable: false,
@@ -910,6 +923,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationPostedSub?.cancel();
     _notificationUpdatedSub?.cancel();
     _notificationRemovedSub?.cancel();
+    _notificationActionRequestSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
@@ -1063,6 +1077,45 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
     }
     return actions;
+  }
+
+  Future<void> _handleLocalNotificationActionRequest(
+    JsonRpcRiftClient client,
+    Map<String, dynamic> event,
+  ) async {
+    final requestId = event['requestId']?.toString() ?? '';
+    final notificationId = event['notificationId']?.toString() ?? '';
+    final action = event['action']?.toString() ?? '';
+    if (requestId.isEmpty || notificationId.isEmpty || action.isEmpty) {
+      return;
+    }
+
+    Map<String, dynamic> result;
+    try {
+      result = await AndroidShell.performLocalNotificationAction(
+        notificationId: notificationId,
+        action: action,
+      );
+    } catch (error) {
+      result = <String, dynamic>{
+        'success': false,
+        'failureReason': 'CapabilityUnavailable',
+        'message': error.toString(),
+      };
+    }
+
+    try {
+      await client.reportLocalNotificationActionHandled(
+        requestId: requestId,
+        success: result['success'] == true,
+        failureReason: result['failureReason']?.toString(),
+        message: result['message']?.toString(),
+      );
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to report local action result: $error',
+      );
+    }
   }
 
   void _showMirroredNotificationPreview(Map<String, dynamic> event) {
@@ -1286,6 +1339,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
       // Native notifications are best-effort previews; removal only updates the
       // in-app history state.
+    });
+
+    _notificationActionRequestSub =
+        client.onNotificationActionRequest.listen((event) {
+      unawaited(_handleLocalNotificationActionRequest(client, event));
     });
 
     _fileOfferSub = client.onFileOffer.listen((event) {

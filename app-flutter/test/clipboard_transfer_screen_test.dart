@@ -157,6 +157,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> performNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) async {
@@ -669,7 +670,8 @@ void main() {
     );
   });
 
-  testWidgets('Send tab rebuilds when daemon-backed queue refresh changes peer eligibility',
+  testWidgets(
+      'Send tab rebuilds when daemon-backed queue refresh changes peer eligibility',
       (WidgetTester tester) async {
     final client = FakeTransferJsonRpcClient(
       sendQueueSupported: true,

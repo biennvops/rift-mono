@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
+import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,10 +44,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
@@ -145,10 +148,13 @@ void main() {
   late StreamController<Map<String, dynamic>> notificationPostedController;
   late StreamController<Map<String, dynamic>> notificationUpdatedController;
   late StreamController<Map<String, dynamic>> notificationRemovedController;
+  late StreamController<Map<String, dynamic>>
+      notificationActionRequestController;
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
 
-  Future<void> dispatchPlatformMethodCall(String channel, MethodCall call) async {
+  Future<void> dispatchPlatformMethodCall(
+      String channel, MethodCall call) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final codec = const StandardMethodCodec();
@@ -191,10 +197,13 @@ void main() {
     WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
-    notificationPostedController = StreamController<Map<String, dynamic>>.broadcast();
+    notificationPostedController =
+        StreamController<Map<String, dynamic>>.broadcast();
     notificationUpdatedController =
         StreamController<Map<String, dynamic>>.broadcast();
     notificationRemovedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    notificationActionRequestController =
         StreamController<Map<String, dynamic>>.broadcast();
     isConnected = true;
     macOsCalls.clear();
@@ -233,6 +242,8 @@ void main() {
         .thenAnswer((_) => notificationRemovedController.stream);
     when(() => mockClient.onNotificationActionResult)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationActionRequest)
+        .thenAnswer((_) => notificationActionRequestController.stream);
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
@@ -300,10 +311,17 @@ void main() {
     );
     when(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
         notificationId: any(named: 'notificationId'),
         action: any(named: 'action'),
       ),
     ).thenAnswer((_) async => <String, Object?>{'success': true});
+    when(() => mockClient.reportLocalNotificationActionHandled(
+          requestId: any(named: 'requestId'),
+          success: any(named: 'success'),
+          failureReason: any(named: 'failureReason'),
+          message: any(named: 'message'),
+        )).thenAnswer((_) async => <String, Object?>{'success': true});
     when(() => mockClient.connect()).thenAnswer((_) async {});
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -331,6 +349,8 @@ void main() {
     notificationPostedController.close();
     notificationUpdatedController.close();
     notificationRemovedController.close();
+    notificationActionRequestController.close();
+    AndroidShell.debugIsAndroidOverride = null;
     setMacOSNotificationBridgeOverride(null);
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -364,7 +384,8 @@ void main() {
     expect(result, equals(mockDeviceInfo));
   });
 
-  testWidgets('HomeScreen auto-opens PairingScreen for incoming pairing request',
+  testWidgets(
+      'HomeScreen auto-opens PairingScreen for incoming pairing request',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
 
@@ -456,8 +477,7 @@ void main() {
     expect(consumedPendingShareItems, isTrue);
   });
 
-  testWidgets(
-      'RiftApp reapplies saved notification sync policy on reconnect',
+  testWidgets('RiftApp reapplies saved notification sync policy on reconnect',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({
       AppPrefs.notificationSyncEnabled: false,
@@ -530,6 +550,52 @@ void main() {
   });
 
   testWidgets(
+      'Android executes incoming notification action requests and reports results',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/android/shell'),
+      (call) async {
+        if (call.method == 'performLocalNotificationAction') {
+          expect(call.arguments, {
+            'notificationId': 'android-notif-1',
+            'action': 'dismiss',
+          });
+          return <String, Object?>{'success': true};
+        }
+        return null;
+      },
+    );
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    notificationActionRequestController.add({
+      'requestId': 'request-1',
+      'notificationId': 'android-notif-1',
+      'sourceDeviceId': 'rift-android',
+      'requestingDeviceId': 'rift-desktop',
+      'action': 'dismiss',
+    });
+    await tester.pump();
+
+    verify(
+      () => mockClient.reportLocalNotificationActionHandled(
+        requestId: 'request-1',
+        success: true,
+        failureReason: null,
+        message: null,
+      ),
+    ).called(1);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/android/shell'),
+      null,
+    );
+  });
+
+  testWidgets(
       'explicit mirrored notification actions call performNotificationAction',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildRiftApp(mockClient));
@@ -540,6 +606,7 @@ void main() {
       'rift.permissions',
       const MethodCall('notificationActivated', <String, Object?>{
         'route': 'history.notifications',
+        'sourceDeviceId': 'rift-android',
         'notificationId': 'notif-321',
         'notificationAction': 'open',
       }),
@@ -548,6 +615,7 @@ void main() {
 
     verify(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-android',
         notificationId: 'notif-321',
         action: 'open',
       ),
@@ -567,6 +635,7 @@ void main() {
       'rift.permissions',
       const MethodCall('notificationActivated', <String, Object?>{
         'route': 'history.notifications',
+        'sourceDeviceId': 'rift-android',
         'notificationId': 'notif-queued',
         'notificationAction': 'dismiss',
       }),
@@ -575,6 +644,7 @@ void main() {
 
     verifyNever(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
         notificationId: any(named: 'notificationId'),
         action: any(named: 'action'),
       ),
@@ -588,6 +658,7 @@ void main() {
 
     verify(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-android',
         notificationId: 'notif-queued',
         action: 'dismiss',
       ),

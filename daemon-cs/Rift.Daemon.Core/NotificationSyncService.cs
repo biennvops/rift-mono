@@ -159,25 +159,28 @@ public sealed class NotificationSyncService : INotificationSyncService
     }
 
     public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
         string notificationId,
         string action,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (string.IsNullOrWhiteSpace(notificationId))
+        if (string.IsNullOrWhiteSpace(sourceDeviceId) || string.IsNullOrWhiteSpace(notificationId))
         {
-            throw new NotificationSyncFailureException("A notification ID is required.", -32009);
+            throw new NotificationSyncFailureException("A source device ID and notification ID are required.", -32009);
         }
 
         var normalizedAction = NormalizeAction(action);
         NotificationSyncRecord notification;
         lock (_gate)
         {
-            notification = _notifications.Values
-                .Where(record => !record.IsRemoved)
-                .FirstOrDefault(record => string.Equals(record.NotificationId, notificationId, StringComparison.Ordinal))
-                ?? throw new NotificationSyncFailureException($"Mirrored notification '{notificationId}' was not found.", -32009);
+            notification = _notifications.GetValueOrDefault(GetNotificationKey(sourceDeviceId, notificationId))
+                ?? throw new NotificationSyncFailureException($"Mirrored notification '{notificationId}' was not found for '{sourceDeviceId}'.", -32009);
+            if (notification.IsRemoved)
+            {
+                throw new NotificationSyncFailureException($"Mirrored notification '{notificationId}' was not found for '{sourceDeviceId}'.", -32009);
+            }
         }
 
         EnsureActionAllowed(notification, normalizedAction);
@@ -566,22 +569,21 @@ public sealed class NotificationSyncService : INotificationSyncService
 
     private NotificationSyncRecord NormalizeLocalNotification(NotificationSyncRecord notification)
     {
+        var sourcePlatform = DetectLocalPlatform();
         return new NotificationSyncRecord
         {
             NotificationId = notification.NotificationId,
             SourceDeviceId = string.IsNullOrWhiteSpace(notification.SourceDeviceId)
                 ? _identityManager.GetDeviceId()
                 : notification.SourceDeviceId,
-            SourcePlatform = string.IsNullOrWhiteSpace(notification.SourcePlatform)
-                ? DetectLocalPlatform()
-                : notification.SourcePlatform,
+            SourcePlatform = sourcePlatform,
             PackageName = notification.PackageName,
             AppName = notification.AppName,
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            IsDismissible = notification.IsDismissible,
-            IsOpenable = notification.IsOpenable,
+            IsDismissible = false,
+            IsOpenable = false,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)

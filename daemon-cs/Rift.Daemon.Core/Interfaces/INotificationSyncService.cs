@@ -73,6 +73,7 @@ public interface INotificationSyncService
     Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken);
 
     Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
         string notificationId,
         string action,
         CancellationToken cancellationToken);

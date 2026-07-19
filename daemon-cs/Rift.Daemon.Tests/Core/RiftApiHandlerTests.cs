@@ -603,7 +603,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             false,
             "windows");
         var listed = await _handler.ListNotificationsAsync();
-        var action = await _handler.PerformNotificationActionAsync("notif-1", "open");
+        var action = await _handler.PerformNotificationActionAsync("rift-peer", "notif-1", "open");
         var policy = await _handler.UpdateNotificationSyncPolicyAsync(true, ["com.bank.example"]);
 
         Assert.Equal("notif-local-1", localEvent.NotificationId);
@@ -717,7 +717,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
-        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken)
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string sourceDeviceId, string notificationId, string action, CancellationToken cancellationToken)
         {
             return Task.FromResult(new PerformNotificationActionResult
             {

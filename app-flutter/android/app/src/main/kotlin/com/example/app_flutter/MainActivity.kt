@@ -218,6 +218,25 @@ class MainActivity: FlutterActivity() {
                     "requestNotificationPermission" -> {
                         requestNotificationPermission(result)
                     }
+                    "performLocalNotificationAction" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val notificationId = args?.get("notificationId") as? String
+                        val action = args?.get("action") as? String
+                        if (notificationId.isNullOrBlank() || action.isNullOrBlank()) {
+                            result.error(
+                                "invalid_args",
+                                "notificationId and action are required",
+                                null,
+                            )
+                        } else {
+                            result.success(
+                                RiftNotificationListenerService.performAction(
+                                    notificationId,
+                                    action,
+                                ),
+                            )
+                        }
+                    }
                     "showNotification" -> {
                         val args = call.arguments as? Map<*, *>
                         val title = args?.get("title") as? String
