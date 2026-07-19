@@ -121,11 +121,13 @@ class MainActivity: FlutterActivity() {
         clipboardChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> {
-                    Log.i(tag, "startService requested from Flutter (stubbed)")
+                    Log.i(tag, "startService requested from Flutter")
+                    RiftDaemonService.start(this)
                     result.success(true)
                 }
                 "stopService" -> {
-                    Log.i(tag, "stopService requested from Flutter (stubbed)")
+                    Log.i(tag, "stopService requested from Flutter")
+                    RiftDaemonService.stop(this)
                     result.success(true)
                 }
                 "setClipboardContent" -> {

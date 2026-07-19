@@ -72,6 +72,10 @@
             android:exported="false" />
             
         <service
+            android:name=".RiftDaemonService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <service
             android:name=".RiftTileService"
             android:label="Gửi tới Rift"
             android:icon="@mipmap/ic_launcher"
