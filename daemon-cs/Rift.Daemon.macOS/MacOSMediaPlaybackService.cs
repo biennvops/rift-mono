@@ -26,7 +26,51 @@ internal sealed class MacOSMediaPlaybackService(
 
         logger.LogInformation("Starting macOS media playback observer.");
         _stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var transport = serviceProvider.GetRequiredService<ITransport>();
+        transport.SessionStateChanged += OnSessionStateChanged;
+        _stoppingCts.Token.Register(() => transport.SessionStateChanged -= OnSessionStateChanged);
         _runTask = Task.Run(() => RunAsync(_stoppingCts.Token), CancellationToken.None);
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (!args.IsOnline ||
+            !args.AllowsProtectedTraffic ||
+            !args.SelectedCapabilities.Contains("media.playback", StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        _ = RepublishCurrentPlaybackAsync(args.PeerDeviceId, _stoppingCts!.Token);
+    }
+
+    private async Task RepublishCurrentPlaybackAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        MediaPlaybackRecord? playback;
+        lock (_gate)
+        {
+            playback = _current?.Snapshot.ToRecord();
+        }
+
+        if (playback is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>().PublishLocalPlaybackToPeerAsync(
+                peerDeviceId,
+                playback,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to republish media playback after session establishment with {PeerDeviceId}.", peerDeviceId);
+        }
     }
 
     private async Task RunAsync(CancellationToken stoppingToken)
@@ -69,7 +113,7 @@ internal sealed class MacOSMediaPlaybackService(
             "togglePlayPause" => ["send", "2"],
             "next" => ["send", "4"],
             "previous" => ["send", "5"],
-            "seek" when request.PositionMs.HasValue => ["seek", request.PositionMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            "seek" when request.PositionMs.HasValue => ["seek", checked((request.PositionMs.Value * 1000L)).ToString(System.Globalization.CultureInfo.InvariantCulture)],
             _ => null
         };
 
@@ -189,7 +233,7 @@ internal sealed class MacOSMediaPlaybackService(
         var playbackKey = payload.ContentItemIdentifier ?? payload.Title;
         var playbackId = string.Join(":", appId, playbackKey, payload.Artist ?? string.Empty);
         var durationMs = payload.Duration.HasValue ? Math.Max(0L, (long)Math.Round(payload.Duration.Value * 1000d)) : (long?)null;
-        var positionMs = Math.Max(0L, (long)Math.Round((payload.ElapsedTime ?? 0d) * 1000d));
+        var positionMs = GetPositionMs(payload.ElapsedTimeNow, payload.ElapsedTime);
         var canSkip = payload.ProhibitsSkip != true;
 
         return new MacOSNowPlayingSnapshot(
@@ -210,6 +254,9 @@ internal sealed class MacOSMediaPlaybackService(
             CanSeek: durationMs is > 0,
             UpdatedAt: DateTimeOffset.UtcNow.ToString("O"));
     }
+
+    internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
+        Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
 
     private static string CreateFingerprint(MacOSNowPlayingSnapshot snapshot)
     {
@@ -350,6 +397,7 @@ internal sealed class MacOSMediaPlaybackService(
         public string? ArtworkMimeType { get; init; }
         public double? Duration { get; init; }
         public double? ElapsedTime { get; init; }
+        public double? ElapsedTimeNow { get; init; }
         public bool? ProhibitsSkip { get; init; }
         public string? ContentItemIdentifier { get; init; }
         public int? ProcessIdentifier { get; init; }

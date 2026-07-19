@@ -26,6 +26,7 @@ class RemoteMediaPlaybackManager(
         const val notificationChannelName = "Rift media playback"
         private const val notificationId = 4108
         private const val actionIntent = "com.example.app_flutter.MEDIA_PLAYBACK_ACTION"
+        private const val extraSourceDeviceId = "sourceDeviceId"
         private const val extraPlaybackId = "playbackId"
         private const val extraAction = "action"
         private const val extraPositionMs = "positionMs"
@@ -41,9 +42,11 @@ class RemoteMediaPlaybackManager(
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                val playbackId = intent?.getStringExtra(extraPlaybackId) ?: return
+                val sourceDeviceId = intent?.getStringExtra(extraSourceDeviceId) ?: return
+                val playbackId = intent.getStringExtra(extraPlaybackId) ?: return
                 val action = intent.getStringExtra(extraAction) ?: return
                 val payload = linkedMapOf<String, Any?>(
+                    "sourceDeviceId" to sourceDeviceId,
                     "playbackId" to playbackId,
                     "action" to action,
                 )
@@ -53,6 +56,37 @@ class RemoteMediaPlaybackManager(
                 actionCallback(payload)
             }
         }
+
+    init {
+        mediaSession.setCallback(
+            object : MediaSessionCompat.Callback() {
+                override fun onPlay() = dispatchCurrentPlaybackAction("play")
+
+                override fun onPause() = dispatchCurrentPlaybackAction("pause")
+
+                override fun onSkipToNext() = dispatchCurrentPlaybackAction("next")
+
+                override fun onSkipToPrevious() = dispatchCurrentPlaybackAction("previous")
+
+                override fun onSeekTo(positionMs: Long) =
+                    dispatchCurrentPlaybackAction("seek", positionMs)
+            },
+        )
+    }
+
+    private fun dispatchCurrentPlaybackAction(action: String, positionMs: Long? = null) {
+        val playback = currentPlayback ?: return
+        val sourceDeviceId = playback["sourceDeviceId"]?.toString()?.takeIf { it.isNotBlank() } ?: return
+        val playbackId = playback["playbackId"]?.toString()?.takeIf { it.isNotBlank() } ?: return
+        actionCallback(
+            linkedMapOf<String, Any?>(
+                "sourceDeviceId" to sourceDeviceId,
+                "playbackId" to playbackId,
+                "action" to action,
+                "positionMs" to positionMs,
+            ).filterValues { it != null },
+        )
+    }
 
     fun start() {
         if (receiverRegistered) {
@@ -197,16 +231,18 @@ class RemoteMediaPlaybackManager(
     }
 
     private fun buildActionIntent(playback: Map<String, Any?>, action: String): PendingIntent {
+        val sourceDeviceId = playback["sourceDeviceId"]?.toString().orEmpty()
         val playbackId = playback["playbackId"]?.toString().orEmpty()
         val intent =
             Intent(actionIntent).apply {
                 setPackage(context.packageName)
+                putExtra(extraSourceDeviceId, sourceDeviceId)
                 putExtra(extraPlaybackId, playbackId)
                 putExtra(extraAction, action)
             }
         return PendingIntent.getBroadcast(
             context,
-            "$playbackId:$action".hashCode(),
+            "$sourceDeviceId:$playbackId:$action".hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

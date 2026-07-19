@@ -27,6 +27,13 @@ class MockSessionManager implements SessionManager {
   @override
   void requireCapability(String peerDeviceId, String capabilityName) {}
   @override
+  Future<void> sendPeerError(
+    String peerDeviceId, {
+    required String failureReason,
+    String? refMessageId,
+    required String message,
+  }) async {}
+  @override
   Future<void> waitForSessionEstablished(
     String peerDeviceId, {
     Duration timeout = const Duration(seconds: 10),

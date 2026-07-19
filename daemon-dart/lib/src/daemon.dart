@@ -355,6 +355,29 @@ Future<bool> allowPeerHandshake({
 /// hosted by an Android Foreground Service.
 class RiftDaemon {
   static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
+  static const Duration _defaultMediaPlaybackActionTimeout = Duration(
+    seconds: 30,
+  );
+  static final RegExp _rfc3339UtcTimestamp = RegExp(
+    r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$',
+  );
+  static const Set<String> _failureReasons = {
+    'PeerUnreachable',
+    'PeerRejected',
+    'OfferExpired',
+    'CapabilityUnavailable',
+    'ConnectionLost',
+    'Timeout',
+    'PolicyDenied',
+    'AuthenticationFailed',
+    'Unauthorized',
+    'HashMismatch',
+    'MalformedMessage',
+    'VersionMismatch',
+    'ProtocolError',
+    'PayloadTooLarge',
+    'InvalidTransition',
+  };
   IdentityManagerImpl? _identityManager;
   DiscoveryService? _discoveryService;
   TransportImpl? _transport;
@@ -367,6 +390,13 @@ class RiftDaemon {
   OperationManager? _operationManager;
   MediaPlaybackManager? _mediaPlaybackManager;
   StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
+  StreamSubscription<ProtocolMessage>? _mediaPlaybackMessageSub;
+  final Map<String, Map<String, dynamic>> _pendingMediaPlaybackActions = {};
+  final Map<String, String> _pendingMediaPlaybackActionKeys = {};
+  final Map<String, Timer> _pendingMediaPlaybackActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingIncomingMediaPlaybackActions =
+      {};
+  final Map<String, Timer> _pendingIncomingMediaPlaybackActionTimers = {};
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
@@ -383,6 +413,7 @@ class RiftDaemon {
   final bool enableTransport;
   final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
+  final Duration mediaPlaybackActionTimeout;
 
   RiftDaemon({
     required this.storagePath,
@@ -390,6 +421,7 @@ class RiftDaemon {
     this.enableTransport = true,
     this.enableDiscovery = true,
     this.onIpcEvent,
+    this.mediaPlaybackActionTimeout = _defaultMediaPlaybackActionTimeout,
   });
 
   Future<void> start() async {
@@ -538,7 +570,9 @@ class RiftDaemon {
       _notificationSyncMessageSub = _sessionManager!.onMessage.listen(
         _handleNotificationSyncProtocolMessage,
       );
-      _sessionManager!.onMessage.listen(_handleMediaPlaybackProtocolMessage);
+      _mediaPlaybackMessageSub = _sessionManager!.onMessage.listen(
+        _handleMediaPlaybackProtocolMessage,
+      );
 
       _mediaPlaybackManager!.onPosted.listen((record) {
         onIpcEvent?.call({
@@ -558,7 +592,11 @@ class RiftDaemon {
         onIpcEvent?.call({
           'jsonrpc': '2.0',
           'method': 'rift.onMediaPlaybackRemoved',
-          'params': record.toJson(),
+          'params': {
+            'playbackId': record.playbackId,
+            'sourceDeviceId': record.sourceDeviceId,
+            if (record.removedAt != null) 'removedAt': record.removedAt,
+          },
         });
       });
       _mediaPlaybackManager!.onActionResult.listen((event) {
@@ -661,36 +699,524 @@ class RiftDaemon {
     return _mediaPlaybackManager?.listStateJson() ?? {'playbacks': <dynamic>[]};
   }
 
+  Map<String, dynamic> _getMediaPlaybackState(Map<String, dynamic> params) {
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final playback = _mediaPlaybackManager!.getPlayback(
+      sourceDeviceId,
+      playbackId,
+    );
+    if (playback == null) {
+      throw const RiftException(-32009, 'Media playback was not found');
+    }
+    return playback.toJson();
+  }
+
+  Future<List<String>> _broadcastMediaPlaybackEnvelope({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) async {
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final ctx = _sessionManager!.getContext(peer.deviceId);
+        if (ctx == null || !ctx.hasCapability('media.playback')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': messageType,
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': payload,
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[MediaPlayback] Could not send $messageType to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return broadcastTo;
+  }
+
   Future<Map<String, dynamic>> _handleLocalMediaPlaybackEvent(
     Map<String, dynamic> params,
   ) async {
     _requireTransportServices();
     final eventType = RpcUtils.requireStringParam(params, 'eventType');
     final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final localDeviceId = _identityManager!.deviceId;
+
+    if (eventType == 'removed') {
+      final removedAt = _optionalMediaPlaybackTimestamp(params, 'removedAt');
+      _mediaPlaybackManager!.removePlayback(
+        localDeviceId,
+        playbackId,
+        removedAt: removedAt,
+      );
+      final payload = <String, dynamic>{
+        'playbackId': playbackId,
+        'sourceDeviceId': localDeviceId,
+        'removedAt': ?removedAt,
+      };
+      return {
+        'playbackId': playbackId,
+        'broadcastTo': await _broadcastMediaPlaybackEnvelope(
+          messageType: 'media.playbackRemoved',
+          payload: payload,
+        ),
+      };
+    }
+
+    if (eventType != 'posted' && eventType != 'updated') {
+      throw ArgumentError.value(
+        eventType,
+        'eventType',
+        'must be posted, updated, or removed',
+      );
+    }
+
     final record = MediaPlaybackRecord(
       playbackId: playbackId,
-      sourceDeviceId: _identityManager!.deviceId,
+      sourceDeviceId: localDeviceId,
       sourcePlatform: params['sourcePlatform'] as String?,
       appId: RpcUtils.requireStringParam(params, 'appId'),
       appName: RpcUtils.requireStringParam(params, 'appName'),
       title: params['title'] as String?,
       artist: params['artist'] as String?,
       album: params['album'] as String?,
-      artwork: params['artwork'] is Map<String, dynamic>
-          ? Map<String, dynamic>.from(params['artwork'] as Map<String, dynamic>)
+      artwork: params['artwork'] is Map
+          ? Map<String, dynamic>.from(params['artwork'] as Map)
           : null,
       playbackState: RpcUtils.requireStringParam(params, 'playbackState'),
       positionMs: RpcUtils.requireIntParam(params, 'positionMs'),
       durationMs: params['durationMs'] as int?,
-      canPlay: params['canPlay'] as bool? ?? false,
-      canPause: params['canPause'] as bool? ?? false,
-      canSkipNext: params['canSkipNext'] as bool? ?? false,
-      canSkipPrevious: params['canSkipPrevious'] as bool? ?? false,
-      canSeek: params['canSeek'] as bool? ?? false,
+      canPlay: _requireMediaPlaybackBool(params, 'canPlay'),
+      canPause: _requireMediaPlaybackBool(params, 'canPause'),
+      canSkipNext: _requireMediaPlaybackBool(params, 'canSkipNext'),
+      canSkipPrevious: _requireMediaPlaybackBool(params, 'canSkipPrevious'),
+      canSeek: _requireMediaPlaybackBool(params, 'canSeek'),
       updatedAt: RpcUtils.requireStringParam(params, 'updatedAt'),
     );
-    return _mediaPlaybackManager!.notifyLocalEvent(eventType, record);
+    _validateMediaPlaybackRecord(record);
+    final result = _mediaPlaybackManager!.notifyLocalEvent(eventType, record);
+    return {
+      ...result,
+      'broadcastTo': await _broadcastMediaPlaybackEnvelope(
+        messageType: eventType == 'posted'
+            ? 'media.playbackPosted'
+            : 'media.playbackUpdated',
+        payload: record.toJson(),
+      ),
+    };
   }
+
+  Future<Map<String, dynamic>> _performMediaPlaybackAction(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final action = _normalizeMediaPlaybackAction(
+      RpcUtils.requireStringParam(params, 'action'),
+      params['positionMs'] as int?,
+    );
+    final playback = _mediaPlaybackManager!.getPlayback(
+      sourceDeviceId,
+      playbackId,
+    );
+    if (playback == null) {
+      throw const RiftException(-32009, 'Media playback was not found');
+    }
+    _ensureMediaPlaybackActionAllowed(playback, action);
+
+    await _ensureTrustedSessionForPeer(sourceDeviceId);
+    try {
+      _sessionManager!.requireCapability(sourceDeviceId, 'media.playback');
+    } catch (error) {
+      throw RiftException(-32003, error.toString());
+    }
+
+    final actionKey = '$sourceDeviceId\n$playbackId\n$action';
+    if (_pendingMediaPlaybackActionKeys.containsKey(actionKey)) {
+      throw const RiftException(
+        -32010,
+        'A matching playback action is pending',
+      );
+    }
+
+    final operationId = const Uuid().v4();
+    _operationManager!.createOperation(
+      operationId: operationId,
+      operationType: _mediaPlaybackOperationType(action),
+      sourceDeviceId: _identityManager!.deviceId,
+      destinationDeviceId: sourceDeviceId,
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.pending,
+      details: {
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'action': action,
+        if (params['positionMs'] != null) 'positionMs': params['positionMs'],
+      },
+    );
+    _pendingMediaPlaybackActions[operationId] = {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'playbackId': playbackId,
+      'action': action,
+      'actionKey': actionKey,
+    };
+    _pendingMediaPlaybackActionKeys[actionKey] = operationId;
+    _pendingMediaPlaybackActionTimers[operationId] = Timer(
+      mediaPlaybackActionTimeout,
+      () => _expirePendingMediaPlaybackAction(operationId),
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
+
+    try {
+      await _sessionManager!.sendMessage(sourceDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'media.playbackActionRequest',
+        'sourceDeviceId': _identityManager!.deviceId,
+        'destinationDeviceId': sourceDeviceId,
+        'operationId': operationId,
+        'payload': {
+          'playbackId': playbackId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': _identityManager!.deviceId,
+          'action': action,
+          if (params['positionMs'] != null) 'positionMs': params['positionMs'],
+          'requestedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+    } catch (error) {
+      final pending = _pendingMediaPlaybackActions.remove(operationId);
+      if (pending != null) {
+        if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
+          _pendingMediaPlaybackActionKeys.remove(actionKey);
+        }
+        _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.failed,
+          failureReason: 'PeerUnreachable',
+        );
+      }
+      throw RiftException(-32003, 'Failed to send playback action: $error');
+    }
+
+    return {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'playbackId': playbackId,
+      'action': action,
+      'state': 'Pending',
+    };
+  }
+
+  void _expirePendingMediaPlaybackAction(String operationId) {
+    final pending = _pendingMediaPlaybackActions.remove(operationId);
+    _pendingMediaPlaybackActionTimers.remove(operationId);
+    if (pending == null) {
+      return;
+    }
+
+    final actionKey = pending['actionKey'] as String;
+    if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
+      _pendingMediaPlaybackActionKeys.remove(actionKey);
+    }
+    _operationManager?.transitionOperation(
+      operationId,
+      OperationState.expired,
+      failureReason: 'Timeout',
+    );
+  }
+
+  Future<Map<String, dynamic>> _reportLocalMediaPlaybackActionHandled(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final requestId = RpcUtils.requireStringParam(params, 'requestId');
+    final success = params['success'];
+    if (success is! bool) {
+      throw ArgumentError.value(success, 'success', 'must be a boolean');
+    }
+    final failureReason = _normalizeMediaPlaybackFailureReason(
+      success: success,
+      failureReason: params['failureReason'],
+      invalidCode: -32602,
+    );
+    final message = params['message'];
+    if (message != null && message is! String) {
+      throw ArgumentError.value(message, 'message', 'must be a string');
+    }
+    final pending = _pendingIncomingMediaPlaybackActions.remove(requestId);
+    if (pending == null) {
+      throw const RiftException(
+        -32009,
+        'Playback action request was not found',
+      );
+    }
+    _pendingIncomingMediaPlaybackActionTimers.remove(requestId)?.cancel();
+    await _sendMediaPlaybackActionResult(
+      pending,
+      success: success,
+      failureReason: failureReason,
+      message: message as String?,
+    );
+    return {
+      'requestId': requestId,
+      'playbackId': pending['playbackId'],
+      'action': pending['action'],
+      'success': success,
+    };
+  }
+
+  String? _normalizeMediaPlaybackFailureReason({
+    required bool success,
+    required Object? failureReason,
+    required int invalidCode,
+  }) {
+    if (failureReason != null) {
+      if (failureReason is! String) {
+        throw ArgumentError.value(
+          failureReason,
+          'failureReason',
+          'must be a string',
+        );
+      }
+      if (!_failureReasons.contains(failureReason)) {
+        throw RiftException(
+          invalidCode,
+          'Invalid failureReason: $failureReason',
+        );
+      }
+      if (success) {
+        return null;
+      }
+      return failureReason;
+    }
+    return success ? null : 'PeerRejected';
+  }
+
+  @visibleForTesting
+  String? normalizeMediaPlaybackFailureReasonForTesting({
+    required bool success,
+    required Object? failureReason,
+    required int invalidCode,
+  }) => _normalizeMediaPlaybackFailureReason(
+    success: success,
+    failureReason: failureReason,
+    invalidCode: invalidCode,
+  );
+
+  Future<void> _sendMediaPlaybackActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    final requestingDeviceId = request['requestingDeviceId'] as String;
+    await _sessionManager!.sendMessage(requestingDeviceId, {
+      'rift': '0.1-draft',
+      'messageId': const Uuid().v4(),
+      'type': 'media.playbackActionResult',
+      'sourceDeviceId': _identityManager!.deviceId,
+      'destinationDeviceId': requestingDeviceId,
+      'payload': {
+        'playbackId': request['playbackId'],
+        'sourceDeviceId': _identityManager!.deviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': request['action'],
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  Future<void> _trySendMediaPlaybackActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    try {
+      await _sendMediaPlaybackActionResult(
+        request,
+        success: success,
+        failureReason: failureReason,
+        message: message,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to send incoming action result: $error',
+      );
+    }
+  }
+
+  Future<void> _expireIncomingMediaPlaybackAction(String requestId) async {
+    _pendingIncomingMediaPlaybackActionTimers.remove(requestId);
+    final pending = _pendingIncomingMediaPlaybackActions.remove(requestId);
+    if (pending == null) {
+      return;
+    }
+    try {
+      await _sendMediaPlaybackActionResult(
+        pending,
+        success: false,
+        failureReason: 'Timeout',
+        message: 'The local media control client did not handle the request.',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to expire incoming action $requestId: $error',
+      );
+    }
+  }
+
+  String? _optionalMediaPlaybackTimestamp(
+    Map<String, dynamic> payload,
+    String key,
+  ) {
+    final value = payload[key];
+    if (value == null) {
+      return null;
+    }
+    if (value is! String || !_isRfc3339UtcTimestamp(value)) {
+      throw ArgumentError.value(
+        value,
+        key,
+        'must be a full RFC 3339 UTC timestamp',
+      );
+    }
+    return value;
+  }
+
+  bool _requireMediaPlaybackBool(Map<String, dynamic> payload, String key) {
+    final value = payload[key];
+    if (value is! bool) {
+      throw ArgumentError.value(value, key, 'must be a boolean');
+    }
+    return value;
+  }
+
+  void _validateMediaPlaybackRecord(MediaPlaybackRecord playback) {
+    const playbackStates = {'playing', 'paused', 'stopped', 'buffering'};
+    if (!playbackStates.contains(playback.playbackState)) {
+      throw ArgumentError.value(
+        playback.playbackState,
+        'playbackState',
+        'must be playing, paused, stopped, or buffering',
+      );
+    }
+    if (playback.positionMs < 0 ||
+        (playback.durationMs != null && playback.durationMs! < 0)) {
+      throw const RiftException(
+        -32602,
+        'positionMs and durationMs must be non-negative',
+      );
+    }
+    if (!_isRfc3339UtcTimestamp(playback.updatedAt)) {
+      throw ArgumentError.value(
+        playback.updatedAt,
+        'updatedAt',
+        'must be a full RFC 3339 UTC timestamp',
+      );
+    }
+  }
+
+  bool _isRfc3339UtcTimestamp(String value) {
+    final match = _rfc3339UtcTimestamp.firstMatch(value);
+    final timestamp = DateTime.tryParse(value);
+    if (match == null || timestamp == null || !timestamp.isUtc) {
+      return false;
+    }
+    final parts = value.substring(0, 19).split(RegExp(r'[-T:]'));
+    final expected = parts.map(int.parse).toList(growable: false);
+    return expected[0] > 0 &&
+        timestamp.year == expected[0] &&
+        timestamp.month == expected[1] &&
+        timestamp.day == expected[2] &&
+        timestamp.hour == expected[3] &&
+        timestamp.minute == expected[4] &&
+        timestamp.second == expected[5];
+  }
+
+  String _normalizeMediaPlaybackAction(
+    String action,
+    int? positionMs, {
+    bool allowSeekWithoutPosition = false,
+  }) {
+    const actions = {
+      'play',
+      'pause',
+      'togglePlayPause',
+      'next',
+      'previous',
+      'seek',
+    };
+    if (!actions.contains(action)) {
+      throw RiftException(-32010, 'Unknown media playback action: $action');
+    }
+    if (action == 'seek' &&
+        !allowSeekWithoutPosition &&
+        (positionMs == null || positionMs < 0)) {
+      throw const RiftException(
+        -32602,
+        'A non-negative positionMs is required for seek',
+      );
+    }
+    return action;
+  }
+
+  void _ensureMediaPlaybackActionAllowed(
+    MediaPlaybackRecord playback,
+    String action,
+  ) {
+    final allowed = switch (action) {
+      'play' => playback.canPlay,
+      'pause' => playback.canPause,
+      'togglePlayPause' => playback.canPlay || playback.canPause,
+      'next' => playback.canSkipNext,
+      'previous' => playback.canSkipPrevious,
+      'seek' => playback.canSeek,
+      _ => false,
+    };
+    if (!allowed) {
+      throw RiftException(
+        -32010,
+        "Media playback does not allow action '$action'",
+      );
+    }
+  }
+
+  String _mediaPlaybackOperationType(String action) => switch (action) {
+    'play' => 'media.play',
+    'pause' => 'media.pause',
+    'togglePlayPause' => 'media.toggle',
+    'next' => 'media.next',
+    'previous' => 'media.previous',
+    'seek' => 'media.seek',
+    _ => 'media.playback',
+  };
 
   Map<String, dynamic> _listNotificationSyncState() {
     final notifications =
@@ -959,7 +1485,86 @@ class RiftDaemon {
     }
   }
 
+  @visibleForTesting
+  SessionManager get sessionManagerForTesting => _sessionManager!;
+
+  @visibleForTesting
+  Future<void> handleMediaPlaybackProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleMediaPlaybackProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
+
   Future<void> _handleMediaPlaybackProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    try {
+      await _handleValidatedMediaPlaybackProtocolMessage(message);
+    } on RiftException catch (error) {
+      final reason = error.code == -32010
+          ? 'ProtocolError'
+          : 'MalformedMessage';
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $reason from ${message.peerDeviceId}: $error',
+      );
+      try {
+        await _sessionManager!.sendPeerError(
+          message.peerDeviceId,
+          failureReason: reason,
+          refMessageId: message.payload['messageId'] is String
+              ? message.payload['messageId'] as String
+              : null,
+          message: error.message,
+        );
+      } catch (rejectError) {
+        RiftLog.warn(
+          '[MediaPlayback] Failed to send $reason to ${message.peerDeviceId}: $rejectError',
+        );
+      }
+    } on ArgumentError catch (error) {
+      await _rejectMalformedMediaPlaybackMessage(message, error);
+    } on TypeError catch (error) {
+      await _rejectMalformedMediaPlaybackMessage(message, error);
+    }
+  }
+
+  Future<void> _trySendMediaPlaybackPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  Future<void> _rejectMalformedMediaPlaybackMessage(
+    ProtocolMessage message,
+    Object error,
+  ) async {
+    RiftLog.warn(
+      '[MediaPlayback] Dropping MalformedMessage from ${message.peerDeviceId}: $error',
+    );
+    await _trySendMediaPlaybackPeerError(
+      message,
+      'MalformedMessage',
+      error.toString(),
+    );
+  }
+
+  Future<void> _handleValidatedMediaPlaybackProtocolMessage(
     ProtocolMessage message,
   ) async {
     final type = message.payload['type'] as String?;
@@ -973,53 +1578,238 @@ class RiftDaemon {
         'media.playback',
       );
     } catch (error) {
+      final failureReason = error.toString().contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'Unauthorized';
       RiftLog.warn(
         '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      await _trySendMediaPlaybackPeerError(
+        message,
+        failureReason,
+        error.toString(),
       );
       return;
     }
 
     final payload = message.payload['payload'];
     if (payload is! Map<String, dynamic>) {
+      throw ArgumentError.value(payload, 'payload', 'must be an object');
+    }
+
+    if (type == 'media.playbackActionRequest') {
+      final sourceDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'sourceDeviceId',
+      );
+      final requestingDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'requestingDeviceId',
+      );
+      if (sourceDeviceId != _identityManager!.deviceId ||
+          requestingDeviceId != message.peerDeviceId) {
+        const errorMessage = 'Media playback action request identity mismatch';
+        RiftLog.warn(
+          '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+        );
+        await _trySendMediaPlaybackPeerError(
+          message,
+          'Unauthorized',
+          errorMessage,
+        );
+        return;
+      }
+      final requestId = const Uuid().v4();
+      final action = _normalizeMediaPlaybackAction(
+        RpcUtils.requireStringParam(payload, 'action'),
+        payload['positionMs'] as int?,
+      );
+      final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+      final requestedAt = _optionalMediaPlaybackTimestamp(
+        payload,
+        'requestedAt',
+      );
+      final request = <String, dynamic>{
+        'requestId': requestId,
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': action,
+        if (payload['positionMs'] is int) 'positionMs': payload['positionMs'],
+        'requestedAt': ?requestedAt,
+      };
+      final localPlayback = _mediaPlaybackManager!.getPlayback(
+        sourceDeviceId,
+        playbackId,
+      );
+      if (localPlayback == null) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: 'The local media playback was not found.',
+        );
+        return;
+      }
+      try {
+        _ensureMediaPlaybackActionAllowed(localPlayback, action);
+      } on RiftException catch (error) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: error.message,
+        );
+        return;
+      }
+      if (onIpcEvent == null) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: 'No local media control client is connected.',
+        );
+        return;
+      }
+      _pendingIncomingMediaPlaybackActions[requestId] = request;
+      _pendingIncomingMediaPlaybackActionTimers[requestId] = Timer(
+        mediaPlaybackActionTimeout,
+        () => unawaited(_expireIncomingMediaPlaybackAction(requestId)),
+      );
+      onIpcEvent?.call({
+        'jsonrpc': '2.0',
+        'method': 'rift.onMediaPlaybackActionRequest',
+        'params': request,
+      });
       return;
     }
-    if (payload['sourceDeviceId'] != message.peerDeviceId) {
+
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      payload,
+      'sourceDeviceId',
+    );
+    if (sourceDeviceId != message.peerDeviceId) {
+      const errorMessage = 'Media playback sourceDeviceId mismatch';
       RiftLog.warn(
-        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+      );
+      await _trySendMediaPlaybackPeerError(
+        message,
+        'Unauthorized',
+        errorMessage,
       );
       return;
     }
 
     if (type == 'media.playbackActionResult') {
-      _mediaPlaybackManager!.addActionResult(payload);
+      final requestingDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'requestingDeviceId',
+      );
+      if (requestingDeviceId != _identityManager!.deviceId) {
+        const errorMessage = 'Media playback requestingDeviceId mismatch';
+        RiftLog.warn(
+          '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+        );
+        await _trySendMediaPlaybackPeerError(
+          message,
+          'Unauthorized',
+          errorMessage,
+        );
+        return;
+      }
+      final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+      final action = _normalizeMediaPlaybackAction(
+        RpcUtils.requireStringParam(payload, 'action'),
+        null,
+        allowSeekWithoutPosition: true,
+      );
+      final success = payload['success'];
+      if (success is! bool) {
+        throw ArgumentError.value(success, 'success', 'must be a boolean');
+      }
+      final failureReason = _normalizeMediaPlaybackFailureReason(
+        success: success,
+        failureReason: payload['failureReason'],
+        invalidCode: -32010,
+      );
+      if (payload['message'] != null && payload['message'] is! String) {
+        throw ArgumentError.value(
+          payload['message'],
+          'message',
+          'must be a string',
+        );
+      }
+      final actionKey = '$sourceDeviceId\n$playbackId\n$action';
+      final operationId = _pendingMediaPlaybackActionKeys.remove(actionKey);
+      final pending = operationId == null
+          ? null
+          : _pendingMediaPlaybackActions.remove(operationId);
+      if (operationId == null || pending == null) {
+        RiftLog.warn(
+          '[MediaPlayback] Dropping unmatched action result from ${message.peerDeviceId}',
+        );
+        return;
+      }
+      _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
+      _operationManager!.transitionOperation(
+        operationId,
+        OperationState.active,
+      );
+      _operationManager!.transitionOperation(
+        operationId,
+        success ? OperationState.done : OperationState.failed,
+        failureReason: failureReason,
+        details: payload['message'] is String
+            ? {'message': payload['message']}
+            : null,
+      );
+      _mediaPlaybackManager!.addActionResult({
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'operationId': operationId,
+        'action': action,
+        'state': success ? 'Done' : 'Failed',
+        'success': success,
+        'failureReason': ?failureReason,
+        if (payload['message'] is String) 'message': payload['message'],
+      });
+      return;
+    }
+
+    final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+    if (type == 'media.playbackRemoved') {
+      _mediaPlaybackManager!.removePlayback(
+        sourceDeviceId,
+        playbackId,
+        removedAt: _optionalMediaPlaybackTimestamp(payload, 'removedAt'),
+      );
       return;
     }
 
     final record = MediaPlaybackRecord(
-      playbackId: RpcUtils.requireStringParam(payload, 'playbackId'),
-      sourceDeviceId: RpcUtils.requireStringParam(payload, 'sourceDeviceId'),
+      playbackId: playbackId,
+      sourceDeviceId: sourceDeviceId,
       sourcePlatform: payload['sourcePlatform'] as String?,
       appId: RpcUtils.requireStringParam(payload, 'appId'),
       appName: RpcUtils.requireStringParam(payload, 'appName'),
       title: payload['title'] as String?,
       artist: payload['artist'] as String?,
       album: payload['album'] as String?,
-      artwork: payload['artwork'] is Map<String, dynamic>
-          ? Map<String, dynamic>.from(
-              payload['artwork'] as Map<String, dynamic>,
-            )
+      artwork: payload['artwork'] is Map
+          ? Map<String, dynamic>.from(payload['artwork'] as Map)
           : null,
-      playbackState: payload['playbackState'] as String? ?? 'stopped',
-      positionMs: payload['positionMs'] as int? ?? 0,
+      playbackState: RpcUtils.requireStringParam(payload, 'playbackState'),
+      positionMs: RpcUtils.requireIntParam(payload, 'positionMs'),
       durationMs: payload['durationMs'] as int?,
-      canPlay: payload['canPlay'] as bool? ?? false,
-      canPause: payload['canPause'] as bool? ?? false,
-      canSkipNext: payload['canSkipNext'] as bool? ?? false,
-      canSkipPrevious: payload['canSkipPrevious'] as bool? ?? false,
-      canSeek: payload['canSeek'] as bool? ?? false,
-      updatedAt: payload['updatedAt'] as String? ?? '',
-      removedAt: payload['removedAt'] as String?,
+      canPlay: _requireMediaPlaybackBool(payload, 'canPlay'),
+      canPause: _requireMediaPlaybackBool(payload, 'canPause'),
+      canSkipNext: _requireMediaPlaybackBool(payload, 'canSkipNext'),
+      canSkipPrevious: _requireMediaPlaybackBool(payload, 'canSkipPrevious'),
+      canSeek: _requireMediaPlaybackBool(payload, 'canSeek'),
+      updatedAt: RpcUtils.requireStringParam(payload, 'updatedAt'),
     );
+    _validateMediaPlaybackRecord(record);
 
     switch (type) {
       case 'media.playbackPosted':
@@ -1028,9 +1818,6 @@ class RiftDaemon {
       case 'media.playbackUpdated':
         _mediaPlaybackManager!.notifyLocalEvent('updated', record);
         return;
-      case 'media.playbackRemoved':
-        _mediaPlaybackManager!.notifyLocalEvent('removed', record);
-        return;
       default:
         return;
     }
@@ -1038,10 +1825,20 @@ class RiftDaemon {
 
   Future<void> stop() async {
     await _notificationSyncMessageSub?.cancel();
+    await _mediaPlaybackMessageSub?.cancel();
+    for (final timer in _pendingMediaPlaybackActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingMediaPlaybackActionTimers.clear();
+    for (final timer in _pendingIncomingMediaPlaybackActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingIncomingMediaPlaybackActionTimers.clear();
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
     await _fileTransferService?.dispose();
+    _mediaPlaybackManager?.dispose();
     _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
@@ -1424,6 +2221,15 @@ class RiftDaemon {
 
       case 'rift.listMediaPlayback':
         return _listMediaPlaybackState();
+
+      case 'rift.getMediaPlayback':
+        return _getMediaPlaybackState(params);
+
+      case 'rift.performMediaPlaybackAction':
+        return _performMediaPlaybackAction(params);
+
+      case 'rift.reportLocalMediaPlaybackActionHandled':
+        return _reportLocalMediaPlaybackActionHandled(params);
 
       case 'rift.updateNotificationSyncPolicy':
         final enabled = params['enabled'];

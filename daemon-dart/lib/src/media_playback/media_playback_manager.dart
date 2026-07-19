@@ -30,6 +30,11 @@ class MediaPlaybackManager {
         .toList(growable: false),
   };
 
+  MediaPlaybackRecord? getPlayback(String sourceDeviceId, String playbackId) {
+    final playback = _playbacks[_key(sourceDeviceId, playbackId)];
+    return playback == null || playback.isRemoved ? null : playback;
+  }
+
   Map<String, dynamic> notifyLocalEvent(
     String eventType,
     MediaPlaybackRecord record,
@@ -45,29 +50,52 @@ class MediaPlaybackManager {
         _updatedController.add(record);
         break;
       case 'removed':
-        final removed = MediaPlaybackRecord(
-          playbackId: record.playbackId,
-          sourceDeviceId: record.sourceDeviceId,
-          sourcePlatform: record.sourcePlatform,
-          appId: record.appId,
-          appName: record.appName,
-          playbackState: record.playbackState,
-          positionMs: record.positionMs,
-          durationMs: record.durationMs,
-          canPlay: record.canPlay,
-          canPause: record.canPause,
-          canSkipNext: record.canSkipNext,
-          canSkipPrevious: record.canSkipPrevious,
-          canSeek: record.canSeek,
-          updatedAt: record.updatedAt,
-          isRemoved: true,
+        return removePlayback(
+          record.sourceDeviceId,
+          record.playbackId,
           removedAt: record.removedAt,
         );
-        _playbacks[key] = removed;
-        _removedController.add(removed);
-        break;
+      default:
+        throw ArgumentError.value(
+          eventType,
+          'eventType',
+          'must be posted, updated, or removed',
+        );
     }
     return {'playbackId': record.playbackId, 'broadcastTo': <String>[]};
+  }
+
+  Map<String, dynamic> removePlayback(
+    String sourceDeviceId,
+    String playbackId, {
+    String? removedAt,
+  }) {
+    final key = _key(sourceDeviceId, playbackId);
+    final existing = _playbacks[key];
+    final removed = MediaPlaybackRecord(
+      playbackId: playbackId,
+      sourceDeviceId: sourceDeviceId,
+      sourcePlatform: existing?.sourcePlatform,
+      appId: existing?.appId ?? 'unknown',
+      appName: existing?.appName ?? 'Unknown',
+      playbackState: existing?.playbackState ?? 'stopped',
+      positionMs: existing?.positionMs ?? 0,
+      durationMs: existing?.durationMs,
+      canPlay: existing?.canPlay ?? false,
+      canPause: existing?.canPause ?? false,
+      canSkipNext: existing?.canSkipNext ?? false,
+      canSkipPrevious: existing?.canSkipPrevious ?? false,
+      canSeek: existing?.canSeek ?? false,
+      updatedAt:
+          existing?.updatedAt ??
+          removedAt ??
+          DateTime.now().toUtc().toIso8601String(),
+      isRemoved: true,
+      removedAt: removedAt,
+    );
+    _playbacks[key] = removed;
+    _removedController.add(removed);
+    return {'playbackId': playbackId, 'broadcastTo': <String>[]};
   }
 
   void addActionResult(Map<String, dynamic> event) {

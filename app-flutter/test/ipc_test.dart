@@ -5,6 +5,9 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
   StreamController<String>? _daemonToApp;
@@ -368,6 +371,8 @@ class MockTransport implements IpcTransport {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('JsonRpcRiftClient', () {
     late MockTransport transport;
     late JsonRpcRiftClient client;
@@ -1102,8 +1107,12 @@ void main() {
       };
 
       final listed = await client.listMediaPlayback();
-      final detailed = await client.getMediaPlayback('playback-1');
+      final detailed = await client.getMediaPlayback(
+        sourceDeviceId: 'rift-peer',
+        playbackId: 'playback-1',
+      );
       final actionResult = await client.performMediaPlaybackAction(
+        sourceDeviceId: 'rift-peer',
         playbackId: 'playback-1',
         action: 'pause',
       );
@@ -1124,10 +1133,52 @@ void main() {
             )
             .single['params'],
         {
+          'sourceDeviceId': 'rift-peer',
           'playbackId': 'playback-1',
           'action': 'pause',
         },
       );
+    });
+
+    test('Android playback actions include the source device identity',
+        () async {
+      const shellChannel = MethodChannel('rift/android/shell');
+      AndroidShell.debugIsAndroidOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shellChannel, (call) async => true);
+      await client.connect();
+      final coordinator = AndroidRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          }),
+        );
+
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          },
+        );
+      } finally {
+        await coordinator.dispose();
+        AndroidShell.debugIsAndroidOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(shellChannel, null);
+      }
     });
 
     test('should surface getOperation not found JSON-RPC errors', () async {

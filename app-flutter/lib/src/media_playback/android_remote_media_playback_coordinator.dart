@@ -51,15 +51,22 @@ class AndroidRemoteMediaPlaybackCoordinator {
     }
 
     final payload = Map<String, dynamic>.from(args);
+    final sourceDeviceId = payload['sourceDeviceId']?.toString();
     final playbackId = payload['playbackId']?.toString();
     final action = payload['action']?.toString();
     final positionMs = (payload['positionMs'] as num?)?.toInt();
-    if (playbackId == null || playbackId.isEmpty || action == null || action.isEmpty) {
+    if (sourceDeviceId == null ||
+        sourceDeviceId.isEmpty ||
+        playbackId == null ||
+        playbackId.isEmpty ||
+        action == null ||
+        action.isEmpty) {
       return null;
     }
 
     try {
       await _client.performMediaPlaybackAction(
+        sourceDeviceId: sourceDeviceId,
         playbackId: playbackId,
         action: action,
         positionMs: positionMs,
@@ -85,10 +92,12 @@ class AndroidRemoteMediaPlaybackCoordinator {
       );
       _playbacksByKey
         ..clear()
-        ..addEntries(playbacks.map((playback) => MapEntry(_keyFor(playback), playback)));
+        ..addEntries(
+            playbacks.map((playback) => MapEntry(_keyFor(playback), playback)));
       await _syncNativeState();
     } catch (error) {
-      debugPrint('[Media Playback] Failed to refresh mirrored playbacks: $error');
+      debugPrint(
+          '[Media Playback] Failed to refresh mirrored playbacks: $error');
     }
   }
 
@@ -140,8 +149,10 @@ class AndroidRemoteMediaPlaybackCoordinator {
 
     final candidates = _playbacksByKey.values.toList(growable: false)
       ..sort((a, b) {
-        final left = DateTime.tryParse(a['updatedAt']?.toString() ?? '')?.toUtc();
-        final right = DateTime.tryParse(b['updatedAt']?.toString() ?? '')?.toUtc();
+        final left =
+            DateTime.tryParse(a['updatedAt']?.toString() ?? '')?.toUtc();
+        final right =
+            DateTime.tryParse(b['updatedAt']?.toString() ?? '')?.toUtc();
         if (left == null && right == null) {
           return 0;
         }
