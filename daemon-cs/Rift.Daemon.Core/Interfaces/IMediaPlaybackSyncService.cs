@@ -99,9 +99,13 @@ public interface IMediaPlaybackSyncService
 
     Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken);
 
-    Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken);
+    Task<MediaPlaybackRecord> GetMediaPlaybackAsync(
+        string sourceDeviceId,
+        string playbackId,
+        CancellationToken cancellationToken);
 
     Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(
+        string sourceDeviceId,
         string playbackId,
         string action,
         long? positionMs,

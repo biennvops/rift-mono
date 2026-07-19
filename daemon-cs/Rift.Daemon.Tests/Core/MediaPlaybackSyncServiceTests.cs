@@ -99,6 +99,43 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal("CapabilityUnavailable", payload.GetProperty("payload").GetProperty("failureReason").GetString());
     }
 
+    [Fact]
+    public async Task GetMediaPlaybackAsync_QualifiesPlaybackIdBySourceDevice()
+    {
+        var service = new MediaPlaybackSyncService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            logger: NullLogger<MediaPlaybackSyncService>.Instance);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-source-a", "shared-playback", "Track A"), CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-source-b", "shared-playback", "Track B"), CancellationToken.None);
+
+        var result = await service.GetMediaPlaybackAsync("rift-source-b", "shared-playback", CancellationToken.None);
+
+        Assert.Equal("rift-source-b", result.SourceDeviceId);
+        Assert.Equal("Track B", result.Title);
+    }
+
+    private static MediaPlaybackRecord CreatePlayback(string sourceDeviceId, string playbackId, string title) => new()
+    {
+        PlaybackId = playbackId,
+        SourceDeviceId = sourceDeviceId,
+        AppId = "com.example.music",
+        AppName = "Example Music",
+        Title = title,
+        PlaybackState = "playing",
+        PositionMs = 1000,
+        CanPlay = true,
+        CanPause = true,
+        CanSkipNext = true,
+        CanSkipPrevious = true,
+        CanSeek = true,
+        UpdatedAt = "2026-07-16T10:00:00Z"
+    };
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

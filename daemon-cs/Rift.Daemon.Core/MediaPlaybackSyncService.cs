@@ -59,19 +59,24 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
     }
 
-    public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken)
+    public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(
+        string sourceDeviceId,
+        string playbackId,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(playbackId))
+        if (string.IsNullOrWhiteSpace(sourceDeviceId) || string.IsNullOrWhiteSpace(playbackId))
         {
-            throw new MediaPlaybackSyncFailureException("A playback ID is required.", -32009);
+            throw new MediaPlaybackSyncFailureException("A source device ID and playback ID are required.", -32009);
         }
 
         lock (_gate)
         {
-            var record = _playbacks.Values
-                .Where(playback => !playback.IsRemoved)
-                .FirstOrDefault(playback => string.Equals(playback.PlaybackId, playbackId, StringComparison.Ordinal));
+            var record = _playbacks.GetValueOrDefault(GetPlaybackKey(sourceDeviceId, playbackId));
+            if (record?.IsRemoved == true)
+            {
+                record = null;
+            }
             if (record is null)
             {
                 throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found.", -32009);
@@ -162,25 +167,27 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     }
 
     public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(
+        string sourceDeviceId,
         string playbackId,
         string action,
         long? positionMs,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (string.IsNullOrWhiteSpace(playbackId))
+        if (string.IsNullOrWhiteSpace(sourceDeviceId) || string.IsNullOrWhiteSpace(playbackId))
         {
-            throw new MediaPlaybackSyncFailureException("A playback ID is required.", -32009);
+            throw new MediaPlaybackSyncFailureException("A source device ID and playback ID are required.", -32009);
         }
 
         var normalizedAction = NormalizeAction(action, positionMs);
         MediaPlaybackRecord playback;
         lock (_gate)
         {
-            playback = _playbacks.Values
-                .Where(record => !record.IsRemoved)
-                .FirstOrDefault(record => string.Equals(record.PlaybackId, playbackId, StringComparison.Ordinal))
-                ?? throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found.", -32009);
+            playback = _playbacks.GetValueOrDefault(GetPlaybackKey(sourceDeviceId, playbackId))!;
+            if (playback is null || playback.IsRemoved)
+            {
+                throw new MediaPlaybackSyncFailureException($"Mirrored playback '{playbackId}' was not found for '{sourceDeviceId}'.", -32009);
+            }
         }
 
         EnsureActionAllowed(playback, normalizedAction);

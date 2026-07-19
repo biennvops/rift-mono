@@ -358,11 +358,11 @@ public class RiftApiHandler : IRiftApi
         _mediaPlaybackSyncService.ListMediaPlaybackAsync(CancellationToken.None);
 
     [JsonRpcMethod("rift.getMediaPlayback")]
-    public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId)
+    public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId)
     {
         try
         {
-            return await _mediaPlaybackSyncService.GetMediaPlaybackAsync(playbackId, CancellationToken.None);
+            return await _mediaPlaybackSyncService.GetMediaPlaybackAsync(sourceDeviceId, playbackId, CancellationToken.None);
         }
         catch (MediaPlaybackSyncFailureException ex)
         {
@@ -425,11 +425,11 @@ public class RiftApiHandler : IRiftApi
     }
 
     [JsonRpcMethod("rift.performMediaPlaybackAction")]
-    public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs = null)
+    public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs = null)
     {
         try
         {
-            return await _mediaPlaybackSyncService.PerformMediaPlaybackActionAsync(playbackId, action, positionMs, CancellationToken.None);
+            return await _mediaPlaybackSyncService.PerformMediaPlaybackActionAsync(sourceDeviceId, playbackId, action, positionMs, CancellationToken.None);
         }
         catch (MediaPlaybackSyncFailureException ex)
         {
@@ -741,8 +741,8 @@ public class RiftApiHandler : IRiftApi
     {
         public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(string eventType, MediaPlaybackRecord playback, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
-        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
-        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
