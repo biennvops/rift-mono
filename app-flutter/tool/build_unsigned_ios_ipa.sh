@@ -6,15 +6,24 @@ IPA_DIR="$ROOT_DIR/build/ios/ipa"
 APP_PATH="$ROOT_DIR/build/ios/iphoneos/Runner.app"
 IPA_PATH="$IPA_DIR/Runner-unsigned-release.ipa"
 DEV_BACKGROUND_LOCATION="${RIFT_DEV_BACKGROUND_LOCATION:-0}"
+IOS_BUILD_NUMBER="${RIFT_IOS_BUILD_NUMBER:-}"
 
 if [[ "$DEV_BACKGROUND_LOCATION" != "0" && "$DEV_BACKGROUND_LOCATION" != "1" ]]; then
   printf 'RIFT_DEV_BACKGROUND_LOCATION must be 0 or 1.\n' >&2
   exit 2
 fi
+if [[ -n "$IOS_BUILD_NUMBER" && ! "$IOS_BUILD_NUMBER" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
+  printf 'RIFT_IOS_BUILD_NUMBER must contain one to three numeric components.\n' >&2
+  exit 2
+fi
 
 cd "$ROOT_DIR"
 
-flutter build ios --release --no-codesign
+BUILD_ARGS=(ios --release --no-codesign)
+if [[ -n "$IOS_BUILD_NUMBER" ]]; then
+  BUILD_ARGS+=(--build-number="$IOS_BUILD_NUMBER")
+fi
+flutter build "${BUILD_ARGS[@]}"
 
 if [[ "$DEV_BACKGROUND_LOCATION" == "1" ]]; then
   python3 - "$APP_PATH/Info.plist" <<'PY'
@@ -52,13 +61,14 @@ cp -R "$APP_PATH" "$IPA_DIR/Payload/"
   zip -r -y "$(basename "$IPA_PATH")" Payload >/dev/null
 )
 
-python3 - "$IPA_PATH" "$DEV_BACKGROUND_LOCATION" <<'PY'
+python3 - "$IPA_PATH" "$DEV_BACKGROUND_LOCATION" "$IOS_BUILD_NUMBER" <<'PY'
 import plistlib
 import sys
 import zipfile
 
 ipa_path = sys.argv[1]
 keepalive_enabled = sys.argv[2] == '1'
+expected_build_number = sys.argv[3]
 
 with zipfile.ZipFile(ipa_path) as archive:
     info_plist_paths = [
@@ -77,6 +87,14 @@ location_usage_keys = (
     'NSLocationAlwaysAndWhenInUseUsageDescription',
 )
 background_modes = plist.get('UIBackgroundModes', [])
+
+if expected_build_number and plist.get('CFBundleVersion') != expected_build_number:
+    raise SystemExit(
+        'IPA build number mismatch: expected '
+        f'{expected_build_number}, found {plist.get("CFBundleVersion", "missing")}.'
+    )
+if expected_build_number:
+    print(f'Verified IPA build number {expected_build_number}.')
 
 if keepalive_enabled:
     missing = [key for key in location_usage_keys if not plist.get(key)]
