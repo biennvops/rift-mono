@@ -10,18 +10,34 @@ import UIKit
   private var documentsChannel: FlutterMethodChannel?
   private var previewURL: NSURL?
   private var backgroundLocationManager: CLLocationManager?
+  private var backgroundLocationActivationObserver: NSObjectProtocol?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    let launched = super.application(
+      application,
+      didFinishLaunchingWithOptions: launchOptions
+    )
     if Bundle.main.object(forInfoDictionaryKey: "RiftDevBackgroundLocationEnabled") as? Bool == true {
-      startDevelopmentBackgroundLocation()
+      backgroundLocationActivationObserver = NotificationCenter.default.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.startDevelopmentBackgroundLocation()
+      }
     }
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return launched
   }
 
   private func startDevelopmentBackgroundLocation() {
+    if let manager = backgroundLocationManager {
+      updateDevelopmentBackgroundLocation(for: manager)
+      return
+    }
+
     let manager = CLLocationManager()
     manager.delegate = self
     manager.desiredAccuracy = kCLLocationAccuracyKilometer
@@ -32,6 +48,14 @@ import UIKit
     manager.showsBackgroundLocationIndicator = true
     backgroundLocationManager = manager
 
+    updateDevelopmentBackgroundLocation(for: manager)
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    updateDevelopmentBackgroundLocation(for: manager)
+  }
+
+  private func updateDevelopmentBackgroundLocation(for manager: CLLocationManager) {
     switch locationAuthorizationStatus(for: manager) {
     case .authorizedAlways:
       manager.startUpdatingLocation()
@@ -39,22 +63,8 @@ import UIKit
       manager.startUpdatingLocation()
       manager.requestAlwaysAuthorization()
     case .notDetermined:
-      manager.requestAlwaysAuthorization()
+      manager.requestWhenInUseAuthorization()
     case .denied, .restricted:
-      break
-    @unknown default:
-      break
-    }
-  }
-
-  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-    switch locationAuthorizationStatus(for: manager) {
-    case .authorizedAlways:
-      manager.startUpdatingLocation()
-    case .authorizedWhenInUse:
-      manager.startUpdatingLocation()
-      manager.requestAlwaysAuthorization()
-    case .notDetermined, .denied, .restricted:
       break
     @unknown default:
       break
