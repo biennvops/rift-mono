@@ -232,7 +232,6 @@ class SendQueueController extends ChangeNotifier {
 
   Future<void> restore() async {
     if (_hasRestored) {
-      await refreshFromDaemonIfSupported();
       return;
     }
 

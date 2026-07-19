@@ -523,16 +523,25 @@ class FileTransferService {
         'Accept sender did not match offered target device.',
       );
     }
+    if (transfer.sendTask != null) {
+      return;
+    }
 
     transfer.state = 'active';
     _operationManager.transitionOperation(
       transfer.operationId,
       OperationState.active,
     );
-    await _sendOutgoingTransfer(
-      transfer,
-      requestedChunkSize: payload['chunkSize'] as int?,
-    );
+    transfer.sendTask = () async {
+      try {
+        await _sendOutgoingTransfer(
+          transfer,
+          requestedChunkSize: payload['chunkSize'] as int?,
+        );
+      } catch (_) {
+        // Transfer failures are emitted by _sendOutgoingTransfer.
+      }
+    }();
   }
 
   Future<void> _handleReject(
@@ -551,6 +560,7 @@ class FileTransferService {
         'Reject sender did not match offered target device.',
       );
     }
+    transfer.cancelRequested = true;
     await _failOutgoingTransfer(transfer, failureReason, message);
   }
 
@@ -706,6 +716,7 @@ class FileTransferService {
 
     final outgoing = _outgoingTransfers[transferId];
     if (outgoing != null && outgoing.targetDeviceId == peerDeviceId) {
+      outgoing.cancelRequested = true;
       await _failOutgoingTransfer(outgoing, failureReason, message);
       return;
     }
@@ -817,6 +828,9 @@ class FileTransferService {
     String failureReason,
     String? message,
   ) async {
+    if (transfer.state == 'failed' || transfer.state == 'done') {
+      return;
+    }
     transfer.state = 'failed';
     transfer.failureReason = failureReason;
     _transitionOperationToFailed(transfer.operationId, failureReason);
@@ -1041,6 +1055,7 @@ class _OutgoingTransferState {
   String state;
   String? failureReason;
   bool cancelRequested = false;
+  Future<void>? sendTask;
 
   _OutgoingTransferState({
     required this.transferId,

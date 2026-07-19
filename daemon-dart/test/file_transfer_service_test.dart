@@ -70,6 +70,45 @@ class FakeTransport implements Transport {
   }
 }
 
+class CancelOnFirstChunkTransport extends FakeTransport {
+  CancelOnFirstChunkTransport(this.peerDeviceId);
+
+  final String peerDeviceId;
+  String? transferId;
+  bool _cancelSent = false;
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List payload) async {
+    await super.sendMessage(deviceId, payload);
+    final message = sentMessages.last;
+    if (_cancelSent ||
+        deviceId != peerDeviceId ||
+        message['type']?.toString() != 'file.chunk') {
+      return;
+    }
+
+    final currentTransferId = transferId;
+    if (currentTransferId == null || currentTransferId.isEmpty) {
+      return;
+    }
+
+    _cancelSent = true;
+    simulateIncomingMessage(peerDeviceId, {
+      'rift': '0.1-draft',
+      'messageId': 'abababab-abab-4bab-8bab-abababababab',
+      'type': 'file.cancel',
+      'sourceDeviceId': peerDeviceId,
+      'destinationDeviceId': 'rift-local',
+      'payload': {
+        'transferId': currentTransferId,
+        'failureReason': 'PolicyDenied',
+        'message': 'peer cancelled',
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+  }
+}
+
 class FakeIdentityManager implements IdentityManager {
   @override
   String get deviceId => 'rift-local';
@@ -361,6 +400,75 @@ void main() {
         );
       },
     );
+
+    test('stops outgoing send after remote cancel', () async {
+      await service.dispose();
+      await sessionManager.dispose();
+
+      transport = CancelOnFirstChunkTransport('rift-peer');
+      sessionManager = SessionManager(
+        transport,
+        FakeIdentityManager(),
+        FakeTrustStore(),
+      );
+      service = FileTransferService(
+        sessionManager: sessionManager,
+        trustStore: FakeTrustStore(),
+        operationManager: operationManager,
+        localDeviceId: 'rift-local',
+        storagePath: tempDir.path,
+      );
+
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+        ..handshakeState = HandshakeState.established
+        ..trustState = TrustState.trusted
+        ..capabilityNegotiated = true
+        ..negotiatedCapabilities = [
+          Capability(name: 'file.transfer', version: 1),
+        ];
+      sessionManager.injectContextForTesting(ctx);
+
+      final localFile = File(
+        '${tempDir.path}${Platform.pathSeparator}large-sample.txt',
+      );
+      await localFile.writeAsString('a' * 600000);
+
+      final failedFuture = service.onTransferFailed.firstWhere(
+        (event) => event['failureReason'] == 'PolicyDenied',
+      );
+
+      final result = await service.offerFile(
+        targetDeviceId: 'rift-peer',
+        localPath: localFile.path,
+        fileName: 'large-sample.txt',
+      );
+
+      (transport as CancelOnFirstChunkTransport).transferId = result.transferId;
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '67676767-6767-4767-8767-676767676767',
+        'type': 'file.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': result.transferId,
+          'receivingDeviceId': 'rift-peer',
+          'chunkSize': 262144,
+        },
+      });
+
+      await failedFuture.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(
+        transport.sentMessages.where((message) => message['type'] == 'file.chunk'),
+        hasLength(1),
+      );
+      expect(
+        transport.sentMessages.any((message) => message['type'] == 'file.complete'),
+        isFalse,
+      );
+    });
 
     test('rejects dot-only incoming file names before staging', () async {
       transport.simulateIncomingMessage('rift-peer', {
