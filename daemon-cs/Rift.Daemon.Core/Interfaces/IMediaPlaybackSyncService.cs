@@ -97,6 +97,18 @@ public interface IMediaPlaybackSyncService
         string? removedAt,
         CancellationToken cancellationToken);
 
+    Task PublishLocalPlaybackToPeerAsync(
+        string peerDeviceId,
+        MediaPlaybackRecord playback,
+        CancellationToken cancellationToken);
+
+    Task SendPeerErrorAsync(
+        string peerDeviceId,
+        string failureReason,
+        string? refMessageId,
+        string message,
+        CancellationToken cancellationToken);
+
     Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken);
 
     Task<MediaPlaybackRecord> GetMediaPlaybackAsync(

@@ -26,7 +26,51 @@ internal sealed class MacOSMediaPlaybackService(
 
         logger.LogInformation("Starting macOS media playback observer.");
         _stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var transport = serviceProvider.GetRequiredService<ITransport>();
+        transport.SessionStateChanged += OnSessionStateChanged;
+        _stoppingCts.Token.Register(() => transport.SessionStateChanged -= OnSessionStateChanged);
         _runTask = Task.Run(() => RunAsync(_stoppingCts.Token), CancellationToken.None);
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (!args.IsOnline ||
+            !args.AllowsProtectedTraffic ||
+            !args.SelectedCapabilities.Contains("media.playback", StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        _ = RepublishCurrentPlaybackAsync(args.PeerDeviceId, _stoppingCts!.Token);
+    }
+
+    private async Task RepublishCurrentPlaybackAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        MediaPlaybackRecord? playback;
+        lock (_gate)
+        {
+            playback = _current?.Snapshot.ToRecord();
+        }
+
+        if (playback is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>().PublishLocalPlaybackToPeerAsync(
+                peerDeviceId,
+                playback,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to republish media playback after session establishment with {PeerDeviceId}.", peerDeviceId);
+        }
     }
 
     private async Task RunAsync(CancellationToken stoppingToken)

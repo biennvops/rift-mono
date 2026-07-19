@@ -29,6 +29,6 @@ catch (InvalidOperationException ex)
 
 var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 var mediaPlaybackService = host.Services.GetRequiredService<MacOSMediaPlaybackService>();
-lifetime.ApplicationStarted.Register(() => mediaPlaybackService.Start(lifetime.ApplicationStopping));
+mediaPlaybackService.Start(lifetime.ApplicationStopping);
 
 host.Run();

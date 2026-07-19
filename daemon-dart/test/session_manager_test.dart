@@ -135,6 +135,26 @@ void main() {
       sessionManager.dispose();
     });
 
+    test('sendPeerError rejects a referenced peer message', () async {
+      sessionManager.injectContextForTesting(
+        SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
+          ..handshakeState = HandshakeState.established
+          ..capabilityNegotiated = true,
+      );
+
+      await sessionManager.sendPeerError(
+        'rift-peer',
+        failureReason: 'ProtocolError',
+        refMessageId: '11111111-1111-4111-8111-111111111111',
+        message: 'Unknown media playback action',
+      );
+
+      expect(transport.sentMessages.single['type'], 'error');
+      expect(transport.sentMessages.single['payload']['failureReason'], 'ProtocolError');
+      expect(transport.sentMessages.single['payload']['refMessageId'], '11111111-1111-4111-8111-111111111111');
+      expect(transport.disconnectedPeers, isEmpty);
+    });
+
     test('Client-side session.accept missing identityVerified fails before PoP validation', () async {
       // Register the peer cert BEFORE calling sendSessionHello so the channel
       // binding can be computed (mimics the transport having seen the peer TLS cert).

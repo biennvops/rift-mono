@@ -14,6 +14,43 @@ public sealed class ProtocolMessageRouter(
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        string? messageType = null;
+        string? messageId = null;
+        try
+        {
+            using (var document = JsonDocument.Parse(payload))
+            {
+                var root = document.RootElement;
+                messageType = root.TryGetProperty("type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String
+                    ? typeElement.GetString()
+                    : null;
+                messageId = root.TryGetProperty("messageId", out var idElement) && idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString()
+                    : null;
+            }
+
+            await HandleValidatedMessageAsync(session, payload, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (messageType?.StartsWith("media.playback", StringComparison.Ordinal) == true && IsMediaMessageError(ex))
+        {
+            var failureReason = ex switch
+            {
+                UnauthorizedAccessException when ex.Message.Contains("requires negotiated capability", StringComparison.Ordinal) => "CapabilityUnavailable",
+                UnauthorizedAccessException => "Unauthorized",
+                MediaPlaybackSyncFailureException { ErrorCode: -32010 } => "ProtocolError",
+                _ => "MalformedMessage"
+            };
+            await mediaPlaybackSyncService.SendPeerErrorAsync(
+                session.PeerDeviceId,
+                failureReason,
+                messageId,
+                ex.Message,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleValidatedMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
         var peerDeviceId = session.PeerDeviceId;
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
@@ -425,6 +462,9 @@ public sealed class ProtocolMessageRouter(
             Icon = icon
         };
     }
+
+    private static bool IsMediaMessageError(Exception exception) =>
+        exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or MediaPlaybackSyncFailureException or UnauthorizedAccessException;
 
     private static MediaPlaybackRecord ParseMediaPlaybackRecord(JsonElement mediaPayload)
     {

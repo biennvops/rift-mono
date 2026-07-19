@@ -453,6 +453,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     public async Task HandleMessageAsync_MediaPlaybackActionRequest_ValidatesRequesterIdentity()
     {
         const string peerDeviceId = "rift-peer-media-action";
+        await _mediaPlaybackSyncService.HandleMediaPlaybackPostedAsync(new MediaPlaybackRecord
+        {
+            PlaybackId = "playback-1",
+            SourceDeviceId = _identityManager.GetDeviceId(),
+            AppId = "com.example.music",
+            AppName = "Example Music",
+            PlaybackState = "playing",
+            CanPause = true,
+            UpdatedAt = "2026-07-20T10:00:00Z"
+        }, CancellationToken.None);
 
         await _router.HandleMessageAsync(
             CreateSession(peerDeviceId, ["media.playback"]),
@@ -472,11 +482,71 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_MalformedMediaPlayback_SendsPeerError()
+    {
+        const string peerDeviceId = "rift-peer-malformed-media";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackPosted", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                appId = "com.example.music",
+                appName = "Example Music",
+                playbackState = "playing",
+                positionMs = -1,
+                canPlay = true,
+                canPause = true,
+                canSkipNext = true,
+                canSkipPrevious = true,
+                canSeek = true,
+                updatedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("MalformedMessage", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MalformedOptionalMediaTimestamps_SendPeerErrors()
+    {
+        const string peerDeviceId = "rift-peer-media-timestamps";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "pause",
+                requestedAt = "2026-07-20"
+            }),
+            CancellationToken.None);
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackRemoved", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                removedAt = "2026-07-20T10:00:00+01:00"
+            }),
+            CancellationToken.None);
+
+        Assert.Equal(2, _clipboardTransport.Payloads.Count(payload =>
+            payload.GetProperty("type").GetString() == "error" &&
+            payload.GetProperty("payload").GetProperty("failureReason").GetString() == "MalformedMessage"));
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_MediaPlaybackActionRequest_RejectsSpoofedRequester()
     {
         const string peerDeviceId = "rift-peer-media-action";
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+        await _router.HandleMessageAsync(
             CreateSession(peerDeviceId, ["media.playback"]),
             CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
             {
@@ -485,7 +555,52 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 requestingDeviceId = "rift-spoofed-requester",
                 action = "pause"
             }),
-            CancellationToken.None));
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionResult_RejectsSpoofedRequester()
+    {
+        const string peerDeviceId = "rift-peer-media-result";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionResult", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                requestingDeviceId = "rift-spoofed-requester",
+                action = "pause",
+                success = true
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackWithoutCapability_SendsCapabilityUnavailable()
+    {
+        const string peerDeviceId = "rift-peer-media-capability";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, []),
+            CreateEnvelope(peerDeviceId, "media.playbackRemoved", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("CapabilityUnavailable", error.GetProperty("payload").GetProperty("failureReason").GetString());
     }
 
     [Fact]
@@ -572,6 +687,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public List<JsonElement> Payloads { get; } = [];
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -584,6 +700,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         {
             using var document = JsonDocument.Parse(frameBody);
             SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            Payloads.Add(document.RootElement.Clone());
             return Task.CompletedTask;
         }
 

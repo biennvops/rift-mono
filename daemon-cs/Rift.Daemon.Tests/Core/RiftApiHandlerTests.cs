@@ -757,6 +757,12 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
+        public Task PublishLocalPlaybackToPeerAsync(string peerDeviceId, MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(new ListMediaPlaybackResult
