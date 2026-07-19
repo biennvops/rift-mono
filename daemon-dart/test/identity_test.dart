@@ -28,6 +28,42 @@ void main() {
       expect(manager.deviceId.length, equals(5 + 32)); // 'rift-' + 32 chars
     });
 
+    test('Should use injected private key without writing plaintext', () async {
+      final seed = Uint8List.fromList(List<int>.generate(32, (i) => i));
+      var providerCalls = 0;
+      final manager = IdentityManagerImpl(
+        tempDir.path,
+        privateKeyProvider: () async {
+          providerCalls += 1;
+          return seed;
+        },
+      );
+
+      await manager.initialize();
+
+      expect(providerCalls, 1);
+      expect(manager.deviceId, startsWith('rift-'));
+      expect(File('${tempDir.path}/identity.key').existsSync(), isFalse);
+    });
+
+    test('Should reject malformed injected private key', () async {
+      final manager = IdentityManagerImpl(
+        tempDir.path,
+        privateKeyProvider: () async => Uint8List(31),
+      );
+
+      expect(
+        manager.initialize,
+        throwsA(
+          isA<Exception>().having(
+            (error) => error.toString(),
+            'message',
+            contains('Corrupted identity key'),
+          ),
+        ),
+      );
+    });
+
     test('Should load existing identity from disk', () async {
       var manager1 = IdentityManagerImpl(tempDir.path);
       await manager1.initialize();
