@@ -1,5 +1,6 @@
 package com.example.app_flutter
 
+import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.app.Notification
 import android.app.PendingIntent
@@ -56,12 +57,32 @@ class RiftNotificationListenerService : NotificationListenerService() {
                         } else {
                             contentIntent.send()
                         }
-                        mapOf("success" to true)
+                        if (contentIntent.creatorPackage == service.packageName &&
+                            !moveRiftTaskToFront(service)) {
+                            failure(
+                                "CapabilityUnavailable",
+                                "Android did not allow Rift to move to the foreground.",
+                            )
+                        } else {
+                            mapOf("success" to true)
+                        }
                     } catch (error: PendingIntent.CanceledException) {
                         failure("CapabilityUnavailable", error.message ?: "The notification action expired.")
                     }
                 }
                 else -> failure("ProtocolError", "Unknown notification action '$action'.")
+            }
+        }
+
+        private fun moveRiftTaskToFront(service: RiftNotificationListenerService): Boolean {
+            return try {
+                val activityManager = service.getSystemService(ActivityManager::class.java)
+                val task = activityManager.appTasks.firstOrNull() ?: return false
+                task.moveToFront()
+                true
+            } catch (error: RuntimeException) {
+                Log.w(tag, "Unable to move Rift task to foreground", error)
+                false
             }
         }
 
