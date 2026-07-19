@@ -52,5 +52,57 @@ cp -R "$APP_PATH" "$IPA_DIR/Payload/"
   zip -r -y "$(basename "$IPA_PATH")" Payload >/dev/null
 )
 
+python3 - "$IPA_PATH" "$DEV_BACKGROUND_LOCATION" <<'PY'
+import plistlib
+import sys
+import zipfile
+
+ipa_path = sys.argv[1]
+keepalive_enabled = sys.argv[2] == '1'
+
+with zipfile.ZipFile(ipa_path) as archive:
+    info_plist_paths = [
+        name
+        for name in archive.namelist()
+        if name.startswith('Payload/') and name.endswith('.app/Info.plist')
+    ]
+    if len(info_plist_paths) != 1:
+        raise SystemExit(
+            f'Expected one app Info.plist in IPA, found {len(info_plist_paths)}.'
+        )
+    plist = plistlib.loads(archive.read(info_plist_paths[0]))
+
+location_usage_keys = (
+    'NSLocationWhenInUseUsageDescription',
+    'NSLocationAlwaysAndWhenInUseUsageDescription',
+)
+background_modes = plist.get('UIBackgroundModes', [])
+
+if keepalive_enabled:
+    missing = [key for key in location_usage_keys if not plist.get(key)]
+    if plist.get('RiftDevBackgroundLocationEnabled') is not True:
+        missing.append('RiftDevBackgroundLocationEnabled=true')
+    if 'location' not in background_modes:
+        missing.append('UIBackgroundModes=location')
+    if missing:
+        raise SystemExit(
+            'Development keepalive IPA is missing required metadata: '
+            + ', '.join(missing)
+        )
+    print('Verified development keepalive metadata in IPA.')
+else:
+    unexpected = [key for key in location_usage_keys if key in plist]
+    if 'RiftDevBackgroundLocationEnabled' in plist:
+        unexpected.append('RiftDevBackgroundLocationEnabled')
+    if 'location' in background_modes:
+        unexpected.append('UIBackgroundModes=location')
+    if unexpected:
+        raise SystemExit(
+            'Normal IPA contains development location metadata: '
+            + ', '.join(unexpected)
+        )
+    print('Verified normal IPA contains no development location metadata.')
+PY
+
 printf 'Built unsigned IPA: %s\n' "$IPA_PATH"
 shasum -a 256 "$IPA_PATH"
