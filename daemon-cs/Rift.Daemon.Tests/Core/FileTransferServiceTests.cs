@@ -595,6 +595,41 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OutgoingConnectionLost_PreservesTransferStateForResume()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.FailChunkSendOnce = true;
+
+        var path = CreateTempFile(new string('a', 600000));
+        try
+        {
+            var offer = await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
+
+            await _service.HandleAcceptReceivedAsync("rift-peer", offer.TransferId, "rift-peer", 262144, CancellationToken.None);
+            await WaitForConditionAsync(
+                () => _notifications.Notifications.Any(note => note.Method == "rift.onFileTransferFailed"),
+                TimeSpan.FromSeconds(1));
+
+            var transfers = await _service.ListFileTransfersAsync();
+            Assert.Contains(transfers.Transfers, transfer =>
+                transfer.TransferId == offer.TransferId &&
+                transfer.Direction == "outgoing" &&
+                transfer.FailureReason == "ConnectionLost");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task HandleCancelReceivedAsync_RejectsAuthenticatedPeerThatDoesNotOwnOutgoingTransfer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -923,6 +958,7 @@ public sealed class FileTransferServiceTests : IDisposable
         public List<string> DisconnectedPeers { get; } = [];
         public Queue<Exception> ConnectExceptions { get; } = new();
         public bool BlockChunkSends { get; set; }
+        public bool FailChunkSendOnce { get; set; }
         public int BlockedChunkSendCount { get; private set; }
         public bool HasActiveSessionValue { get; set; } = true;
         public bool HasProtectedSessionValue { get; set; } = true;
@@ -954,6 +990,11 @@ public sealed class FileTransferServiceTests : IDisposable
             var type = document.RootElement.GetProperty("type").GetString() ?? string.Empty;
             var payload = document.RootElement.GetProperty("payload").Clone();
             SentMessages.Add((peerDeviceId, type, payload));
+            if (FailChunkSendOnce && string.Equals(type, "file.chunk", StringComparison.Ordinal))
+            {
+                FailChunkSendOnce = false;
+                throw new IOException("simulated broken pipe");
+            }
             if (BlockChunkSends && string.Equals(type, "file.chunk", StringComparison.Ordinal))
             {
                 BlockedChunkSendCount++;

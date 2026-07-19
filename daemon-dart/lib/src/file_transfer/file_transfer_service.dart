@@ -736,8 +736,11 @@ class FileTransferService {
 
     final raf = await file.open();
     try {
-      var offset = 0;
-      var chunkIndex = 0;
+      var offset = transfer.bytesTransferred;
+      var chunkIndex = offset ~/ chunkSize;
+      if (offset > 0) {
+        await raf.setPosition(offset);
+      }
       while (offset < transfer.byteSize) {
         if (transfer.cancelRequested) {
           throw const RiftException(-32010, 'Transfer cancelled.');
@@ -778,10 +781,13 @@ class FileTransferService {
         _emitProgress(transfer.toInfo());
       }
     } catch (error) {
+      final failureReason = _failureReasonForError(error);
+      final preserveForResume = failureReason == 'ConnectionLost';
       await _failOutgoingTransfer(
         transfer,
-        _failureReasonForError(error),
+        failureReason,
         error.toString(),
+        preserveForResume: preserveForResume,
       );
       rethrow;
     } finally {
@@ -818,16 +824,20 @@ class FileTransferService {
   Future<void> _failOutgoingTransfer(
     _OutgoingTransferState transfer,
     String failureReason,
-    String? message,
-  ) async {
+    String? message, {
+    bool preserveForResume = false,
+  }) async {
     if (transfer.state == 'failed' || transfer.state == 'done') {
       return;
     }
     transfer.state = 'failed';
     transfer.failureReason = failureReason;
+    transfer.sendTask = null;
     _transitionOperationToFailed(transfer.operationId, failureReason);
     _emitFailed(transfer.toInfo(), message);
-    _outgoingTransfers.remove(transfer.transferId);
+    if (!preserveForResume) {
+      _outgoingTransfers.remove(transfer.transferId);
+    }
   }
 
   Future<void> _failIncomingTransfer(

@@ -110,6 +110,20 @@ class CancelOnFirstChunkTransport extends FakeTransport {
   }
 }
 
+class FailFirstChunkTransport extends FakeTransport {
+  bool _failed = false;
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List payload) async {
+    final decoded = json.decode(utf8.decode(payload)) as Map<String, dynamic>;
+    sentMessages.add(decoded);
+    if (!_failed && decoded['type']?.toString() == 'file.chunk') {
+      _failed = true;
+      throw const SocketException('simulated connection reset');
+    }
+  }
+}
+
 class FakeIdentityManager implements IdentityManager {
   @override
   String get deviceId => 'rift-local';
@@ -472,6 +486,76 @@ void main() {
       expect(
         transport.sentMessages.any((message) => message['type'] == 'file.complete'),
         isFalse,
+      );
+    });
+
+    test('preserves outgoing transfer state after recoverable disconnect', () async {
+      await service.dispose();
+      await sessionManager.dispose();
+
+      transport = FailFirstChunkTransport();
+      sessionManager = SessionManager(
+        transport,
+        FakeIdentityManager(),
+        FakeTrustStore(),
+      );
+      service = FileTransferService(
+        sessionManager: sessionManager,
+        trustStore: FakeTrustStore(),
+        operationManager: operationManager,
+        localDeviceId: 'rift-local',
+        storagePath: tempDir.path,
+      );
+
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+        ..handshakeState = HandshakeState.established
+        ..trustState = TrustState.trusted
+        ..capabilityNegotiated = true
+        ..negotiatedCapabilities = [
+          Capability(name: 'file.transfer', version: 1),
+        ];
+      sessionManager.injectContextForTesting(ctx);
+
+      final localFile = File(
+        '${tempDir.path}${Platform.pathSeparator}resume-sample.txt',
+      );
+      await localFile.writeAsString('a' * 600000);
+
+      final failedFuture = service.onTransferFailed.firstWhere(
+        (event) => event['failureReason'] == 'ConnectionLost',
+      );
+
+      final result = await service.offerFile(
+        targetDeviceId: 'rift-peer',
+        localPath: localFile.path,
+        fileName: 'resume-sample.txt',
+      );
+
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '78787878-7878-4787-8787-787878787878',
+        'type': 'file.accept',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': result.transferId,
+          'receivingDeviceId': 'rift-peer',
+          'chunkSize': 262144,
+        },
+      });
+
+      await failedFuture.timeout(const Duration(seconds: 2));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final transfers = service.listFileTransfers();
+      expect(
+        transfers.any(
+          (transfer) =>
+              transfer['transferId'] == result.transferId &&
+              transfer['direction'] == 'outgoing' &&
+              transfer['failureReason'] == 'ConnectionLost',
+        ),
+        isTrue,
       );
     });
 

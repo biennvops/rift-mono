@@ -647,14 +647,19 @@ public sealed class FileTransferService : IFileTransferService
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, transfer.SendCancellation.Token);
         var sendCancellationToken = linkedCts.Token;
+        var retainOutgoingState = false;
         try
         {
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Active);
             var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
             await using var stream = new FileStream(transfer.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var buffer = new byte[chunkSize];
-            var chunkIndex = 0;
-            long offset = 0;
+            var chunkIndex = (int)(transfer.BytesTransferred / chunkSize);
+            long offset = transfer.BytesTransferred;
+            if (offset > 0)
+            {
+                stream.Seek(offset, SeekOrigin.Begin);
+            }
 
             while (true)
             {
@@ -726,6 +731,7 @@ public sealed class FileTransferService : IFileTransferService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException)
         {
             _logger.LogWarning(ex, "File transfer {TransferId} failed while sending.", transfer.TransferId);
+            retainOutgoingState = true;
             TryTransitionFailure(transfer.OperationId, "ConnectionLost");
             LogEvent(SecurityEventTypes.ConnectionLost, transfer.TargetDeviceId, SecurityEventSeverity.Error, SecurityEventOutcome.Failure, "ConnectionLost", transfer.OperationId);
             await NotifyTransferFailedAsync(
@@ -741,8 +747,12 @@ public sealed class FileTransferService : IFileTransferService
         }
         finally
         {
-            _outgoingTransfers.TryRemove(transfer.TransferId, out _);
-            transfer.SendCancellation.Dispose();
+            transfer.SendTask = null;
+            if (!retainOutgoingState)
+            {
+                _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+                transfer.SendCancellation.Dispose();
+            }
         }
     }
 
