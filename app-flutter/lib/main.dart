@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
@@ -36,6 +37,12 @@ import 'src/platform/windows_shell.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
 String? _lastDesktopClipboardReadFingerprint;
+
+@visibleForTesting
+void setMacOSNotificationBridgeOverride(bool? value) {
+  // ignore: invalid_use_of_visible_for_testing_member
+  MacOSNotifications.debugIsMacOSOverride = value;
+}
 
 String _desktopClipboardFingerprint(String contentType, Uint8List bytes) {
   final byteDigest = base64Encode(bytes);

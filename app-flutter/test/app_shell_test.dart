@@ -7,7 +7,6 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
@@ -188,7 +187,7 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    MacOSNotifications.debugIsMacOSOverride = true;
+    setMacOSNotificationBridgeOverride(true);
     WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
@@ -332,7 +331,7 @@ void main() {
     notificationPostedController.close();
     notificationUpdatedController.close();
     notificationRemovedController.close();
-    MacOSNotifications.debugIsMacOSOverride = null;
+    setMacOSNotificationBridgeOverride(null);
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
@@ -429,7 +428,7 @@ void main() {
   testWidgets('App shell consumes pending macOS share payload on startup',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
-    MacOSNotifications.debugIsMacOSOverride = true;
+    setMacOSNotificationBridgeOverride(true);
     final channel = const MethodChannel('rift.permissions');
     var consumedPendingShareItems = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
