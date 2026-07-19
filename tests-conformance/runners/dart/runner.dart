@@ -62,6 +62,9 @@ Future<void> _runCase(
     case 'envelope-validation':
       _runEnvelopeValidation(testCase);
       return;
+    case 'notification-sync':
+      _runNotificationSync(testCase);
+      return;
     default:
       throw UnsupportedError('Unknown conformance suite: $suiteName');
   }
@@ -136,6 +139,58 @@ void _runEnvelopeValidation(Map<String, dynamic> testCase) {
   } else {
     _expectEquals(expected['result'], 'reject');
     _expectEquals(expected['error'], 'MalformedMessage');
+  }
+}
+
+void _runNotificationSync(Map<String, dynamic> testCase) {
+  final input = Map<String, dynamic>.from(testCase['input'] as Map);
+  final expected = Map<String, dynamic>.from(testCase['expected'] as Map);
+  final payload = Map<String, dynamic>.from(input['payload'] as Map);
+  final type = input['type'];
+  final authenticatedPeerId = input['authenticatedPeerId'];
+
+  String result = 'accept';
+  String? error;
+  if (type == 'notification.posted') {
+    final requiredFieldsValid =
+        payload['notificationId'] is String &&
+        payload['sourceDeviceId'] is String &&
+        payload['packageName'] is String &&
+        payload['appName'] is String &&
+        payload['postedAt'] is String &&
+        payload['isDismissible'] is bool &&
+        payload['isOpenable'] is bool;
+    if (!requiredFieldsValid) {
+      result = 'reject';
+      error = 'MalformedMessage';
+    } else if (payload['sourceDeviceId'] != authenticatedPeerId) {
+      result = 'reject';
+      error = 'Unauthorized';
+    } else if (payload['sourcePlatform'] == 'android' &&
+        payload['isOpenable'] == true) {
+      result = 'reject';
+      error = 'ProtocolError';
+    }
+  } else if (type == 'notification.actionRequest') {
+    if (payload['sourceDeviceId'] != input['localDeviceId'] ||
+        payload['requestingDeviceId'] != authenticatedPeerId) {
+      result = 'reject';
+      error = 'Unauthorized';
+    } else if (payload['action'] == 'open') {
+      result = 'reject';
+      error = 'CapabilityUnavailable';
+    } else if (payload['action'] != 'dismiss') {
+      result = 'reject';
+      error = 'ProtocolError';
+    }
+  } else {
+    result = 'reject';
+    error = 'ProtocolError';
+  }
+
+  _expectEquals(result, expected['result']);
+  if (result == 'reject') {
+    _expectEquals(error, expected['error']);
   }
 }
 

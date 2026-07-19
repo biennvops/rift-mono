@@ -1,0 +1,120 @@
+{
+  "suite": "notification-sync",
+  "description": "Validate Android-origin notification records and remote action constraints",
+  "testCases": [
+    {
+      "id": "notification-posted-android-valid",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "type": "notification.posted",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "sourcePlatform": "android",
+          "packageName": "com.example.chat",
+          "appName": "Example Chat",
+          "postedAt": "2026-07-20T10:00:00Z",
+          "isDismissible": true,
+          "isOpenable": false
+        }
+      },
+      "expected": { "result": "accept" }
+    },
+    {
+      "id": "notification-posted-source-mismatch",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "type": "notification.posted",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sourcePlatform": "android",
+          "packageName": "com.example.chat",
+          "appName": "Example Chat",
+          "postedAt": "2026-07-20T10:00:00Z",
+          "isDismissible": true,
+          "isOpenable": false
+        }
+      },
+      "expected": { "result": "reject", "error": "Unauthorized" }
+    },
+    {
+      "id": "notification-posted-android-open-advertised",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "type": "notification.posted",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "sourcePlatform": "android",
+          "packageName": "com.example.chat",
+          "appName": "Example Chat",
+          "postedAt": "2026-07-20T10:00:00Z",
+          "isDismissible": true,
+          "isOpenable": true
+        }
+      },
+      "expected": { "result": "reject", "error": "ProtocolError" }
+    },
+    {
+      "id": "notification-dismiss-request-valid",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "localDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "type": "notification.actionRequest",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requestingDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "action": "dismiss"
+        }
+      },
+      "expected": { "result": "accept" }
+    },
+    {
+      "id": "notification-action-requester-mismatch",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "localDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "type": "notification.actionRequest",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requestingDeviceId": "rift-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "action": "dismiss"
+        }
+      },
+      "expected": { "result": "reject", "error": "Unauthorized" }
+    },
+    {
+      "id": "notification-open-request-unsupported",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "localDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "type": "notification.actionRequest",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requestingDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "action": "open"
+        }
+      },
+      "expected": { "result": "reject", "error": "CapabilityUnavailable" }
+    },
+    {
+      "id": "notification-unknown-action",
+      "input": {
+        "authenticatedPeerId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "localDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "type": "notification.actionRequest",
+        "payload": {
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "requestingDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "action": "reply"
+        }
+      },
+      "expected": { "result": "reject", "error": "ProtocolError" }
+    }
+  ]
+}
