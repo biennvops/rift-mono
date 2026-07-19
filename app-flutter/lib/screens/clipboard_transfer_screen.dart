@@ -44,6 +44,9 @@ class ClipboardTransferScreen extends StatefulWidget {
   final String? displayName;
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
   final bool? revealCompletedTransfersInFolderOverride;
+  final bool? exportCompletedTransfersOverride;
+  final Future<void> Function(String path)? openFileOverride;
+  final Future<void> Function(String path)? exportFileOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
@@ -53,6 +56,9 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.displayName,
     this.pickSendFilesOverride,
     this.revealCompletedTransfersInFolderOverride,
+    this.exportCompletedTransfersOverride,
+    this.openFileOverride,
+    this.exportFileOverride,
     this.routeNotifier,
     this.sharedClipboardTextNotifier,
   });
@@ -95,6 +101,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ??
       shouldRevealCompletedTransferDestination();
+  bool get _exportCompletedTransfers =>
+      widget.exportCompletedTransfersOverride ?? Platform.isIOS;
   late final SendQueueController _sendQueueController;
   SendQueueController get _sendQueue => _sendQueueController;
   SendQueueModeCoordinator get _queueMode =>
@@ -1373,6 +1381,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     try {
       if (revealInFolder) {
         await showFileInFolder(destinationPath);
+      } else if (widget.openFileOverride != null) {
+        await widget.openFileOverride!(destinationPath);
       } else {
         await openFilePath(destinationPath);
       }
@@ -1380,6 +1390,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(content: Text('Could not open saved file: $error')),
+      );
+    }
+  }
+
+  Future<void> _exportTransferDestination(String destinationPath) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (widget.exportFileOverride != null) {
+        await widget.exportFileOverride!(destinationPath);
+      } else {
+        await exportFilePath(destinationPath);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not export saved file: $error')),
       );
     }
   }
@@ -2426,9 +2452,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                       ],
                       if (canOpenDestination) ...[
                         const SizedBox(height: 8),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
-                            if (_revealCompletedTransfersInFolder) ...[
+                            if (_revealCompletedTransfersInFolder)
                               OutlinedButton.icon(
                                 onPressed: () => _openTransferDestination(
                                   destinationPath,
@@ -2437,8 +2465,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                                 icon: const Icon(Icons.folder_open),
                                 label: const Text('Open Folder'),
                               ),
-                              const SizedBox(width: 8),
-                            ],
                             OutlinedButton.icon(
                               onPressed: () => _openTransferDestination(
                                 destinationPath,
@@ -2447,6 +2473,14 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                               icon: const Icon(Icons.open_in_new),
                               label: const Text('Open File'),
                             ),
+                            if (_exportCompletedTransfers)
+                              OutlinedButton.icon(
+                                onPressed: () => _exportTransferDestination(
+                                  destinationPath,
+                                ),
+                                icon: const Icon(Icons.ios_share),
+                                label: const Text('Export'),
+                              ),
                           ],
                         ),
                       ],

@@ -258,6 +258,9 @@ void main() {
     ValueNotifier<String?>? routeNotifier,
     ValueNotifier<String?>? sharedClipboardTextNotifier,
     bool preferDaemonOnlyOverride = true,
+    bool? exportCompletedTransfersOverride,
+    Future<void> Function(String path)? openFileOverride,
+    Future<void> Function(String path)? exportFileOverride,
   }) {
     return MaterialApp(
       home: MultiProvider(
@@ -274,6 +277,9 @@ void main() {
         ],
         child: ClipboardTransferScreen(
           revealCompletedTransfersInFolderOverride: revealInFolder,
+          exportCompletedTransfersOverride: exportCompletedTransfersOverride,
+          openFileOverride: openFileOverride,
+          exportFileOverride: exportFileOverride,
           pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
           sharedClipboardTextNotifier: sharedClipboardTextNotifier,
@@ -303,6 +309,32 @@ void main() {
     );
     expect(find.text('Open File'), findsOneWidget);
     expect(find.text('Open Folder'), findsNothing);
+  });
+
+  testWidgets('iOS transfer actions preview and export the saved file',
+      (WidgetTester tester) async {
+    String? openedPath;
+    String? exportedPath;
+    final routeNotifier =
+        ValueNotifier<String?>(NotificationRoute.historyTransferActivity);
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        exportCompletedTransfersOverride: true,
+        openFileOverride: (path) async => openedPath = path,
+        exportFileOverride: (path) async => exportedPath = path,
+        routeNotifier: routeNotifier,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Open File'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Export'));
+    await tester.pumpAndSettle();
+
+    expect(openedPath, '/storage/emulated/0/Download/Rift/report.pdf');
+    expect(exportedPath, '/storage/emulated/0/Download/Rift/report.pdf');
   });
 
   testWidgets('Transfer activity shows folder action for desktop flow',
@@ -669,7 +701,8 @@ void main() {
     );
   });
 
-  testWidgets('Send tab rebuilds when daemon-backed queue refresh changes peer eligibility',
+  testWidgets(
+      'Send tab rebuilds when daemon-backed queue refresh changes peer eligibility',
       (WidgetTester tester) async {
     final client = FakeTransferJsonRpcClient(
       sendQueueSupported: true,

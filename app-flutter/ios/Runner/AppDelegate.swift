@@ -1,10 +1,13 @@
 import Flutter
+import QuickLook
 import Security
 import UIKit
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
   private var identityChannel: FlutterMethodChannel?
+  private var documentsChannel: FlutterMethodChannel?
+  private var previewURL: NSURL?
 
   override func application(
     _ application: UIApplication,
@@ -40,6 +43,85 @@ import UIKit
       }
     }
     identityChannel = channel
+
+    let documentsChannel = FlutterMethodChannel(
+      name: "rift/ios/documents",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    documentsChannel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(FlutterError(code: "unavailable", message: "Rift is unavailable.", details: nil))
+        return
+      }
+      guard let arguments = call.arguments as? [String: Any],
+            let path = arguments["path"] as? String,
+            FileManager.default.fileExists(atPath: path) else {
+        result(FlutterError(code: "file_not_found", message: "The saved file no longer exists.", details: nil))
+        return
+      }
+      guard let presenter = self.activeViewController() else {
+        result(FlutterError(code: "unavailable", message: "No active iOS window.", details: nil))
+        return
+      }
+
+      let url = URL(fileURLWithPath: path)
+      switch call.method {
+      case "previewFile":
+        self.previewURL = url as NSURL
+        let preview = QLPreviewController()
+        preview.dataSource = self
+        presenter.present(preview, animated: true) {
+          result(true)
+        }
+      case "exportFile":
+        let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+          popover.sourceView = presenter.view
+          popover.sourceRect = CGRect(
+            x: presenter.view.bounds.midX,
+            y: presenter.view.bounds.midY,
+            width: 0,
+            height: 0
+          )
+        }
+        presenter.present(activity, animated: true) {
+          result(true)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.documentsChannel = documentsChannel
+  }
+
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
+    return previewURL == nil ? 0 : 1
+  }
+
+  func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+    return previewURL!
+  }
+
+  private func activeViewController() -> UIViewController? {
+    let root = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap { $0.windows }
+      .first { $0.isKeyWindow }?
+      .rootViewController
+    return Self.topViewController(from: root)
+  }
+
+  private static func topViewController(from controller: UIViewController?) -> UIViewController? {
+    if let presented = controller?.presentedViewController {
+      return topViewController(from: presented)
+    }
+    if let navigation = controller as? UINavigationController {
+      return topViewController(from: navigation.visibleViewController)
+    }
+    if let tab = controller as? UITabBarController {
+      return topViewController(from: tab.selectedViewController)
+    }
+    return controller
   }
 
   private static let identityService = "dev.rift.identity.ed25519"

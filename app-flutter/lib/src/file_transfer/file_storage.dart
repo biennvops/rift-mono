@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 const MethodChannel _androidShellChannel = MethodChannel('rift/android/shell');
+const MethodChannel _iosDocumentsChannel = MethodChannel('rift/ios/documents');
 
 String sanitizeIncomingFileName(String fileName) {
   final segments = fileName
@@ -135,6 +136,17 @@ Future<void> openFilePath(String path) async {
     return;
   }
 
+  if (Platform.isIOS) {
+    final opened = await _iosDocumentsChannel.invokeMethod<bool>(
+      'previewFile',
+      <String, Object?>{'path': path},
+    );
+    if (opened != true) {
+      throw FileSystemException('iOS could not preview file.', path);
+    }
+    return;
+  }
+
   if (Platform.isWindows) {
     await Process.run('cmd', <String>['/c', 'start', '', path],
         runInShell: true);
@@ -152,6 +164,23 @@ Future<void> openFilePath(String path) async {
   }
 
   throw UnsupportedError('Open file is not supported on this platform.');
+}
+
+Future<void> exportFilePath(String path) async {
+  if (path.trim().isEmpty) {
+    throw const FileSystemException('Path is empty.');
+  }
+  if (!Platform.isIOS) {
+    throw UnsupportedError('Export file is not supported on this platform.');
+  }
+
+  final exported = await _iosDocumentsChannel.invokeMethod<bool>(
+    'exportFile',
+    <String, Object?>{'path': path},
+  );
+  if (exported != true) {
+    throw FileSystemException('iOS could not export file.', path);
+  }
 }
 
 Future<void> showFileInFolder(String path) async {
