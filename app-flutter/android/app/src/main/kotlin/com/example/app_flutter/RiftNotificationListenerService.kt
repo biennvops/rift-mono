@@ -58,6 +58,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         activeInstance = this
+        reconcileRemovedNotifications()
         Log.i(tag, "Notification listener connected")
     }
 
@@ -141,6 +142,23 @@ class RiftNotificationListenerService : NotificationListenerService() {
 
     private fun isSyncTestNotification(sbn: StatusBarNotification): Boolean =
         sbn.notification.extras?.getBoolean(syncTestExtraKey, false) == true
+
+    private fun reconcileRemovedNotifications() {
+        val activeIds = activeNotifications?.mapTo(mutableSetOf()) { it.key }
+            ?: emptySet()
+        val removedAt = formatUtcTimestamp(System.currentTimeMillis())
+        for (notificationId in NotificationSyncRelay.activeNotificationIds(this) - activeIds) {
+            NotificationSyncRelay.markNotificationRemoved(this, notificationId)
+            NotificationSyncRelay.queueAndBroadcast(
+                this,
+                mapOf(
+                    "eventType" to "removed",
+                    "notificationId" to notificationId,
+                    "removedAt" to removedAt,
+                ),
+            )
+        }
+    }
 
     private fun formatUtcTimestamp(epochMillis: Long): String {
         val formatter =

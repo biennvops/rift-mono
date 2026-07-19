@@ -17,6 +17,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.content.pm.PackageManager
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -342,7 +344,7 @@ class MainActivity: FlutterActivity() {
     override fun onResume() {
         super.onResume()
         Log.i(tag, "onResume")
-        deliverPendingLaunchActionIfPossible()
+        schedulePendingLaunchActionDelivery()
         deliverPendingNotificationSyncEvents()
     }
 
@@ -596,7 +598,7 @@ class MainActivity: FlutterActivity() {
             return
         }
         pendingLaunchAction = action
-        deliverPendingLaunchActionIfPossible()
+        schedulePendingLaunchActionDelivery()
     }
 
     private fun handleLaunchIntent(intent: Intent?) {
@@ -749,6 +751,12 @@ class MainActivity: FlutterActivity() {
             action[payloadKey] = extras.get(key)
         }
         return action
+    }
+
+    private fun schedulePendingLaunchActionDelivery() {
+        Handler(Looper.getMainLooper()).post {
+            deliverPendingLaunchActionIfPossible()
+        }
     }
 
     private fun deliverPendingLaunchActionIfPossible() {

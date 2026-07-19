@@ -71,11 +71,14 @@ object NotificationSyncRelay {
         }.apply()
     }
 
-    fun hasSeenNotification(context: Context, notificationId: String): Boolean {
+    fun activeNotificationIds(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-        return prefs.getStringSet(activeNotificationIdsKey, emptySet())
-            ?.contains(notificationId) == true
+        return prefs.getStringSet(activeNotificationIdsKey, emptySet())?.toSet()
+            ?: emptySet()
     }
+
+    fun hasSeenNotification(context: Context, notificationId: String): Boolean =
+        activeNotificationIds(context).contains(notificationId)
 
     fun markNotificationActive(context: Context, notificationId: String) {
         mutateActiveNotificationIds(context) { ids -> ids += notificationId }
