@@ -9,6 +9,7 @@ import 'event_log_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/ios_notifications.dart';
 import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
@@ -22,7 +23,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
+  static const Duration _notificationPolicyDebounce =
+      Duration(milliseconds: 300);
   static const _androidTestNotificationPackage = 'com.example.app_flutter';
   static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
@@ -97,6 +99,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (AndroidShell.isSupported) {
       return AndroidShell.getNotificationPermissionStatus();
     }
+    if (IOSNotifications.isSupported) {
+      return IOSNotifications.getPermissionStatus();
+    }
     if (Platform.isMacOS) {
       return MacOSNotifications.getStatus();
     }
@@ -115,6 +120,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool success = false;
     if (AndroidShell.isSupported) {
       success = await AndroidShell.openNotificationSettings();
+    } else if (IOSNotifications.isSupported) {
+      success = await IOSNotifications.openSettings();
     } else if (Platform.isMacOS) {
       try {
         final direct = await Process.run('open', <String>[
@@ -143,8 +150,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _requestMacOSNotifications() async {
-    final granted = await MacOSNotifications.request();
+  Future<void> _requestNotifications() async {
+    final granted = IOSNotifications.isSupported
+        ? await IOSNotifications.requestPermission()
+        : await MacOSNotifications.request();
     final status = await _loadNotificationPermissionStatus();
     if (!mounted) {
       return;
@@ -182,6 +191,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showTestNotification() async {
+    if (IOSNotifications.isSupported) {
+      final success = await IOSNotifications.show(
+        title: 'Rift test notification',
+        body: 'If you see this notification, iOS delivery is working.',
+        route: NotificationRoute.historyNotifications,
+        payload: const <String, Object?>{'testNotification': true},
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? 'Sent iOS test notification.'
+                : 'Unable to send test notification. Enable app notifications first.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     final success = await AndroidShell.showTestNotification();
     if (success) {
@@ -351,7 +380,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool get _canManageNotificationSettings =>
-      AndroidShell.isSupported || Platform.isMacOS;
+      AndroidShell.isSupported ||
+      IOSNotifications.isSupported ||
+      Platform.isMacOS;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
@@ -392,28 +423,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
       case 'denied':
         return 'System notifications are off';
       case 'notDetermined':
-        return Platform.isMacOS
+        return Platform.isMacOS || IOSNotifications.isSupported
             ? 'Permission has not been requested yet'
             : 'Notification permission not granted yet';
       case 'unknown':
-        return Platform.isMacOS
-            ? 'Unable to read macOS notification permission state'
-            : 'Notification status unavailable on this platform';
+        if (Platform.isMacOS) {
+          return 'Unable to read macOS notification permission state';
+        }
+        if (IOSNotifications.isSupported) {
+          return 'Unable to read iOS notification permission state';
+        }
+        return 'Notification status unavailable on this platform';
       default:
         return 'Notification status: $_notificationPermissionStatus';
     }
   }
 
   String get _notificationPermissionActionLabel {
-    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
+    if ((Platform.isMacOS || IOSNotifications.isSupported) &&
+        _notificationPermissionStatus == 'notDetermined') {
       return 'ALLOW';
     }
     return 'OPEN SETTINGS';
   }
 
   Future<void> _handleNotificationPermissionAction() async {
-    if (Platform.isMacOS && _notificationPermissionStatus == 'notDetermined') {
-      await _requestMacOSNotifications();
+    if ((Platform.isMacOS || IOSNotifications.isSupported) &&
+        _notificationPermissionStatus == 'notDetermined') {
+      await _requestNotifications();
       return;
     }
     await _openNotificationSettings();
@@ -545,12 +582,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _deviceInfo?['implementationId']?.toString() ?? 'Unavailable';
     final protocolVersion =
         _deviceInfo?['protocolVersion']?.toString() ?? 'Unavailable';
-    final localNetworkSubtitle = Platform.isAndroid || Platform.isMacOS
-        ? 'Used during discovery and pairing'
-        : 'Managed by the local daemon';
+    final localNetworkSubtitle =
+        Platform.isAndroid || Platform.isMacOS || IOSNotifications.isSupported
+            ? 'Used during discovery and pairing'
+            : 'Managed by the local daemon';
     final backgroundExecSubtitle = Platform.isAndroid
         ? 'Rift uses a foreground service; some vendors may still restrict background work'
-        : 'Handled by the desktop session and local daemon';
+        : IOSNotifications.isSupported
+            ? 'Development builds can use location keepalive; iOS may still terminate the app'
+            : 'Handled by the desktop session and local daemon';
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -765,12 +805,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ),
-                if (AndroidShell.isSupported)
+                if (AndroidShell.isSupported || IOSNotifications.isSupported)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     child: SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
+                        key: const Key('test-notification-button'),
                         onPressed: _showTestNotification,
                         icon: const Icon(Icons.notifications_active_outlined),
                         label: const Text('Test notification'),
