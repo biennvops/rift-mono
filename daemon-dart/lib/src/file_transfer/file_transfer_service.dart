@@ -968,6 +968,8 @@ class FileTransferService {
           return 'Unauthorized';
         case -32006:
           return 'HashMismatch';
+        case -32007:
+          return 'PayloadTooLarge';
         case -32009:
           return 'NotFound';
         case -32010:

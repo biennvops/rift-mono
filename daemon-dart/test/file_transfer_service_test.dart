@@ -305,6 +305,35 @@ void main() {
       expect(service.listIncomingFileOffers(), isEmpty);
     });
 
+    test('sends PayloadTooLarge cancel for oversized incoming file offer', () async {
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '90909090-9090-4090-8090-909090909090',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+          'fileName': 'huge.bin',
+          'mediaType': 'application/octet-stream',
+          'byteSize': 33554433,
+          'sha256':
+              '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+          'chunkSize': 262144,
+          'chunkCount': 1,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      final cancelMessage = transport.sentMessages.singleWhere(
+        (message) => message['type'] == 'file.cancel',
+      );
+      expect(cancelMessage['payload']['failureReason'], 'PayloadTooLarge');
+    });
+
     test('rejects negative byteSize in incoming file offers', () async {
       transport.simulateIncomingMessage('rift-peer', {
         'rift': '0.1-draft',
