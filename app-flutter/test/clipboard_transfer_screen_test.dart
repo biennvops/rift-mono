@@ -39,6 +39,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   final _trustChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final _fileCompletedController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
@@ -103,7 +105,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferCompleted =>
-      const Stream<Map<String, dynamic>>.empty();
+      _fileCompletedController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed =>
@@ -240,6 +242,10 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
     };
   }
 
+  Future<void> emitFileCompleted(Map<String, dynamic> value) async {
+    _fileCompletedController.add(value);
+  }
+
   Future<void> emitConnectionChanged(bool value) async {
     _isConnected = value;
     _connectionChangedController.add(value);
@@ -335,6 +341,42 @@ void main() {
 
     expect(openedPath, '/storage/emulated/0/Download/Rift/report.pdf');
     expect(exportedPath, '/storage/emulated/0/Download/Rift/report.pdf');
+  });
+
+  testWidgets('Transfer activity retains completed event after active refresh',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      transfers: const <Map<String, dynamic>>[],
+    );
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        client: client,
+        routeNotifier:
+            ValueNotifier<String?>(NotificationRoute.historyTransferActivity),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await client.emitFileCompleted(const {
+      'transferId': 'completed-transfer',
+      'peerDeviceId': 'rift-peer-1',
+      'fileName': 'received.pdf',
+      'mediaType': 'application/pdf',
+      'byteSize': 2048,
+      'bytesTransferred': 2048,
+      'state': 'done',
+      'direction': 'incoming',
+      'destinationPath': '/documents/Downloads/received.pdf',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('received.pdf'), findsOneWidget);
+    expect(
+      find.text('Saved to: /documents/Downloads/received.pdf'),
+      findsOneWidget,
+    );
+    expect(find.text('Open File'), findsOneWidget);
   });
 
   testWidgets('Transfer activity shows folder action for desktop flow',

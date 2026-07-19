@@ -217,6 +217,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
       unawaited(_handleLegacyTransferCompleted(event));
       if (mounted) {
+        _retainTerminalTransfer(event);
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
       }
@@ -224,6 +225,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
       unawaited(_handleLegacyTransferFailed(event));
       if (mounted) {
+        _retainTerminalTransfer(event);
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
       }
@@ -413,10 +415,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       }).toList(growable: false);
 
       if (!mounted) return;
+      final listedTransferIds = transfers
+          .map((transfer) => transfer['transferId']?.toString())
+          .whereType<String>()
+          .toSet();
+      final retainedTerminalTransfers = _fileTransfers.where((transfer) {
+        final transferId = transfer['transferId']?.toString();
+        return _isTerminalTransfer(transfer) &&
+            (transferId == null || !listedTransferIds.contains(transferId));
+      }).toList(growable: false);
       setState(() {
         _fileTransfers
           ..clear()
-          ..addAll(transfers);
+          ..addAll(transfers)
+          ..addAll(retainedTerminalTransfers);
       });
     } catch (_) {
       if (!mounted) return;
@@ -425,6 +437,26 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         setState(() => _isRefreshingTransfers = false);
       }
     }
+  }
+
+  bool _isTerminalTransfer(Map<String, dynamic> transfer) {
+    final state = transfer['state']?.toString().toLowerCase();
+    return state == 'done' || state == 'failed' || state == 'cancelled';
+  }
+
+  void _retainTerminalTransfer(Map<String, dynamic> event) {
+    if (!_matchesDeviceFilter(event['peerDeviceId']?.toString())) {
+      return;
+    }
+    final transferId = event['transferId']?.toString();
+    setState(() {
+      if (transferId != null) {
+        _fileTransfers.removeWhere(
+          (transfer) => transfer['transferId']?.toString() == transferId,
+        );
+      }
+      _fileTransfers.insert(0, Map<String, dynamic>.from(event));
+    });
   }
 
   Future<void> _refreshTrustedPeers() async {
