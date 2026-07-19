@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/platform/ios_clipboard.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +15,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   FakeTransferJsonRpcClient({
     List<Map<String, dynamic>>? transfers,
     List<Map<String, dynamic>>? clipboardOffers,
+    this.clipboardFetchResult,
     this.sendQueueSupported = false,
     List<Map<String, dynamic>>? queueItems,
     bool isConnected = true,
@@ -44,6 +47,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
+  final Map<String, dynamic>? clipboardFetchResult;
   final List<Map<String, dynamic>> notifications = <Map<String, dynamic>>[];
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> queueItems;
@@ -128,12 +132,13 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> fetchClipboardContent(String offerId) async {
     fetchedClipboardOfferIds.add(offerId);
-    return {
-      'offerId': offerId,
-      'contentType': 'text/plain',
-      'contentBase64': 'aGVsbG8gZnJvbSBkZXNrdG9w',
-      'verified': true,
-    };
+    return clipboardFetchResult ??
+        {
+          'offerId': offerId,
+          'contentType': 'text/plain',
+          'contentBase64': 'aGVsbG8gZnJvbSBkZXNrdG9w',
+          'verified': true,
+        };
   }
 
   @override
@@ -280,7 +285,10 @@ void main() {
     Future<void> Function(String path)? openFileOverride,
     Future<void> Function(String path)? exportFileOverride,
     bool? iosClipboardActionsOverride,
+    Future<IOSClipboardContent?> Function()? readClipboardContentOverride,
     Future<String?> Function()? readClipboardTextOverride,
+    Future<void> Function(IOSClipboardContent content)?
+        writeClipboardContentOverride,
     Future<void> Function(String text)? writeClipboardTextOverride,
   }) {
     return MaterialApp(
@@ -302,7 +310,9 @@ void main() {
           openFileOverride: openFileOverride,
           exportFileOverride: exportFileOverride,
           iosClipboardActionsOverride: iosClipboardActionsOverride,
+          readClipboardContentOverride: readClipboardContentOverride,
           readClipboardTextOverride: readClipboardTextOverride,
+          writeClipboardContentOverride: writeClipboardContentOverride,
           writeClipboardTextOverride: writeClipboardTextOverride,
           pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
@@ -582,6 +592,35 @@ void main() {
     expect(find.text('Clipboard sent to trusted devices.'), findsOneWidget);
   });
 
+  testWidgets('iOS sends clipboard image after explicit user action',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient();
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        client: client,
+        iosClipboardActionsOverride: true,
+        readClipboardContentOverride: () async => IOSClipboardContent(
+          contentType: 'image/png',
+          bytes: Uint8List.fromList(<int>[137, 80, 78, 71]),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send Clipboard'));
+    await tester.pumpAndSettle();
+
+    expect(client.clipboardNotifications, hasLength(1));
+    expect(client.clipboardNotifications.single['contentType'], 'image/png');
+    expect(client.clipboardNotifications.single['byteSize'], 4);
+    expect(client.clipboardNotifications.single['contentBase64'], 'iVBORw==');
+    expect(
+      find.text('Clipboard image sent to trusted devices.'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('iOS copies incoming clipboard text after explicit user action',
       (WidgetTester tester) async {
     String? copiedText;
@@ -612,6 +651,48 @@ void main() {
 
     expect(client.fetchedClipboardOfferIds, ['offer-remote-1']);
     expect(copiedText, 'hello from desktop');
+    expect(find.text('Copied to clipboard.'), findsOneWidget);
+  });
+
+  testWidgets('iOS copies incoming clipboard image after explicit user action',
+      (WidgetTester tester) async {
+    IOSClipboardContent? copiedContent;
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-image-1',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'image/png',
+          'byteSize': 4,
+          'sha256': 'abc123',
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+      clipboardFetchResult: const {
+        'offerId': 'offer-image-1',
+        'contentType': 'image/png',
+        'contentBase64': 'iVBORw==',
+        'verified': true,
+      },
+    );
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: false,
+        client: client,
+        iosClipboardActionsOverride: true,
+        writeClipboardContentOverride: (content) async {
+          copiedContent = content;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Copy Image'));
+    await tester.pumpAndSettle();
+
+    expect(client.fetchedClipboardOfferIds, ['offer-image-1']);
+    expect(copiedContent?.contentType, 'image/png');
+    expect(copiedContent?.bytes, <int>[137, 80, 78, 71]);
     expect(find.text('Copied to clipboard.'), findsOneWidget);
   });
 

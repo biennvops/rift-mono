@@ -8,6 +8,7 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
   private var identityChannel: FlutterMethodChannel?
+  private var clipboardChannel: FlutterMethodChannel?
   private var documentsChannel: FlutterMethodChannel?
   private var notificationsChannel: FlutterMethodChannel?
   private var previewURL: NSURL?
@@ -110,6 +111,59 @@ import UserNotifications
       }
     }
     identityChannel = channel
+
+    let clipboardChannel = FlutterMethodChannel(
+      name: "rift/ios/clipboard",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    clipboardChannel.setMethodCallHandler { call, result in
+      let pasteboard = UIPasteboard.general
+      switch call.method {
+      case "readContent":
+        if let image = pasteboard.image, let data = image.pngData() {
+          result([
+            "contentType": "image/png",
+            "bytes": FlutterStandardTypedData(bytes: data),
+          ])
+        } else if let text = pasteboard.string, let data = text.data(using: .utf8) {
+          result([
+            "contentType": "text/plain",
+            "bytes": FlutterStandardTypedData(bytes: data),
+          ])
+        } else {
+          result(nil)
+        }
+      case "writeContent":
+        guard let arguments = call.arguments as? [String: Any],
+              let contentType = arguments["contentType"] as? String,
+              let typedData = arguments["bytes"] as? FlutterStandardTypedData else {
+          result(FlutterError(code: "invalid_args", message: "contentType and bytes are required.", details: nil))
+          return
+        }
+
+        switch contentType {
+        case "text/plain", "clipboard":
+          guard let text = String(data: typedData.data, encoding: .utf8) else {
+            result(false)
+            return
+          }
+          pasteboard.string = text
+          result(true)
+        case "image/png":
+          guard let image = UIImage(data: typedData.data) else {
+            result(false)
+            return
+          }
+          pasteboard.image = image
+          result(true)
+        default:
+          result(false)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.clipboardChannel = clipboardChannel
 
     let documentsChannel = FlutterMethodChannel(
       name: "rift/ios/documents",

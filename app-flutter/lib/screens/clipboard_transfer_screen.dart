@@ -19,6 +19,7 @@ import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/ios_clipboard.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
@@ -51,7 +52,10 @@ class ClipboardTransferScreen extends StatefulWidget {
   final Future<void> Function(String path)? openFileOverride;
   final Future<void> Function(String path)? exportFileOverride;
   final bool? iosClipboardActionsOverride;
+  final Future<IOSClipboardContent?> Function()? readClipboardContentOverride;
   final Future<String?> Function()? readClipboardTextOverride;
+  final Future<void> Function(IOSClipboardContent content)?
+      writeClipboardContentOverride;
   final Future<void> Function(String text)? writeClipboardTextOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
@@ -66,7 +70,9 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.openFileOverride,
     this.exportFileOverride,
     this.iosClipboardActionsOverride,
+    this.readClipboardContentOverride,
     this.readClipboardTextOverride,
+    this.writeClipboardContentOverride,
     this.writeClipboardTextOverride,
     this.routeNotifier,
     this.sharedClipboardTextNotifier,
@@ -524,30 +530,63 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     return '${deviceId.substring(0, 12)}...';
   }
 
-  Future<void> _sendClipboardText() async {
+  Future<void> _sendClipboard() async {
     final messenger = ScaffoldMessenger.of(context);
     final client = context.read<JsonRpcRiftClient>();
     try {
-      final text = widget.readClipboardTextOverride != null
-          ? await widget.readClipboardTextOverride!()
-          : (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-      if (text == null || text.isEmpty) {
+      IOSClipboardContent? content;
+      if (widget.readClipboardContentOverride != null) {
+        content = await widget.readClipboardContentOverride!();
+      } else if (widget.readClipboardTextOverride != null) {
+        final text = await widget.readClipboardTextOverride!();
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      } else if (Platform.isIOS) {
+        content = await IOSClipboard.readContent();
+      } else {
+        final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      }
+
+      if (content == null || content.bytes.isEmpty) {
         messenger.showSnackBar(
-          const SnackBar(content: Text('The clipboard has no text to send.')),
+          const SnackBar(
+            content: Text('The clipboard has no text or image to send.'),
+          ),
         );
         return;
       }
+      if (content.contentType != 'text/plain' &&
+          content.contentType != 'image/png') {
+        throw StateError(
+          'Unsupported clipboard type: ${content.contentType}',
+        );
+      }
 
-      final bytes = utf8.encode(text);
       await client.notifyClipboardChange(
-        contentType: 'text/plain',
-        byteSize: bytes.length,
-        sha256: sha256.convert(bytes).toString(),
-        contentBase64: base64Encode(bytes),
+        contentType: content.contentType,
+        byteSize: content.bytes.length,
+        sha256: sha256.convert(content.bytes).toString(),
+        contentBase64: base64Encode(content.bytes),
       );
       if (!mounted) return;
       messenger.showSnackBar(
-        const SnackBar(content: Text('Clipboard sent to trusted devices.')),
+        SnackBar(
+          content: Text(
+            content.contentType == 'image/png'
+                ? 'Clipboard image sent to trusted devices.'
+                : 'Clipboard sent to trusted devices.',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
@@ -578,11 +617,28 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (contentBase64 == null || contentBase64.isEmpty) {
         throw StateError('Clipboard content was empty.');
       }
-      final text = utf8.decode(base64Decode(contentBase64));
-      if (widget.writeClipboardTextOverride != null) {
-        await widget.writeClipboardTextOverride!(text);
+      final contentType = result['contentType']?.toString() ??
+          offer['contentType']?.toString() ??
+          '';
+      final content = IOSClipboardContent(
+        contentType: contentType,
+        bytes: base64Decode(contentBase64),
+      );
+      if (widget.writeClipboardContentOverride != null) {
+        await widget.writeClipboardContentOverride!(content);
+      } else if (contentType == 'text/plain' || contentType == 'clipboard') {
+        final text = utf8.decode(content.bytes);
+        if (widget.writeClipboardTextOverride != null) {
+          await widget.writeClipboardTextOverride!(text);
+        } else {
+          await Clipboard.setData(ClipboardData(text: text));
+        }
+      } else if (contentType == 'image/png' && Platform.isIOS) {
+        if (!await IOSClipboard.writeContent(content)) {
+          throw StateError('iOS did not apply the clipboard image.');
+        }
       } else {
-        await Clipboard.setData(ClipboardData(text: text));
+        throw StateError('Unsupported clipboard type: $contentType');
       }
       if (!mounted) return;
       messenger.showSnackBar(
@@ -1951,7 +2007,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         children: [
           if (_iosClipboardActions) ...[
             FilledButton.icon(
-              onPressed: _sendClipboardText,
+              onPressed: _sendClipboard,
               icon: const Icon(Icons.send),
               label: const Text('Send Clipboard'),
             ),
@@ -1972,7 +2028,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       children: [
         if (_iosClipboardActions) ...[
           FilledButton.icon(
-            onPressed: _sendClipboardText,
+            onPressed: _sendClipboard,
             icon: const Icon(Icons.send),
             label: const Text('Send Clipboard'),
           ),
@@ -2035,12 +2091,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                           ),
                         ),
                       ],
-                      if (_iosClipboardActions && !isImage) ...[
+                      if (_iosClipboardActions) ...[
                         const SizedBox(height: 8),
                         TextButton.icon(
                           onPressed: () => _copyClipboardOffer(offer),
                           icon: const Icon(Icons.copy),
-                          label: const Text('Copy'),
+                          label: Text(isImage ? 'Copy Image' : 'Copy'),
                         ),
                       ],
                     ],
