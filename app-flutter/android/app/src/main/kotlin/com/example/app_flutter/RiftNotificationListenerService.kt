@@ -1,7 +1,9 @@
 package com.example.app_flutter
 
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.PendingIntent
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -37,7 +39,23 @@ class RiftNotificationListenerService : NotificationListenerService() {
                     val contentIntent = notification.notification.contentIntent
                         ?: return failure("CapabilityUnavailable", "The notification cannot be opened.")
                     try {
-                        contentIntent.send()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            val options = ActivityOptions.makeBasic().apply {
+                                pendingIntentBackgroundActivityStartMode =
+                                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                            }
+                            contentIntent.send(
+                                service,
+                                0,
+                                null,
+                                null,
+                                null,
+                                null,
+                                options.toBundle(),
+                            )
+                        } else {
+                            contentIntent.send()
+                        }
                         mapOf("success" to true)
                     } catch (error: PendingIntent.CanceledException) {
                         failure("CapabilityUnavailable", error.message ?: "The notification action expired.")
