@@ -15,6 +15,7 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/android_shell.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
@@ -1460,6 +1461,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   }
 
   Future<String?> _pickDestinationPath(String suggestedFileName) async {
+    if (Platform.isAndroid) {
+      final prepared =
+          await AndroidShell.prepareIncomingDownload(suggestedFileName);
+      return prepared?['stagingPath']?.toString();
+    }
+
     try {
       final defaultPath = await _defaultDestinationPath(suggestedFileName);
       final path = await FilePicker.platform.saveFile(
