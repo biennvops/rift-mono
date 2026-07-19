@@ -331,7 +331,7 @@ The v1 notification record fields are:
 | `bodyPreview`     | No       | string              | Mirrored body preview only                                            |
 | `postedAt`        | Yes      | RFC 3339 UTC string | Audit timestamp for the Android-side post/update event                |
 | `isDismissible`   | Yes      | boolean             | Whether remote `dismiss` is currently allowed                         |
-| `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed                            |
+| `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed; Android sources use `false` in v1 |
 | `icon`            | No       | object              | Optional metadata for an icon payload; implementations MAY omit icons |
 
 `notification.posted` payload fields: the full notification record above.
@@ -340,7 +340,7 @@ The v1 notification record fields are:
 
 `notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
 
-`notification.actionRequest` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `sourceDeviceId` MUST identify the Android device that originated the notification, and `requestingDeviceId` MUST match the authenticated envelope identity. Notification actions are guaranteed only for Android-origin notifications in v1; non-Android sources MUST advertise `isDismissible: false` and `isOpenable: false`. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
+`notification.actionRequest` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `sourceDeviceId` MUST identify the Android device that originated the notification, and `requestingDeviceId` MUST match the authenticated envelope identity. Android-origin notifications MAY advertise remote `dismiss` but MUST advertise `isOpenable: false` in v1 because Android does not reliably permit a remote device action to foreground an application. Non-Android sources MUST advertise `isDismissible: false` and `isOpenable: false`. The v1 action vocabulary remains closed as `open` and `dismiss` for forward compatibility, but a request MUST NOT be sent when the corresponding advertised flag is false. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
 
 `notification.actionResult` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
@@ -561,7 +561,7 @@ Expiry is measured from local receipt time using monotonic timers. Wall-clock ti
 
 Notification sync mirrors limited notification metadata between trusted peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
 
-Each originating daemon is the source of truth for its notification state and local sync policy. Android-origin notifications MAY advertise remote `open` and `dismiss`; desktop-origin notifications MUST advertise both actions as unavailable in v1. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
+Each originating daemon is the source of truth for its notification state and local sync policy. Android-origin notifications MAY advertise remote `dismiss` but MUST advertise remote `open` as unavailable in v1 because Android background-activity-launch policy does not recognize a remote-device click as a local foreground-launch gesture. Desktop-origin notifications MUST advertise both actions as unavailable in v1. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
 
 Receivers MUST key mirrored records by `(sourceDeviceId, notificationId)` and mutate them in place on `notification.updated` / `notification.removed`. Senders and receivers SHOULD log accepted, denied, expired, malformed, and action-result flows with metadata only. Event details MUST NOT include full unredacted notification content beyond the mirrored title/body preview already permitted on the wire.
 

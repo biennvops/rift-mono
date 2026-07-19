@@ -644,7 +644,7 @@ Returns the locally cached mirrored notification inbox plus the current local no
 
 #### `rift.performNotificationAction`
 
-Requests a remote action against a mirrored notification when the source marked that action as available.
+Requests a remote action against a mirrored notification when the source marked that action as available. Android-origin notifications advertise `isOpenable: false` in v1 because Android does not reliably allow a remote-device action to foreground an application; Android remote actions are therefore limited to `dismiss`.
 
 **Params:**
 

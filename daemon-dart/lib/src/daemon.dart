@@ -1333,9 +1333,9 @@ class RiftDaemon {
         );
         final sourcePlatform = record['sourcePlatform'] as String? ?? 'android';
         record['sourcePlatform'] = sourcePlatform;
+        record['isOpenable'] = false;
         if (sourcePlatform != 'android') {
           record['isDismissible'] = false;
-          record['isOpenable'] = false;
         }
 
         _notificationSyncRecords[_notificationRecordKey(

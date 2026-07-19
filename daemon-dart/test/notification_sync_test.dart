@@ -103,6 +103,14 @@ void main() {
           },
         });
 
+        final listed = await daemon.handleJsonRpcRequest({
+          'method': 'rift.listNotifications',
+        });
+        final localNotification =
+            (listed['notifications'] as List).single as Map<String, dynamic>;
+        expect(localNotification['isOpenable'], isFalse);
+        expect(localNotification['isDismissible'], isTrue);
+
         await daemon.handleNotificationSyncProtocolMessageForTesting(
           peerDeviceId,
           {

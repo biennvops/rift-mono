@@ -1,10 +1,6 @@
 package com.example.app_flutter
 
-import android.app.ActivityManager
-import android.app.ActivityOptions
 import android.app.Notification
-import android.app.PendingIntent
-import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -36,53 +32,11 @@ class RiftNotificationListenerService : NotificationListenerService() {
                         mapOf("success" to true)
                     }
                 }
-                "open" -> {
-                    val contentIntent = notification.notification.contentIntent
-                        ?: return failure("CapabilityUnavailable", "The notification cannot be opened.")
-                    try {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                            val options = ActivityOptions.makeBasic().apply {
-                                pendingIntentBackgroundActivityStartMode =
-                                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
-                            }
-                            contentIntent.send(
-                                service,
-                                0,
-                                null,
-                                null,
-                                null,
-                                null,
-                                options.toBundle(),
-                            )
-                        } else {
-                            contentIntent.send()
-                        }
-                        if (contentIntent.creatorPackage == service.packageName &&
-                            !moveRiftTaskToFront(service)) {
-                            failure(
-                                "CapabilityUnavailable",
-                                "Android did not allow Rift to move to the foreground.",
-                            )
-                        } else {
-                            mapOf("success" to true)
-                        }
-                    } catch (error: PendingIntent.CanceledException) {
-                        failure("CapabilityUnavailable", error.message ?: "The notification action expired.")
-                    }
-                }
+                "open" -> failure(
+                    "CapabilityUnavailable",
+                    "Android does not allow reliable remote foreground launches.",
+                )
                 else -> failure("ProtocolError", "Unknown notification action '$action'.")
-            }
-        }
-
-        private fun moveRiftTaskToFront(service: RiftNotificationListenerService): Boolean {
-            return try {
-                val activityManager = service.getSystemService(ActivityManager::class.java)
-                val task = activityManager.appTasks.firstOrNull() ?: return false
-                task.moveToFront()
-                true
-            } catch (error: RuntimeException) {
-                Log.w(tag, "Unable to move Rift task to foreground", error)
-                false
             }
         }
 
@@ -175,7 +129,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
             "bodyPreview" to body,
             "postedAt" to formatUtcTimestamp(sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()),
             "isDismissible" to sbn.isClearable,
-            "isOpenable" to (sbn.notification.contentIntent != null),
+            "isOpenable" to false,
         )
     }
 
