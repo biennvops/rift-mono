@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:daemon_dart/daemon_dart.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
 
@@ -16,6 +17,8 @@ abstract class InProcessDaemon {
 }
 
 class RiftInProcessDaemon implements InProcessDaemon {
+  static const _identityChannel = MethodChannel('rift/ios/identity');
+
   final RiftDaemon _daemon;
 
   RiftInProcessDaemon._(this._daemon);
@@ -27,9 +30,21 @@ class RiftInProcessDaemon implements InProcessDaemon {
     return RiftInProcessDaemon._(
       RiftDaemon(
         storagePath: storagePath,
+        identityPrivateKeyProvider: () => _loadIdentityKey(storagePath),
         onIpcEvent: onIpcEvent,
       ),
     );
+  }
+
+  static Future<Uint8List> _loadIdentityKey(String storagePath) async {
+    final key = await _identityChannel.invokeMethod<Uint8List>(
+      'loadOrCreate',
+      {'legacyPath': '$storagePath/identity.key'},
+    );
+    if (key == null) {
+      throw StateError('iOS Keychain returned no identity key.');
+    }
+    return key;
   }
 
   @override

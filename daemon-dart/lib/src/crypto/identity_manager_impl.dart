@@ -13,6 +13,7 @@ import 'pop_manager.dart';
 
 class IdentityManagerImpl implements IdentityManager {
   final String storagePath;
+  final Future<Uint8List> Function()? privateKeyProvider;
   Uint8List? _privateKey;
   Uint8List? _publicKey;
   String _deviceId = '';
@@ -24,12 +25,19 @@ class IdentityManagerImpl implements IdentityManager {
   String _tlsPrivateKeyPem = '';
   Uint8List? _tlsCertificateDer;
 
-  IdentityManagerImpl(this.storagePath);
+  IdentityManagerImpl(this.storagePath, {this.privateKeyProvider});
 
   @override
   Future<void> initialize() async {
     var keyFile = File(p.join(storagePath, 'identity.key'));
-    if (await keyFile.exists()) {
+    if (privateKeyProvider != null) {
+      final keyBytes = await privateKeyProvider!();
+      if (keyBytes.length != 32) {
+        throw Exception('Corrupted identity key: expected 32 bytes.');
+      }
+      _privateKey = Uint8List.fromList(keyBytes);
+      await _derivePublicKey();
+    } else if (await keyFile.exists()) {
       final keyBytes = await keyFile.readAsBytes();
       if (keyBytes.length != 32) {
         throw Exception('Corrupted identity key file: expected 32 bytes.');

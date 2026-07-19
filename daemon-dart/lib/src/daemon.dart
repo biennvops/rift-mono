@@ -379,6 +379,7 @@ class RiftDaemon {
   bool _isDiscovering = false;
 
   final String storagePath;
+  final Future<Uint8List> Function()? identityPrivateKeyProvider;
   final int port;
   final bool enableTransport;
   final bool enableDiscovery;
@@ -386,6 +387,7 @@ class RiftDaemon {
 
   RiftDaemon({
     required this.storagePath,
+    this.identityPrivateKeyProvider,
     this.port = 11112,
     this.enableTransport = true,
     this.enableDiscovery = true,
@@ -393,7 +395,10 @@ class RiftDaemon {
   });
 
   Future<void> start() async {
-    _identityManager = IdentityManagerImpl(storagePath);
+    _identityManager = IdentityManagerImpl(
+      storagePath,
+      privateKeyProvider: identityPrivateKeyProvider,
+    );
     await _identityManager!.initialize();
 
     _trustStore = TrustStoreImpl(p.join(storagePath, 'trust_store.db'));
