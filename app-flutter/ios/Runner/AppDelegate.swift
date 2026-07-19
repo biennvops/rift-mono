@@ -18,6 +18,7 @@ import UserNotifications
   private var currentMediaPlaybackSourceDeviceId: String?
   private var currentMediaPlaybackId: String?
   private var currentMediaPlaybackState: String?
+  private var currentMediaPlaybackInfo: [String: Any]?
   private var remoteMediaAudioPlayer: AVAudioPlayer?
   private var previewURL: NSURL?
   private var backgroundLocationManager: CLLocationManager?
@@ -141,6 +142,29 @@ import UserNotifications
 
     configureMediaPlaybackCommandTargetsIfNeeded()
     updateMediaPlaybackCommandAvailability(playback)
+    currentMediaPlaybackInfo = nowPlayingInfo
+    reassertRemoteMediaPlaybackState()
+    return true
+  }
+
+  private func clearRemoteMediaPlayback() {
+    currentMediaPlaybackSourceDeviceId = nil
+    currentMediaPlaybackId = nil
+    currentMediaPlaybackState = nil
+    currentMediaPlaybackInfo = nil
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    if #available(iOS 13.0, *) {
+      MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+    updateMediaPlaybackCommandAvailability([:])
+    stopDevelopmentRemoteMediaSession()
+  }
+
+  private func reassertRemoteMediaPlaybackState() {
+    guard let nowPlayingInfo = currentMediaPlaybackInfo else {
+      return
+    }
+
     let infoCenter = MPNowPlayingInfoCenter.default()
     infoCenter.nowPlayingInfo = nowPlayingInfo
     if #available(iOS 13.0, *) {
@@ -157,19 +181,7 @@ import UserNotifications
         infoCenter.playbackState = .unknown
       }
     }
-    return true
-  }
-
-  private func clearRemoteMediaPlayback() {
-    currentMediaPlaybackSourceDeviceId = nil
-    currentMediaPlaybackId = nil
-    currentMediaPlaybackState = nil
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-    if #available(iOS 13.0, *) {
-      MPNowPlayingInfoCenter.default().playbackState = .stopped
-    }
-    updateMediaPlaybackCommandAvailability([:])
-    stopDevelopmentRemoteMediaSession()
+    syncDevelopmentRemoteMediaSessionPlaybackState()
   }
 
   private func startDevelopmentRemoteMediaSession() -> Bool {
@@ -178,7 +190,7 @@ import UserNotifications
     ) as? Bool == true else {
       return false
     }
-    if remoteMediaAudioPlayer?.isPlaying == true {
+    if remoteMediaAudioPlayer != nil {
       return true
     }
 
@@ -203,6 +215,19 @@ import UserNotifications
     } catch {
       NSLog("Rift failed to start development remote media session: %@", error.localizedDescription)
       return false
+    }
+  }
+
+  private func syncDevelopmentRemoteMediaSessionPlaybackState() {
+    guard let player = remoteMediaAudioPlayer else {
+      return
+    }
+    if currentMediaPlaybackState == "playing" {
+      if !player.isPlaying {
+        player.play()
+      }
+    } else if player.isPlaying {
+      player.pause()
     }
   }
 
@@ -330,7 +355,12 @@ import UserNotifications
     if let positionMs {
       payload["positionMs"] = positionMs
     }
-    channel.invokeMethod("mediaPlaybackAction", arguments: payload)
+    channel.invokeMethod("mediaPlaybackAction", arguments: payload) { [weak self] _ in
+      self?.reassertRemoteMediaPlaybackState()
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) { [weak self] in
+      self?.reassertRemoteMediaPlaybackState()
+    }
     return .success
   }
 

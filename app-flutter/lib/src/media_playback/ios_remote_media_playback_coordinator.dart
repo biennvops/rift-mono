@@ -15,7 +15,9 @@ class IOSRemoteMediaPlaybackCoordinator {
   StreamSubscription<Map<String, dynamic>>? _postedSub;
   StreamSubscription<Map<String, dynamic>>? _updatedSub;
   StreamSubscription<Map<String, dynamic>>? _removedSub;
+  StreamSubscription<Map<String, dynamic>>? _actionResultSub;
   StreamSubscription<bool>? _connectionSub;
+  Timer? _actionRefreshTimer;
 
   Future<void> start() async {
     if (!IOSMediaPlayback.isSupported) return;
@@ -24,6 +26,9 @@ class IOSRemoteMediaPlaybackCoordinator {
     _postedSub = _client.onMediaPlaybackPosted.listen(_upsertPlayback);
     _updatedSub = _client.onMediaPlaybackUpdated.listen(_upsertPlayback);
     _removedSub = _client.onMediaPlaybackRemoved.listen(_removePlayback);
+    _actionResultSub = _client.onMediaPlaybackActionResult.listen((_) {
+      _scheduleAuthoritativeRefresh(Duration.zero);
+    });
     _connectionSub = _client.onConnectionChanged.listen((isConnected) {
       if (isConnected) unawaited(refresh());
     });
@@ -34,7 +39,9 @@ class IOSRemoteMediaPlaybackCoordinator {
     IOSMediaPlayback.setMethodCallHandler(null);
     await _postedSub?.cancel();
     await _updatedSub?.cancel();
+    _actionRefreshTimer?.cancel();
     await _removedSub?.cancel();
+    await _actionResultSub?.cancel();
     await _connectionSub?.cancel();
     if (IOSMediaPlayback.isSupported) await IOSMediaPlayback.clear();
   }
@@ -65,11 +72,17 @@ class IOSRemoteMediaPlaybackCoordinator {
         action: action,
         positionMs: positionMs,
       );
+      _scheduleAuthoritativeRefresh(const Duration(milliseconds: 300));
       return true;
     } catch (error) {
       debugPrint('[iOS Media Playback] Failed to perform action: $error');
       return false;
     }
+  }
+
+  void _scheduleAuthoritativeRefresh(Duration delay) {
+    _actionRefreshTimer?.cancel();
+    _actionRefreshTimer = Timer(delay, () => unawaited(refresh()));
   }
 
   Future<void> refresh() async {

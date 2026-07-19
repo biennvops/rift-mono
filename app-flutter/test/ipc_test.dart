@@ -1255,6 +1255,38 @@ void main() {
             'positionMs': 42000,
           },
         );
+
+        transport.listMediaPlaybackResult = {
+          'playbacks': [
+            {
+              ...Map<String, dynamic>.from(
+                (transport.listMediaPlaybackResult['playbacks'] as List).single
+                    as Map,
+              ),
+              'playbackState': 'paused',
+              'positionMs': 42000,
+              'canPlay': true,
+              'canPause': false,
+              'updatedAt': '2026-07-19T17:30:01Z',
+            }
+          ],
+        };
+        transport.emitNotification('rift.onMediaPlaybackActionResult', {
+          'playbackId': 'playback-ios-1',
+          'sourceDeviceId': 'rift-mac',
+          'action': 'seek',
+          'operationId': 'operation-media-1',
+          'state': 'Done',
+          'success': true,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final confirmedPlayback = Map<String, dynamic>.from(
+          (nativeCalls.lastWhere((call) => call.method == 'show').arguments
+              as Map)['playback'] as Map,
+        );
+        expect(confirmedPlayback['playbackState'], 'paused');
+        expect(confirmedPlayback['positionMs'], 42000);
       } finally {
         await coordinator.dispose();
         IOSMediaPlayback.debugIsIOSOverride = null;
