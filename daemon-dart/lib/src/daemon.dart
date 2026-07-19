@@ -602,6 +602,7 @@ class RiftDaemon {
           'method': 'rift.onPeerDiscovered',
           'params': {
             'deviceId': peer.deviceIdHint,
+            'instanceId': peer.instanceId,
             'address': peer.address,
             'port': peer.port,
             'txtRecord': {
@@ -623,7 +624,7 @@ class RiftDaemon {
           _forwardIpcEvent({
             'jsonrpc': '2.0',
             'method': 'rift.onPeerLost',
-            'params': {'deviceId': deviceId},
+            'params': {'deviceId': deviceId, 'instanceId': peer.instanceId},
           });
         }
       });
