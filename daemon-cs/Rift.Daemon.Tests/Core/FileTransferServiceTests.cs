@@ -630,6 +630,46 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleResumeReceived_UsesPausedOutgoingTransferState()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.FailSecondChunkSendOnce = true;
+
+        var path = CreateTempFile(new string('a', 600000));
+        try
+        {
+            var offer = await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
+            await _service.HandleAcceptReceivedAsync("rift-peer", offer.TransferId, "rift-peer", 262144, CancellationToken.None);
+            await WaitForConditionAsync(
+                () => _notifications.Notifications.Any(note => note.Method == "rift.onFileTransferFailed"),
+                TimeSpan.FromSeconds(1));
+
+            var sentChunkCountBeforeResume = _transport.SentMessages.Count(sent => sent.Type == "file.chunk");
+            await _service.HandleResumeReceivedAsync("rift-peer", offer.TransferId, "rift-peer", 1, 262144, CancellationToken.None);
+            await WaitForConditionAsync(
+                () => _transport.SentMessages.Count(sent => sent.Type == "file.complete") > 0,
+                TimeSpan.FromSeconds(1));
+
+            var resumedChunk = _transport.SentMessages
+                .Skip(sentChunkCountBeforeResume)
+                .First(sent => sent.Type == "file.chunk");
+            Assert.Equal(1, resumedChunk.Payload.GetProperty("chunkIndex").GetInt32());
+            Assert.Equal(262144, resumedChunk.Payload.GetProperty("offset").GetInt64());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task HandleCancelReceivedAsync_RejectsAuthenticatedPeerThatDoesNotOwnOutgoingTransfer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -805,6 +845,70 @@ public sealed class FileTransferServiceTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task PartialIncomingTransfer_SendsResumeWhenTrustedSessionReturns()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+
+        var bytes = Encoding.UTF8.GetBytes(new string('a', 600000));
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        const string transferId = "transfer-resume";
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = transferId,
+            FileName = "resume.txt",
+            MediaType = "text/plain",
+            ByteSize = bytes.Length,
+            Sha256 = sha,
+            ChunkSize = 262144,
+            ChunkCount = 3,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
+
+        var destination = Path.Combine(Path.GetTempPath(), $"rift-resume-{Guid.NewGuid():N}.txt");
+        try
+        {
+            await _service.AcceptFileOfferAsync(transferId, destination, overwrite: false, CancellationToken.None);
+            var firstChunk = bytes.AsSpan(0, 262144).ToArray();
+            var firstChunkSha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(firstChunk));
+            await _service.HandleChunkReceivedAsync(
+                "rift-peer",
+                transferId,
+                0,
+                0,
+                firstChunk.Length,
+                firstChunkSha,
+                Convert.ToBase64String(firstChunk),
+                false,
+                CancellationToken.None);
+
+            _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
+            await WaitForConditionAsync(() => _transport.SentMessages.Any(sent => sent.Type == "file.resume"), TimeSpan.FromSeconds(1));
+
+            var resume = _transport.SentMessages.Last(sent => sent.Type == "file.resume");
+            Assert.Equal(transferId, resume.Payload.GetProperty("transferId").GetString());
+            Assert.Equal(1, resume.Payload.GetProperty("nextChunkIndex").GetInt32());
+            Assert.Equal(262144, resume.Payload.GetProperty("offset").GetInt64());
+        }
+        finally
+        {
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+        }
+    }
+
     public void Dispose()
     {
     }
@@ -947,11 +1051,7 @@ public sealed class FileTransferServiceTests : IDisposable
             remove { }
         }
 
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type, JsonElement Payload)> SentMessages { get; } = [];
         public List<(string Host, int Port)> ConnectAttempts { get; } = [];
@@ -959,7 +1059,9 @@ public sealed class FileTransferServiceTests : IDisposable
         public Queue<Exception> ConnectExceptions { get; } = new();
         public bool BlockChunkSends { get; set; }
         public bool FailChunkSendOnce { get; set; }
+        public bool FailSecondChunkSendOnce { get; set; }
         public int BlockedChunkSendCount { get; private set; }
+        public int ChunkSendCount { get; private set; }
         public bool HasActiveSessionValue { get; set; } = true;
         public bool HasProtectedSessionValue { get; set; } = true;
         public TimeSpan ConnectDelay { get; set; } = TimeSpan.Zero;
@@ -990,10 +1092,19 @@ public sealed class FileTransferServiceTests : IDisposable
             var type = document.RootElement.GetProperty("type").GetString() ?? string.Empty;
             var payload = document.RootElement.GetProperty("payload").Clone();
             SentMessages.Add((peerDeviceId, type, payload));
-            if (FailChunkSendOnce && string.Equals(type, "file.chunk", StringComparison.Ordinal))
+            if (string.Equals(type, "file.chunk", StringComparison.Ordinal))
             {
-                FailChunkSendOnce = false;
-                throw new IOException("simulated broken pipe");
+                ChunkSendCount++;
+                if (FailChunkSendOnce)
+                {
+                    FailChunkSendOnce = false;
+                    throw new IOException("simulated broken pipe");
+                }
+                if (FailSecondChunkSendOnce && ChunkSendCount == 2)
+                {
+                    FailSecondChunkSendOnce = false;
+                    throw new IOException("simulated broken pipe");
+                }
             }
             if (BlockChunkSends && string.Equals(type, "file.chunk", StringComparison.Ordinal))
             {
@@ -1023,6 +1134,11 @@ public sealed class FileTransferServiceTests : IDisposable
         public void ReleaseBlockedChunkSends()
         {
             _releaseBlockedChunkSends.TrySetResult();
+        }
+
+        public void RaiseSessionStateChanged(SessionStateChangedEventArgs args)
+        {
+            SessionStateChanged?.Invoke(this, args);
         }
     }
 }

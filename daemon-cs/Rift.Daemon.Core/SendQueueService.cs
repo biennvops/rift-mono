@@ -463,11 +463,6 @@ public sealed class SendQueueService : ISendQueueService
                     updated.Status = IsRecoverableFailureReason(args.FailureReason)
                         ? "waiting_for_peer"
                         : "failed";
-                    if (updated.Status == "waiting_for_peer")
-                    {
-                        updated.CurrentOperationId = null;
-                        updated.LastTransferId = null;
-                    }
                     break;
             }
         }
@@ -493,7 +488,15 @@ public sealed class SendQueueService : ISendQueueService
                     continue;
                 }
 
-                if (item.Status is "queued" or "waiting_for_peer")
+                if (item.Status == "queued")
+                {
+                    queueItemIds.Add(item.QueueItemId);
+                    continue;
+                }
+
+                if (item.Status == "waiting_for_peer" &&
+                    string.IsNullOrWhiteSpace(item.LastTransferId) &&
+                    string.IsNullOrWhiteSpace(item.CurrentOperationId))
                 {
                     queueItemIds.Add(item.QueueItemId);
                 }

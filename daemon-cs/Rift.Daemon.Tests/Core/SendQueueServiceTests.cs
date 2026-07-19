@@ -215,6 +215,56 @@ public sealed class SendQueueServiceTests
     }
 
     [Fact]
+    public async Task ResumableWaitingForPeer_DoesNotCreateNewOfferOnReconnect()
+    {
+        var fileTransfer = new FakeFileTransferService();
+        var transport = new FakeTransport();
+        var service = new SendQueueService(_trustStore, null, fileTransfer, transport);
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        var path = CreateTempFile("hello");
+        try
+        {
+            var result = await service.EnqueueFileSendAsync(path, "demo.txt", "text/plain", "rift-peer", "picker", CancellationToken.None);
+            fileTransfer.RaiseTransferUpdated(new FileTransferLifecycleEventArgs
+            {
+                TransferId = "transfer-1",
+                OperationId = "operation-1",
+                Direction = "outgoing",
+                PeerDeviceId = "rift-peer",
+                FileName = "demo.txt",
+                ByteSize = 5,
+                State = "failed",
+                FailureReason = "ConnectionLost",
+                Message = "socket reset"
+            });
+
+            var waiting = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
+            Assert.Equal("waiting_for_peer", waiting.Status);
+            Assert.Equal("transfer-1", waiting.LastTransferId);
+            Assert.Equal("operation-1", waiting.CurrentOperationId);
+            Assert.Equal(1, fileTransfer.OfferCallCount);
+
+            transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
+            await Task.Delay(50);
+
+            var unchanged = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
+            Assert.Equal("waiting_for_peer", unchanged.Status);
+            Assert.Equal("transfer-1", unchanged.LastTransferId);
+            Assert.Equal(1, fileTransfer.OfferCallCount);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task TerminalPayloadTooLargeFailure_DoesNotWaitForPeer()
     {
         var fileTransfer = new FakeFileTransferService

@@ -32,6 +32,7 @@ public sealed class FileTransferService : IFileTransferService
 
     private readonly ConcurrentDictionary<string, RemoteFileOfferState> _remoteOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, OutgoingTransferState> _outgoingTransfers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, OutgoingTransferState> _pausedOutgoingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IncomingTransferState> _incomingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _pendingTrustedReconnects = new(StringComparer.Ordinal);
 
@@ -333,6 +334,9 @@ public sealed class FileTransferService : IFileTransferService
     public Task<ListFileTransfersResult> ListFileTransfersAsync()
     {
         var transfers = _outgoingTransfers.Values
+            .Concat(_pausedOutgoingTransfers.Values)
+            .GroupBy(transfer => transfer.TransferId, StringComparer.Ordinal)
+            .Select(group => group.First())
             .Select(transfer => ToTransferInfo(transfer))
             .Concat(_incomingTransfers.Values.Select(transfer => ToTransferInfo(transfer)))
             .OrderByDescending(transfer => transfer.TransferId, StringComparer.Ordinal)
@@ -357,9 +361,12 @@ public sealed class FileTransferService : IFileTransferService
         const string failureReason = "Cancelled";
         const string message = "Transfer cancelled by local user.";
 
-        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing) ||
+            _pausedOutgoingTransfers.TryGetValue(transferId, out outgoing))
         {
-            outgoing.SendCancellation.Cancel();
+            outgoing!.SendCancellation.Cancel();
+            _outgoingTransfers.TryRemove(transferId, out _);
+            _pausedOutgoingTransfers.TryRemove(transferId, out _);
             await TrySendCancelAsync(outgoing.TargetDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
             TryTransitionFailure(outgoing.OperationId, failureReason);
             await NotifyTransferFailedAsync(
@@ -457,6 +464,7 @@ public sealed class FileTransferService : IFileTransferService
         }
 
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Reject");
+        _pausedOutgoingTransfers.TryRemove(transferId, out _);
         var rejectedTransfer = _outgoingTransfers.TryRemove(transferId, out var removedTransfer) ? removedTransfer : transfer;
         TryTransitionFailure(rejectedTransfer.OperationId, failureReason);
         LogEvent(SecurityEventTypes.FileTransferRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, failureReason, rejectedTransfer.OperationId);
@@ -627,6 +635,7 @@ public sealed class FileTransferService : IFileTransferService
         if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
         {
             EnsureOutgoingTransferPeerMatches(outgoing, deviceId, "Cancel");
+            _pausedOutgoingTransfers.TryRemove(transferId, out _);
             var transferToCancel = _outgoingTransfers.TryRemove(transferId, out var removedOutgoing) ? removedOutgoing : outgoing;
             transferToCancel.SendCancellation.Cancel();
             TryTransitionFailure(transferToCancel.OperationId, failureReason);
@@ -655,11 +664,13 @@ public sealed class FileTransferService : IFileTransferService
         EnsurePayloadIdentityMatches(deviceId, receivingDeviceId, "file.resume");
         EnsurePeerCanUseFileTransfer(deviceId, RequiredCapability);
 
-        if (!_outgoingTransfers.TryGetValue(transferId, out var transfer))
+        if (!_outgoingTransfers.TryGetValue(transferId, out var transfer) &&
+            !_pausedOutgoingTransfers.TryRemove(transferId, out transfer))
         {
             throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was not found.");
         }
 
+        _outgoingTransfers[transferId] = transfer!;
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Resume");
         if (offset < 0 || offset > transfer.ByteSize)
         {
@@ -684,7 +695,7 @@ public sealed class FileTransferService : IFileTransferService
         var retainOutgoingState = false;
         try
         {
-            _operationService.TransitionOperation(transfer.OperationId, OperationState.Active);
+            TransitionActiveIfPossible(transfer.OperationId);
             var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
             await using var stream = new FileStream(transfer.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var buffer = new byte[chunkSize];
@@ -782,9 +793,15 @@ public sealed class FileTransferService : IFileTransferService
         finally
         {
             transfer.SendTask = null;
-            if (!retainOutgoingState)
+            if (retainOutgoingState)
             {
                 _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+                _pausedOutgoingTransfers[transfer.TransferId] = transfer;
+            }
+            else
+            {
+                _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+                _pausedOutgoingTransfers.TryRemove(transfer.TransferId, out _);
                 transfer.SendCancellation.Dispose();
             }
         }
