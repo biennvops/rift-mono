@@ -19,7 +19,6 @@ class FileTransferService {
   static const int defaultChunkSize = 256 * 1024;
   static const int maxChunkSize = 4 * 1024 * 1024;
   static const int defaultOfferExpiryMs = 300000;
-  static const int maxIncomingOfferByteSize = 32 * 1024 * 1024;
 
   final SessionManager _sessionManager;
   final TrustStore _trustStore;
@@ -471,13 +470,6 @@ class FileTransferService {
         required != requiredCapability) {
       throw const RiftException(-32001, 'Malformed file.offer payload.');
     }
-    if (byteSize > maxIncomingOfferByteSize) {
-      throw const RiftException(
-        -32007,
-        'Incoming file offer exceeded the maximum supported size.',
-      );
-    }
-
     await _ensurePeerCanUseFileTransfer(peerDeviceId);
 
     final offer = _RemoteFileOfferState(
