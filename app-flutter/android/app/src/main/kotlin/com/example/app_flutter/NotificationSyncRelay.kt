@@ -14,13 +14,12 @@ object NotificationSyncRelay {
 
     fun queueAndBroadcast(context: Context, payload: Map<String, Any?>) {
         queueEvent(context, payload)
-        context.sendBroadcast(buildIntent(payload))
+        context.sendBroadcast(buildIntent(context, payload))
     }
 
-    fun drainPendingEvents(context: Context): List<Map<String, Any?>> {
+    fun pendingEvents(context: Context): List<Map<String, Any?>> {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         val raw = prefs.getString(pendingEventsKey, null)
-        prefs.edit().remove(pendingEventsKey).apply()
         if (raw.isNullOrBlank()) {
             return emptyList()
         }
@@ -110,8 +109,8 @@ object NotificationSyncRelay {
         prefs.edit().putString(pendingEventsKey, entries.toString()).apply()
     }
 
-    private fun buildIntent(payload: Map<String, Any?>): Intent {
-        return Intent(broadcastAction).apply {
+    private fun buildIntent(context: Context, payload: Map<String, Any?>): Intent {
+        return Intent(broadcastAction).setPackage(context.packageName).apply {
             payload.forEach { (key, value) ->
                 when (value) {
                     is String -> putExtra(key, value)

@@ -352,25 +352,12 @@ void main() {
     await tester.pump();
 
     expect(find.text('Sent Android test notification.'), findsOneWidget);
-    final captured = verify(
+    verifyNever(
       () => mockClient.notifyLocalNotificationEvent(
-        eventType: 'posted',
-        payload: captureAny(named: 'payload'),
+        eventType: any(named: 'eventType'),
+        payload: any(named: 'payload'),
       ),
-    ).captured.single as Map<String, Object?>;
-    expect(
-      captured['notificationId'] as String,
-      startsWith('android:com.example.app_flutter:test:'),
     );
-    expect(captured['packageName'], 'com.example.app_flutter');
-    expect(captured['appName'], 'Rift');
-    expect(captured['title'], 'Rift test notification');
-    expect(
-      captured['bodyPreview'],
-      'If you see this notification, sync is working.',
-    );
-    expect(captured['isDismissible'], isTrue);
-    expect(captured['isOpenable'], isTrue);
   });
 
   testWidgets('SettingsScreen exposes desktop notification sync test button',

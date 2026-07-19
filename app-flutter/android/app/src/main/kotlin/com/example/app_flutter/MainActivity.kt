@@ -94,8 +94,7 @@ class MainActivity: FlutterActivity() {
     private val notificationSyncReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val payload = extractNotificationSyncPayload(intent) ?: return
-            NotificationSyncRelay.acknowledgeDeliveredEvent(this@MainActivity, payload)
-            shellChannel?.invokeMethod("notificationSyncEvent", payload)
+            deliverNotificationSyncEvent(payload)
         }
     }
 
@@ -758,11 +757,34 @@ class MainActivity: FlutterActivity() {
         pendingLaunchAction = null
     }
 
-    private fun deliverPendingNotificationSyncEvents() {
+    private fun deliverNotificationSyncEvent(payload: Map<String, Any?>) {
         val channel = shellChannel ?: return
-        NotificationSyncRelay.drainPendingEvents(this).forEach { event ->
-            channel.invokeMethod("notificationSyncEvent", event)
-        }
+        channel.invokeMethod(
+            "notificationSyncEvent",
+            payload,
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    NotificationSyncRelay.acknowledgeDeliveredEvent(
+                        this@MainActivity,
+                        payload,
+                    )
+                }
+
+                override fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+                    Log.w(tag, "Flutter rejected notification sync event: $errorCode $errorMessage")
+                }
+
+                override fun notImplemented() {
+                    Log.w(tag, "Flutter notification sync event handler is unavailable")
+                }
+            },
+        )
+    }
+
+    private fun deliverPendingNotificationSyncEvents() {
+        NotificationSyncRelay.pendingEvents(this).forEach(
+            ::deliverNotificationSyncEvent,
+        )
     }
 
     private fun extractNotificationSyncPayload(intent: Intent?): Map<String, Any?>? {

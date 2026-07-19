@@ -23,8 +23,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
-  static const _androidTestNotificationPackage = 'com.example.app_flutter';
-  static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
   static const _desktopTestNotificationAppName = 'Rift Desktop';
   Map<String, dynamic>? _deviceInfo;
@@ -182,31 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _showTestNotification() async {
-    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     final success = await AndroidShell.showTestNotification();
-    if (success) {
-      final now = DateTime.now().toUtc();
-      try {
-        await client.notifyLocalNotificationEvent(
-          eventType: 'posted',
-          payload: <String, Object?>{
-            'notificationId':
-                'android:$_androidTestNotificationPackage:test:${now.microsecondsSinceEpoch}',
-            'packageName': _androidTestNotificationPackage,
-            'appName': _androidTestNotificationAppName,
-            'title': 'Rift test notification',
-            'bodyPreview': 'If you see this notification, sync is working.',
-            'postedAt': now.toIso8601String(),
-            'isDismissible': true,
-            'isOpenable': true,
-          },
-        );
-      } catch (error) {
-        debugPrint(
-          '[Notification Sync] Failed to mirror Android test notification: $error',
-        );
-      }
-    }
     if (!mounted) {
       return;
     }
