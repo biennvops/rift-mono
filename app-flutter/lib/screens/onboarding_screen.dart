@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'background_sync_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/ios_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -85,9 +86,13 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   Future<String> _loadNotificationPermissionStatus() async {
-    return AndroidShell.isSupported
-        ? AndroidShell.getNotificationPermissionStatus()
-        : MacOSNotifications.getStatus();
+    if (AndroidShell.isSupported) {
+      return AndroidShell.getNotificationPermissionStatus();
+    }
+    if (IOSNotifications.isSupported) {
+      return IOSNotifications.getPermissionStatus();
+    }
+    return MacOSNotifications.getStatus();
   }
 
   Future<String> _loadNotificationAccessStatus() async {
@@ -144,9 +149,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           data is Map &&
           (data['policy']?.toString() == 'local_network')) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
+              IOSNotifications.isSupported
+                  ? 'Local network access is denied. Enable it in Settings > Apps > Rift > Local Network.'
+                  : 'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
             ),
           ),
         );
@@ -170,9 +177,13 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     }
     var granted = _notificationPermissionGranted;
     if (!granted) {
-      granted = AndroidShell.isSupported
-          ? await AndroidShell.requestNotificationPermission()
-          : await MacOSNotifications.request();
+      if (AndroidShell.isSupported) {
+        granted = await AndroidShell.requestNotificationPermission();
+      } else if (IOSNotifications.isSupported) {
+        granted = await IOSNotifications.requestPermission();
+      } else {
+        granted = await MacOSNotifications.request();
+      }
     }
     if (!mounted) return;
     if (granted) {
@@ -182,9 +193,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     }
     if (!granted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Notifications are disabled. You can enable them later in System Settings > Notifications.',
+            IOSNotifications.isSupported
+                ? 'Notifications are disabled. You can enable them later in Settings > Apps > Rift > Notifications.'
+                : 'Notifications are disabled. You can enable them later in System Settings > Notifications.',
           ),
         ),
       );
@@ -345,7 +358,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     title: 'Alerts & Logs',
                     description: AndroidShell.isSupported
                         ? 'Enable Android notifications and notification access so Rift can show alerts and mirror Android notifications to your trusted desktop devices.'
-                        : 'Enable push notifications to receive real-time alerts on unauthorized access attempts and device sync status.',
+                        : IOSNotifications.isSupported
+                            ? 'Enable local notifications so Rift can alert you about pairing requests, transfers, clipboard offers, and security events.'
+                            : 'Enable notifications to receive real-time alerts on unauthorized access attempts and device sync status.',
                     actions: [
                       _buildPrimaryButton(
                           AndroidShell.isSupported
@@ -357,20 +372,29 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       _buildOutlinedButton('Skip for Now', theme, _nextPage),
                     ],
                   ),
-                  // Card 3: Battery Optimization
+                  // Card 3: Background behavior
                   _buildOnboardingCard(
                     theme: theme,
                     icon: Icons.battery_saver,
                     iconBgColor: theme.colorScheme.tertiaryContainer
                         .withValues(alpha: 0.2),
                     iconColor: theme.colorScheme.tertiary,
-                    title: 'Background Sync',
-                    description:
-                        'To maintain continuous secure clipboard syncing, Rift must run in the background without battery optimization restrictions.',
-                    infoTag: 'MANDATORY FOR BACKGROUND OPS',
+                    title: IOSNotifications.isSupported
+                        ? 'Background Connectivity'
+                        : 'Background Sync',
+                    description: IOSNotifications.isSupported
+                        ? 'iOS controls background runtime and may suspend Rift. Development sideload builds can optionally use location access to improve continuity; clipboard changes still require explicit actions while Rift is open.'
+                        : 'To maintain continuous secure clipboard syncing, Rift must run in the background without battery optimization restrictions.',
+                    infoTag: IOSNotifications.isSupported
+                        ? 'IOS CONTROLS BACKGROUND EXECUTION'
+                        : 'MANDATORY FOR BACKGROUND OPS',
                     actions: [
                       _buildPrimaryButton(
-                        _isProcessing ? 'Processing...' : 'Allow Unrestricted',
+                        _isProcessing
+                            ? 'Processing...'
+                            : IOSNotifications.isSupported
+                                ? 'Review Background Behavior'
+                                : 'Allow Unrestricted',
                         theme,
                         _isProcessing ? null : _finishOnboarding,
                         isProcessing: _isProcessing,

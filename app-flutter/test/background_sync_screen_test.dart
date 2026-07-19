@@ -1,4 +1,5 @@
 import 'package:app_flutter/screens/background_sync_screen.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,6 +7,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    IOSNotifications.debugIsIOSOverride = false;
+  });
+
+  tearDown(() {
+    IOSNotifications.debugIsIOSOverride = null;
   });
 
   testWidgets('BackgroundSyncScreen shows final review copy',
@@ -27,6 +33,35 @@ void main() {
     );
     expect(find.text('Accessibility remains out of scope'), findsOneWidget);
     expect(find.text('Finish Setup'), findsOneWidget);
+  });
+
+  testWidgets('BackgroundSyncScreen explains iOS background limits',
+      (WidgetTester tester) async {
+    IOSNotifications.debugIsIOSOverride = true;
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: BackgroundSyncScreen(),
+      ),
+    );
+
+    expect(find.text('Background Sync Review'), findsOneWidget);
+    expect(find.textContaining('platform limits'), findsOneWidget);
+    expect(find.text('iOS decides how long Rift runs in the background'),
+        findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Development builds can improve background continuity'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Development builds can improve background continuity'),
+        findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Clipboard changes remain explicit'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Clipboard changes remain explicit'), findsOneWidget);
   });
 
   testWidgets('BackgroundSyncScreen marks onboarding complete',
