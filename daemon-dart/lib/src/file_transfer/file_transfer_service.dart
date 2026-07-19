@@ -269,7 +269,7 @@ class FileTransferService {
       byteSize: offer.byteSize,
       expectedSha256: offer.sha256,
       chunkSize: offer.chunkSize,
-      expectedChunkCount: offer.chunkCount,
+      expectedChunkCount: _computeChunkCount(offer.byteSize, offer.chunkSize),
       destinationPath: fullDestinationPath,
       stagingDirectory: stagingDirectory.path,
       stagingPath: stagingPath,
@@ -471,7 +471,7 @@ class FileTransferService {
         fileName.isEmpty ||
         byteSize < 0 ||
         sha256.isEmpty ||
-        chunkCount < 0 ||
+        chunkCount <= 0 ||
         expiresInMs <= 0 ||
         required != requiredCapability) {
       throw const RiftException(-32001, 'Malformed file.offer payload.');
@@ -525,7 +525,13 @@ class FileTransferService {
       return;
     }
 
-    transfer.acceptedChunkSize = payload['chunkSize'] as int?;
+    transfer.acceptedChunkSize = _normalizeChunkSize(
+      payload['chunkSize'] as int?,
+    );
+    transfer.acceptedChunkCount = _computeChunkCount(
+      transfer.byteSize,
+      transfer.acceptedChunkSize!,
+    );
     transfer.state = 'active';
     _operationManager.transitionOperation(
       transfer.operationId,
@@ -535,7 +541,7 @@ class FileTransferService {
       try {
         await _sendOutgoingTransfer(
           transfer,
-          requestedChunkSize: payload['chunkSize'] as int?,
+          requestedChunkSize: transfer.acceptedChunkSize,
         );
       } catch (_) {
         // Transfer failures are emitted by _sendOutgoingTransfer.
@@ -653,7 +659,8 @@ class FileTransferService {
     if (byteSize != transfer.byteSize ||
         wholeFileHash != transfer.expectedSha256 ||
         chunkCount != transfer.expectedChunkCount ||
-        transfer.bytesTransferred != transfer.byteSize) {
+        transfer.bytesTransferred != transfer.byteSize ||
+        transfer.nextChunkIndex != chunkCount) {
       throw const RiftException(
         -32006,
         'Transfer completion metadata did not match the received chunks.',
@@ -732,11 +739,24 @@ class FileTransferService {
         'Resume sender did not match offered target device.',
       );
     }
+    if (transfer.state != 'paused' || transfer.sendTask != null) {
+      throw const RiftException(
+        -32001,
+        'Outgoing transfer is not paused.',
+      );
+    }
     if (offset < 0 || offset > transfer.byteSize) {
       throw const RiftException(-32001, 'Resume offset was out of bounds.');
     }
     final chunkSize = transfer.acceptedChunkSize ?? transfer.chunkSize;
-    if (nextChunkIndex != offset ~/ chunkSize) {
+    final isFinalOffset = offset == transfer.byteSize;
+    final expectedNextChunkIndex =
+        offset ~/ chunkSize + (offset % chunkSize == 0 ? 0 : 1);
+    final hasValidChunkIndex = transfer.byteSize == 0
+        ? nextChunkIndex == 0 || nextChunkIndex == 1
+        : nextChunkIndex == expectedNextChunkIndex;
+    if ((!isFinalOffset && offset % chunkSize != 0) ||
+        !hasValidChunkIndex) {
       throw const RiftException(
         -32001,
         'Resume chunk index did not match the declared offset.',
@@ -744,11 +764,9 @@ class FileTransferService {
     }
 
     transfer.bytesTransferred = offset;
-    if (transfer.sendTask != null) {
-      return;
-    }
-
+    transfer.nextChunkIndex = nextChunkIndex;
     transfer.state = 'active';
+    transfer.failureReason = null;
     transfer.sendTask = () async {
       try {
         await _sendOutgoingTransfer(transfer, requestedChunkSize: chunkSize);
@@ -779,11 +797,9 @@ class FileTransferService {
   }
 
   Future<void> _sendResumeRequestsForPeer(String peerDeviceId) async {
-    final resumableTransfers = _incomingTransfers.values.where((transfer) {
-      return transfer.sourceDeviceId == peerDeviceId &&
-          transfer.bytesTransferred > 0 &&
-          transfer.bytesTransferred < transfer.byteSize;
-    }).toList(growable: false);
+    final resumableTransfers = _incomingTransfers.values
+        .where((transfer) => transfer.sourceDeviceId == peerDeviceId)
+        .toList(growable: false);
     if (resumableTransfers.isEmpty) {
       return;
     }
@@ -825,18 +841,21 @@ class FileTransferService {
     final raf = await file.open();
     try {
       var offset = transfer.bytesTransferred;
-      var chunkIndex = offset ~/ chunkSize;
+      var chunkIndex = transfer.nextChunkIndex;
       if (offset > 0) {
         await raf.setPosition(offset);
       }
-      while (offset < transfer.byteSize) {
+      while (offset < transfer.byteSize ||
+          (transfer.byteSize == 0 && chunkIndex == 0)) {
         if (transfer.cancelRequested) {
           throw const RiftException(-32010, 'Transfer cancelled.');
         }
         final remaining = transfer.byteSize - offset;
         final nextChunkSize = remaining < chunkSize ? remaining : chunkSize;
-        final bytes = await raf.read(nextChunkSize);
-        if (bytes.isEmpty) {
+        final bytes = transfer.byteSize == 0
+            ? <int>[]
+            : await raf.read(nextChunkSize);
+        if (transfer.byteSize > 0 && bytes.isEmpty) {
           throw const RiftException(
             -32000,
             'Unexpected end of file while sending transfer.',
@@ -865,6 +884,7 @@ class FileTransferService {
         offset += bytes.length;
         chunkIndex += 1;
         transfer.bytesTransferred = offset;
+        transfer.nextChunkIndex = chunkIndex;
         transfer.state = 'active';
         _emitProgress(transfer.toInfo());
       }
@@ -886,19 +906,30 @@ class FileTransferService {
       throw const RiftException(-32010, 'Transfer cancelled.');
     }
 
-    await _sessionManager.sendMessage(transfer.targetDeviceId, {
-      'rift': '0.1-draft',
-      'messageId': const Uuid().v4(),
-      'type': 'file.complete',
-      'sourceDeviceId': _localDeviceId,
-      'destinationDeviceId': transfer.targetDeviceId,
-      'payload': {
-        'transferId': transfer.transferId,
-        'byteSize': transfer.byteSize,
-        'sha256': transfer.sha256,
-        'chunkCount': transfer.chunkCount,
-      },
-    });
+    try {
+      await _sessionManager.sendMessage(transfer.targetDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'file.complete',
+        'sourceDeviceId': _localDeviceId,
+        'destinationDeviceId': transfer.targetDeviceId,
+        'payload': {
+          'transferId': transfer.transferId,
+          'byteSize': transfer.byteSize,
+          'sha256': transfer.sha256,
+          'chunkCount': transfer.acceptedChunkCount,
+        },
+      });
+    } catch (error) {
+      final failureReason = _failureReasonForError(error);
+      await _failOutgoingTransfer(
+        transfer,
+        failureReason,
+        error.toString(),
+        preserveForResume: failureReason == 'ConnectionLost',
+      );
+      rethrow;
+    }
 
     transfer.state = 'done';
     _operationManager.transitionOperation(
@@ -918,14 +949,14 @@ class FileTransferService {
     if (transfer.state == 'failed' || transfer.state == 'done') {
       return;
     }
-    transfer.state = 'failed';
+    transfer.state = preserveForResume ? 'paused' : 'failed';
     transfer.failureReason = failureReason;
     transfer.sendTask = null;
-    _transitionOperationToFailed(transfer.operationId, failureReason);
-    _emitFailed(transfer.toInfo(), message);
     if (!preserveForResume) {
+      _transitionOperationToFailed(transfer.operationId, failureReason);
       _outgoingTransfers.remove(transfer.transferId);
     }
+    _emitFailed(transfer.toInfo(), message);
   }
 
   Future<void> _failIncomingTransfer(
@@ -1021,7 +1052,7 @@ class FileTransferService {
 
   int _computeChunkCount(int byteSize, int chunkSize) {
     if (byteSize == 0) {
-      return 0;
+      return 1;
     }
     return ((byteSize + chunkSize) - 1) ~/ chunkSize;
   }
@@ -1144,7 +1175,9 @@ class _OutgoingTransferState {
   final int chunkCount;
   final DateTime expiresAt;
   int bytesTransferred = 0;
+  int nextChunkIndex = 0;
   int? acceptedChunkSize;
+  late int acceptedChunkCount;
   String state;
   String? failureReason;
   bool cancelRequested = false;
