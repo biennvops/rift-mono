@@ -835,47 +835,34 @@ class MainActivity: FlutterActivity() {
         }
 
         val displayName = resolveAvailableDownloadName(sanitizeDownloadFileName(fileName))
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, displayName)
-                put(MediaStore.Downloads.MIME_TYPE, mediaType)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                put(MediaStore.Downloads.IS_PENDING, 1)
-            }
-            val uri = contentResolver.insert(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                values,
-            ) ?: throw IllegalStateException("Could not create Downloads entry")
-
-            try {
-                contentResolver.openOutputStream(uri, "w")?.use { output ->
-                    stagingFile.inputStream().use { input -> input.copyTo(output) }
-                } ?: throw IllegalStateException("Could not open Downloads entry")
-                values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
-                stagingFile.delete()
-                return mapOf(
-                    "contentUri" to uri.toString(),
-                    "displayName" to displayName,
-                    "displayPath" to "Downloads/$displayName",
-                )
-            } catch (e: Exception) {
-                contentResolver.delete(uri, null, null)
-                throw e
-            }
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.MIME_TYPE, mediaType)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.Downloads.IS_PENDING, 1)
         }
+        val uri = contentResolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            values,
+        ) ?: throw IllegalStateException("Could not create Downloads entry")
 
-        val downloadsDirectory =
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val destination = File(downloadsDirectory, displayName)
-        stagingFile.copyTo(destination, overwrite = false)
-        stagingFile.delete()
-        return mapOf(
-            "contentUri" to Uri.fromFile(destination).toString(),
-            "displayName" to displayName,
-            "displayPath" to "Downloads/$displayName",
-        )
+        try {
+            contentResolver.openOutputStream(uri, "w")?.use { output ->
+                stagingFile.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("Could not open Downloads entry")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            stagingFile.delete()
+            return mapOf(
+                "contentUri" to uri.toString(),
+                "displayName" to displayName,
+                "displayPath" to "Downloads/$displayName",
+            )
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
     }
 
     private fun resolveAvailableDownloadName(fileName: String): String {
@@ -896,11 +883,6 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun downloadNameExists(fileName: String): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            val downloadsDirectory =
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            return File(downloadsDirectory, fileName).exists()
-        }
         contentResolver.query(
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
             arrayOf(MediaStore.Downloads._ID),
