@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/src/core/rift_exceptions.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
 import 'package:daemon_dart/src/interfaces/identity_manager.dart';
@@ -638,5 +639,88 @@ void main() {
         expect(completed['destinationPath'], destinationPath);
       },
     );
+
+    test('processes large final chunk before completion from same peer', () async {
+      const transferId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+      final content = 'a' * 600000;
+      final bytes = utf8.encode(content);
+      final sha256Hex = sha256.convert(bytes).toString();
+      final destinationPath =
+          '${tempDir.path}${Platform.pathSeparator}received-large.txt';
+      final completedFuture = service.onTransferCompleted.firstWhere(
+        (event) => event['transferId'] == transferId,
+      );
+
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '15151515-1515-4515-8515-151515151515',
+        'type': 'file.offer',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': transferId,
+          'fileName': 'large.txt',
+          'mediaType': 'text/plain',
+          'byteSize': bytes.length,
+          'sha256': sha256Hex,
+          'chunkSize': 262144,
+          'chunkCount': 3,
+          'expiresInMs': 300000,
+          'sourceDeviceId': 'rift-peer',
+          'requiredCapability': 'file.transfer',
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      await service.acceptFileOffer(
+        transferId: transferId,
+        destinationPath: destinationPath,
+      );
+
+      var offset = 0;
+      for (var chunkIndex = 0; chunkIndex < 3; chunkIndex += 1) {
+        final end = (offset + 262144 < bytes.length)
+            ? offset + 262144
+            : bytes.length;
+        final chunkBytes = bytes.sublist(offset, end);
+        final chunkSha256 = sha256.convert(chunkBytes).toString();
+        transport.simulateIncomingMessage('rift-peer', {
+          'rift': '0.1-draft',
+          'messageId':
+              '16161616-1616-4616-8616-${chunkIndex.toString().padLeft(12, '0')}',
+          'type': 'file.chunk',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'transferId': transferId,
+            'chunkIndex': chunkIndex,
+            'offset': offset,
+            'byteSize': chunkBytes.length,
+            'chunkSha256': chunkSha256,
+            'contentBase64': base64.encode(chunkBytes),
+            'isLastChunk': chunkIndex == 2,
+          },
+        });
+        offset = end;
+      }
+
+      transport.simulateIncomingMessage('rift-peer', {
+        'rift': '0.1-draft',
+        'messageId': '17171717-1717-4717-8717-171717171717',
+        'type': 'file.complete',
+        'sourceDeviceId': 'rift-peer',
+        'destinationDeviceId': 'rift-local',
+        'payload': {
+          'transferId': transferId,
+          'byteSize': bytes.length,
+          'sha256': sha256Hex,
+          'chunkCount': 3,
+        },
+      });
+
+      final completed = await completedFuture.timeout(const Duration(seconds: 2));
+      expect(completed['destinationPath'], destinationPath);
+      expect(await File(destinationPath).readAsString(), content);
+    });
   });
 }
