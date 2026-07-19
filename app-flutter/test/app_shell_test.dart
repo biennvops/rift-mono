@@ -542,7 +542,7 @@ void main() {
     ]);
   });
 
-  testWidgets('iOS requests permission and emits routed notifications',
+  testWidgets('iOS consumes launch actions without requesting permission',
       (WidgetTester tester) async {
     setMacOSNotificationBridgeOverride(false);
     IOSNotifications.debugIsIOSOverride = true;
@@ -578,7 +578,7 @@ void main() {
     });
     await tester.pump();
 
-    expect(calls.any((call) => call.method == 'requestPermission'), isTrue);
+    expect(calls.any((call) => call.method == 'requestPermission'), isFalse);
     expect(calls.any((call) => call.method == 'consumeLaunchAction'), isTrue);
     final showCall =
         calls.lastWhere((call) => call.method == 'showNotification');

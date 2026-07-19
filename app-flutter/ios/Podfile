@@ -40,4 +40,19 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
   end
+
+  pods_runner = installer.pods_project.targets.find { |target| target.name == 'Pods-Runner' }
+  runner_aggregate = installer.aggregate_targets.find { |target| target.name == 'Pods-Runner' }
+  if pods_runner && runner_aggregate
+    runner_project = runner_aggregate.user_project
+    pods_project_path = installer.pods_project.path.realpath
+    unless runner_project.reference_for_path(pods_project_path)
+      relative_path = pods_project_path.relative_path_from(runner_project.path.dirname)
+      runner_project.main_group.new_file(relative_path)
+    end
+
+    runner = runner_project.targets.find { |target| target.name == 'Runner' }
+    runner.add_dependency(pods_runner) if runner
+    runner_project.save
+  end
 end

@@ -21,12 +21,40 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		09BB851C321408724D4DD8C3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 669E8F25E1897672BDB80B7EB784DA24;
+			remoteInfo = Subproject;
+		};
+		3071580CE3B4A26070D25DEA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = ABBFE0777FF986943F468D5BA16A12B2;
+			remoteInfo = Subproject;
+		};
 		331C8085294A63A400263BE5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 97C146ED1CF9000F007C117D;
 			remoteInfo = Runner;
+		};
+		BD7E80015E968EF074AE9144 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */;
+			proxyType = 1;
+			remoteGlobalIDString = 8B74B458B450D74B75744B87BD747314;
+			remoteInfo = "Pods-Runner";
+		};
+		D086CEFF30072AC9B99000FF /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 6C3345B1B3CAEDF5B03B1F731FDC492E;
+			remoteInfo = Subproject;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -69,6 +97,7 @@
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A24F5C86A75A81E2277ACC34 /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.pb-project"; name = Pods.xcodeproj; path = Pods/Pods.xcodeproj; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -135,6 +164,7 @@
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				88DFFEBBCBE4B0EEFA3A9574 /* Pods */,
 				BF3374B28714A26E339E565A /* Frameworks */,
+				BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */,
 			);
 			sourceTree = "<group>";
 		};
@@ -143,6 +173,9 @@
 			children = (
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
+				3DC3FD2405238332DAD63741 /* nsd_ios.framework */,
+				6DA0987A9D48148D1E15EE31 /* Pods_Runner.framework */,
+				D5705BAD5D0FC32F7566A861 /* Pods_RunnerTests.framework */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -210,6 +243,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				F06F1BABC0C54CFFA69BAF0A /* PBXTargetDependency */,
 			);
 			name = Runner;
 			packageProductDependencies = (
@@ -253,6 +287,12 @@
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
+			projectReferences = (
+				{
+					ProductGroup = 97C146EF1CF9000F007C117D /* Products */;
+					ProjectRef = BEEFF715DE23E9D13D2FED0E /* Pods.xcodeproj */;
+				},
+			);
 			projectRoot = "";
 			targets = (
 				97C146ED1CF9000F007C117D /* Runner */,
@@ -260,6 +300,30 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXReferenceProxy section */
+		3DC3FD2405238332DAD63741 /* nsd_ios.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = nsd_ios.framework;
+			remoteRef = 3071580CE3B4A26070D25DEA /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		6DA0987A9D48148D1E15EE31 /* Pods_Runner.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = Pods_Runner.framework;
+			remoteRef = 09BB851C321408724D4DD8C3 /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		D5705BAD5D0FC32F7566A861 /* Pods_RunnerTests.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = Pods_RunnerTests.framework;
+			remoteRef = D086CEFF30072AC9B99000FF /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+/* End PBXReferenceProxy section */
 
 /* Begin PBXResourcesBuildPhase section */
 		331C807F294A63A400263BE5 /* Resources */ = {
@@ -403,6 +467,11 @@
 			isa = PBXTargetDependency;
 			target = 97C146ED1CF9000F007C117D /* Runner */;
 			targetProxy = 331C8085294A63A400263BE5 /* PBXContainerItemProxy */;
+		};
+		F06F1BABC0C54CFFA69BAF0A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = "Pods-Runner";
+			targetProxy = BD7E80015E968EF074AE9144 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 

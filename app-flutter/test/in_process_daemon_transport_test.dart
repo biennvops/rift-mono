@@ -8,11 +8,13 @@ class _FakeDaemon implements InProcessDaemon {
   _FakeDaemon(
     this.onIpcEvent, {
     this.startError,
+    this.startEvent,
     this.startGate,
   });
 
   final void Function(Map<String, dynamic>) onIpcEvent;
   final Object? startError;
+  final Map<String, dynamic>? startEvent;
   final Future<void>? startGate;
   bool started = false;
   bool stopped = false;
@@ -22,6 +24,9 @@ class _FakeDaemon implements InProcessDaemon {
     await startGate;
     if (startError != null) {
       throw startError!;
+    }
+    if (startEvent != null) {
+      onIpcEvent(startEvent!);
     }
     started = true;
   }
@@ -115,6 +120,33 @@ void main() {
     await pumpEventQueue();
 
     expect(daemon.stopped, isTrue);
+  });
+
+  test('buffers daemon notifications emitted during startup', () async {
+    final startupEvent = {
+      'jsonrpc': '2.0',
+      'method': 'rift.onPairingRequest',
+      'params': {
+        'deviceId': 'rift-peer',
+        'fingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+      },
+    };
+    final transport = InProcessDaemonTransport(
+      storagePathProvider: () async => '/tmp/rift-test',
+      daemonFactory: (storagePath, onIpcEvent) => _FakeDaemon(
+        onIpcEvent,
+        startEvent: startupEvent,
+      ),
+    );
+
+    final channel = await transport.connect();
+
+    expect(
+      jsonDecode(await channel.stream.first),
+      startupEvent,
+    );
+
+    await transport.disconnect();
   });
 
   test('forwards daemon notifications and request responses', () async {

@@ -317,7 +317,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
 
     if (IOSNotifications.isSupported) {
-      await IOSNotifications.requestPermission();
       final pendingAction = await IOSNotifications.consumeLaunchAction();
       if (pendingAction != null) {
         _handleNotificationActionPayload(pendingAction);

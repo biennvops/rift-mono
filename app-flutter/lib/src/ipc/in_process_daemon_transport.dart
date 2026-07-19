@@ -72,6 +72,7 @@ class InProcessDaemonTransport implements IpcTransport {
   StreamController<String>? _outgoing;
   StreamSubscription<String>? _outgoingSubscription;
   Future<StreamChannel<String>>? _connecting;
+  final List<String> _pendingDaemonEvents = [];
 
   InProcessDaemonTransport({
     Future<String> Function()? storagePathProvider,
@@ -112,7 +113,9 @@ class InProcessDaemonTransport implements IpcTransport {
   Future<StreamChannel<String>> _connect() async {
     try {
       final storagePath = await _storagePathProvider();
-      _incoming = StreamController<String>.broadcast();
+      _incoming = StreamController<String>.broadcast(
+        onListen: _flushPendingDaemonEvents,
+      );
       _outgoing = StreamController<String>.broadcast();
       _daemon = _daemonFactory(storagePath, _handleDaemonEvent);
       await _daemon!.start();
@@ -137,6 +140,7 @@ class InProcessDaemonTransport implements IpcTransport {
       _daemon = null;
       _outgoing = null;
       _incoming = null;
+      _pendingDaemonEvents.clear();
       rethrow;
     } finally {
       _connecting = null;
@@ -144,7 +148,27 @@ class InProcessDaemonTransport implements IpcTransport {
   }
 
   void _handleDaemonEvent(Map<String, dynamic> event) {
-    _incoming?.add(jsonEncode(event));
+    final message = jsonEncode(event);
+    final incoming = _incoming;
+    if (incoming == null) {
+      return;
+    }
+    if (!incoming.hasListener) {
+      _pendingDaemonEvents.add(message);
+      return;
+    }
+    incoming.add(message);
+  }
+
+  void _flushPendingDaemonEvents() {
+    final incoming = _incoming;
+    if (incoming == null) {
+      return;
+    }
+    for (final message in _pendingDaemonEvents) {
+      incoming.add(message);
+    }
+    _pendingDaemonEvents.clear();
   }
 
   Future<void> _handleClientMessage(String message) async {
@@ -204,5 +228,6 @@ class InProcessDaemonTransport implements IpcTransport {
     await _incoming?.close();
     _outgoing = null;
     _incoming = null;
+    _pendingDaemonEvents.clear();
   }
 }
