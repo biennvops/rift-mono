@@ -1,19 +1,71 @@
+import CoreLocation
 import Flutter
 import QuickLook
 import Security
 import UIKit
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
+@objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
   private var identityChannel: FlutterMethodChannel?
   private var documentsChannel: FlutterMethodChannel?
   private var previewURL: NSURL?
+  private var backgroundLocationManager: CLLocationManager?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    if Bundle.main.object(forInfoDictionaryKey: "RiftDevBackgroundLocationEnabled") as? Bool == true {
+      startDevelopmentBackgroundLocation()
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func startDevelopmentBackgroundLocation() {
+    let manager = CLLocationManager()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyKilometer
+    manager.distanceFilter = 1_000
+    manager.activityType = .other
+    manager.pausesLocationUpdatesAutomatically = false
+    manager.allowsBackgroundLocationUpdates = true
+    manager.showsBackgroundLocationIndicator = true
+    backgroundLocationManager = manager
+
+    switch locationAuthorizationStatus(for: manager) {
+    case .authorizedAlways:
+      manager.startUpdatingLocation()
+    case .authorizedWhenInUse:
+      manager.startUpdatingLocation()
+      manager.requestAlwaysAuthorization()
+    case .notDetermined:
+      manager.requestAlwaysAuthorization()
+    case .denied, .restricted:
+      break
+    @unknown default:
+      break
+    }
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    switch locationAuthorizationStatus(for: manager) {
+    case .authorizedAlways:
+      manager.startUpdatingLocation()
+    case .authorizedWhenInUse:
+      manager.startUpdatingLocation()
+      manager.requestAlwaysAuthorization()
+    case .notDetermined, .denied, .restricted:
+      break
+    @unknown default:
+      break
+    }
+  }
+
+  private func locationAuthorizationStatus(for manager: CLLocationManager) -> CLAuthorizationStatus {
+    if #available(iOS 14.0, *) {
+      return manager.authorizationStatus
+    }
+    return CLLocationManager.authorizationStatus()
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
