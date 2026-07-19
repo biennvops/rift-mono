@@ -10,6 +10,7 @@ import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:app_flutter/src/platform/linux_notifications.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
@@ -17,6 +18,7 @@ class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const androidShellChannel = MethodChannel('rift/android/shell');
+  const iosNotificationsChannel = MethodChannel('rift/ios/notifications');
   const linuxNotificationsChannel = MethodChannel('rift/linux/notifications');
   const macOsPermissionsChannel = MethodChannel('rift.permissions');
   late MockJsonRpcClient mockClient;
@@ -37,6 +39,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     AndroidShell.debugIsAndroidOverride = true;
+    IOSNotifications.debugIsIOSOverride = false;
     LinuxNotifications.debugIsLinuxOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
@@ -104,10 +107,13 @@ void main() {
 
   tearDown(() {
     AndroidShell.debugIsAndroidOverride = null;
+    IOSNotifications.debugIsIOSOverride = null;
     LinuxNotifications.debugIsLinuxOverride = null;
     connectionChangedController.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(iosNotificationsChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(linuxNotificationsChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -141,6 +147,64 @@ void main() {
     // Info from mock should be visible
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
+  });
+
+  testWidgets('SettingsScreen exposes iOS notification diagnostics',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = false;
+    IOSNotifications.debugIsIOSOverride = true;
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(iosNotificationsChannel, (call) async {
+      calls.add(call);
+      switch (call.method) {
+        case 'getPermissionStatus':
+          return 'authorized';
+        case 'showNotification':
+        case 'openSettings':
+        case 'requestPermission':
+          return true;
+      }
+      return null;
+    });
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    await tester.scrollUntilVisible(
+      find.text('System notifications enabled'),
+      200,
+    );
+    expect(find.text('System notifications enabled'), findsOneWidget);
+    expect(find.text('Used during discovery and pairing'), findsOneWidget);
+    expect(
+      find.text(
+        'Development builds can use location keepalive; iOS may still terminate the app',
+      ),
+      findsOneWidget,
+    );
+
+    final testNotificationButton =
+        find.byKey(const Key('test-notification-button'));
+    await tester.ensureVisible(testNotificationButton);
+    await tester.pumpAndSettle();
+    await tester.tap(testNotificationButton);
+    await tester.pumpAndSettle();
+
+    expect(calls.any((call) => call.method == 'getPermissionStatus'), isTrue);
+    final showCall =
+        calls.lastWhere((call) => call.method == 'showNotification');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['title'], 'Rift test notification');
+    expect(arguments['route'], 'history.notifications');
+    expect(find.text('Sent iOS test notification.'), findsOneWidget);
   });
 
   testWidgets('SettingsScreen shows error message for generic error',

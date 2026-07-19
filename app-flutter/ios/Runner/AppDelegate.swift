@@ -226,6 +226,23 @@ import UserNotifications
 
       let notificationCenter = UNUserNotificationCenter.current()
       switch call.method {
+      case "getPermissionStatus":
+        notificationCenter.getNotificationSettings { settings in
+          let status: String
+          switch settings.authorizationStatus {
+          case .notDetermined:
+            status = "notDetermined"
+          case .denied:
+            status = "denied"
+          case .authorized, .provisional:
+            status = "authorized"
+          @unknown default:
+            status = "unknown"
+          }
+          DispatchQueue.main.async {
+            result(status)
+          }
+        }
       case "requestPermission":
         notificationCenter.requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
           DispatchQueue.main.async {
@@ -269,6 +286,14 @@ import UserNotifications
               result(true)
             }
           }
+        }
+      case "openSettings":
+        guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+          result(false)
+          return
+        }
+        UIApplication.shared.open(settingsURL, options: [:]) { opened in
+          result(opened)
         }
       case "consumeLaunchAction":
         self.notificationCallbacksReady = true

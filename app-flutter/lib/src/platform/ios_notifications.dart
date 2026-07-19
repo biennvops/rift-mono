@@ -11,6 +11,12 @@ class IOSNotifications {
 
   static bool get isSupported => debugIsIOSOverride ?? Platform.isIOS;
 
+  static Future<String> getPermissionStatus() async {
+    if (!isSupported) return 'unknown';
+    final status = await _channel.invokeMethod<String>('getPermissionStatus');
+    return status ?? 'unknown';
+  }
+
   static Future<bool> requestPermission() async {
     if (!isSupported) return false;
     final granted = await _channel.invokeMethod<bool>('requestPermission');
@@ -33,6 +39,12 @@ class IOSNotifications {
       if (payload != null) 'payload': payload,
     });
     return shown ?? false;
+  }
+
+  static Future<bool> openSettings() async {
+    if (!isSupported) return false;
+    final opened = await _channel.invokeMethod<bool>('openSettings');
+    return opened ?? false;
   }
 
   static Future<Map<String, dynamic>?> consumeLaunchAction() async {
