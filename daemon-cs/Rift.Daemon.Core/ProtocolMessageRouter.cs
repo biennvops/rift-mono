@@ -187,12 +187,13 @@ public sealed class ProtocolMessageRouter(
             EnsureProtectedMessageAllowed(session, "media.playback", messageType);
             var mediaPayload = root.GetProperty("payload");
             var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
-            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            var requestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, requestingDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
             {
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
-                RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
+                RequestingDeviceId = requestingDeviceId,
                 Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
                 PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) ? positionElement.GetInt64() : null,
                 RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null

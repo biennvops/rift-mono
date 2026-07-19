@@ -77,6 +77,17 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
         Assert.Equal([frameworkPath, "seek", "12345000"], args);
     }
 
+    [Theory]
+    [InlineData(12.5, 7.0, 12500)]
+    [InlineData(null, 7.0, 7000)]
+    public void GetPositionMs_PrefersContinuouslyAdvancingElapsedTime(
+        double? elapsedTimeNow,
+        double? elapsedTime,
+        long expectedPositionMs)
+    {
+        Assert.Equal(expectedPositionMs, MacOSMediaPlaybackService.GetPositionMs(elapsedTimeNow, elapsedTime));
+    }
+
     private async Task<string> CreateSuccessfulAdapterScriptAsync()
     {
         var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");

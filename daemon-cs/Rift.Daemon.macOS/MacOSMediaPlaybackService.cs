@@ -189,7 +189,7 @@ internal sealed class MacOSMediaPlaybackService(
         var playbackKey = payload.ContentItemIdentifier ?? payload.Title;
         var playbackId = string.Join(":", appId, playbackKey, payload.Artist ?? string.Empty);
         var durationMs = payload.Duration.HasValue ? Math.Max(0L, (long)Math.Round(payload.Duration.Value * 1000d)) : (long?)null;
-        var positionMs = Math.Max(0L, (long)Math.Round((payload.ElapsedTime ?? 0d) * 1000d));
+        var positionMs = GetPositionMs(payload.ElapsedTimeNow, payload.ElapsedTime);
         var canSkip = payload.ProhibitsSkip != true;
 
         return new MacOSNowPlayingSnapshot(
@@ -210,6 +210,9 @@ internal sealed class MacOSMediaPlaybackService(
             CanSeek: durationMs is > 0,
             UpdatedAt: DateTimeOffset.UtcNow.ToString("O"));
     }
+
+    internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
+        Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
 
     private static string CreateFingerprint(MacOSNowPlayingSnapshot snapshot)
     {
@@ -350,6 +353,7 @@ internal sealed class MacOSMediaPlaybackService(
         public string? ArtworkMimeType { get; init; }
         public double? Duration { get; init; }
         public double? ElapsedTime { get; init; }
+        public double? ElapsedTimeNow { get; init; }
         public bool? ProhibitsSkip { get; init; }
         public string? ContentItemIdentifier { get; init; }
         public int? ProcessIdentifier { get; init; }

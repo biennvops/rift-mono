@@ -401,6 +401,10 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         {
             throw new InvalidOperationException("media.playbackActionRequest requires playbackId, sourceDeviceId, and requestingDeviceId.");
         }
+        if (!string.Equals(request.SourceDeviceId, _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("media.playbackActionRequest sourceDeviceId did not match the local device identity.");
+        }
 
         var action = NormalizeAction(request.Action, request.PositionMs);
         var requestId = Guid.NewGuid().ToString("D");

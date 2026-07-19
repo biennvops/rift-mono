@@ -450,6 +450,45 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionRequest_ValidatesRequesterIdentity()
+    {
+        const string peerDeviceId = "rift-peer-media-action";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "pause",
+                requestedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Contains(
+            _clipboardTransport.SentMessages,
+            sent => sent.PeerDeviceId == peerDeviceId && sent.Type == "media.playbackActionResult");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionRequest_RejectsSpoofedRequester()
+    {
+        const string peerDeviceId = "rift-peer-media-action";
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = "rift-spoofed-requester",
+                action = "pause"
+            }),
+            CancellationToken.None));
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_RejectsProtectedMessageForDiagnosticOnlySession()
     {
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
