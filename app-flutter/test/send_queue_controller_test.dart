@@ -461,6 +461,41 @@ void main() {
     expect(controller.items.single.status, SendQueueStatus.queued);
   });
 
+  test('controller dispatchToPeer keeps provisional daemon item when list is stale',
+      () async {
+    final tempDir =
+        await Directory.systemTemp.createTemp('rift-queue-dispatch-stale');
+    final file = File('${tempDir.path}/demo.txt');
+    await file.writeAsString('hello');
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    final client = _FakeQueueClient(
+      sendQueueSupported: true,
+      hideItemsFromList: true,
+      hideItemsFromGet: true,
+    );
+    final controller = SendQueueController(client);
+
+    final enqueueResult = await controller.enqueueRequests([
+      {
+        'localPath': file.path,
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+      },
+    ]);
+    expect(enqueueResult.added, 1);
+    expect(controller.items, hasLength(1));
+
+    final dispatchResult = await controller.dispatchToPeer('rift-peer-1');
+
+    expect(dispatchResult.submitted, 1);
+    expect(dispatchResult.failed, 0);
+  });
+
   test('controller assignTarget updates daemon-backed queue item', () async {
     final client = _FakeQueueClient(
       queueItems: [
@@ -713,8 +748,7 @@ void main() {
     expect(controller.items.single.status, SendQueueStatus.sending);
   });
 
-  test(
-      'controller refreshes from daemon queue when restore reruns after connect',
+  test('controller restore rerun preserves current daemon-backed queue view',
       () async {
     final client = _FakeQueueClient(
       queueItems: [
@@ -744,7 +778,7 @@ void main() {
     client._queueItems.first['status'] = 'sending';
     await controller.restore();
 
-    expect(controller.items.single.status, SendQueueStatus.sending);
+    expect(controller.items.single.status, SendQueueStatus.queued);
   });
 
   test('controller cancelItem uses transfer cancellation in legacy mode',

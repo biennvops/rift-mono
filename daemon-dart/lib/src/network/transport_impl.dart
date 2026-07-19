@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:meta/meta.dart';
 
 import '../core/rift_exceptions.dart';
 import '../core/rift_log.dart';
@@ -14,6 +15,9 @@ import 'frame_codec.dart';
 import 'peer_write_gate.dart';
 
 class TransportImpl implements Transport {
+  @visibleForTesting
+  static bool retainExistingSessionOnDuplicate({required bool isAuthenticated}) => isAuthenticated;
+
   final IdentityManager _identityManager;
   final int port;
   
@@ -196,12 +200,19 @@ class TransportImpl implements Transport {
       if (previousSocket != null &&
           previousIsServer != null &&
           !identical(previousSocket, socket)) {
-        if (_authenticatedPeers.contains(peerDeviceId)) {
+        if (retainExistingSessionOnDuplicate(
+          isAuthenticated: _authenticatedPeers.contains(peerDeviceId),
+        )) {
           RiftLog.info(
-            '[TLS] Replacing existing authenticated session for '
-            'peerDeviceId=$peerDeviceId with a fresh connection (likely a stale reconnect).',
+            '[TLS] Keeping existing authenticated session for '
+            'peerDeviceId=$peerDeviceId and dropping duplicate connection.',
           );
-          disconnect(peerDeviceId);
+          try {
+            socket.destroy();
+          } catch (_) {
+            // Best-effort cleanup for a duplicate connection.
+          }
+          return peerDeviceId;
         } else {
           final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
           if (previousIsServer == preferredIsServer) {

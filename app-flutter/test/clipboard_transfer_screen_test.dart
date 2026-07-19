@@ -669,6 +669,51 @@ void main() {
     );
   });
 
+  testWidgets('Send tab rebuilds when daemon-backed queue refresh changes peer eligibility',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-1',
+          'status': 'waiting_for_target',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-1.txt',
+          'fileName': 'demo-1.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send Unassigned (1)'), findsOneWidget);
+
+    client.queueItems.first['status'] = 'sent';
+    await client.emitConnectionChanged(true);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Queue Empty'), findsOneWidget);
+  });
+
   testWidgets('Send tab cancels active daemon-backed transfer',
       (WidgetTester tester) async {
     final client = FakeTransferJsonRpcClient(

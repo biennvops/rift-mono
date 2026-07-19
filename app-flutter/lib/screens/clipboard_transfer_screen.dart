@@ -15,6 +15,7 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/platform/android_shell.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
@@ -94,13 +95,16 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ??
       shouldRevealCompletedTransferDestination();
-  SendQueueController get _sendQueue => context.read<SendQueueController>();
+  late final SendQueueController _sendQueueController;
+  SendQueueController get _sendQueue => _sendQueueController;
   SendQueueModeCoordinator get _queueMode =>
       SendQueueModeCoordinator(_sendQueue, _legacyQueueCoordinator);
 
   @override
   void initState() {
     super.initState();
+    _sendQueueController = context.read<SendQueueController>();
+    _sendQueueController.addListener(_handleSendQueueChanged);
     widget.routeNotifier?.addListener(_handleExternalRoute);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _handleExternalRoute();
@@ -112,6 +116,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   @override
   void dispose() {
+    _sendQueueController.removeListener(_handleSendQueueChanged);
     widget.routeNotifier?.removeListener(_handleExternalRoute);
     _clipboardOfferSub?.cancel();
     _clipboardExpiredSub?.cancel();
@@ -126,6 +131,13 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _trustChangedSub?.cancel();
     _connectionChangedSub?.cancel();
     super.dispose();
+  }
+
+  void _handleSendQueueChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
   }
 
   void _handleExternalRoute() {
@@ -1205,14 +1217,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     );
   }
 
-  Future<void> _removeStagedFile(SendQueueEntry file) async {
-    await _sendQueue.removeItem(file);
-    if (!mounted) {
-      return;
-    }
-    setState(() {});
-  }
-
   Future<void> _cancelStagedFile(SendQueueEntry file) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -1457,6 +1461,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   }
 
   Future<String?> _pickDestinationPath(String suggestedFileName) async {
+    if (Platform.isAndroid) {
+      final prepared =
+          await AndroidShell.prepareIncomingDownload(suggestedFileName);
+      return prepared?['stagingPath']?.toString();
+    }
+
     try {
       final defaultPath = await _defaultDestinationPath(suggestedFileName);
       final path = await FilePicker.platform.saveFile(

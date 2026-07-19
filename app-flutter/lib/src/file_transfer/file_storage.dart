@@ -41,7 +41,7 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
 
     final downloads = await getDownloadsDirectory();
     if (downloads != null) {
-      return Directory(joinPlatformPath(downloads.path, 'Rift'));
+      return downloads;
     }
   } catch (_) {
     // Fall through to platform-specific defaults.
@@ -53,9 +53,8 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
       if (external != null) {
         return Directory(
           joinPlatformPath(
-            joinPlatformPath(
-                external.parent.parent.parent.parent.path, 'Download'),
-            'Rift',
+            external.parent.parent.parent.parent.path,
+            'Download',
           ),
         );
       }
@@ -70,7 +69,7 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
 
   try {
     final docs = await getApplicationDocumentsDirectory();
-    return Directory(joinPlatformPath(docs.path, 'Downloads/Rift'));
+    return Directory(joinPlatformPath(docs.path, 'Downloads'));
   } catch (_) {
     return null;
   }

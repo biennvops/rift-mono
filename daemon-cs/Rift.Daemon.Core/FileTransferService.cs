@@ -16,6 +16,8 @@ public sealed class FileTransferService : IFileTransferService
     private const int DefaultOfferExpiryMs = 300000;
     private const long MaxIncomingOfferByteSize = 32L * 1024 * 1024;
     private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DuplicateReconnectRetryDelay = TimeSpan.FromSeconds(1);
+    private const int DuplicateReconnectRetryAttempts = 3;
 
     private readonly ITransport _transport;
     private readonly ITrustStore _trustStore;
@@ -30,6 +32,7 @@ public sealed class FileTransferService : IFileTransferService
 
     private readonly ConcurrentDictionary<string, RemoteFileOfferState> _remoteOffers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, OutgoingTransferState> _outgoingTransfers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, OutgoingTransferState> _pausedOutgoingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IncomingTransferState> _incomingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _pendingTrustedReconnects = new(StringComparer.Ordinal);
 
@@ -55,6 +58,7 @@ public sealed class FileTransferService : IFileTransferService
         _operationService = operationService;
         _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<FileTransferService>.Instance;
+        _transport.SessionStateChanged += OnSessionStateChanged;
     }
 
     public async Task<OfferFileResult> OfferFileAsync(
@@ -257,7 +261,7 @@ public sealed class FileTransferService : IFileTransferService
             ByteSize = offer.ByteSize,
             ExpectedSha256 = offer.Sha256,
             ChunkSize = offer.ChunkSize,
-            ExpectedChunkCount = offer.ChunkCount,
+            ExpectedChunkCount = ComputeChunkCount(offer.ByteSize, offer.ChunkSize),
             DestinationPath = fullDestinationPath,
             StagingDirectory = stagingDirectory,
             StagingPath = stagingPath,
@@ -330,6 +334,9 @@ public sealed class FileTransferService : IFileTransferService
     public Task<ListFileTransfersResult> ListFileTransfersAsync()
     {
         var transfers = _outgoingTransfers.Values
+            .Concat(_pausedOutgoingTransfers.Values)
+            .GroupBy(transfer => transfer.TransferId, StringComparer.Ordinal)
+            .Select(group => group.First())
             .Select(transfer => ToTransferInfo(transfer))
             .Concat(_incomingTransfers.Values.Select(transfer => ToTransferInfo(transfer)))
             .OrderByDescending(transfer => transfer.TransferId, StringComparer.Ordinal)
@@ -354,9 +361,12 @@ public sealed class FileTransferService : IFileTransferService
         const string failureReason = "Cancelled";
         const string message = "Transfer cancelled by local user.";
 
-        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing) ||
+            _pausedOutgoingTransfers.TryGetValue(transferId, out outgoing))
         {
-            outgoing.SendCancellation.Cancel();
+            outgoing!.SendCancellation.Cancel();
+            _outgoingTransfers.TryRemove(transferId, out _);
+            _pausedOutgoingTransfers.TryRemove(transferId, out _);
             await TrySendCancelAsync(outgoing.TargetDeviceId, transferId, failureReason, message, cancellationToken).ConfigureAwait(false);
             TryTransitionFailure(outgoing.OperationId, failureReason);
             await NotifyTransferFailedAsync(
@@ -402,7 +412,7 @@ public sealed class FileTransferService : IFileTransferService
             string.IsNullOrWhiteSpace(offer.FileName) ||
             offer.ByteSize < 0 ||
             string.IsNullOrWhiteSpace(offer.Sha256) ||
-            offer.ChunkCount < 0 ||
+            offer.ChunkCount <= 0 ||
             offer.ExpiresInMs <= 0 ||
             !string.Equals(offer.RequiredCapability, RequiredCapability, StringComparison.Ordinal))
         {
@@ -442,6 +452,7 @@ public sealed class FileTransferService : IFileTransferService
 
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Accept");
         transfer.AcceptedChunkSize = chunkSize.HasValue ? NormalizeChunkSize(chunkSize.Value) : transfer.ChunkSize;
+        transfer.AcceptedChunkCount = ComputeChunkCount(transfer.ByteSize, transfer.AcceptedChunkSize.Value);
         transfer.SendTask ??= Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
         return Task.CompletedTask;
     }
@@ -454,6 +465,7 @@ public sealed class FileTransferService : IFileTransferService
         }
 
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Reject");
+        _pausedOutgoingTransfers.TryRemove(transferId, out _);
         var rejectedTransfer = _outgoingTransfers.TryRemove(transferId, out var removedTransfer) ? removedTransfer : transfer;
         TryTransitionFailure(rejectedTransfer.OperationId, failureReason);
         LogEvent(SecurityEventTypes.FileTransferRejected, deviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Denied, failureReason, rejectedTransfer.OperationId);
@@ -557,7 +569,9 @@ public sealed class FileTransferService : IFileTransferService
             throw new FileTransferFailureException("Unauthorized", -32004, "Completion sender did not match accepted file offer source.");
         }
 
-        if (transfer.BytesTransferred != byteSize || transfer.ExpectedChunkCount != chunkCount)
+        if (transfer.BytesTransferred != byteSize ||
+            transfer.ExpectedChunkCount != chunkCount ||
+            transfer.NextChunkIndex != chunkCount)
         {
             throw new FileTransferFailureException("FileIntegrityFailed", -32006, "Transfer completion metadata did not match the received chunks.");
         }
@@ -621,10 +635,12 @@ public sealed class FileTransferService : IFileTransferService
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing))
+        if (_outgoingTransfers.TryGetValue(transferId, out var outgoing) ||
+            _pausedOutgoingTransfers.TryGetValue(transferId, out outgoing))
         {
-            EnsureOutgoingTransferPeerMatches(outgoing, deviceId, "Cancel");
-            var transferToCancel = _outgoingTransfers.TryRemove(transferId, out var removedOutgoing) ? removedOutgoing : outgoing;
+            EnsureOutgoingTransferPeerMatches(outgoing!, deviceId, "Cancel");
+            _pausedOutgoingTransfers.TryRemove(transferId, out _);
+            var transferToCancel = _outgoingTransfers.TryRemove(transferId, out var removedOutgoing) ? removedOutgoing : outgoing!;
             transferToCancel.SendCancellation.Cancel();
             TryTransitionFailure(transferToCancel.OperationId, failureReason);
             await NotifyTransferFailedAsync(
@@ -641,26 +657,91 @@ public sealed class FileTransferService : IFileTransferService
         }
     }
 
+    public Task HandleResumeReceivedAsync(
+        string deviceId,
+        string transferId,
+        string receivingDeviceId,
+        int nextChunkIndex,
+        long offset,
+        CancellationToken cancellationToken)
+    {
+        EnsurePayloadIdentityMatches(deviceId, receivingDeviceId, "file.resume");
+        EnsurePeerCanUseFileTransfer(deviceId, RequiredCapability);
+
+        if (!_pausedOutgoingTransfers.TryGetValue(transferId, out var transfer))
+        {
+            if (_outgoingTransfers.ContainsKey(transferId))
+            {
+                throw new FileTransferFailureException("ProtocolError", -32001, $"Outgoing transfer '{transferId}' is not paused.");
+            }
+
+            throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was not found.");
+        }
+
+        EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Resume");
+        if (offset < 0 || offset > transfer.ByteSize)
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume offset was out of bounds.");
+        }
+
+        var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
+        var isFinalOffset = offset == transfer.ByteSize;
+        var hasValidChunkIndex = transfer.ByteSize == 0
+            ? nextChunkIndex is 0 or 1
+            : nextChunkIndex == GetChunkIndexForOffset(offset, chunkSize);
+        if ((!isFinalOffset && offset % chunkSize != 0) || !hasValidChunkIndex)
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume chunk index did not match offset.");
+        }
+
+        transfer.BytesTransferred = offset;
+        transfer.NextChunkIndex = nextChunkIndex;
+        if (!_pausedOutgoingTransfers.TryRemove(transferId, out transfer))
+        {
+            throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was no longer paused.");
+        }
+
+        _outgoingTransfers[transferId] = transfer;
+        transfer.SendTask = Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
+        return Task.CompletedTask;
+    }
+
     private async Task SendFileChunksAsync(OutgoingTransferState transfer, CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, transfer.SendCancellation.Token);
         var sendCancellationToken = linkedCts.Token;
+        var retainOutgoingState = false;
+        var sendingProtectedMessage = false;
         try
         {
-            _operationService.TransitionOperation(transfer.OperationId, OperationState.Active);
+            TransitionActiveIfPossible(transfer.OperationId);
             var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
             await using var stream = new FileStream(transfer.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             var buffer = new byte[chunkSize];
-            var chunkIndex = 0;
-            long offset = 0;
+            var chunkIndex = transfer.NextChunkIndex;
+            long offset = transfer.BytesTransferred;
+            if (offset > 0)
+            {
+                stream.Seek(offset, SeekOrigin.Begin);
+            }
 
+            var sendEmptyChunk = transfer.ByteSize == 0 && chunkIndex == 0;
             while (true)
             {
                 sendCancellationToken.ThrowIfCancellationRequested();
-                var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, chunkSize), sendCancellationToken).ConfigureAwait(false);
-                if (bytesRead == 0)
+                int bytesRead;
+                if (sendEmptyChunk)
                 {
-                    break;
+                    bytesRead = 0;
+                    sendEmptyChunk = false;
+                }
+                else
+                {
+                    bytesRead = await stream.ReadAsync(buffer.AsMemory(0, chunkSize), sendCancellationToken).ConfigureAwait(false);
+                    if (bytesRead == 0)
+                    {
+                        break;
+                    }
                 }
 
                 var chunkBytes = buffer.AsSpan(0, bytesRead).ToArray();
@@ -682,11 +763,14 @@ public sealed class FileTransferService : IFileTransferService
                     }
                 };
 
+                sendingProtectedMessage = true;
                 await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(envelope), sendCancellationToken).ConfigureAwait(false);
+                sendingProtectedMessage = false;
 
                 offset += bytesRead;
                 chunkIndex++;
                 transfer.BytesTransferred = offset;
+                transfer.NextChunkIndex = chunkIndex;
                 await NotifyTransferProgressAsync(transfer, null, sendCancellationToken).ConfigureAwait(false);
             }
 
@@ -701,11 +785,13 @@ public sealed class FileTransferService : IFileTransferService
                     transferId = transfer.TransferId,
                     byteSize = transfer.ByteSize,
                     sha256 = transfer.Sha256,
-                    chunkCount = transfer.ChunkCount
+                    chunkCount = transfer.AcceptedChunkCount
                 }
             };
 
+            sendingProtectedMessage = true;
             await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), sendCancellationToken).ConfigureAwait(false);
+            sendingProtectedMessage = false;
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
             await NotifyTransferCompletedAsync(
                 transfer.TransferId,
@@ -721,10 +807,13 @@ public sealed class FileTransferService : IFileTransferService
         {
             _logger.LogInformation("File transfer {TransferId} stopped after remote cancellation.", transfer.TransferId);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException)
+        catch (Exception ex) when (IsRecoverableTransferInterruption(ex, sendingProtectedMessage))
         {
-            _logger.LogWarning(ex, "File transfer {TransferId} failed while sending.", transfer.TransferId);
-            TryTransitionFailure(transfer.OperationId, "ConnectionLost");
+            _logger.LogWarning(ex, "File transfer {TransferId} was interrupted while sending.", transfer.TransferId);
+            retainOutgoingState = true;
+            transfer.SendTask = null;
+            _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+            _pausedOutgoingTransfers[transfer.TransferId] = transfer;
             LogEvent(SecurityEventTypes.ConnectionLost, transfer.TargetDeviceId, SecurityEventSeverity.Error, SecurityEventOutcome.Failure, "ConnectionLost", transfer.OperationId);
             await NotifyTransferFailedAsync(
                 transfer.TransferId,
@@ -737,11 +826,78 @@ public sealed class FileTransferService : IFileTransferService
                 ex.Message,
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException)
+        {
+            var failureReason = GetTerminalSendFailureReason(ex);
+            _logger.LogWarning(ex, "File transfer {TransferId} failed terminally while sending.", transfer.TransferId);
+            TryTransitionFailure(transfer.OperationId, failureReason);
+            await NotifyTransferFailedAsync(
+                transfer.TransferId,
+                transfer.OperationId,
+                "outgoing",
+                transfer.TargetDeviceId,
+                transfer.FileName,
+                transfer.ByteSize,
+                failureReason,
+                ex.Message,
+                cancellationToken).ConfigureAwait(false);
+        }
         finally
         {
-            _outgoingTransfers.TryRemove(transfer.TransferId, out _);
-            transfer.SendCancellation.Dispose();
+            if (!retainOutgoingState)
+            {
+                transfer.SendTask = null;
+                _outgoingTransfers.TryRemove(transfer.TransferId, out _);
+                _pausedOutgoingTransfers.TryRemove(transfer.TransferId, out _);
+                transfer.SendCancellation.Dispose();
+            }
         }
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (!args.IsOnline || !args.AllowsProtectedTraffic)
+        {
+            return;
+        }
+
+        var resumableTransfers = _incomingTransfers.Values
+            .Where(transfer => string.Equals(transfer.SourceDeviceId, args.PeerDeviceId, StringComparison.Ordinal))
+            .ToArray();
+        if (resumableTransfers.Length == 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            foreach (var transfer in resumableTransfers)
+            {
+                try
+                {
+                    var envelope = new
+                    {
+                        rift = "0.1-draft",
+                        type = "file.resume",
+                        messageId = Guid.NewGuid().ToString("D"),
+                        sourceDeviceId = _identityManager.GetDeviceId(),
+                        payload = new
+                        {
+                            transferId = transfer.TransferId,
+                            receivingDeviceId = _identityManager.GetDeviceId(),
+                            nextChunkIndex = transfer.NextChunkIndex,
+                            offset = transfer.BytesTransferred
+                        }
+                    };
+
+                    await SendProtectedMessageAsync(args.PeerDeviceId, EncodeEnvelope(envelope), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to send file.resume for {TransferId}.", transfer.TransferId);
+                }
+            }
+        });
     }
 
     private async Task NotifyFileOfferAsync(RemoteFileOfferState offer, CancellationToken cancellationToken)
@@ -1003,7 +1159,7 @@ public sealed class FileTransferService : IFileTransferService
     {
         if (byteSize == 0)
         {
-            return 0;
+            return 1;
         }
 
         return (int)((byteSize + chunkSize - 1) / chunkSize);
@@ -1181,9 +1337,11 @@ public sealed class FileTransferService : IFileTransferService
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                await ConnectToEndpointWithRetryAsync(
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -1221,9 +1379,11 @@ public sealed class FileTransferService : IFileTransferService
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                await ConnectToEndpointWithRetryAsync(
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -1238,10 +1398,112 @@ public sealed class FileTransferService : IFileTransferService
             $"Failed to reconnect trusted peer '{peerDeviceId}' using discovery endpoints. {lastError?.Message ?? "No endpoint succeeded."}");
     }
 
+    private async Task ConnectToEndpointWithRetryAsync(
+        string peerDeviceId,
+        string address,
+        int port,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastDuplicateRace = null;
+        for (var attempt = 0; attempt < DuplicateReconnectRetryAttempts; attempt++)
+        {
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TrustedReconnectTimeout);
+                await _transport.ConnectToPeerAsync(address, port, timeoutCts.Token).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (IsLikelyDuplicateBootstrapRace(ex))
+            {
+                lastDuplicateRace = ex;
+                _logger.LogInformation(
+                    ex,
+                    "Trusted reconnect for peer {PeerDeviceId} hit a duplicate bootstrap race on {Address}:{Port}. Waiting briefly for an in-flight session before retry attempt {Attempt}/{MaxAttempts}.",
+                    peerDeviceId,
+                    address,
+                    port,
+                    attempt + 1,
+                    DuplicateReconnectRetryAttempts);
+
+                if (await WaitForProtectedSessionAsync(peerDeviceId, DuplicateReconnectRetryDelay, cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
+        }
+
+        if (lastDuplicateRace is not null)
+        {
+            throw lastDuplicateRace;
+        }
+    }
+
+    private async Task<bool> WaitForProtectedSessionAsync(
+        string peerDeviceId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_transport.HasProtectedSession(peerDeviceId))
+            {
+                return true;
+            }
+
+            await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+        }
+
+        return _transport.HasProtectedSession(peerDeviceId);
+    }
+
+    private static bool IsLikelyDuplicateBootstrapRace(Exception ex)
+    {
+        return ex switch
+        {
+            InvalidOperationException invalidOperationException =>
+                invalidOperationException.Message.Contains(
+                    "Peer closed connection before sending session.hello.",
+                    StringComparison.Ordinal),
+            IOException ioException =>
+                ioException.Message.Contains("unexpected EOF", StringComparison.OrdinalIgnoreCase) ||
+                ioException.Message.Contains("0 bytes", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+    }
+
     private static bool IsNoOpenSessionError(InvalidOperationException ex)
     {
         return ex.Message.Contains("No open session exists", StringComparison.Ordinal);
     }
+
+    private static int GetChunkIndexForOffset(long offset, int chunkSize)
+    {
+        var completeChunks = offset / chunkSize;
+        return checked((int)(completeChunks + (offset % chunkSize == 0 ? 0 : 1)));
+    }
+
+    private static bool IsRecoverableTransferInterruption(Exception exception, bool sendingProtectedMessage)
+    {
+        if (!sendingProtectedMessage)
+        {
+            return false;
+        }
+
+        return exception is IOException or InvalidOperationException ||
+               exception is FileTransferFailureException { FailureReason: "PeerUnreachable" or "ConnectionLost" or "Timeout" };
+    }
+
+    private static string GetTerminalSendFailureReason(Exception exception) => exception switch
+    {
+        FileNotFoundException or DirectoryNotFoundException => "ProtocolError",
+        UnauthorizedAccessException or IOException => "PolicyDenied",
+        FileTransferFailureException failure => failure.FailureReason,
+        InvalidOperationException => "InvalidTransition",
+        _ => "ProtocolError"
+    };
 
     private void TransitionActiveIfPossible(string operationId)
     {
@@ -1389,10 +1651,12 @@ public sealed class FileTransferService : IFileTransferService
         public string MediaType { get; init; } = string.Empty;
         public long ByteSize { get; init; }
         public long BytesTransferred { get; set; }
+        public int NextChunkIndex { get; set; }
         public string Sha256 { get; init; } = string.Empty;
         public int ChunkSize { get; init; }
         public int ChunkCount { get; init; }
         public int? AcceptedChunkSize { get; set; }
+        public int AcceptedChunkCount { get; set; }
         public DateTimeOffset ExpiresAt { get; init; }
         public CancellationTokenSource SendCancellation { get; init; } = new();
         public Task? SendTask { get; set; }

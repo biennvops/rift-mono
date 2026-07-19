@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Networking;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -31,6 +32,7 @@ public class Worker(
         {
             discoveryService.StartDiscovery();
         }
+        var peerMessageGates = new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         transport.MessageReceived += OnTransportMessageReceived;
         transport.SessionStateChanged += OnSessionStateChanged;
 
@@ -77,10 +79,14 @@ public class Worker(
 
         void OnTransportMessageReceived(object? sender, MessageReceivedEventArgs args)
         {
+            var gate = peerMessageGates.GetOrAdd(args.PeerDeviceId, _ => new SemaphoreSlim(1, 1));
             _ = Task.Run(async () =>
             {
+                var lockHeld = false;
                 try
                 {
+                    await gate.WaitAsync(stoppingToken);
+                    lockHeld = true;
                     heartbeatManager.ObserveAuthenticatedMessage(args.Session);
                     await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
                 }
@@ -91,6 +97,13 @@ public class Worker(
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to route message from peer {PeerDeviceId}.", args.PeerDeviceId);
+                }
+                finally
+                {
+                    if (lockHeld)
+                    {
+                        gate.Release();
+                    }
                 }
             }, stoppingToken);
         }
@@ -130,6 +143,7 @@ public class Worker(
             }
             else
             {
+                peerMessageGates.TryRemove(args.PeerDeviceId, out _);
                 heartbeatManager.OnSessionStateChanged(args);
             }
         }

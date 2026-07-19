@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
@@ -36,6 +37,12 @@ import 'src/platform/windows_shell.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
 String? _lastDesktopClipboardReadFingerprint;
+
+@visibleForTesting
+void setMacOSNotificationBridgeOverride(bool? value) {
+  // ignore: invalid_use_of_visible_for_testing_member
+  MacOSNotifications.debugIsMacOSOverride = value;
+}
 
 String _desktopClipboardFingerprint(String contentType, Uint8List bytes) {
   final byteDigest = base64Encode(bytes);
@@ -1017,21 +1024,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
+        if (MacOSNotifications.supportsPendingShareHandoff) {
+          await MacOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isLinux && route != null) {
           await LinuxNotifications.show(
             title: title,
             body: body,
             route: route,
             destinationPath: destinationPath,
-            payload: payload,
-          );
-          return;
-        }
-        if (Platform.isMacOS) {
-          await MacOSNotifications.show(
-            title: title,
-            body: body,
-            route: route,
             payload: payload,
           );
         }
@@ -1111,8 +1118,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isLinux) {
-          await LinuxNotifications.show(
+        if (MacOSNotifications.supportsPendingShareHandoff) {
+          await MacOSNotifications.show(
             title: notificationTitle,
             body: notificationBody,
             route: NotificationRoute.historyNotifications,
@@ -1121,8 +1128,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isMacOS) {
-          await MacOSNotifications.show(
+        if (Platform.isLinux) {
+          await LinuxNotifications.show(
             title: notificationTitle,
             body: notificationBody,
             route: NotificationRoute.historyNotifications,
@@ -1294,24 +1301,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
 
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
-      final fileName = event['fileName']?.toString() ?? 'file';
-      final peer = event['peerDeviceId']?.toString() ?? 'trusted device';
-      final destinationPath = event['destinationPath']?.toString();
-      final isIncoming =
-          destinationPath != null && destinationPath.trim().isNotEmpty;
-      _maybeNotify(
-        isIncoming ? 'File received' : 'File sent',
-        destinationPath == null || destinationPath.trim().isEmpty
-            ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
-            : '$fileName saved to $destinationPath.',
-      );
-      _maybeNotifyCompletedTransfer(
-        title: isIncoming ? 'File received' : 'File sent',
-        body: destinationPath == null || destinationPath.trim().isEmpty
-            ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
-            : '$fileName saved to $destinationPath.',
-        destinationPath: destinationPath,
-      );
+      unawaited(_handleCompletedFileTransfer(event));
     });
 
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
@@ -1323,6 +1313,87 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         route: NotificationRoute.historyTransferActivity,
       );
     });
+  }
+
+  Future<_IncomingFileDestination?> _prepareIncomingFileDestination(
+    String fileName,
+  ) async {
+    if (Platform.isAndroid) {
+      final prepared = await AndroidShell.prepareIncomingDownload(fileName);
+      final stagingPath = prepared?['stagingPath']?.toString();
+      final displayPath = prepared?['displayPath']?.toString();
+      if (stagingPath == null ||
+          stagingPath.isEmpty ||
+          displayPath == null ||
+          displayPath.isEmpty) {
+        return null;
+      }
+      return _IncomingFileDestination(
+        transferPath: stagingPath,
+        displayPath: displayPath,
+      );
+    }
+
+    final destinationPath = await buildDefaultIncomingFilePath(fileName);
+    if (destinationPath == null || destinationPath.isEmpty) {
+      return null;
+    }
+    return _IncomingFileDestination(
+      transferPath: destinationPath,
+      displayPath: destinationPath,
+    );
+  }
+
+  Future<void> _handleCompletedFileTransfer(
+    Map<String, dynamic> event,
+  ) async {
+    final fileName = event['fileName']?.toString() ?? 'file';
+    final mediaType =
+        event['mediaType']?.toString() ?? 'application/octet-stream';
+    final peer = event['peerDeviceId']?.toString() ?? 'trusted device';
+    final daemonDestinationPath = event['destinationPath']?.toString();
+    final isIncoming = daemonDestinationPath != null &&
+        daemonDestinationPath.trim().isNotEmpty;
+    var displayDestinationPath = daemonDestinationPath;
+    var openDestinationPath = daemonDestinationPath;
+
+    if (Platform.isAndroid && isIncoming) {
+      try {
+        final published = await AndroidShell.publishIncomingDownload(
+          stagingPath: daemonDestinationPath,
+          fileName: fileName,
+          mediaType: mediaType,
+        );
+        displayDestinationPath = published?['displayPath']?.toString();
+        openDestinationPath = published?['contentUri']?.toString();
+        if (displayDestinationPath == null ||
+            displayDestinationPath.isEmpty ||
+            openDestinationPath == null ||
+            openDestinationPath.isEmpty) {
+          throw const FileSystemException(
+            'Android did not return the published download location.',
+          );
+        }
+      } catch (error) {
+        _maybeNotifyWithRoute(
+          title: 'File save failed',
+          body: '$fileName was received but could not be added to Downloads: $error',
+          route: NotificationRoute.historyTransferActivity,
+        );
+        return;
+      }
+    }
+
+    final body = displayDestinationPath == null ||
+            displayDestinationPath.trim().isEmpty
+        ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
+        : '$fileName saved to $displayDestinationPath.';
+    _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    _maybeNotifyCompletedTransfer(
+      title: isIncoming ? 'File received' : 'File sent',
+      body: body,
+      destinationPath: openDestinationPath,
+    );
   }
 
   Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
@@ -1343,17 +1414,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _autoAcceptingTransferIds.add(transferId);
     final client = context.read<JsonRpcRiftClient>();
     try {
-      final destinationPath = await buildDefaultIncomingFilePath(fileName);
-      if (destinationPath == null || destinationPath.isEmpty) {
+      final destination = await _prepareIncomingFileDestination(fileName);
+      if (destination == null) {
         throw const FileSystemException(
-          'Could not resolve a public Downloads/Rift save location.',
+          'Could not prepare the Downloads save location.',
         );
       }
 
       final shouldAccept = await _confirmIncomingFileOffer(
         fileName: fileName,
         sourceDeviceId: sourceDeviceId,
-        destinationPath: destinationPath,
+        destinationPath: destination.displayPath,
       );
       if (shouldAccept != true) {
         await client.rejectFileOffer(
@@ -1371,7 +1442,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         SnackBar(
           content: Text(
             'Receiving $fileName from $sourceDeviceId...\n'
-            'Saved to: $destinationPath',
+            'Saved to: ${destination.displayPath}',
           ),
         ),
       );
@@ -1380,7 +1451,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
       await client.acceptFileOffer(
         transferId: transferId,
-        destinationPath: destinationPath,
+        destinationPath: destination.transferPath,
         overwrite: false,
       );
     } catch (error) {
@@ -1420,6 +1491,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           : const OnboardingScreen(),
     );
   }
+}
+
+class _IncomingFileDestination {
+  const _IncomingFileDestination({
+    required this.transferPath,
+    required this.displayPath,
+  });
+
+  final String transferPath;
+  final String displayPath;
 }
 
 ThemeData _buildRiftTheme() {

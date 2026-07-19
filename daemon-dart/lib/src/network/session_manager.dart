@@ -103,6 +103,7 @@ class SessionManager {
   final TrustStore _trustStore;
   final Map<String, SessionContext> _sessions = {};
   final Map<String, Completer<void>> _establishmentWaiters = {};
+  final Map<String, Future<void>> _inboundMessageTails = {};
 
   // Channel binding Tier 3 (spec §5.3.1 / ADR-0011): dart:io SecureSocket does
   // not expose tls-exporter (RFC 9266) or tls-unique (RFC 5929), so the Dart
@@ -221,21 +222,31 @@ class SessionManager {
     this._trustStore, {
     this.peerAllowanceResolver,
   }) {
-    _transport.onMessageReceived.listen(
-      (msg) => _handleMessage(msg).catchError((Object e, StackTrace st) {
-        RiftLog.error(
-          '[Session] Unhandled exception in _handleMessage',
-          error: e,
-          stackTrace: st,
-        );
-        _transport.disconnect(msg.peerDeviceId);
-      }),
-    );
+    _transport.onMessageReceived.listen((msg) {
+      final previous = _inboundMessageTails[msg.peerDeviceId];
+      late final Future<void> next;
+      next = (previous?.catchError((_) {}) ?? Future<void>.value())
+          .then((_) => _handleMessage(msg))
+          .catchError((Object e, StackTrace st) {
+            RiftLog.error(
+              '[Session] Unhandled exception in _handleMessage',
+              error: e,
+              stackTrace: st,
+            );
+            _transport.disconnect(msg.peerDeviceId);
+          }).whenComplete(() {
+            if (identical(_inboundMessageTails[msg.peerDeviceId], next)) {
+              _inboundMessageTails.remove(msg.peerDeviceId);
+            }
+          });
+      _inboundMessageTails[msg.peerDeviceId] = next;
+    });
     _transport.onPeerDisconnected.listen((deviceId) {
       final waiter = _establishmentWaiters.remove(deviceId);
       if (waiter != null && !waiter.isCompleted) {
         waiter.complete();
       }
+      _inboundMessageTails.remove(deviceId);
       final ctx = _sessions.remove(deviceId);
       if (ctx != null) {
         ctx.dispose();
@@ -274,6 +285,7 @@ class SessionManager {
       ctx.dispose();
     }
     _sessions.clear();
+    _inboundMessageTails.clear();
     await _trustedSessionReadyController.close();
     await _presenceUpdateController.close();
     await _messageController.close();
@@ -409,7 +421,9 @@ class SessionManager {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     final ctx = _sessions[peerDeviceId];
-    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+    if (ctx != null &&
+        ctx.handshakeState == HandshakeState.established &&
+        ctx.capabilityNegotiated) {
       return;
     }
 

@@ -206,11 +206,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 () => RegisterOrReuseSession(deviceId, session),
                 token),
             _ => RunSessionLifetimeAsync(session, cancellationToken),
-            () =>
-            {
-                _sessions.TryRemove(deviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(deviceId, session),
             cancellationToken);
     }
 
@@ -246,14 +242,23 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Replacing existing authenticated session for peer {DeviceId} with a fresh connection (likely a stale reconnect).", deviceId);
-            existingSession.Dispose();
-            _sessions[deviceId] = session;
-            return SessionRegistrationResult.RegisteredNew;
+            _logger.LogInformation("Keeping existing authenticated session for peer {DeviceId} and dropping duplicate fresh connection.", deviceId);
+            session.Dispose();
+            return SessionRegistrationResult.ReusedExisting;
         }
 
         session.Dispose();
         return SessionRegistrationResult.Conflict;
+    }
+
+    private bool RemoveSessionIfCurrent(string deviceId, ActiveSession session)
+    {
+        var removed = _sessions.TryGetValue(deviceId, out var current) &&
+            ReferenceEquals(current, session) &&
+            _sessions.TryRemove(new KeyValuePair<string, ActiveSession>(deviceId, session));
+
+        session.Dispose();
+        return removed;
     }
 
     internal bool ShouldAllowProtectedTraffic(string deviceId)
@@ -364,11 +369,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.SelectedCapabilities,
             session.AllowsProtectedTraffic,
             token => RunRegisteredSessionLoopAsync(session, token),
-            () =>
-            {
-                _sessions.TryRemove(session.DeviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(session.DeviceId, session),
             cancellationToken);
     }
 
@@ -377,7 +378,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         IReadOnlyList<CapabilityDescriptor> selectedCapabilities,
         bool allowsProtectedTraffic,
         Func<CancellationToken, Task> sessionLoop,
-        Action cleanup,
+        Func<bool> cleanup,
         CancellationToken cancellationToken)
     {
         var capabilityNames = selectedCapabilities.Select(capability => capability.Name).ToArray();
@@ -393,12 +394,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
         finally
         {
-            cleanup();
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: false,
-                capabilityNames,
-                allowsProtectedTraffic));
+            if (cleanup())
+            {
+                SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                    deviceId,
+                    isOnline: false,
+                    capabilityNames,
+                    allowsProtectedTraffic));
+            }
         }
     }
 

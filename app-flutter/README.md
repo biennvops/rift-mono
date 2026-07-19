@@ -20,7 +20,7 @@ Normative behavior lives in:
 
 - Windows: named-pipe transport to `daemon-cs`
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
-- Android: isolate transport to `daemon-dart`
+- Android 10 (API 29) or later: isolate transport to `daemon-dart`
 
 macOS notes:
 
