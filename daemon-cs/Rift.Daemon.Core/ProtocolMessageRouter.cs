@@ -346,6 +346,20 @@ public sealed class ProtocolMessageRouter(
             return;
         }
 
+        if (string.Equals(messageType, "file.resume", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleResumeReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("receivingDeviceId").GetString() ?? string.Empty,
+                filePayload.GetProperty("nextChunkIndex").GetInt32(),
+                filePayload.GetProperty("offset").GetInt64(),
+                cancellationToken);
+            return;
+        }
+
         if (messageType.StartsWith("operation.", StringComparison.Ordinal))
         {
             EnsureProtectedMessageAllowed(session, "operation.lifecycle", messageType);

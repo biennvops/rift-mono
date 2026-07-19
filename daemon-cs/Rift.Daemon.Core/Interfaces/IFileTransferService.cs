@@ -163,4 +163,12 @@ public interface IFileTransferService
         string failureReason,
         string? message,
         CancellationToken cancellationToken);
+
+    Task HandleResumeReceivedAsync(
+        string deviceId,
+        string transferId,
+        string receivingDeviceId,
+        int nextChunkIndex,
+        long offset,
+        CancellationToken cancellationToken);
 }

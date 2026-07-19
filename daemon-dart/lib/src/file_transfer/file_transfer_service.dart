@@ -57,6 +57,9 @@ class FileTransferService {
     _messageSub = _sessionManager.onMessage
         .asyncMap(_handleMessage)
         .listen((_) {});
+    _sessionManager.onTrustedSessionReady.listen((ctx) {
+      unawaited(_sendResumeRequestsForPeer(ctx.peerDeviceId));
+    });
   }
 
   Future<void> dispose() async {
@@ -418,6 +421,9 @@ class FileTransferService {
         case 'file.cancel':
           await _handleCancel(msg.peerDeviceId, payload);
           break;
+        case 'file.resume':
+          await _handleResume(msg.peerDeviceId, payload);
+          break;
         default:
           RiftLog.warn('[FileTransfer] Unknown file message type: $type');
       }
@@ -519,6 +525,7 @@ class FileTransferService {
       return;
     }
 
+    transfer.acceptedChunkSize = payload['chunkSize'] as int?;
     transfer.state = 'active';
     _operationManager.transitionOperation(
       transfer.operationId,
@@ -697,6 +704,58 @@ class FileTransferService {
     await _deleteDirectoryIfExists(transfer.stagingDirectory);
   }
 
+  Future<void> _handleResume(
+    String peerDeviceId,
+    Map<String, dynamic> payload,
+  ) async {
+    final transferId = payload['transferId'] as String? ?? '';
+    final receivingDeviceId = payload['receivingDeviceId'] as String? ?? '';
+    final nextChunkIndex = payload['nextChunkIndex'] as int? ?? -1;
+    final offset = payload['offset'] as int? ?? -1;
+    if (transferId.isEmpty) {
+      throw const RiftException(-32001, 'Missing transferId in file.resume.');
+    }
+    if (receivingDeviceId != peerDeviceId) {
+      throw const RiftUnauthorizedException(
+        'file.resume receivingDeviceId mismatch with authenticated peer identity.',
+      );
+    }
+
+    final transfer = _outgoingTransfers[transferId];
+    if (transfer == null) {
+      throw RiftNotFoundException(
+        "Outgoing transfer '$transferId' was not found.",
+      );
+    }
+    if (transfer.targetDeviceId != peerDeviceId) {
+      throw const RiftUnauthorizedException(
+        'Resume sender did not match offered target device.',
+      );
+    }
+    if (offset < 0 || offset > transfer.byteSize) {
+      throw const RiftException(-32001, 'Resume offset was out of bounds.');
+    }
+    final chunkSize = transfer.acceptedChunkSize ?? transfer.chunkSize;
+    if (nextChunkIndex != offset ~/ chunkSize) {
+      throw const RiftException(
+        -32001,
+        'Resume chunk index did not match the declared offset.',
+      );
+    }
+
+    transfer.bytesTransferred = offset;
+    if (transfer.sendTask != null) {
+      return;
+    }
+
+    transfer.state = 'active';
+    transfer.sendTask = () async {
+      try {
+        await _sendOutgoingTransfer(transfer, requestedChunkSize: chunkSize);
+      } catch (_) {}
+    }();
+  }
+
   Future<void> _handleCancel(
     String peerDeviceId,
     Map<String, dynamic> payload,
@@ -716,6 +775,35 @@ class FileTransferService {
     final incoming = _incomingTransfers[transferId];
     if (incoming != null && incoming.sourceDeviceId == peerDeviceId) {
       await _failIncomingTransfer(incoming, failureReason, message);
+    }
+  }
+
+  Future<void> _sendResumeRequestsForPeer(String peerDeviceId) async {
+    final resumableTransfers = _incomingTransfers.values.where((transfer) {
+      return transfer.sourceDeviceId == peerDeviceId &&
+          transfer.bytesTransferred > 0 &&
+          transfer.bytesTransferred < transfer.byteSize;
+    }).toList(growable: false);
+    if (resumableTransfers.isEmpty) {
+      return;
+    }
+
+    for (final transfer in resumableTransfers) {
+      try {
+        await _sessionManager.sendMessage(peerDeviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': 'file.resume',
+          'sourceDeviceId': _localDeviceId,
+          'destinationDeviceId': peerDeviceId,
+          'payload': {
+            'transferId': transfer.transferId,
+            'receivingDeviceId': _localDeviceId,
+            'nextChunkIndex': transfer.nextChunkIndex,
+            'offset': transfer.bytesTransferred,
+          },
+        });
+      } catch (_) {}
     }
   }
 
@@ -1056,6 +1144,7 @@ class _OutgoingTransferState {
   final int chunkCount;
   final DateTime expiresAt;
   int bytesTransferred = 0;
+  int? acceptedChunkSize;
   String state;
   String? failureReason;
   bool cancelRequested = false;

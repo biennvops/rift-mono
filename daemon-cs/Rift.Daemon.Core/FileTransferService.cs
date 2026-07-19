@@ -57,6 +57,7 @@ public sealed class FileTransferService : IFileTransferService
         _operationService = operationService;
         _ipcNotificationService = ipcNotificationService;
         _logger = logger ?? NullLogger<FileTransferService>.Instance;
+        _transport.SessionStateChanged += OnSessionStateChanged;
     }
 
     public async Task<OfferFileResult> OfferFileAsync(
@@ -643,6 +644,39 @@ public sealed class FileTransferService : IFileTransferService
         }
     }
 
+    public Task HandleResumeReceivedAsync(
+        string deviceId,
+        string transferId,
+        string receivingDeviceId,
+        int nextChunkIndex,
+        long offset,
+        CancellationToken cancellationToken)
+    {
+        EnsurePayloadIdentityMatches(deviceId, receivingDeviceId, "file.resume");
+        EnsurePeerCanUseFileTransfer(deviceId, RequiredCapability);
+
+        if (!_outgoingTransfers.TryGetValue(transferId, out var transfer))
+        {
+            throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was not found.");
+        }
+
+        EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Resume");
+        if (offset < 0 || offset > transfer.ByteSize)
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume offset was out of bounds.");
+        }
+
+        var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
+        if (nextChunkIndex != (int)(offset / chunkSize))
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume chunk index did not match offset.");
+        }
+
+        transfer.BytesTransferred = offset;
+        transfer.SendTask ??= Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
+        return Task.CompletedTask;
+    }
+
     private async Task SendFileChunksAsync(OutgoingTransferState transfer, CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, transfer.SendCancellation.Token);
@@ -754,6 +788,54 @@ public sealed class FileTransferService : IFileTransferService
                 transfer.SendCancellation.Dispose();
             }
         }
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (!args.IsOnline || !args.AllowsProtectedTraffic)
+        {
+            return;
+        }
+
+        var resumableTransfers = _incomingTransfers.Values
+            .Where(transfer => string.Equals(transfer.SourceDeviceId, args.PeerDeviceId, StringComparison.Ordinal) &&
+                               transfer.BytesTransferred > 0 &&
+                               transfer.BytesTransferred < transfer.ByteSize)
+            .ToArray();
+        if (resumableTransfers.Length == 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            foreach (var transfer in resumableTransfers)
+            {
+                try
+                {
+                    var envelope = new
+                    {
+                        rift = "0.1-draft",
+                        type = "file.resume",
+                        messageId = Guid.NewGuid().ToString("D"),
+                        sourceDeviceId = _identityManager.GetDeviceId(),
+                        payload = new
+                        {
+                            transferId = transfer.TransferId,
+                            receivingDeviceId = _identityManager.GetDeviceId(),
+                            nextChunkIndex = transfer.NextChunkIndex,
+                            offset = transfer.BytesTransferred
+                        }
+                    };
+
+                    await SendProtectedMessageAsync(args.PeerDeviceId, EncodeEnvelope(envelope), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to send file.resume for {TransferId}.", transfer.TransferId);
+                }
+            }
+        });
     }
 
     private async Task NotifyFileOfferAsync(RemoteFileOfferState offer, CancellationToken cancellationToken)
