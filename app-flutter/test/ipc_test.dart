@@ -6,7 +6,9 @@ import 'package:fake_async/fake_async.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/ios_media_playback.dart';
 import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
@@ -1179,6 +1181,88 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(shellChannel, null);
       }
+    });
+
+    test('iOS mirrors playback state and routes native seek actions', () async {
+      const mediaPlaybackChannel = MethodChannel('rift/ios/media_playback');
+      final nativeCalls = <MethodCall>[];
+      IOSMediaPlayback.debugIsIOSOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-ios-1',
+            'sourceDeviceId': 'rift-mac',
+            'sourcePlatform': 'macos',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Test Song',
+            'artist': 'Test Artist',
+            'album': 'Test Album',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          }
+        ],
+      };
+      await client.connect();
+      final coordinator = IOSRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'show',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-mac');
+        expect(playback['playbackId'], 'playback-ios-1');
+        expect(playback['title'], 'Test Song');
+        expect(playback['positionMs'], 1500);
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+      } finally {
+        await coordinator.dispose();
+        IOSMediaPlayback.debugIsIOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(nativeCalls.map((call) => call.method), contains('clear'));
     });
 
     test('should surface getOperation not found JSON-RPC errors', () async {

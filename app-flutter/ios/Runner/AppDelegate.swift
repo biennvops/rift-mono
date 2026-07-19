@@ -1,5 +1,6 @@
 import CoreLocation
 import Flutter
+import MediaPlayer
 import QuickLook
 import Security
 import UIKit
@@ -11,6 +12,11 @@ import UserNotifications
   private var clipboardChannel: FlutterMethodChannel?
   private var documentsChannel: FlutterMethodChannel?
   private var notificationsChannel: FlutterMethodChannel?
+  private var mediaPlaybackChannel: FlutterMethodChannel?
+  private var mediaPlaybackCommandTargets: [Any] = []
+  private var currentMediaPlaybackSourceDeviceId: String?
+  private var currentMediaPlaybackId: String?
+  private var currentMediaPlaybackState: String?
   private var previewURL: NSURL?
   private var backgroundLocationManager: CLLocationManager?
   private var backgroundLocationActivationObserver: NSObjectProtocol?
@@ -84,8 +90,197 @@ import UserNotifications
     return CLLocationManager.authorizationStatus()
   }
 
+  private func showRemoteMediaPlayback(_ playback: [String: Any]) -> Bool {
+    guard let sourceDeviceId = playback["sourceDeviceId"] as? String,
+          !sourceDeviceId.isEmpty,
+          let playbackId = playback["playbackId"] as? String,
+          !playbackId.isEmpty else {
+      return false
+    }
+
+    currentMediaPlaybackSourceDeviceId = sourceDeviceId
+    currentMediaPlaybackId = playbackId
+    currentMediaPlaybackState = playback["playbackState"] as? String
+
+    var nowPlayingInfo: [String: Any] = [:]
+    let appName = playback["appName"] as? String
+    let title = playback["title"] as? String
+    nowPlayingInfo[MPMediaItemPropertyTitle] = title?.isEmpty == false
+      ? title
+      : appName ?? "Remote playback"
+    if let artist = playback["artist"] as? String, !artist.isEmpty {
+      nowPlayingInfo[MPMediaItemPropertyArtist] = artist
+    }
+    if let album = playback["album"] as? String, !album.isEmpty {
+      nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = album
+    }
+    if let durationMs = playback["durationMs"] as? NSNumber,
+       durationMs.doubleValue >= 0 {
+      nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = durationMs.doubleValue / 1_000
+    }
+
+    let positionMs = (playback["positionMs"] as? NSNumber)?.doubleValue ?? 0
+    nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, positionMs / 1_000)
+    let isPlaying = currentMediaPlaybackState == "playing"
+    nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+    nowPlayingInfo[MPNowPlayingInfoPropertyDefaultPlaybackRate] = 1.0
+    nowPlayingInfo[MPNowPlayingInfoPropertyExternalContentIdentifier] =
+      "\(sourceDeviceId):\(playbackId)"
+
+    if let artwork = playback["artwork"] as? [String: Any],
+       let dataBase64 = artwork["dataBase64"] as? String,
+       let data = Data(base64Encoded: dataBase64),
+       let image = UIImage(data: data) {
+      nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(
+        boundsSize: image.size
+      ) { _ in image }
+    }
+
+    configureMediaPlaybackCommandTargetsIfNeeded()
+    updateMediaPlaybackCommandAvailability(playback)
+    let infoCenter = MPNowPlayingInfoCenter.default()
+    infoCenter.nowPlayingInfo = nowPlayingInfo
+    if #available(iOS 13.0, *) {
+      switch currentMediaPlaybackState {
+      case "playing":
+        infoCenter.playbackState = .playing
+      case "paused":
+        infoCenter.playbackState = .paused
+      case "buffering":
+        infoCenter.playbackState = .interrupted
+      case "stopped":
+        infoCenter.playbackState = .stopped
+      default:
+        infoCenter.playbackState = .unknown
+      }
+    }
+    return true
+  }
+
+  private func clearRemoteMediaPlayback() {
+    currentMediaPlaybackSourceDeviceId = nil
+    currentMediaPlaybackId = nil
+    currentMediaPlaybackState = nil
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    if #available(iOS 13.0, *) {
+      MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+    updateMediaPlaybackCommandAvailability([:])
+  }
+
+  private func configureMediaPlaybackCommandTargetsIfNeeded() {
+    guard mediaPlaybackCommandTargets.isEmpty else {
+      return
+    }
+
+    let commands = MPRemoteCommandCenter.shared()
+    mediaPlaybackCommandTargets.append(
+      commands.playCommand.addTarget { [weak self] _ in
+        self?.dispatchMediaPlaybackAction("play") ?? .noSuchContent
+      }
+    )
+    mediaPlaybackCommandTargets.append(
+      commands.pauseCommand.addTarget { [weak self] _ in
+        self?.dispatchMediaPlaybackAction("pause") ?? .noSuchContent
+      }
+    )
+    mediaPlaybackCommandTargets.append(
+      commands.nextTrackCommand.addTarget { [weak self] _ in
+        self?.dispatchMediaPlaybackAction("next") ?? .noSuchContent
+      }
+    )
+    mediaPlaybackCommandTargets.append(
+      commands.previousTrackCommand.addTarget { [weak self] _ in
+        self?.dispatchMediaPlaybackAction("previous") ?? .noSuchContent
+      }
+    )
+    mediaPlaybackCommandTargets.append(
+      commands.togglePlayPauseCommand.addTarget { [weak self] _ in
+        guard let self else {
+          return .noSuchContent
+        }
+        return self.dispatchMediaPlaybackAction(
+          self.currentMediaPlaybackState == "playing" ? "pause" : "play"
+        )
+      }
+    )
+    mediaPlaybackCommandTargets.append(
+      commands.changePlaybackPositionCommand.addTarget { [weak self] event in
+        guard let positionEvent = event as? MPChangePlaybackPositionCommandEvent else {
+          return .commandFailed
+        }
+        return self?.dispatchMediaPlaybackAction(
+          "seek",
+          positionMs: Int((positionEvent.positionTime * 1_000).rounded())
+        ) ?? .noSuchContent
+      }
+    )
+  }
+
+  private func updateMediaPlaybackCommandAvailability(_ playback: [String: Any]) {
+    let commands = MPRemoteCommandCenter.shared()
+    commands.playCommand.isEnabled = playback["canPlay"] as? Bool == true
+    commands.pauseCommand.isEnabled = playback["canPause"] as? Bool == true
+    commands.togglePlayPauseCommand.isEnabled =
+      commands.playCommand.isEnabled || commands.pauseCommand.isEnabled
+    commands.nextTrackCommand.isEnabled = playback["canSkipNext"] as? Bool == true
+    commands.previousTrackCommand.isEnabled = playback["canSkipPrevious"] as? Bool == true
+    commands.changePlaybackPositionCommand.isEnabled = playback["canSeek"] as? Bool == true
+    commands.skipForwardCommand.isEnabled = false
+    commands.skipBackwardCommand.isEnabled = false
+    commands.changePlaybackRateCommand.isEnabled = false
+  }
+
+  private func dispatchMediaPlaybackAction(
+    _ action: String,
+    positionMs: Int? = nil
+  ) -> MPRemoteCommandHandlerStatus {
+    guard let sourceDeviceId = currentMediaPlaybackSourceDeviceId,
+          let playbackId = currentMediaPlaybackId,
+          let channel = mediaPlaybackChannel else {
+      return .noSuchContent
+    }
+
+    var payload: [String: Any] = [
+      "sourceDeviceId": sourceDeviceId,
+      "playbackId": playbackId,
+      "action": action,
+    ]
+    if let positionMs {
+      payload["positionMs"] = positionMs
+    }
+    channel.invokeMethod("mediaPlaybackAction", arguments: payload)
+    return .success
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    let mediaPlaybackChannel = FlutterMethodChannel(
+      name: "rift/ios/media_playback",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    mediaPlaybackChannel.setMethodCallHandler { [weak self] call, result in
+      guard let self else {
+        result(false)
+        return
+      }
+      switch call.method {
+      case "show":
+        guard let arguments = call.arguments as? [String: Any],
+              let playback = arguments["playback"] as? [String: Any] else {
+          result(false)
+          return
+        }
+        result(self.showRemoteMediaPlayback(playback))
+      case "clear":
+        self.clearRemoteMediaPlayback()
+        result(true)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    self.mediaPlaybackChannel = mediaPlaybackChannel
 
     let channel = FlutterMethodChannel(
       name: "rift/ios/identity",
