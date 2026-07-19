@@ -311,6 +311,23 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         Assert.Null(_trustStore.GetPeer(remoteDeviceId));
     }
 
+    [Fact]
+    public void RegisterOrReuseSession_DuplicateAuthenticatedSession_ReusesExistingSession()
+    {
+        const string deviceId = "rift-peer-duplicate-auth";
+        RegisterAuthenticatedSession(deviceId, allowsProtectedTraffic: true, ["file.transfer"]);
+        var candidate = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic: true, ["file.transfer"]);
+
+        var method = typeof(TlsTransport).GetMethod("RegisterOrReuseSession", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var result = (TlsTransport.SessionRegistrationResult)method!.Invoke(_transport, [deviceId, candidate])!;
+
+        Assert.Equal(TlsTransport.SessionRegistrationResult.ReusedExisting, result);
+        Assert.True(_transport.HasActiveSession(deviceId));
+        Assert.True(_transport.HasProtectedSession(deviceId));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -349,6 +366,19 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
 
     private void RegisterAuthenticatedSession(string deviceId, bool allowsProtectedTraffic, IReadOnlyList<string> selectedCapabilities)
     {
+        var session = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic, selectedCapabilities);
+
+        var sessionsField = typeof(TlsTransport).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(sessionsField);
+        var sessions = sessionsField!.GetValue(_transport)!;
+        var tryAdd = sessions.GetType().GetMethod("TryAdd");
+        Assert.NotNull(tryAdd);
+        var added = (bool)tryAdd!.Invoke(sessions, [deviceId, session])!;
+        Assert.True(added);
+    }
+
+    private static object CreateAuthenticatedSession(string deviceId, bool allowsProtectedTraffic, IReadOnlyList<string> selectedCapabilities)
+    {
         var activeSessionType = typeof(TlsTransport).GetNestedType("ActiveSession", BindingFlags.NonPublic);
         Assert.NotNull(activeSessionType);
 
@@ -372,13 +402,6 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         activeSessionType.GetProperty("PeerContext")!.SetValue(
             session,
             new SessionPeerContext(deviceId, selectedCapabilities, allowsProtectedTraffic));
-
-        var sessionsField = typeof(TlsTransport).GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(sessionsField);
-        var sessions = sessionsField!.GetValue(_transport)!;
-        var tryAdd = sessions.GetType().GetMethod("TryAdd");
-        Assert.NotNull(tryAdd);
-        var added = (bool)tryAdd!.Invoke(sessions, [deviceId, session])!;
-        Assert.True(added);
+        return session;
     }
 }

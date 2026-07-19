@@ -144,6 +144,51 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OfferFileAsync_ReconnectsViaDiscoveryAfterDuplicateBootstrapRace()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.HasActiveSessionValue = false;
+        _transport.HasProtectedSessionValue = false;
+        _transport.ConnectExceptions.Enqueue(new IOException("Received an unexpected EOF or 0 bytes from the transport stream."));
+        _transport.ConnectExceptions.Enqueue(new IOException("Received an unexpected EOF or 0 bytes from the transport stream."));
+        _discoveryCoordinator.DiscoveredPeer = new DiscoveredPeerInfo
+        {
+            DeviceId = "rift-peer",
+            Address = "127.0.0.1",
+            Port = 11112,
+            ObservedEndpoints =
+            [
+                new DiscoveredPeerEndpoint
+                {
+                    Address = "127.0.0.1",
+                    Port = 11112
+                }
+            ]
+        };
+
+        var path = CreateTempFile("hello");
+        try
+        {
+            var result = await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
+
+            Assert.Equal("rift-peer", result.TargetDeviceId);
+            Assert.Equal([("127.0.0.1", 11112), ("127.0.0.1", 11112), ("127.0.0.1", 11112)], _transport.ConnectAttempts);
+            Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "file.offer");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task AcceptFileOfferAsync_SendsAcceptMessage()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -822,6 +867,8 @@ public sealed class FileTransferServiceTests : IDisposable
 
     private sealed class FakeDiscoveryCoordinator : IDiscoveryCoordinator
     {
+        public DiscoveredPeerInfo? DiscoveredPeer { get; set; }
+
         public DiscoveryToggleResult StartDiscovery() => new() { Started = true };
 
         public DiscoveryToggleResult StopDiscovery() => new() { Stopped = true };
@@ -830,6 +877,12 @@ public sealed class FileTransferServiceTests : IDisposable
 
         public bool TryGetDiscoveredPeer(string deviceId, out DiscoveredPeerInfo? peer)
         {
+            if (DiscoveredPeer is not null && string.Equals(DiscoveredPeer.DeviceId, deviceId, StringComparison.Ordinal))
+            {
+                peer = DiscoveredPeer;
+                return true;
+            }
+
             peer = null;
             return false;
         }
@@ -868,6 +921,7 @@ public sealed class FileTransferServiceTests : IDisposable
         public List<(string PeerDeviceId, string Type, JsonElement Payload)> SentMessages { get; } = [];
         public List<(string Host, int Port)> ConnectAttempts { get; } = [];
         public List<string> DisconnectedPeers { get; } = [];
+        public Queue<Exception> ConnectExceptions { get; } = new();
         public bool BlockChunkSends { get; set; }
         public int BlockedChunkSendCount { get; private set; }
         public bool HasActiveSessionValue { get; set; } = true;
@@ -882,6 +936,10 @@ public sealed class FileTransferServiceTests : IDisposable
             if (ConnectDelay > TimeSpan.Zero)
             {
                 await Task.Delay(ConnectDelay, cancellationToken);
+            }
+            if (ConnectExceptions.Count > 0)
+            {
+                throw ConnectExceptions.Dequeue();
             }
             HasActiveSessionValue = true;
             HasProtectedSessionValue = true;

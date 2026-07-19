@@ -16,6 +16,8 @@ public sealed class FileTransferService : IFileTransferService
     private const int DefaultOfferExpiryMs = 300000;
     private const long MaxIncomingOfferByteSize = 32L * 1024 * 1024;
     private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan DuplicateReconnectRetryDelay = TimeSpan.FromSeconds(1);
+    private const int DuplicateReconnectRetryAttempts = 3;
 
     private readonly ITransport _transport;
     private readonly ITrustStore _trustStore;
@@ -1181,9 +1183,11 @@ public sealed class FileTransferService : IFileTransferService
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                await ConnectToEndpointWithRetryAsync(
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -1221,9 +1225,11 @@ public sealed class FileTransferService : IFileTransferService
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
+                await ConnectToEndpointWithRetryAsync(
+                    peerDeviceId,
+                    endpoint.Address,
+                    endpoint.Port,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -1236,6 +1242,82 @@ public sealed class FileTransferService : IFileTransferService
             "PeerUnreachable",
             -32000,
             $"Failed to reconnect trusted peer '{peerDeviceId}' using discovery endpoints. {lastError?.Message ?? "No endpoint succeeded."}");
+    }
+
+    private async Task ConnectToEndpointWithRetryAsync(
+        string peerDeviceId,
+        string address,
+        int port,
+        CancellationToken cancellationToken)
+    {
+        Exception? lastDuplicateRace = null;
+        for (var attempt = 0; attempt < DuplicateReconnectRetryAttempts; attempt++)
+        {
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeoutCts.CancelAfter(TrustedReconnectTimeout);
+                await _transport.ConnectToPeerAsync(address, port, timeoutCts.Token).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (IsLikelyDuplicateBootstrapRace(ex))
+            {
+                lastDuplicateRace = ex;
+                _logger.LogInformation(
+                    ex,
+                    "Trusted reconnect for peer {PeerDeviceId} hit a duplicate bootstrap race on {Address}:{Port}. Waiting briefly for an in-flight session before retry attempt {Attempt}/{MaxAttempts}.",
+                    peerDeviceId,
+                    address,
+                    port,
+                    attempt + 1,
+                    DuplicateReconnectRetryAttempts);
+
+                if (await WaitForProtectedSessionAsync(peerDeviceId, DuplicateReconnectRetryDelay, cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
+        }
+
+        if (lastDuplicateRace is not null)
+        {
+            throw lastDuplicateRace;
+        }
+    }
+
+    private async Task<bool> WaitForProtectedSessionAsync(
+        string peerDeviceId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_transport.HasProtectedSession(peerDeviceId))
+            {
+                return true;
+            }
+
+            await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+        }
+
+        return _transport.HasProtectedSession(peerDeviceId);
+    }
+
+    private static bool IsLikelyDuplicateBootstrapRace(Exception ex)
+    {
+        return ex switch
+        {
+            InvalidOperationException invalidOperationException =>
+                invalidOperationException.Message.Contains(
+                    "Peer closed connection before sending session.hello.",
+                    StringComparison.Ordinal),
+            IOException ioException =>
+                ioException.Message.Contains("unexpected EOF", StringComparison.OrdinalIgnoreCase) ||
+                ioException.Message.Contains("0 bytes", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     private static bool IsNoOpenSessionError(InvalidOperationException ex)

@@ -14,6 +14,10 @@ import 'frame_codec.dart';
 import 'peer_write_gate.dart';
 
 class TransportImpl implements Transport {
+  static const Duration _authenticatedSessionFreshnessWindow = Duration(
+    seconds: 2,
+  );
+
   final IdentityManager _identityManager;
   final int port;
   
@@ -23,6 +27,7 @@ class TransportImpl implements Transport {
   final Map<String, Uint8List> _peerCerts = {};
   final Map<String, PeerWriteGate> _peerWriteGates = {};
   final Set<String> _authenticatedPeers = {};
+  final Map<String, DateTime> _peerLastActivityAt = {};
   final Map<String, Timer> _unauthenticatedTimeouts = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
   final _disconnectController = StreamController<String>.broadcast();
@@ -197,9 +202,27 @@ class TransportImpl implements Transport {
           previousIsServer != null &&
           !identical(previousSocket, socket)) {
         if (_authenticatedPeers.contains(peerDeviceId)) {
+          final lastActivityAt = _peerLastActivityAt[peerDeviceId];
+          final isFresh =
+              lastActivityAt != null &&
+              DateTime.now().toUtc().difference(lastActivityAt) <=
+                  _authenticatedSessionFreshnessWindow;
+          if (isFresh) {
+            RiftLog.info(
+              '[TLS] Keeping existing authenticated session for '
+              'peerDeviceId=$peerDeviceId and dropping duplicate fresh connection.',
+            );
+            try {
+              socket.destroy();
+            } catch (_) {
+              // Best-effort cleanup for a duplicate connection.
+            }
+            return peerDeviceId;
+          }
+
           RiftLog.info(
-            '[TLS] Replacing existing authenticated session for '
-            'peerDeviceId=$peerDeviceId with a fresh connection (likely a stale reconnect).',
+            '[TLS] Replacing stale authenticated session for '
+            'peerDeviceId=$peerDeviceId with a fresh connection.',
           );
           disconnect(peerDeviceId);
         } else {
@@ -246,6 +269,7 @@ class TransportImpl implements Transport {
 
       socket.cast<List<int>>().transform(RiftFrameTransformer(maxFrameSizeProvider: frameSizeProvider)).listen(
         (frameJson) {
+          _peerLastActivityAt[peerDeviceId] = DateTime.now().toUtc();
           _messageController.add(TransportMessage(
             peerDeviceId: peerDeviceId,
             payload: Uint8List.fromList(utf8.encode(json.encode(frameJson))),
@@ -294,6 +318,7 @@ class TransportImpl implements Transport {
     _peerCerts.remove(peerDeviceId);
     _peerWriteGates.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
+    _peerLastActivityAt.remove(peerDeviceId);
     if (!_disconnectController.isClosed) {
       _disconnectController.add(peerDeviceId);
     }
@@ -321,6 +346,7 @@ class TransportImpl implements Transport {
     if (_peers.containsKey(peerDeviceId)) {
       _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
       _authenticatedPeers.add(peerDeviceId);
+      _peerLastActivityAt[peerDeviceId] = DateTime.now().toUtc();
     }
   }
 
@@ -369,6 +395,7 @@ class TransportImpl implements Transport {
 
         currentSocket.add(frame);
         await currentSocket.flush();
+        _peerLastActivityAt[deviceId] = DateTime.now().toUtc();
         RiftLog.info(
           '[TLS] transport.sendMessage flushed peerDeviceId=$deviceId',
         );
