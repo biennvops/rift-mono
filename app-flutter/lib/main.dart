@@ -1118,8 +1118,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isLinux) {
-          await LinuxNotifications.show(
+        if (MacOSNotifications.supportsPendingShareHandoff) {
+          await MacOSNotifications.show(
             title: notificationTitle,
             body: notificationBody,
             route: NotificationRoute.historyNotifications,
@@ -1128,8 +1128,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isMacOS) {
-          await MacOSNotifications.show(
+        if (Platform.isLinux) {
+          await LinuxNotifications.show(
             title: notificationTitle,
             body: notificationBody,
             route: NotificationRoute.historyNotifications,
