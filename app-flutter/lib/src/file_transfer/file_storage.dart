@@ -29,7 +29,7 @@ String joinPlatformPath(String a, String b) {
 Future<Directory?> resolveIncomingDownloadsDirectory() async {
   if (Platform.isIOS) {
     final documents = await getApplicationDocumentsDirectory();
-    return Directory(joinPlatformPath(documents.path, 'Downloads/Rift'));
+    return Directory(joinPlatformPath(documents.path, 'Downloads'));
   }
 
   try {
