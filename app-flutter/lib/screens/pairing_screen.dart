@@ -207,10 +207,7 @@ class _PairingScreenState extends State<PairingScreen> {
 
     if (_isRecipientFlow) {
       _isClosingAfterCompletion = true;
-      await _showRecipientPairingSuccessNotice();
-      if (!mounted) {
-        return;
-      }
+      unawaited(_showRecipientPairingSuccessNotice().catchError((_) {}));
       Navigator.of(context).maybePop();
       return;
     }
