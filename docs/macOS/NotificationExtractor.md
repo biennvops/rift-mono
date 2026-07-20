@@ -18,7 +18,7 @@ The process does not accept paths, SQL, shell commands, or generic file-read req
 
 Database access is read-only. Each scan uses SQLite's online backup API to create a private mode-`0600` snapshot, which includes committed WAL state without modifying Notification Center's database. The snapshot is deleted when the request completes.
 
-The extractor validates the expected `app` and `record` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Malformed notification payloads are skipped and counted without returning their content.
+The extractor validates the expected `app`, `record`, and active-state `delivered` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Active notifications are resolved by matching the 16-byte `delivered.list` value to `record.uuid`; `record.presented` is historical presentation state and must not be used as active membership. Malformed notification payloads are skipped and counted without returning their content.
 
 macOS-origin records always report `isDismissible: false` and `isOpenable: false`, as required by notification sync v1. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier. It does not return the full property-list payload.
 
@@ -43,7 +43,7 @@ RIFT_CODESIGN_IDENTITY='Developer ID Application: Example (TEAMID)' \
   daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-Use the same signing identity and bundle location between builds so macOS can retain the FDA grant reliably.
+Use the same signing identity and bundle location between builds so macOS can retain the FDA grant reliably. Ad-hoc signatures change when the app is rebuilt and require the FDA entry to be removed and re-added.
 
 ## Granting Full Disk Access
 
@@ -77,4 +77,6 @@ Expected status states are:
 - `fullDiskAccessRequired`
 - `unsupportedSchema`
 
-The daemon integration and authenticated XPC boundary are intentionally deferred. Standard input is only the functional prototype transport and must not be treated as signed-peer authentication.
+The macOS daemon launches the extractor through LaunchServices so TCC attributes FDA to the extractor bundle rather than the daemon. Requests and responses use per-call private temporary directories and mode-`0600` files. Calls time out after 10 seconds, responses are limited to 1 MiB, and malformed or oversized responses are rejected. The daemon polls incremental records and periodically reconciles the `delivered` UUID set to emit removals.
+
+Authenticated XPC and Seatbelt confinement are intentionally deferred. Standard input is the functional prototype transport and must not be treated as signed-peer authentication.
