@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Rift
+Comment=Start Rift device continuity in the background
+Exec=@EXEC@
+Icon=dev.rift.Rift
+Terminal=false
+Type=Application
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

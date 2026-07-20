@@ -358,13 +358,16 @@ struct _MyApplication {
   char** dart_entrypoint_arguments;
   FlMethodChannel* linux_notifications_channel;
   gchar* pending_notification_payload;
+  gboolean start_hidden;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  if (!self->start_hidden) {
+    gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  }
 }
 
 static void dispatch_linux_notification_payload(MyApplication* self,
@@ -542,6 +545,13 @@ static void register_linux_notifications_channel(MyApplication* self,
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  GtkWindow* existing_window =
+      gtk_application_get_active_window(GTK_APPLICATION(application));
+  if (existing_window != nullptr) {
+    gtk_window_present(existing_window);
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -565,11 +575,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "app_flutter");
+    gtk_header_bar_set_title(header_bar, "Rift");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "app_flutter");
+    gtk_window_set_title(window, "Rift");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -607,6 +617,13 @@ static gboolean my_application_local_command_line(GApplication* application,
   MyApplication* self = MY_APPLICATION(application);
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
+  self->start_hidden = FALSE;
+  for (gint i = 1; (*arguments)[i] != nullptr; ++i) {
+    if (g_strcmp0((*arguments)[i], "--background") == 0) {
+      self->start_hidden = TRUE;
+      break;
+    }
+  }
 
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
@@ -685,6 +702,7 @@ static void my_application_class_init(MyApplicationClass* klass) {
 static void my_application_init(MyApplication* self) {
   self->linux_notifications_channel = nullptr;
   self->pending_notification_payload = nullptr;
+  self->start_hidden = FALSE;
 }
 
 MyApplication* my_application_new() {
@@ -696,5 +714,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     G_APPLICATION_DEFAULT_FLAGS, nullptr));
 }

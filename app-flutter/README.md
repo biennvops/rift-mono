@@ -54,6 +54,13 @@ flutter run -d linux
 flutter run -d <android-device>
 ```
 
+Install the Linux app, desktop entry, and login autostart for the current user:
+
+```bash
+linux/tools/build_linux_app.sh
+linux/tools/install_user_app.sh
+```
+
 Desktop targets expect a compatible daemon endpoint to be available. Android
 starts the Dart daemon through the isolate bridge.
 

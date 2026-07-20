@@ -180,6 +180,11 @@ void main() {
     );
   }
 
+  test('desktop background startup is enabled only by its launch flag', () {
+    expect(shouldStartDesktopHidden(const <String>[]), isFalse);
+    expect(shouldStartDesktopHidden(const <String>['--background']), isTrue);
+  });
+
   final mockDeviceInfo = {
     'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
     'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
