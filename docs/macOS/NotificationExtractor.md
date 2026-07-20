@@ -1,0 +1,80 @@
+# macOS Notification Extractor
+
+Rift uses a dedicated background app for reading Notification Center metadata on macOS. The separate app identity keeps Full Disk Access (FDA) away from the network-facing daemon.
+
+## Security boundary
+
+The extractor bundle identifier is `com.rift.notification-extractor`. It has no network listener and accepts only newline-delimited JSON requests through standard input. The phase-one operation vocabulary is fixed:
+
+- `getStatus`
+- `scanNotificationChanges`
+- `rescanActiveNotifications`
+
+The process does not accept paths, SQL, shell commands, or generic file-read requests. It always reads:
+
+```text
+~/Library/Group Containers/group.com.apple.usernoted/db2/db
+```
+
+Database access is read-only. Each scan uses SQLite's online backup API to create a private mode-`0600` snapshot, which includes committed WAL state without modifying Notification Center's database. The snapshot is deleted when the request completes.
+
+The extractor validates the expected `app` and `record` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Malformed notification payloads are skipped and counted without returning their content.
+
+macOS-origin records always report `isDismissible: false` and `isOpenable: false`, as required by notification sync v1. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier. It does not return the full property-list payload.
+
+## Building the app
+
+From the repository root:
+
+```bash
+daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
+```
+
+The script defaults to the current architecture and creates:
+
+```text
+dist/macos/Rift Notification Extractor.app
+```
+
+Development builds are ad-hoc signed. Set `RIFT_CODESIGN_IDENTITY` to use a stable Developer ID or Apple Development identity:
+
+```bash
+RIFT_CODESIGN_IDENTITY='Developer ID Application: Example (TEAMID)' \
+  daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
+```
+
+Use the same signing identity and bundle location between builds so macOS can retain the FDA grant reliably.
+
+## Granting Full Disk Access
+
+1. Build the app and place it in its intended stable location.
+2. Open **System Settings → Privacy & Security → Full Disk Access**.
+3. Add and enable **Rift Notification Extractor**.
+4. Restart the extractor after changing the grant.
+
+FDA belongs only to the extractor. Do not grant FDA to Rift Daemon or the Flutter UI.
+
+## Request protocol
+
+One compact JSON object is accepted per line, with a maximum request size of 64 KiB.
+
+```json
+{"id":"1","operation":"getStatus"}
+{"id":"2","operation":"scanNotificationChanges","cursor":0}
+{"id":"3","operation":"rescanActiveNotifications"}
+```
+
+Each response echoes the request ID and contains either `result` or a closed error object:
+
+```json
+{"id":"1","ok":true,"result":{"databaseFound":true,"databaseReadable":true,"schemaSupported":true,"state":"ready"}}
+```
+
+Expected status states are:
+
+- `ready`
+- `databaseNotFound`
+- `fullDiskAccessRequired`
+- `unsupportedSchema`
+
+The daemon integration and authenticated XPC boundary are intentionally deferred. Standard input is only the functional prototype transport and must not be treated as signed-peer authentication.
