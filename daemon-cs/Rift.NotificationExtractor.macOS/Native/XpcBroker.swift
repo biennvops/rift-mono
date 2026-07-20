@@ -149,7 +149,7 @@ private struct XpcBrokerMain {
     static func main() {
         let listener = NSXPCListener(machServiceName: riftNotificationExtractorMachService)
         let allowedClientRequirement = Bundle.main.object(forInfoDictionaryKey: "RiftAllowedClientRequirement") as? String
-            ?? "identifier \"com.rift.daemon\""
+            ?? "identifier \"com.rift.daemon\" and certificate leaf[subject.CN] = \"Rift Development Code Signing\""
         listener.setConnectionCodeSigningRequirement(allowedClientRequirement)
         let delegate = ListenerDelegate()
         listener.delegate = delegate

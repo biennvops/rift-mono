@@ -22,12 +22,28 @@ The listener calls `setConnectionCodeSigningRequirement` before activation. Deve
 identifier "com.rift.daemon"
 ```
 
-Production builds must replace this with a requirement containing the release team identifier and the daemon's designated requirement. The listener rejects clients before its delegate receives a connection.
+Development builds bind the identifier to the local certificate subject:
+
+```text
+identifier "com.rift.daemon"
+and certificate leaf[subject.CN] = "Rift Development Code Signing"
+```
+
+Create the local identity once with:
+
+```bash
+daemon-cs/Tools/setup_rift_dev_signing.sh
+```
+
+The script stores the private key only in the selected local keychain, refuses to replace an existing identity, and is safe to rerun. Both macOS app build scripts automatically prefer this identity when it is present. Rebuilds receive different code-directory hashes but retain the same designated certificate requirement, avoiding ad-hoc FDA churn.
+
+Production builds must replace the development subject requirement with the release team identifier and designated requirement. The listener rejects clients before its delegate receives a connection.
 
 The daemon loads a small Swift bridge dynamic library into the C# daemon process. The bridge connects to the Mach service and also requires:
 
 ```text
 identifier "com.rift.notification-extractor"
+and certificate leaf[subject.CN] = "Rift Development Code Signing"
 ```
 
 This keeps both ends of the peer identity check explicit. A separate command-line probe is provided only for signed-bundle testing and is not a production transport.

@@ -17,7 +17,9 @@ if [[ -z "$runtime" ]]; then
 fi
 
 out_root="$repo_root/dist/macos"
-publish_dir="$out_root/notification-extractor-publish-$runtime"
+mkdir -p "$out_root"
+publish_dir="$(mktemp -d "$out_root/notification-extractor-publish-$runtime.XXXXXX")"
+trap 'rm -rf "$publish_dir"' EXIT
 app_dir="$out_root/Rift Notification Extractor.app"
 broker="$app_dir/Contents/MacOS/rift-notification-extractor"
 worker="$app_dir/Contents/Helpers/rift-notification-extractor-worker"
@@ -46,7 +48,13 @@ xcrun swiftc \
   -framework Foundation \
   -o "$broker"
 
-codesign_identity="${RIFT_CODESIGN_IDENTITY:--}"
+if [[ -n "${RIFT_CODESIGN_IDENTITY:-}" ]]; then
+  codesign_identity="$RIFT_CODESIGN_IDENTITY"
+elif /usr/bin/security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -Fq '"Rift Development Code Signing"'; then
+  codesign_identity="Rift Development Code Signing"
+else
+  codesign_identity="-"
+fi
 codesign --force --sign "$codesign_identity" --identifier com.rift.notification-extractor.worker "$worker"
 codesign --force --deep --sign "$codesign_identity" --identifier com.rift.notification-extractor "$app_dir"
 codesign --verify --deep --strict --verbose=2 "$app_dir"

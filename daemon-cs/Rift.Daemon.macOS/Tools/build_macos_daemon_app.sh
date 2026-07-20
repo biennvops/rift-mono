@@ -28,7 +28,13 @@ dotnet publish "$project" -c Release -r "$runtime" --self-contained true -o "$pu
 echo "Assembling app bundle -> $app_dir"
 rm -rf "$app_dir"
 
-codesign_identity="${RIFT_CODESIGN_IDENTITY:--}"
+if [[ -n "${RIFT_CODESIGN_IDENTITY:-}" ]]; then
+  codesign_identity="$RIFT_CODESIGN_IDENTITY"
+elif /usr/bin/security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -Fq '"Rift Development Code Signing"'; then
+  codesign_identity="Rift Development Code Signing"
+else
+  codesign_identity="-"
+fi
 codesign --force --sign "$codesign_identity" --identifier com.rift.daemon "$publish_dir/Rift.Daemon.macOS"
 mkdir -p "$app_dir/Contents/MacOS"
 
