@@ -61,6 +61,9 @@ linux/tools/build_linux_app.sh
 linux/tools/install_user_app.sh
 ```
 
+The Linux desktop entry forwards supported files opened with Rift to the
+existing process and adds them to the durable send queue.
+
 Desktop targets expect a compatible daemon endpoint to be available. Android
 starts the Dart daemon through the isolate bridge.
 

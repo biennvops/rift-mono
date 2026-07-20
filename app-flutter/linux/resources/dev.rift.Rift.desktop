@@ -1,10 +1,11 @@
 [Desktop Entry]
 Name=Rift
 Comment=Secure local device continuity
-Exec=@EXEC@
+Exec=@EXEC@ %F
 Icon=dev.rift.Rift
 Terminal=false
 Type=Application
 Categories=Utility;
+MimeType=application/octet-stream;image/png;text/plain;
 StartupNotify=true
 X-GNOME-UsesNotifications=true

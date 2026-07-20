@@ -33,6 +33,7 @@ import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
+import 'src/platform/linux_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -320,6 +321,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     IOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    if (Platform.isLinux) {
+      LinuxSendFiles.setMethodCallHandler(_handleLinuxSendFilesMethodCall);
+      unawaited(_consumePendingLinuxSendItems());
+    }
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
@@ -413,6 +418,30 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_iosRemoteMediaPlayback!.start());
     }
+  }
+
+  Future<void> _consumePendingLinuxSendItems() async {
+    final pendingItems = await LinuxSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleLinuxSendFilesMethodCall(MethodCall call) async {
+    if (call.method != LinuxSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = LinuxSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    return null;
   }
 
   Future<dynamic> _handleMacOSSendFilesMethodCall(MethodCall call) async {
