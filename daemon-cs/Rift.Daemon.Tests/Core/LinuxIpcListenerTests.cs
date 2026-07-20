@@ -101,6 +101,41 @@ public class LinuxIpcListenerTests : IDisposable
     }
 
     [Fact]
+    public void ResolveSocketPath_UsesRuntimeSubdirectory_WhenRuntimeRootIsReadOnly()
+    {
+        if (!IsUnix) return;
+
+        var xdgDir = Path.Combine("/tmp", $"rift-test-systemd-{Guid.NewGuid():N}");
+        var socketDir = Path.Combine(xdgDir, "rift-daemon");
+        Directory.CreateDirectory(socketDir);
+        File.SetUnixFileMode(socketDir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(xdgDir,
+            UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        var prev = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
+        try
+        {
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", xdgDir);
+            var result = LinuxIpcListener.ResolveSocketPath();
+            Assert.Equal(Path.Combine(socketDir, "v0.1.sock"), result);
+        }
+        finally
+        {
+            File.SetUnixFileMode(xdgDir,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Environment.SetEnvironmentVariable("XDG_RUNTIME_DIR", prev);
+            try
+            {
+                Directory.Delete(xdgDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void ResolveSocketPath_FallsBackToTmp_WhenXdgUnset()
     {
         if (!IsUnix) return;
