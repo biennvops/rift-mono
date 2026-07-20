@@ -14,6 +14,7 @@ internal sealed class MacOSNotificationSyncObserver(
 
     private readonly Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
     private long _cursor;
+    private bool _cursorInitialized;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -61,19 +62,23 @@ internal sealed class MacOSNotificationSyncObserver(
             throw new MacOSExtractorException(status.State, GetStatusMessage(status.State));
         }
 
-        _cursor = 0;
-        for (var page = 0; page < 10_000; page++)
+        if (!_cursorInitialized)
         {
-            var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
-            _cursor = Math.Max(_cursor, scan.Cursor);
-            if (scan.Notifications.Count + scan.SkippedRecords < ExtractorPageSize)
+            _cursor = 0;
+            for (var page = 0; page < 10_000; page++)
             {
-                break;
+                var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
+                _cursor = Math.Max(_cursor, scan.Cursor);
+                if (scan.Notifications.Count + scan.SkippedRecords < ExtractorPageSize)
+                {
+                    break;
+                }
+                if (page == 9_999)
+                {
+                    throw new MacOSExtractorException("bootstrapLimitExceeded", "Notification cursor bootstrap exceeded its safety limit.");
+                }
             }
-            if (page == 9_999)
-            {
-                throw new MacOSExtractorException("bootstrapLimitExceeded", "Notification cursor bootstrap exceeded its safety limit.");
-            }
+            _cursorInitialized = true;
         }
 
         logger.LogInformation("macOS notification extraction started at cursor {Cursor}.", _cursor);

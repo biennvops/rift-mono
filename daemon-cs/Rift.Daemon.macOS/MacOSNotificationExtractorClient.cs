@@ -58,9 +58,10 @@ internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtra
 
         try
         {
+            var requestId = Guid.NewGuid().ToString("D");
             var request = JsonSerializer.Serialize(new
             {
-                id = Guid.NewGuid().ToString("D"),
+                id = requestId,
                 operation,
                 cursor
             }, JsonOptions);
@@ -100,6 +101,10 @@ internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtra
             if (response is null)
             {
                 throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an empty response.");
+            }
+            if (!string.Equals(response.Id, requestId, StringComparison.Ordinal))
+            {
+                throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor response ID did not match the request.");
             }
             if (!response.Ok)
             {
@@ -231,6 +236,7 @@ internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtra
 
     private sealed class ExtractorResponse
     {
+        public string Id { get; init; } = string.Empty;
         public bool Ok { get; init; }
         public JsonElement Result { get; init; }
         public ExtractorError? Error { get; init; }

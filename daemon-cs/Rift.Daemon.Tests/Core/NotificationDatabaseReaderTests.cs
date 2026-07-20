@@ -56,14 +56,15 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
         InsertNotification(databasePath, 1, Guid.NewGuid(), presented: true, Convert.FromBase64String(PayloadBase64));
         InsertNotification(databasePath, 2, Guid.NewGuid(), presented: true, "not a plist"u8.ToArray());
         InsertNotification(databasePath, 3, Guid.NewGuid(), presented: true, Convert.FromBase64String(PayloadBase64));
+        InsertNotification(databasePath, 4, Guid.NewGuid(), presented: true, new byte[1024 * 1024 + 1]);
         var reader = new NotificationDatabaseReader(databasePath);
 
         var result = reader.ScanNotificationChanges(1);
 
         var notification = Assert.Single(result.Notifications);
         Assert.Equal("Build complete", notification.Title);
-        Assert.Equal(3, result.Cursor);
-        Assert.Equal(1, result.SkippedRecords);
+        Assert.Equal(4, result.Cursor);
+        Assert.Equal(2, result.SkippedRecords);
     }
 
     [Fact]

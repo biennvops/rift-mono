@@ -5,6 +5,7 @@ namespace Rift.NotificationExtractor.macOS;
 internal sealed class NotificationDatabaseReader
 {
     private const int MaximumScanRecords = 500;
+    private const int MaximumPayloadBytes = 1024 * 1024;
     private static readonly DateTimeOffset AppleEpoch = new(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private static readonly string[] RequiredAppColumns = ["app_id", "identifier"];
     private static readonly string[] RequiredRecordColumns =
@@ -84,6 +85,11 @@ internal sealed class NotificationDatabaseReader
             nextCursor = Math.Max(nextCursor, recordId);
             try
             {
+                var payloadLength = reader.GetBytes(3, 0, buffer: null, bufferOffset: 0, length: 0);
+                if (payloadLength > MaximumPayloadBytes)
+                {
+                    throw new InvalidDataException("Notification property list exceeded 1 MiB.");
+                }
                 var payload = reader.GetFieldValue<byte[]>(3);
                 var root = BinaryPropertyListReader.Read(payload);
                 var title = FindString(root, "titl", "title");

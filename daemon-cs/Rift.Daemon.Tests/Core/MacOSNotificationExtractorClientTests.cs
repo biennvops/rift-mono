@@ -21,9 +21,10 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
                 AssertPrivateFile(errorPath);
                 using var request = JsonDocument.Parse(await File.ReadAllTextAsync(requestPath, cancellationToken));
                 Assert.Equal("getStatus", request.RootElement.GetProperty("operation").GetString());
+                var requestId = request.RootElement.GetProperty("id").GetString();
                 await File.WriteAllTextAsync(
                     responsePath,
-                    "{\"ok\":true,\"result\":{\"databaseFound\":true,\"databaseReadable\":true,\"schemaSupported\":true,\"state\":\"ready\"}}\n",
+                    $"{{\"id\":\"{requestId}\",\"ok\":true,\"result\":{{\"databaseFound\":true,\"databaseReadable\":true,\"schemaSupported\":true,\"state\":\"ready\"}}}}\n",
                     cancellationToken);
             });
 
@@ -62,17 +63,36 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     [Fact]
     public async Task GetStatusAsync_ReportsExtractorError()
     {
-        var client = CreateClient((_, responsePath, cancellationToken) =>
-            File.WriteAllTextAsync(
+        var client = CreateClient(async (requestPath, responsePath, cancellationToken) =>
+        {
+            using var request = JsonDocument.Parse(await File.ReadAllTextAsync(requestPath, cancellationToken));
+            var requestId = request.RootElement.GetProperty("id").GetString();
+            await File.WriteAllTextAsync(
                 responsePath,
-                "{\"ok\":false,\"error\":{\"code\":\"fullDiskAccessRequired\",\"message\":\"FDA required\"}}\n",
-                cancellationToken));
+                $"{{\"id\":\"{requestId}\",\"ok\":false,\"error\":{{\"code\":\"fullDiskAccessRequired\",\"message\":\"FDA required\"}}}}\n",
+                cancellationToken);
+        });
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
             () => client.GetStatusAsync(CancellationToken.None));
 
         Assert.Equal("fullDiskAccessRequired", exception.Code);
         Assert.Equal("FDA required", exception.Message);
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_RejectsMismatchedResponseId()
+    {
+        var client = CreateClient((_, responsePath, cancellationToken) =>
+            File.WriteAllTextAsync(
+                responsePath,
+                "{\"id\":\"wrong-id\",\"ok\":true,\"result\":{\"state\":\"ready\"}}\n",
+                cancellationToken));
+
+        var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
+            () => client.GetStatusAsync(CancellationToken.None));
+
+        Assert.Equal("invalidResponse", exception.Code);
     }
 
     [Fact]

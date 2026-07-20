@@ -45,8 +45,10 @@ public sealed class MacOSNotificationSyncObserverTests
         var observer = CreateObserver(syncService, extractorClient);
 
         await observer.BootstrapAsync(CancellationToken.None);
+        await observer.BootstrapAsync(CancellationToken.None);
 
         Assert.Empty(syncService.Events);
+        Assert.Equal(1, extractorClient.ScanCalls);
         Assert.Equal(0, extractorClient.RescanCalls);
     }
 
@@ -93,6 +95,7 @@ public sealed class MacOSNotificationSyncObserverTests
     private sealed class StubExtractorClient : IMacOSNotificationExtractorClient
     {
         public MacOSExtractorScanResult ScanResult { get; init; } = new();
+        public int ScanCalls { get; private set; }
         public int RescanCalls { get; private set; }
 
         public Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken) =>
@@ -104,8 +107,11 @@ public sealed class MacOSNotificationSyncObserverTests
                 State = "ready"
             });
 
-        public Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken) =>
-            Task.FromResult(ScanResult);
+        public Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken)
+        {
+            ScanCalls++;
+            return Task.FromResult(ScanResult);
+        }
 
         public Task<MacOSExtractorScanResult> RescanActiveNotificationsAsync(CancellationToken cancellationToken)
         {
