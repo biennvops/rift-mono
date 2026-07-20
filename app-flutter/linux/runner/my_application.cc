@@ -13,12 +13,18 @@
 namespace {
 
 constexpr char kDesktopClipboardChannel[] = "rift/desktop/clipboard";
+constexpr char kDesktopClipboardEventsChannel[] =
+    "rift/desktop/clipboard_events";
 constexpr char kLinuxNotificationsChannel[] = "rift/linux/notifications";
 constexpr char kLinuxNotificationActionName[] = "notificationActivated";
 constexpr char kLinuxNotificationActionOpenName[] = "notificationActionOpen";
 constexpr char kLinuxNotificationActionDismissName[] =
     "notificationActionDismiss";
 std::string g_last_logged_clipboard_fingerprint;
+FlEventChannel* g_clipboard_events_channel = nullptr;
+gboolean g_emit_clipboard_events = FALSE;
+GtkClipboard* g_monitored_clipboard = nullptr;
+gulong g_clipboard_owner_change_handler = 0;
 
 std::string fingerprint_clipboard_payload(const char* content_type,
                                           const uint8_t* bytes,
@@ -260,6 +266,59 @@ void register_desktop_clipboard_channel(FlView* view) {
       "rift-desktop-clipboard-channel",
       g_object_ref(channel),
       g_object_unref);
+}
+
+void clipboard_owner_changed_cb(GtkClipboard* clipboard,
+                                GdkEventOwnerChange* event,
+                                gpointer user_data) {
+  if (!g_emit_clipboard_events || g_clipboard_events_channel == nullptr) {
+    return;
+  }
+
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(FlValue) value = fl_value_new_null();
+  if (!fl_event_channel_send(
+          g_clipboard_events_channel, value, nullptr, &error)) {
+    g_warning("Rift clipboard bridge: failed to send change event: %s",
+              error->message);
+  }
+}
+
+FlMethodErrorResponse* clipboard_events_listen_cb(FlEventChannel* channel,
+                                                  FlValue* args,
+                                                  gpointer user_data) {
+  g_emit_clipboard_events = TRUE;
+  return nullptr;
+}
+
+FlMethodErrorResponse* clipboard_events_cancel_cb(FlEventChannel* channel,
+                                                  FlValue* args,
+                                                  gpointer user_data) {
+  g_emit_clipboard_events = FALSE;
+  return nullptr;
+}
+
+void register_desktop_clipboard_events_channel(FlView* view) {
+  FlEngine* engine = fl_view_get_engine(view);
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_clipboard_events_channel = fl_event_channel_new(
+      messenger, kDesktopClipboardEventsChannel, FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(
+      g_clipboard_events_channel,
+      clipboard_events_listen_cb,
+      clipboard_events_cancel_cb,
+      nullptr,
+      nullptr);
+
+  g_monitored_clipboard = gtk_clipboard_get_default(gdk_display_get_default());
+  if (g_monitored_clipboard != nullptr) {
+    g_clipboard_owner_change_handler = g_signal_connect(
+        g_monitored_clipboard,
+        "owner-change",
+        G_CALLBACK(clipboard_owner_changed_cb),
+        nullptr);
+  }
 }
 
 std::string encode_notification_payload(const gchar* route,
@@ -605,6 +664,7 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   register_desktop_clipboard_channel(view);
+  register_desktop_clipboard_events_channel(view);
   register_linux_notifications_channel(self, view);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
@@ -684,6 +744,15 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (g_monitored_clipboard != nullptr &&
+      g_clipboard_owner_change_handler != 0) {
+    g_signal_handler_disconnect(
+        g_monitored_clipboard, g_clipboard_owner_change_handler);
+    g_clipboard_owner_change_handler = 0;
+  }
+  g_monitored_clipboard = nullptr;
+  g_emit_clipboard_events = FALSE;
+  g_clear_object(&g_clipboard_events_channel);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_object(&self->linux_notifications_channel);
   g_clear_pointer(&self->pending_notification_payload, g_free);
