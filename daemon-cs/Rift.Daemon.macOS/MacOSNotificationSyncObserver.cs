@@ -85,6 +85,14 @@ internal sealed class MacOSNotificationSyncObserver(
         {
             var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
             _cursor = Math.Max(_cursor, scan.Cursor);
+            if (scan.Notifications.Count > 0 || scan.SkippedRecords > 0)
+            {
+                logger.LogInformation(
+                    "macOS notification scan returned {NotificationCount} records and skipped {SkippedCount} at cursor {Cursor}.",
+                    scan.Notifications.Count,
+                    scan.SkippedRecords,
+                    _cursor);
+            }
             await ProcessIncrementalAsync(scan.Notifications, cancellationToken).ConfigureAwait(false);
             await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
         }
@@ -110,11 +118,16 @@ internal sealed class MacOSNotificationSyncObserver(
             }
 
             _fingerprints[notification.NotificationId] = fingerprint;
-            await PublishAsync(eventType, notification, removedAt: null, cancellationToken).ConfigureAwait(false);
+            var result = await PublishAsync(eventType, notification, removedAt: null, cancellationToken).ConfigureAwait(false);
+            logger.LogInformation(
+                "macOS notification {EventType} processed (suppressed={Suppressed}, broadcastPeers={BroadcastPeerCount}).",
+                eventType,
+                result.Suppressed,
+                result.BroadcastTo.Count);
         }
     }
 
-    private Task PublishAsync(
+    private Task<NotifyLocalNotificationEventResult> PublishAsync(
         string eventType,
         MacOSExtractedNotification notification,
         string? removedAt,
