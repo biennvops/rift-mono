@@ -71,6 +71,15 @@ publishes their playback state to trusted peers. Remote play, pause, toggle,
 next, previous, and seek actions are routed back to the originating MPRIS
 player.
 
+Run the isolated Linux daemon smoke test with:
+
+```bash
+Rift.Daemon.Linux/Tools/smoke_test_linux_daemon.sh
+```
+
+The smoke test verifies Unix IPC startup, Linux device information, media IPC,
+and identity persistence across a daemon restart.
+
 ## Related Docs
 
 - `../docs/macos-permissions.md`
