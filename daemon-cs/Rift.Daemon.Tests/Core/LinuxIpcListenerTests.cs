@@ -23,6 +23,16 @@ public class LinuxIpcListenerTests : IDisposable
     private static bool IsUnix => OperatingSystem.IsMacOS() || OperatingSystem.IsLinux();
 
     [Fact]
+    public void SystemdUnit_UsesPerUserInstallPath()
+    {
+        var unitPath = Path.Combine(AppContext.BaseDirectory, "Resources", "rift-daemon.service");
+        var unit = File.ReadAllText(unitPath);
+
+        Assert.Contains("ExecStart=%h/.local/lib/rift-daemon/rift-daemon", unit);
+        Assert.DoesNotContain("ExecStart=/usr/local/bin", unit);
+    }
+
+    [Fact]
     public void FitsInSunPath_WithinLimit_ReturnsTrue()
     {
         Assert.True(LinuxIpcListener.FitsInSunPath("/tmp/rift-daemon/v0.1.sock"));

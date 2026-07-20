@@ -54,6 +54,18 @@ dotnet run --project Rift.Daemon.Linux/
 dotnet run --project Rift.Daemon.Windows/
 ```
 
+Install the Linux daemon as a per-user systemd service:
+
+```bash
+Rift.Daemon.Linux/Tools/build_linux_daemon.sh
+Rift.Daemon.Linux/Tools/install_user_service.sh
+systemctl --user status rift-daemon.service
+```
+
+The installer places the self-contained daemon under
+`~/.local/lib/rift-daemon` and preserves identity and trust data under
+`~/.local/share/rift-daemon` during upgrades or uninstall.
+
 ## Related Docs
 
 - `../docs/macos-permissions.md`
