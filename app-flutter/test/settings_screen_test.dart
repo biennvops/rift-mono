@@ -29,6 +29,7 @@ void main() {
     'deviceId': 'rift-test-device-id',
     'displayName': 'Test Device',
     'fingerprint': 'TEST-FINGERPRINT',
+    'identityProtectionBackend': 'secret-service',
   };
 
   setUpAll(() {
@@ -168,6 +169,7 @@ void main() {
 
     expect(find.text('Linux Runtime'), findsOneWidget);
     expect(find.text('Daemon IPC: connected'), findsOneWidget);
+    expect(find.text('Identity protection: secret-service'), findsOneWidget);
     expect(find.text('avahi-daemon: running'), findsNothing);
     expect(find.text('appindicator: supported'), findsNothing);
   });

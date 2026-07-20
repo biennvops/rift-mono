@@ -97,6 +97,7 @@ Returns the local device's identity information.
   "fingerprint": "CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ",
   "implementationId": "riftd-cs/0.1.0",
   "protocolVersion": "0.1-draft",
+  "identityProtectionBackend": "dpapi",
   "capabilities": [
     { "name": "clipboard.offer_fetch", "version": 1 },
     { "name": "presence.basic", "version": 1 },
@@ -111,7 +112,10 @@ Returns the local device's identity information.
 it is derived from the current platform, a coarse device type, and a stable
 two-digit identifier, for example `Windows Desktop 07` or `Android Phone 12`.
 `platform` is a canonical lowercase OS identifier: `android`, `windows`,
-`macos`, `linux`, or `unknown`.
+`macos`, `linux`, or `unknown`. `identityProtectionBackend` is an OPTIONAL
+implementation diagnostic naming the active local identity protection backend,
+for example `dpapi`, `keychain`, `secret-service`, or `file`. It MUST NOT expose
+key identifiers or other secret material.
 
 **Errors:** `-32012` if identity is not yet initialized.
 

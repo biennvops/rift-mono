@@ -936,6 +936,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           _linuxIpcRuntimeDescription(),
                           true,
                         ),
+                        const SizedBox(height: 4),
+                        _buildLinuxRuntimeStatus(
+                          theme,
+                          'Identity protection',
+                          _deviceInfo?['identityProtectionBackend']
+                                  ?.toString() ??
+                              'unknown',
+                          _deviceInfo?['identityProtectionBackend'] ==
+                              'secret-service',
+                        ),
                       ],
                     ),
                   ),

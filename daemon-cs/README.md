@@ -66,6 +66,12 @@ The installer places the self-contained daemon under
 `~/.local/lib/rift-daemon` and preserves identity and trust data under
 `~/.local/share/rift-daemon` during upgrades or uninstall.
 
+Linux protects the local identity encryption key with the desktop Secret
+Service when available. Existing mode-`0600` key files are migrated after a
+successful identity decrypt. Headless sessions without Secret Service retain
+the mode-`0600` filesystem fallback; the active backend is reported by
+`rift.getDeviceInfo` as `IdentityProtectionBackend`.
+
 On Linux, the daemon observes MPRIS players on the user session D-Bus and
 publishes their playback state to trusted peers. Remote play, pause, toggle,
 next, previous, and seek actions are routed back to the originating MPRIS

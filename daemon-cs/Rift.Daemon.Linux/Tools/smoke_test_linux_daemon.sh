@@ -29,6 +29,7 @@ start_daemon() {
   local log_path="$1"
   XDG_RUNTIME_DIR="$runtime_dir" \
   XDG_DATA_HOME="$data_dir" \
+  DBUS_SESSION_BUS_ADDRESS="unix:path=$test_root/missing-session-bus" \
     dotnet run --project "$daemon_project" --no-build >"$log_path" 2>&1 &
   daemon_pid=$!
 
@@ -64,6 +65,8 @@ first_info="$(probe rift.getDeviceInfo)"
 first_device_id="$(printf '%s' "$first_info" | grep -oE 'rift-[a-z2-7]{32}' | head -1)"
 [[ -n "$first_device_id" ]]
 printf '%s' "$first_info" | grep -Eq '"Platform"[[:space:]]*:[[:space:]]*"linux"'
+printf '%s' "$first_info" | grep -Eq '"IdentityProtectionBackend"[[:space:]]*:[[:space:]]*"file"'
+[[ "$(stat -c '%a' "$data_dir/rift-daemon/riftd.sqlite3.rift-secrets.key")" == "600" ]]
 probe rift.listMediaPlayback | grep -q 'Playbacks'
 stop_daemon
 
