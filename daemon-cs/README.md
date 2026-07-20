@@ -66,6 +66,11 @@ The installer places the self-contained daemon under
 `~/.local/lib/rift-daemon` and preserves identity and trust data under
 `~/.local/share/rift-daemon` during upgrades or uninstall.
 
+On Linux, the daemon observes MPRIS players on the user session D-Bus and
+publishes their playback state to trusted peers. Remote play, pause, toggle,
+next, previous, and seek actions are routed back to the originating MPRIS
+player.
+
 ## Related Docs
 
 - `../docs/macos-permissions.md`
