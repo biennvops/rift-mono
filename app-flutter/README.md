@@ -54,11 +54,21 @@ flutter run -d linux
 flutter run -d <android-device>
 ```
 
-Install the Linux app, desktop entry, and login autostart for the current user:
+Build and install the Linux release bundle, desktop entry, and login autostart
+for the current user:
 
 ```bash
 linux/tools/build_linux_app.sh
 linux/tools/install_user_app.sh
+```
+
+The Linux build pins the SQLite amalgamation to an official mirror with a
+checksum because the upstream plugin download can intermittently return
+truncated archives. Validate the published daemon and app installers together
+with:
+
+```bash
+linux/tools/smoke_test_installed_stack.sh
 ```
 
 The Linux desktop entry forwards supported files opened with Rift to the
