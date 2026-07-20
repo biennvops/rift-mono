@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 
 namespace Rift.Daemon.macOS;
@@ -12,25 +13,23 @@ internal interface IMacOSNotificationExtractorClient
 
 internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtractorClient
 {
+    private const int MaximumRequestBytes = 64 * 1024;
     private const int MaximumResponseBytes = 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly string _appPath;
-    private readonly Func<string, string, string, string, CancellationToken, Task> _launchAsync;
+    private readonly Func<byte[], TimeSpan, CancellationToken, Task<byte[]>> _sendAsync;
     private readonly TimeSpan _requestTimeout;
 
     public MacOSNotificationExtractorClient()
-        : this(ResolveAppPath(), LaunchThroughLaunchServicesAsync, TimeSpan.FromSeconds(10))
+        : this(SendNativeAsync, TimeSpan.FromSeconds(10))
     {
     }
 
     internal MacOSNotificationExtractorClient(
-        string appPath,
-        Func<string, string, string, string, CancellationToken, Task> launchAsync,
+        Func<byte[], TimeSpan, CancellationToken, Task<byte[]>> sendAsync,
         TimeSpan? requestTimeout = null)
     {
-        _appPath = appPath;
-        _launchAsync = launchAsync;
+        _sendAsync = sendAsync;
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(10);
     }
 
@@ -45,193 +44,131 @@ internal sealed class MacOSNotificationExtractorClient : IMacOSNotificationExtra
 
     private async Task<T> SendAsync<T>(string operation, long? cursor, CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(_appPath))
+        var requestId = Guid.NewGuid().ToString("D");
+        var request = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
-            throw new MacOSExtractorException("extractorNotFound", "Rift Notification Extractor is not installed.");
+            id = requestId,
+            operation,
+            cursor
+        }, JsonOptions));
+        if (request.Length > MaximumRequestBytes)
+        {
+            throw new MacOSExtractorException("requestTooLarge", "Rift Notification Extractor request exceeded 64 KiB.");
         }
 
-        var directory = Directory.CreateTempSubdirectory("rift-notification-client-");
-        var requestPath = Path.Combine(directory.FullName, "request.json");
-        var responsePath = Path.Combine(directory.FullName, "response.json");
-        var errorPath = Path.Combine(directory.FullName, "error.txt");
-        SetPrivateDirectoryMode(directory.FullName);
+        byte[] responseBytes;
+        try
+        {
+            responseBytes = await _sendAsync(request, _requestTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MacOSExtractorException("extractorTimeout", "Rift Notification Extractor did not respond in time.");
+        }
+        if (responseBytes.Length > MaximumResponseBytes)
+        {
+            throw new MacOSExtractorException("responseTooLarge", "Rift Notification Extractor response exceeded 1 MiB.");
+        }
+
+        ExtractorResponse? response;
+        try
+        {
+            response = JsonSerializer.Deserialize<ExtractorResponse>(responseBytes, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned invalid JSON.");
+        }
+
+        if (response is null)
+        {
+            throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an empty response.");
+        }
+        if (!string.Equals(response.Id, requestId, StringComparison.Ordinal))
+        {
+            throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor response ID did not match the request.");
+        }
+        if (!response.Ok)
+        {
+            throw new MacOSExtractorException(
+                response.Error?.Code ?? "extractorError",
+                response.Error?.Message ?? "Rift Notification Extractor reported an error.");
+        }
 
         try
         {
-            var requestId = Guid.NewGuid().ToString("D");
-            var request = JsonSerializer.Serialize(new
-            {
-                id = requestId,
-                operation,
-                cursor
-            }, JsonOptions);
-            await CreatePrivateFileAsync(requestPath, request + "\n", cancellationToken).ConfigureAwait(false);
-            await CreatePrivateFileAsync(responsePath, string.Empty, cancellationToken).ConfigureAwait(false);
-            await CreatePrivateFileAsync(errorPath, string.Empty, cancellationToken).ConfigureAwait(false);
-
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(_requestTimeout);
-            try
-            {
-                await _launchAsync(_appPath, requestPath, responsePath, errorPath, timeoutCts.Token).ConfigureAwait(false);
-                await WaitForResponseAsync(responsePath, timeoutCts.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new MacOSExtractorException("extractorTimeout", "Rift Notification Extractor did not respond in time.");
-            }
-
-            var responseLength = new FileInfo(responsePath).Length;
-            if (responseLength > MaximumResponseBytes)
-            {
-                throw new MacOSExtractorException("responseTooLarge", "Rift Notification Extractor response exceeded 1 MiB.");
-            }
-
-            var responseJson = await File.ReadAllTextAsync(responsePath, cancellationToken).ConfigureAwait(false);
-            ExtractorResponse? response;
-            try
-            {
-                response = JsonSerializer.Deserialize<ExtractorResponse>(responseJson, JsonOptions);
-            }
-            catch (JsonException)
-            {
-                throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned invalid JSON.");
-            }
-
-            if (response is null)
-            {
-                throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an empty response.");
-            }
-            if (!string.Equals(response.Id, requestId, StringComparison.Ordinal))
-            {
-                throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor response ID did not match the request.");
-            }
-            if (!response.Ok)
-            {
-                throw new MacOSExtractorException(
-                    response.Error?.Code ?? "extractorError",
-                    response.Error?.Message ?? "Rift Notification Extractor reported an error.");
-            }
-
-            try
-            {
-                return response.Result.Deserialize<T>(JsonOptions)
-                    ?? throw new JsonException();
-            }
-            catch (JsonException)
-            {
-                throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an invalid result.");
-            }
+            return response.Result.Deserialize<T>(JsonOptions)
+                ?? throw new JsonException();
         }
-        finally
+        catch (JsonException)
         {
-            try
-            {
-                directory.Delete(recursive: true);
-            }
-            catch
-            {
-            }
+            throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an invalid result.");
         }
     }
 
-    private static async Task LaunchThroughLaunchServicesAsync(
-        string appPath,
-        string requestPath,
-        string responsePath,
-        string errorPath,
+    private static async Task<byte[]> SendNativeAsync(
+        byte[] request,
+        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
+        cancellationToken.ThrowIfCancellationRequested();
+        var timeoutMilliseconds = checked((int)Math.Clamp(timeout.TotalMilliseconds, 1, int.MaxValue));
+        return await Task.Run(() =>
         {
-            FileName = "/usr/bin/open",
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        startInfo.ArgumentList.Add("-n");
-        startInfo.ArgumentList.Add("-g");
-        startInfo.ArgumentList.Add("-a");
-        startInfo.ArgumentList.Add(appPath);
-        startInfo.ArgumentList.Add("--stdin");
-        startInfo.ArgumentList.Add(requestPath);
-        startInfo.ArgumentList.Add("--stdout");
-        startInfo.ArgumentList.Add(responsePath);
-        startInfo.ArgumentList.Add("--stderr");
-        startInfo.ArgumentList.Add(errorPath);
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        if (process.ExitCode != 0)
-        {
-            var error = await File.ReadAllTextAsync(errorPath, cancellationToken).ConfigureAwait(false);
-            throw new MacOSExtractorException(
-                "launchFailed",
-                string.IsNullOrWhiteSpace(error)
-                    ? "Failed to launch Rift Notification Extractor."
-                    : error.Trim());
-        }
-    }
-
-    private static async Task WaitForResponseAsync(string responsePath, CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            var length = new FileInfo(responsePath).Length;
-            if (length > MaximumResponseBytes)
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = NativeMethods.Send(
+                request,
+                request.Length,
+                timeoutMilliseconds,
+                out var responsePointer,
+                out var responseLength);
+            try
             {
-                throw new MacOSExtractorException("responseTooLarge", "Rift Notification Extractor response exceeded 1 MiB.");
-            }
-            if (length > 0)
-            {
-                await using var stream = new FileStream(
-                    responsePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
-                stream.Seek(-1, SeekOrigin.End);
-                if (stream.ReadByte() == '\n')
+                if (status != 0)
                 {
-                    return;
+                    throw CreateNativeException(status);
+                }
+                if (responsePointer == IntPtr.Zero || responseLength <= 0 || responseLength > MaximumResponseBytes)
+                {
+                    throw new MacOSExtractorException("invalidResponse", "Rift Notification Extractor returned an invalid native response.");
+                }
+
+                var response = new byte[responseLength];
+                Marshal.Copy(responsePointer, response, 0, responseLength);
+                return response;
+            }
+            finally
+            {
+                if (responsePointer != IntPtr.Zero)
+                {
+                    NativeMethods.Free(responsePointer);
                 }
             }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
-        }
+        }, CancellationToken.None).WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task CreatePrivateFileAsync(string path, string content, CancellationToken cancellationToken)
+    private static MacOSExtractorException CreateNativeException(int status) => status switch
     {
-        await using (File.Create(path))
-        {
-        }
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        await File.WriteAllTextAsync(path, content, cancellationToken).ConfigureAwait(false);
-    }
+        1 => new MacOSExtractorException("invalidRequest", "The native extractor request was invalid."),
+        2 => new MacOSExtractorException("authenticationFailed", "The authenticated extractor connection failed."),
+        3 => new MacOSExtractorException("extractorTimeout", "Rift Notification Extractor did not respond in time."),
+        4 => new MacOSExtractorException("responseTooLarge", "Rift Notification Extractor response exceeded 1 MiB."),
+        5 => new MacOSExtractorException("allocationFailed", "The native extractor client could not allocate its response."),
+        _ => new MacOSExtractorException("xpcFailed", "The native extractor request failed.")
+    };
 
-    private static void SetPrivateDirectoryMode(string path)
+    private static class NativeMethods
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        }
-    }
+        [DllImport("librift-notification-xpc-client.dylib", EntryPoint = "rift_notification_xpc_send")]
+        internal static extern int Send(
+            byte[] requestBytes,
+            int requestLength,
+            int timeoutMilliseconds,
+            out IntPtr responseBytes,
+            out int responseLength);
 
-    private static string ResolveAppPath()
-    {
-        var configuredPath = Environment.GetEnvironmentVariable("RIFT_NOTIFICATION_EXTRACTOR_APP");
-        if (!string.IsNullOrWhiteSpace(configuredPath))
-        {
-            return configuredPath;
-        }
-
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "Applications",
-            "Rift Notification Extractor.app");
+        [DllImport("librift-notification-xpc-client.dylib", EntryPoint = "rift_notification_xpc_free")]
+        internal static extern void Free(IntPtr pointer);
     }
 
     private sealed class ExtractorResponse

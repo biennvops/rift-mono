@@ -20,5 +20,7 @@
 	<string>1</string>
 	<key>LSBackgroundOnly</key>
 	<true/>
+	<key>RiftAllowedClientRequirement</key>
+	<string>identifier "com.rift.daemon"</string>
 </dict>
 </plist>

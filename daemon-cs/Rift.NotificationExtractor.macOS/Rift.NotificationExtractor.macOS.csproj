@@ -20,4 +20,11 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Native\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Resources\com.rift.notification-extractor.plist" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Resources\RiftNotificationExtractor.Info.plist" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Tools\*.sh" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -5,6 +5,7 @@ set -euo pipefail
 # We want repo root: <repo>/ (not <repo>/daemon-cs).
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 project="$repo_root/daemon-cs/Rift.Daemon.macOS/Rift.Daemon.macOS.csproj"
+xpc_native_dir="$repo_root/daemon-cs/Rift.NotificationExtractor.macOS/Native"
 
 runtime="${1:-}"
 if [[ -z "$runtime" ]]; then
@@ -26,6 +27,9 @@ dotnet publish "$project" -c Release -r "$runtime" --self-contained true -o "$pu
 
 echo "Assembling app bundle -> $app_dir"
 rm -rf "$app_dir"
+
+codesign_identity="${RIFT_CODESIGN_IDENTITY:--}"
+codesign --force --sign "$codesign_identity" --identifier com.rift.daemon "$publish_dir/Rift.Daemon.macOS"
 mkdir -p "$app_dir/Contents/MacOS"
 
 cp "$repo_root/daemon-cs/Rift.Daemon.macOS/Resources/RiftDaemon.Info.plist" \
@@ -42,6 +46,19 @@ else
   echo "ERROR: self-contained publish did not produce Rift.Daemon.macOS executable." >&2
   exit 1
 fi
+
+xcrun swiftc \
+  "$xpc_native_dir/XpcProtocol.swift" \
+  "$xpc_native_dir/XpcClientBridge.swift" \
+  -emit-library \
+  -framework Foundation \
+  -module-name RiftNotificationXpcClient \
+  -o "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
+
+codesign --force --sign "$codesign_identity" "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
+codesign --force --sign "$codesign_identity" --identifier com.rift.daemon "$app_dir/Contents/MacOS/rift-daemon"
+codesign --verify --strict --verbose=2 "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
+codesign --verify --strict --verbose=2 "$app_dir/Contents/MacOS/rift-daemon"
 
 echo "Done."
 echo "Next:"
