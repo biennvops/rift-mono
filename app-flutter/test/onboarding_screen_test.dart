@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_flutter/screens/onboarding_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -78,9 +79,11 @@ class FakeOnboardingClient extends JsonRpcRiftClient {
 
 void main() {
   const androidShellChannel = MethodChannel('rift/android/shell');
+  const iosNotificationsChannel = MethodChannel('rift/ios/notifications');
 
   setUp(() {
     AndroidShell.debugIsAndroidOverride = true;
+    IOSNotifications.debugIsIOSOverride = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, (call) async {
       switch (call.method) {
@@ -99,8 +102,11 @@ void main() {
 
   tearDown(() {
     AndroidShell.debugIsAndroidOverride = null;
+    IOSNotifications.debugIsIOSOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(iosNotificationsChannel, null);
   });
 
   Widget buildTestApp(FakeOnboardingClient client) {
@@ -146,6 +152,42 @@ void main() {
     );
     expect(find.widgetWithText(FilledButton, 'Enable Alerts & Sync'),
         findsNothing);
+  });
+
+  testWidgets('OnboardingScreen uses iOS notifications and background copy',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = false;
+    IOSNotifications.debugIsIOSOverride = true;
+    var permissionRequested = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(iosNotificationsChannel, (call) async {
+      switch (call.method) {
+        case 'getPermissionStatus':
+          return 'denied';
+        case 'requestPermission':
+          permissionRequested = true;
+          return true;
+      }
+      return null;
+    });
+
+    final client = FakeOnboardingClient(localNetworkGranted: true);
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('pairing requests, transfers'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Enable Alerts'));
+    await tester.pumpAndSettle();
+
+    expect(permissionRequested, isTrue);
+    expect(find.text('Background Connectivity'), findsOneWidget);
+    expect(
+        find.textContaining('iOS controls background runtime'), findsOneWidget);
+    expect(
+      find.widgetWithText(FilledButton, 'Review Background Behavior'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

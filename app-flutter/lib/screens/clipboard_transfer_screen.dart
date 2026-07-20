@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -16,6 +19,7 @@ import '../src/file_transfer/send_queue_summary.dart';
 import '../src/file_transfer/send_queue_targeting.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/ios_clipboard.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
 
@@ -44,6 +48,15 @@ class ClipboardTransferScreen extends StatefulWidget {
   final String? displayName;
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
   final bool? revealCompletedTransfersInFolderOverride;
+  final bool? exportCompletedTransfersOverride;
+  final Future<void> Function(String path)? openFileOverride;
+  final Future<void> Function(String path)? exportFileOverride;
+  final bool? iosClipboardActionsOverride;
+  final Future<IOSClipboardContent?> Function()? readClipboardContentOverride;
+  final Future<String?> Function()? readClipboardTextOverride;
+  final Future<void> Function(IOSClipboardContent content)?
+      writeClipboardContentOverride;
+  final Future<void> Function(String text)? writeClipboardTextOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
 
@@ -53,6 +66,14 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.displayName,
     this.pickSendFilesOverride,
     this.revealCompletedTransfersInFolderOverride,
+    this.exportCompletedTransfersOverride,
+    this.openFileOverride,
+    this.exportFileOverride,
+    this.iosClipboardActionsOverride,
+    this.readClipboardContentOverride,
+    this.readClipboardTextOverride,
+    this.writeClipboardContentOverride,
+    this.writeClipboardTextOverride,
     this.routeNotifier,
     this.sharedClipboardTextNotifier,
   });
@@ -95,6 +116,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ??
       shouldRevealCompletedTransferDestination();
+  bool get _exportCompletedTransfers =>
+      widget.exportCompletedTransfersOverride ?? Platform.isIOS;
+  bool get _iosClipboardActions =>
+      widget.iosClipboardActionsOverride ?? Platform.isIOS;
   late final SendQueueController _sendQueueController;
   SendQueueController get _sendQueue => _sendQueueController;
   SendQueueModeCoordinator get _queueMode =>
@@ -209,6 +234,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
       unawaited(_handleLegacyTransferCompleted(event));
       if (mounted) {
+        _retainTerminalTransfer(event);
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
       }
@@ -216,6 +242,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
       unawaited(_handleLegacyTransferFailed(event));
       if (mounted) {
+        _retainTerminalTransfer(event);
         unawaited(_refreshFileOffers());
         unawaited(_refreshTransfers());
       }
@@ -405,10 +432,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       }).toList(growable: false);
 
       if (!mounted) return;
+      final listedTransferIds = transfers
+          .map((transfer) => transfer['transferId']?.toString())
+          .whereType<String>()
+          .toSet();
+      final retainedTerminalTransfers = _fileTransfers.where((transfer) {
+        final transferId = transfer['transferId']?.toString();
+        return _isTerminalTransfer(transfer) &&
+            (transferId == null || !listedTransferIds.contains(transferId));
+      }).toList(growable: false);
       setState(() {
         _fileTransfers
           ..clear()
-          ..addAll(transfers);
+          ..addAll(transfers)
+          ..addAll(retainedTerminalTransfers);
       });
     } catch (_) {
       if (!mounted) return;
@@ -417,6 +454,26 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         setState(() => _isRefreshingTransfers = false);
       }
     }
+  }
+
+  bool _isTerminalTransfer(Map<String, dynamic> transfer) {
+    final state = transfer['state']?.toString().toLowerCase();
+    return state == 'done' || state == 'failed' || state == 'cancelled';
+  }
+
+  void _retainTerminalTransfer(Map<String, dynamic> event) {
+    if (!_matchesDeviceFilter(event['peerDeviceId']?.toString())) {
+      return;
+    }
+    final transferId = event['transferId']?.toString();
+    setState(() {
+      if (transferId != null) {
+        _fileTransfers.removeWhere(
+          (transfer) => transfer['transferId']?.toString() == transferId,
+        );
+      }
+      _fileTransfers.insert(0, Map<String, dynamic>.from(event));
+    });
   }
 
   Future<void> _refreshTrustedPeers() async {
@@ -471,6 +528,128 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       return deviceId;
     }
     return '${deviceId.substring(0, 12)}...';
+  }
+
+  Future<void> _sendClipboard() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      IOSClipboardContent? content;
+      if (widget.readClipboardContentOverride != null) {
+        content = await widget.readClipboardContentOverride!();
+      } else if (widget.readClipboardTextOverride != null) {
+        final text = await widget.readClipboardTextOverride!();
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      } else if (Platform.isIOS) {
+        content = await IOSClipboard.readContent();
+      } else {
+        final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      }
+
+      if (content == null || content.bytes.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('The clipboard has no text or image to send.'),
+          ),
+        );
+        return;
+      }
+      if (content.contentType != 'text/plain' &&
+          content.contentType != 'image/png') {
+        throw StateError(
+          'Unsupported clipboard type: ${content.contentType}',
+        );
+      }
+
+      await client.notifyClipboardChange(
+        contentType: content.contentType,
+        byteSize: content.bytes.length,
+        sha256: sha256.convert(content.bytes).toString(),
+        contentBase64: base64Encode(content.bytes),
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            content.contentType == 'image/png'
+                ? 'Clipboard image sent to trusted devices.'
+                : 'Clipboard sent to trusted devices.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not send clipboard: '
+            '${JsonRpcRiftClient.formatDisplayError(error)}',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _copyClipboardOffer(Map<String, dynamic> offer) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final offerId = offer['offerId']?.toString();
+    if (offerId == null || offerId.isEmpty) return;
+
+    try {
+      final result = await context
+          .read<JsonRpcRiftClient>()
+          .fetchClipboardContent(offerId);
+      if (result['verified'] != true) {
+        throw StateError('Clipboard content could not be verified.');
+      }
+      final contentBase64 = result['contentBase64']?.toString();
+      if (contentBase64 == null || contentBase64.isEmpty) {
+        throw StateError('Clipboard content was empty.');
+      }
+      final contentType = result['contentType']?.toString() ??
+          offer['contentType']?.toString() ??
+          '';
+      final content = IOSClipboardContent(
+        contentType: contentType,
+        bytes: base64Decode(contentBase64),
+      );
+      if (widget.writeClipboardContentOverride != null) {
+        await widget.writeClipboardContentOverride!(content);
+      } else if (contentType == 'text/plain' || contentType == 'clipboard') {
+        final text = utf8.decode(content.bytes);
+        if (widget.writeClipboardTextOverride != null) {
+          await widget.writeClipboardTextOverride!(text);
+        } else {
+          await Clipboard.setData(ClipboardData(text: text));
+        }
+      } else if (contentType == 'image/png' && Platform.isIOS) {
+        if (!await IOSClipboard.writeContent(content)) {
+          throw StateError('iOS did not apply the clipboard image.');
+        }
+      } else {
+        throw StateError('Unsupported clipboard type: $contentType');
+      }
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Copied to clipboard.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not copy clipboard item: $error')),
+      );
+    }
   }
 
   Future<void> _performNotificationAction(
@@ -1374,6 +1553,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     try {
       if (revealInFolder) {
         await showFileInFolder(destinationPath);
+      } else if (widget.openFileOverride != null) {
+        await widget.openFileOverride!(destinationPath);
       } else {
         await openFilePath(destinationPath);
       }
@@ -1381,6 +1562,22 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(content: Text('Could not open saved file: $error')),
+      );
+    }
+  }
+
+  Future<void> _exportTransferDestination(String destinationPath) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (widget.exportFileOverride != null) {
+        await widget.exportFileOverride!(destinationPath);
+      } else {
+        await exportFilePath(destinationPath);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not export saved file: $error')),
       );
     }
   }
@@ -1470,6 +1667,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
     try {
       final defaultPath = await _defaultDestinationPath(suggestedFileName);
+      if (Platform.isIOS) {
+        return defaultPath;
+      }
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Save incoming file',
         fileName: suggestedFileName,
@@ -1493,16 +1693,27 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final destinationPath = await _pickDestinationPath(
       offer['fileName']?.toString() ?? 'incoming.bin',
     );
-    if (destinationPath == null || destinationPath.isEmpty || !mounted) {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (destinationPath == null || destinationPath.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(
+            content: Text('Could not resolve an iOS save location.')),
+      );
       return;
     }
 
-    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(content: Text('Saving to $destinationPath...')),
+    );
     try {
-      await context.read<JsonRpcRiftClient>().acceptFileOffer(
+      await context
+          .read<JsonRpcRiftClient>()
+          .acceptFileOffer(
             transferId: transferId,
             destinationPath: destinationPath,
-          );
+          )
+          .timeout(const Duration(seconds: 15));
       if (!mounted) return;
       setState(() {
         _activeSection = _HistorySection.transferActivity;
@@ -1792,79 +2003,111 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildClipboardHistorySection(ThemeData theme) {
     if (_clipboardOffers.isEmpty) {
-      return Text(
-        'No recent clipboard items from trusted devices yet.',
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_iosClipboardActions) ...[
+            FilledButton.icon(
+              onPressed: _sendClipboard,
+              icon: const Icon(Icons.send),
+              label: const Text('Send Clipboard'),
+            ),
+            const SizedBox(height: 16),
+          ],
+          Text(
+            'No recent clipboard items from trusted devices yet.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       );
     }
 
     return Column(
-      children: _clipboardOffers.map((offer) {
-        final sourceDeviceId = offer['sourceDeviceId']?.toString();
-        final contentType = offer['contentType']?.toString() ?? '';
-        final isImage = contentType.startsWith('image/');
-        final mediaLabel = isImage ? 'Image' : 'Text';
-        final expiresAt =
-            DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
-        final expiresLabel = expiresAt == null
-            ? null
-            : 'Expires ${_formatRelativeTime(expiresAt)}';
-
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: theme.colorScheme.outlineVariant,
-            ),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_iosClipboardActions) ...[
+          FilledButton.icon(
+            onPressed: _sendClipboard,
+            icon: const Icon(Icons.send),
+            label: const Text('Send Clipboard'),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                isImage ? Icons.image : Icons.notes,
-                color: theme.colorScheme.onSurfaceVariant,
+          const SizedBox(height: 16),
+        ],
+        ..._clipboardOffers.map((offer) {
+          final sourceDeviceId = offer['sourceDeviceId']?.toString();
+          final contentType = offer['contentType']?.toString() ?? '';
+          final isImage = contentType.startsWith('image/');
+          final mediaLabel = isImage ? 'Image' : 'Text';
+          final expiresAt =
+              DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
+          final expiresLabel = expiresAt == null
+              ? null
+              : 'Expires ${_formatRelativeTime(expiresAt)}';
+
+          return Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: theme.colorScheme.outlineVariant,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _peerDisplayName(sourceDeviceId),
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$mediaLabel • ${_formatSize(offer['byteSize'] as num? ?? 0)}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    if (expiresLabel != null) ...[
-                      const SizedBox(height: 4),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  isImage ? Icons.image : Icons.notes,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        expiresLabel,
+                        _peerDisplayName(sourceDeviceId),
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$mediaLabel • ${_formatSize(offer['byteSize'] as num? ?? 0)}',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
+                      if (expiresLabel != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          expiresLabel,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                      if (_iosClipboardActions) ...[
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: () => _copyClipboardOffer(offer),
+                          icon: const Icon(Icons.copy),
+                          label: Text(isImage ? 'Copy Image' : 'Copy'),
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        );
-      }).toList(growable: false),
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 
@@ -2413,9 +2656,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                       ],
                       if (canOpenDestination) ...[
                         const SizedBox(height: 8),
-                        Row(
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
                           children: [
-                            if (_revealCompletedTransfersInFolder) ...[
+                            if (_revealCompletedTransfersInFolder)
                               OutlinedButton.icon(
                                 onPressed: () => _openTransferDestination(
                                   destinationPath,
@@ -2424,8 +2669,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                                 icon: const Icon(Icons.folder_open),
                                 label: const Text('Open Folder'),
                               ),
-                              const SizedBox(width: 8),
-                            ],
                             OutlinedButton.icon(
                               onPressed: () => _openTransferDestination(
                                 destinationPath,
@@ -2434,6 +2677,14 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                               icon: const Icon(Icons.open_in_new),
                               label: const Text('Open File'),
                             ),
+                            if (_exportCompletedTransfers)
+                              OutlinedButton.icon(
+                                onPressed: () => _exportTransferDestination(
+                                  destinationPath,
+                                ),
+                                icon: const Icon(Icons.ios_share),
+                                label: const Text('Export'),
+                              ),
                           ],
                         ),
                       ],

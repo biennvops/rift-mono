@@ -13,6 +13,7 @@ import 'pop_manager.dart';
 
 class IdentityManagerImpl implements IdentityManager {
   final String storagePath;
+  final Future<Uint8List> Function()? privateKeyProvider;
   Uint8List? _privateKey;
   Uint8List? _publicKey;
   String _deviceId = '';
@@ -24,12 +25,19 @@ class IdentityManagerImpl implements IdentityManager {
   String _tlsPrivateKeyPem = '';
   Uint8List? _tlsCertificateDer;
 
-  IdentityManagerImpl(this.storagePath);
+  IdentityManagerImpl(this.storagePath, {this.privateKeyProvider});
 
   @override
   Future<void> initialize() async {
     var keyFile = File(p.join(storagePath, 'identity.key'));
-    if (await keyFile.exists()) {
+    if (privateKeyProvider != null) {
+      final keyBytes = await privateKeyProvider!();
+      if (keyBytes.length != 32) {
+        throw Exception('Corrupted identity key: expected 32 bytes.');
+      }
+      _privateKey = Uint8List.fromList(keyBytes);
+      await _derivePublicKey();
+    } else if (await keyFile.exists()) {
       final keyBytes = await keyFile.readAsBytes();
       if (keyBytes.length != 32) {
         throw Exception('Corrupted identity key file: expected 32 bytes.');
@@ -38,8 +46,10 @@ class IdentityManagerImpl implements IdentityManager {
       await _derivePublicKey();
     } else {
       var random = Random.secure();
-      _privateKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
-      
+      _privateKey = Uint8List.fromList(
+        List.generate(32, (_) => random.nextInt(256)),
+      );
+
       // Atomic write: prevents a corrupted key file on crash mid-write.
       await keyFile.parent.create(recursive: true);
       var tempFile = File('${keyFile.path}.tmp');
@@ -53,7 +63,9 @@ class IdentityManagerImpl implements IdentityManager {
 
     // Ephemeral TLS cert: trust root is Ed25519, so TLS cert can be regenerated each session.
     final ecdsaKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
-    _tlsPrivateKeyPem = CryptoUtils.encodeEcPrivateKeyToPem(ecdsaKeyPair.privateKey as ECPrivateKey);
+    _tlsPrivateKeyPem = CryptoUtils.encodeEcPrivateKeyToPem(
+      ecdsaKeyPair.privateKey as ECPrivateKey,
+    );
     _tlsCertificatePem = RiftCertBuilder.generateSelfSignedCert(
       ecdsaKeyPair,
       _publicKey!,
@@ -96,21 +108,34 @@ class IdentityManagerImpl implements IdentityManager {
   @override
   Uint8List get tlsCertificateDer {
     if (_tlsCertificateDer == null) {
-      throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
+      throw const RiftIdentityNotInitializedException(
+        'IdentityManager not initialized',
+      );
     }
-    return Uint8List.fromList(_tlsCertificateDer!); // Defensive copy to prevent mutation
+    return Uint8List.fromList(
+      _tlsCertificateDer!,
+    ); // Defensive copy to prevent mutation
   }
 
   @override
   String get tlsPrivateKeyPem => _tlsPrivateKeyPem;
 
   @override
-  Future<String> generateIdentityProof(Uint8List channelBinding, Uint8List localCertDer) async {
+  Future<String> generateIdentityProof(
+    Uint8List channelBinding,
+    Uint8List localCertDer,
+  ) async {
     if (_cachedKeyPair == null || _privateKey == null || _publicKey == null) {
-      throw const RiftIdentityNotInitializedException('IdentityManager not initialized');
+      throw const RiftIdentityNotInitializedException(
+        'IdentityManager not initialized',
+      );
     }
     return await PoPManager.generateIdentityProof(
-        channelBinding, _publicKey!, localCertDer, _privateKey!);
+      channelBinding,
+      _publicKey!,
+      localCertDer,
+      _privateKey!,
+    );
   }
 
   @override
@@ -150,14 +175,18 @@ class IdentityManagerImpl implements IdentityManager {
   static String _deriveDisplayName(Uint8List fingerprintBytes) {
     final platform = Platform.isAndroid
         ? 'Android'
+        : Platform.isIOS
+        ? 'iOS'
         : Platform.isWindows
-            ? 'Windows'
-            : Platform.isMacOS
-                ? 'macOS'
-                : Platform.isLinux
-                    ? 'Linux'
-                    : 'Unknown';
-    final deviceType = Platform.isAndroid ? 'Phone' : 'Desktop';
+        ? 'Windows'
+        : Platform.isMacOS
+        ? 'macOS'
+        : Platform.isLinux
+        ? 'Linux'
+        : 'Unknown';
+    final deviceType = Platform.isAndroid || Platform.isIOS
+        ? 'Phone'
+        : 'Desktop';
     final numericId =
         (((fingerprintBytes[0] << 8) | fingerprintBytes[1]) % 100) + 1;
     return '$platform $deviceType ${numericId.toString().padLeft(2, '0')}';
@@ -165,7 +194,8 @@ class IdentityManagerImpl implements IdentityManager {
 
   /// Decodes a PEM certificate to DER bytes.
   static Uint8List _pemToDer(String pem) {
-    final lines = pem.split('\n')
+    final lines = pem
+        .split('\n')
         .map((l) => l.trim())
         .where((l) => l.isNotEmpty && !l.startsWith('-----'))
         .join();

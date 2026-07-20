@@ -415,6 +415,7 @@ class RiftDaemon {
   bool _isDiscovering = false;
 
   final String storagePath;
+  final Future<Uint8List> Function()? identityPrivateKeyProvider;
   final int port;
   final bool enableTransport;
   final bool enableDiscovery;
@@ -424,6 +425,7 @@ class RiftDaemon {
 
   RiftDaemon({
     required this.storagePath,
+    this.identityPrivateKeyProvider,
     this.port = 11112,
     this.enableTransport = true,
     this.enableDiscovery = true,
@@ -433,7 +435,10 @@ class RiftDaemon {
   });
 
   Future<void> start() async {
-    _identityManager = IdentityManagerImpl(storagePath);
+    _identityManager = IdentityManagerImpl(
+      storagePath,
+      privateKeyProvider: identityPrivateKeyProvider,
+    );
     await _identityManager!.initialize();
 
     _trustStore = TrustStoreImpl(p.join(storagePath, 'trust_store.db'));
@@ -469,6 +474,20 @@ class RiftDaemon {
             source: 'session-established',
           ),
         );
+      });
+      _sessionManager!.onPresenceUpdate.listen((ctx) {
+        _forwardIpcEvent({
+          'jsonrpc': '2.0',
+          'method': 'rift.onPresenceUpdate',
+          'params': {
+            'deviceId': ctx.peerDeviceId,
+            'status': ctx.currentPresenceStatus,
+            'lastSeenAt': ctx.lastHeartbeatReceived?.toUtc().toIso8601String(),
+            'capabilities': ctx.negotiatedCapabilities
+                .map((capability) => capability.name)
+                .toList(),
+          },
+        });
       });
 
       _pairingManager = PairingManager(
@@ -625,10 +644,52 @@ class RiftDaemon {
           _identityManager!.getDeviceFingerprint(),
         ),
       );
-      await _discoveryService!.startAdvertising();
-      if (await _shouldAutoStartDiscovery()) {
-        await _discoveryService!.startDiscovery();
-        _isDiscovering = true;
+      _discoveryService!.onDeviceDiscovered.listen((peer) {
+        if (peer.deviceIdHint == _identityManager!.deviceId) return;
+        if (peer.deviceIdHint == null) return;
+        trackDiscoveredPeer(peer);
+        unawaited(prefetchSessionForDiscoveredPeer(peer.deviceIdHint!));
+        _forwardIpcEvent({
+          'jsonrpc': '2.0',
+          'method': 'rift.onPeerDiscovered',
+          'params': {
+            'deviceId': peer.deviceIdHint,
+            'instanceId': peer.instanceId,
+            'address': peer.address,
+            'port': peer.port,
+            'txtRecord': {
+              'minV': peer.minVersion,
+              'maxV': peer.maxVersion,
+              'did': peer.deviceIdHint,
+              if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
+            },
+          },
+        });
+      });
+      _discoveryService!.onDeviceLost.listen((peer) {
+        final deviceId = peer.deviceIdHint;
+        if (deviceId == null) return;
+
+        final hadVisiblePeer = _discoveredPeers.containsKey(deviceId);
+        untrackDiscoveredPeer(peer);
+        if (hadVisiblePeer && !_discoveredPeers.containsKey(deviceId)) {
+          _forwardIpcEvent({
+            'jsonrpc': '2.0',
+            'method': 'rift.onPeerLost',
+            'params': {'deviceId': deviceId, 'instanceId': peer.instanceId},
+          });
+        }
+      });
+      try {
+        await _discoveryService!.startAdvertising();
+        if (await _shouldAutoStartDiscovery()) {
+          await _discoveryService!.startDiscovery();
+          _isDiscovering = true;
+        }
+      } catch (e) {
+        RiftLog.warn(
+          '[Discovery] Startup failed; continuing without active discovery: $e',
+        );
       }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
@@ -2224,6 +2285,9 @@ class RiftDaemon {
     if (Platform.isAndroid) {
       return 'android';
     }
+    if (Platform.isIOS) {
+      return 'ios';
+    }
     if (Platform.isWindows) {
       return 'windows';
     }
@@ -2243,6 +2307,9 @@ class RiftDaemon {
 
     if (displayName.startsWith('Android ')) {
       return 'android';
+    }
+    if (displayName.startsWith('iOS ')) {
+      return 'ios';
     }
     if (displayName.startsWith('Windows ')) {
       return 'windows';
@@ -3914,63 +3981,6 @@ class RiftDaemon {
               ),
               'rpcPort': rpcPort.sendPort,
             },
-          });
-
-          daemon._discoveryService?.onDeviceDiscovered.listen((peer) {
-            if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
-            if (peer.deviceIdHint == null) return; // Ignore non-Rift devices
-            daemon.trackDiscoveredPeer(peer);
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPeerDiscovered',
-              'params': {
-                'deviceId': peer.deviceIdHint,
-                'address': peer.address,
-                'port': peer.port,
-                'txtRecord': {
-                  'minV': peer.minVersion,
-                  'maxV': peer.maxVersion,
-                  'did': peer.deviceIdHint,
-                  if (peer.fingerprintPrefix != null)
-                    'fp': peer.fingerprintPrefix,
-                },
-              },
-            });
-          });
-
-          daemon._discoveryService?.onDeviceLost.listen((peer) {
-            final deviceId = peer.deviceIdHint;
-            if (deviceId == null) return;
-
-            final hadVisiblePeer = daemon._discoveredPeers.containsKey(
-              deviceId,
-            );
-            daemon.untrackDiscoveredPeer(peer);
-            final stillVisible = daemon._discoveredPeers.containsKey(deviceId);
-            if (hadVisiblePeer && !stillVisible) {
-              sendPort.send({
-                'jsonrpc': '2.0',
-                'method': 'rift.onPeerLost',
-                'params': {'deviceId': deviceId},
-              });
-            }
-          });
-
-          daemon._sessionManager?.onPresenceUpdate.listen((ctx) {
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPresenceUpdate',
-              'params': {
-                'deviceId': ctx.peerDeviceId,
-                'status': ctx.currentPresenceStatus,
-                'lastSeenAt': ctx.lastHeartbeatReceived
-                    ?.toUtc()
-                    .toIso8601String(),
-                'capabilities': ctx.negotiatedCapabilities
-                    .map((c) => c.name)
-                    .toList(),
-              },
-            });
           });
         } on SocketException catch (e) {
           rpcPort.close();

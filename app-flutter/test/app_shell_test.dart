@@ -9,6 +9,8 @@ import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/screens/settings_screen.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
+import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
@@ -195,6 +197,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     setMacOSNotificationBridgeOverride(true);
+    IOSNotifications.debugIsIOSOverride = false;
     WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
@@ -353,10 +356,16 @@ void main() {
     notificationActionRequestController.close();
     AndroidShell.debugIsAndroidOverride = null;
     setMacOSNotificationBridgeOverride(null);
+    IOSNotifications.debugIsIOSOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
       null,
     );
   });
@@ -548,6 +557,54 @@ void main() {
       <String, String>{'id': 'open', 'title': 'Open'},
       <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
     ]);
+  });
+
+  testWidgets('iOS consumes launch actions without requesting permission',
+      (WidgetTester tester) async {
+    setMacOSNotificationBridgeOverride(false);
+    IOSNotifications.debugIsIOSOverride = true;
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
+      (call) async {
+        calls.add(call);
+        switch (call.method) {
+          case 'requestPermission':
+          case 'showNotification':
+            return true;
+          case 'consumeLaunchAction':
+            return null;
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-ios',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Hello iPhone',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    expect(calls.any((call) => call.method == 'requestPermission'), isFalse);
+    expect(calls.any((call) => call.method == 'consumeLaunchAction'), isTrue);
+    final showCall =
+        calls.lastWhere((call) => call.method == 'showNotification');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], NotificationRoute.historyNotifications);
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'rift-peer-1 • Hello iPhone');
   });
 
   testWidgets(

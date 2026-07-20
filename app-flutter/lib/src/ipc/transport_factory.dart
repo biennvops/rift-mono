@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'ipc_transport.dart';
 import 'android_daemon_isolate_transport.dart';
+import 'in_process_daemon_transport.dart';
 import 'named_pipe_transport.dart';
 import 'unix_socket_transport.dart';
 
@@ -13,6 +14,8 @@ class TransportFactory {
       return UnixSocketTransport();
     } else if (Platform.isAndroid) {
       return AndroidDaemonIsolateTransport();
+    } else if (Platform.isIOS) {
+      return InProcessDaemonTransport();
     }
 
     throw UnsupportedError('Platform not supported for Rift Daemon IPC');

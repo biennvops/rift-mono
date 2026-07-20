@@ -29,7 +29,9 @@ import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
+import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
@@ -216,6 +218,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
+  IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -306,10 +309,20 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    IOSNotifications.setMethodCallHandler(
+      _handlePlatformNotificationMethodCall,
+    );
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
+
+    if (IOSNotifications.isSupported) {
+      final pendingAction = await IOSNotifications.consumeLaunchAction();
+      if (pendingAction != null) {
+        _handleNotificationActionPayload(pendingAction);
+      }
+    }
 
     if (Platform.isAndroid) {
       final pendingAction = await AndroidShell.consumeLaunchAction();
@@ -385,8 +398,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void _bindMediaPlayback() {
     final client = context.read<JsonRpcRiftClient>();
     if (Platform.isAndroid) {
-      _androidRemoteMediaPlayback = AndroidRemoteMediaPlaybackCoordinator(client);
+      _androidRemoteMediaPlayback =
+          AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
+    } else if (Platform.isIOS) {
+      _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
+      unawaited(_iosRemoteMediaPlayback!.start());
     }
   }
 
@@ -931,6 +948,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationActionRequestSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
+    unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(
@@ -1023,6 +1041,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }) {
     unawaited(() async {
       try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            destinationPath: destinationPath,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isAndroid && route != null) {
           await AndroidShell.showNotification(
             title: title,
@@ -1152,6 +1180,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     unawaited(() async {
       try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
         if (Platform.isAndroid) {
           final sourcePlatform = event['sourcePlatform']?.toString();
           if (sourcePlatform != 'windows' &&
@@ -1360,7 +1397,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         body: '$fileName from $sourceDeviceId.',
         route: NotificationRoute.historyIncomingOffers,
       );
-      unawaited(_handleIncomingFileOffer(event));
+      if (!Platform.isIOS) {
+        unawaited(_handleIncomingFileOffer(event));
+      }
     });
 
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
@@ -1440,18 +1479,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       } catch (error) {
         _maybeNotifyWithRoute(
           title: 'File save failed',
-          body: '$fileName was received but could not be added to Downloads: $error',
+          body:
+              '$fileName was received but could not be added to Downloads: $error',
           route: NotificationRoute.historyTransferActivity,
         );
         return;
       }
     }
 
-    final body = displayDestinationPath == null ||
-            displayDestinationPath.trim().isEmpty
-        ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
-        : '$fileName saved to $displayDestinationPath.';
-    _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    final body =
+        displayDestinationPath == null || displayDestinationPath.trim().isEmpty
+            ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
+            : '$fileName saved to $displayDestinationPath.';
+    if (!Platform.isIOS) {
+      _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    }
     _maybeNotifyCompletedTransfer(
       title: isIncoming ? 'File received' : 'File sent',
       body: body,
