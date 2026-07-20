@@ -45,6 +45,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
       LinuxNotifications.isSupported ||
       Platform.isMacOS;
 
+  String _linuxIpcRuntimeDescription() {
+    final runtimeDir = Platform.environment['XDG_RUNTIME_DIR'];
+    if (runtimeDir != null &&
+        runtimeDir.isNotEmpty &&
+        Directory(runtimeDir).existsSync()) {
+      return runtimeDir;
+    }
+    return '/tmp fallback';
+  }
+
+  Widget _buildLinuxRuntimeStatus(
+    ThemeData theme,
+    String label,
+    String value,
+    bool available,
+  ) {
+    final color =
+        available ? theme.colorScheme.secondary : theme.colorScheme.error;
+    return Row(
+      children: [
+        Icon(available ? Icons.done : Icons.warning_amber,
+            size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '$label: $value',
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontFamily: 'JetBrains Mono',
+              color: color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -874,32 +910,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Linux Daemon Dependencies',
+                        Text('Linux Runtime',
                             style: theme.textTheme.bodyLarge
                                 ?.copyWith(fontWeight: FontWeight.bold)),
                         const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(Icons.done,
-                                size: 16, color: theme.colorScheme.secondary),
-                            const SizedBox(width: 8),
-                            Text('avahi-daemon: running',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    fontFamily: 'JetBrains Mono',
-                                    color: theme.colorScheme.secondary)),
-                          ],
+                        _buildLinuxRuntimeStatus(
+                          theme,
+                          'Daemon IPC',
+                          context.read<JsonRpcRiftClient>().isConnected
+                              ? 'connected'
+                              : 'disconnected',
+                          context.read<JsonRpcRiftClient>().isConnected,
                         ),
                         const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(Icons.done,
-                                size: 16, color: theme.colorScheme.secondary),
-                            const SizedBox(width: 8),
-                            Text('appindicator: supported',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    fontFamily: 'JetBrains Mono',
-                                    color: theme.colorScheme.secondary)),
-                          ],
+                        _buildLinuxRuntimeStatus(
+                          theme,
+                          'Desktop session',
+                          Platform.environment['XDG_SESSION_TYPE'] ?? 'unknown',
+                          Platform.environment['XDG_SESSION_TYPE'] != null,
+                        ),
+                        const SizedBox(height: 4),
+                        _buildLinuxRuntimeStatus(
+                          theme,
+                          'IPC runtime',
+                          _linuxIpcRuntimeDescription(),
+                          true,
                         ),
                       ],
                     ),

@@ -149,6 +149,29 @@ void main() {
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
   });
 
+  testWidgets('SettingsScreen reports real Linux runtime status',
+      (WidgetTester tester) async {
+    AndroidShell.debugIsAndroidOverride = false;
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.scrollUntilVisible(
+      find.text('Linux Runtime'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+
+    expect(find.text('Linux Runtime'), findsOneWidget);
+    expect(find.text('Daemon IPC: connected'), findsOneWidget);
+    expect(find.text('avahi-daemon: running'), findsNothing);
+    expect(find.text('appindicator: supported'), findsNothing);
+  });
+
   testWidgets('SettingsScreen exposes iOS notification diagnostics',
       (WidgetTester tester) async {
     AndroidShell.debugIsAndroidOverride = false;
