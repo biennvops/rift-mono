@@ -59,14 +59,18 @@ internal sealed class NotificationDatabaseReader
         using var snapshot = CreateSnapshot();
         using var connection = OpenReadOnly(snapshot.DatabasePath);
         EnsureSupportedSchema(connection);
+        if (activeOnly)
+        {
+            EnsureActiveStateSchema(connection);
+        }
 
         using var command = connection.CreateCommand();
         command.CommandText = activeOnly
             ? """
               SELECT r.rec_id, r.uuid, a.identifier, r.data, r.delivered_date
-              FROM record AS r
+              FROM delivered AS d
+              INNER JOIN record AS r ON r.app_id = d.app_id AND r.uuid = d.list
               INNER JOIN app AS a ON a.app_id = r.app_id
-              WHERE r.presented = 1
               ORDER BY r.rec_id
               LIMIT $limit;
               """
@@ -199,6 +203,16 @@ internal sealed class NotificationDatabaseReader
             throw new ExtractorException(
                 "unsupportedSchema",
                 "The macOS Notification Center database schema is not supported.");
+        }
+    }
+
+    private static void EnsureActiveStateSchema(SqliteConnection connection)
+    {
+        if (!HasColumns(connection, "delivered", ["app_id", "list"]))
+        {
+            throw new ExtractorException(
+                "unsupportedSchema",
+                "The macOS Notification Center active-state schema is not supported.");
         }
     }
 

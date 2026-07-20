@@ -31,8 +31,9 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
     {
         var notificationId = Guid.Parse("67aa580e-6062-4cc0-a3c0-8cb53a9fcf7f");
         var databasePath = CreateDatabase();
-        InsertNotification(databasePath, 1, notificationId, presented: true, Convert.FromBase64String(PayloadBase64));
-        InsertNotification(databasePath, 2, Guid.NewGuid(), presented: false, Convert.FromBase64String(PayloadBase64));
+        InsertNotification(databasePath, 1, notificationId, presented: false, Convert.FromBase64String(PayloadBase64));
+        InsertNotification(databasePath, 2, Guid.NewGuid(), presented: true, Convert.FromBase64String(PayloadBase64));
+        SetActiveNotification(databasePath, notificationId);
         var reader = new NotificationDatabaseReader(databasePath);
 
         var result = reader.RescanActiveNotifications();
@@ -48,6 +49,9 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
         Assert.False(notification.IsOpenable);
         Assert.Equal(1, result.Cursor);
         Assert.Equal(0, result.SkippedRecords);
+
+        ClearActiveNotifications(databasePath);
+        Assert.Empty(reader.RescanActiveNotifications().Notifications);
     }
 
     [Fact]
@@ -105,6 +109,10 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
                 delivered_date REAL NOT NULL,
                 presented INTEGER NOT NULL
             );
+            CREATE TABLE delivered (
+                app_id INTEGER PRIMARY KEY,
+                list BLOB NOT NULL
+            );
             INSERT INTO app (app_id, identifier) VALUES (1, 'com.example.build');
             """;
         command.ExecuteNonQuery();
@@ -128,6 +136,23 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
         command.Parameters.AddWithValue("$uuid", notificationId.ToByteArray(bigEndian: true));
         command.Parameters.AddWithValue("$data", payload);
         command.Parameters.AddWithValue("$presented", presented ? 1 : 0);
+        command.ExecuteNonQuery();
+    }
+
+    private static void SetActiveNotification(string databasePath, Guid notificationId)
+    {
+        using var connection = Open(databasePath);
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO delivered (app_id, list) VALUES (1, $uuid);";
+        command.Parameters.AddWithValue("$uuid", notificationId.ToByteArray(bigEndian: true));
+        command.ExecuteNonQuery();
+    }
+
+    private static void ClearActiveNotifications(string databasePath)
+    {
+        using var connection = Open(databasePath);
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM delivered;";
         command.ExecuteNonQuery();
     }
 
