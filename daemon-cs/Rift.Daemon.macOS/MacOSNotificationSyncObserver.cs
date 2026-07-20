@@ -10,7 +10,6 @@ internal sealed class MacOSNotificationSyncObserver(
 {
     private const int ExtractorPageSize = 500;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan ReconcileInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, string> _fingerprints = new(StringComparer.Ordinal);
@@ -52,7 +51,7 @@ internal sealed class MacOSNotificationSyncObserver(
         }
     }
 
-    private async Task BootstrapAsync(CancellationToken cancellationToken)
+    internal async Task BootstrapAsync(CancellationToken cancellationToken)
     {
         var status = await extractorClient.GetStatusAsync(cancellationToken).ConfigureAwait(false);
         if (!string.Equals(status.State, "ready", StringComparison.Ordinal) ||
@@ -77,27 +76,16 @@ internal sealed class MacOSNotificationSyncObserver(
             }
         }
 
-        var active = await extractorClient.RescanActiveNotificationsAsync(cancellationToken).ConfigureAwait(false);
-        await ReconcileActiveAsync(active.Notifications, cancellationToken).ConfigureAwait(false);
         logger.LogInformation("macOS notification extraction started at cursor {Cursor}.", _cursor);
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)
     {
-        var nextReconcileAt = DateTimeOffset.UtcNow + ReconcileInterval;
         while (!cancellationToken.IsCancellationRequested)
         {
             var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
             _cursor = Math.Max(_cursor, scan.Cursor);
             await ProcessIncrementalAsync(scan.Notifications, cancellationToken).ConfigureAwait(false);
-
-            if (DateTimeOffset.UtcNow >= nextReconcileAt)
-            {
-                var active = await extractorClient.RescanActiveNotificationsAsync(cancellationToken).ConfigureAwait(false);
-                await ReconcileActiveAsync(active.Notifications, cancellationToken).ConfigureAwait(false);
-                nextReconcileAt = DateTimeOffset.UtcNow + ReconcileInterval;
-            }
-
             await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -108,6 +96,11 @@ internal sealed class MacOSNotificationSyncObserver(
     {
         foreach (var notification in notifications)
         {
+            if (ShouldIgnore(notification.PackageName))
+            {
+                continue;
+            }
+
             var fingerprint = CreateFingerprint(notification);
             var eventType = _fingerprints.ContainsKey(notification.NotificationId) ? "updated" : "posted";
             if (_fingerprints.TryGetValue(notification.NotificationId, out var previousFingerprint) &&
@@ -118,31 +111,6 @@ internal sealed class MacOSNotificationSyncObserver(
 
             _fingerprints[notification.NotificationId] = fingerprint;
             await PublishAsync(eventType, notification, removedAt: null, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    internal async Task ReconcileActiveAsync(
-        IReadOnlyList<MacOSExtractedNotification> activeNotifications,
-        CancellationToken cancellationToken)
-    {
-        var activeIds = activeNotifications
-            .Select(notification => notification.NotificationId)
-            .ToHashSet(StringComparer.Ordinal);
-
-        await ProcessIncrementalAsync(activeNotifications, cancellationToken).ConfigureAwait(false);
-
-        foreach (var removedId in _fingerprints.Keys.Where(id => !activeIds.Contains(id)).ToArray())
-        {
-            _fingerprints.Remove(removedId);
-            await notificationSyncService.HandleLocalNotificationEventAsync(
-                "removed",
-                new NotificationSyncRecord
-                {
-                    NotificationId = removedId,
-                    SourceDeviceId = identityManager.GetDeviceId()
-                },
-                DateTimeOffset.UtcNow.ToString("O"),
-                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -168,6 +136,10 @@ internal sealed class MacOSNotificationSyncObserver(
             },
             removedAt,
             cancellationToken);
+
+    private static bool ShouldIgnore(string packageName) =>
+        string.Equals(packageName, "com.example.appFlutter", StringComparison.OrdinalIgnoreCase) ||
+        packageName.StartsWith("com.rift.", StringComparison.OrdinalIgnoreCase);
 
     private static string CreateFingerprint(MacOSExtractedNotification notification) => string.Join(
         '\n',

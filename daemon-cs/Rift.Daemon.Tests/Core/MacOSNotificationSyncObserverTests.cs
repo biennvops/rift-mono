@@ -31,49 +31,87 @@ public sealed class MacOSNotificationSyncObserverTests
     }
 
     [Fact]
-    public async Task ReconcileActiveAsync_RemovesNotificationsMissingFromDeliveredSet()
+    public async Task BootstrapAsync_AdvancesCursorWithoutReplayingHistoricalNotifications()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var extractorClient = new StubExtractorClient
+        {
+            ScanResult = new MacOSExtractorScanResult
+            {
+                Cursor = 42,
+                Notifications = [CreateNotification("historical-game-mode", "Game Mode: On")]
+            }
+        };
+        var observer = CreateObserver(syncService, extractorClient);
+
+        await observer.BootstrapAsync(CancellationToken.None);
+
+        Assert.Empty(syncService.Events);
+        Assert.Equal(0, extractorClient.RescanCalls);
+    }
+
+    [Theory]
+    [InlineData("com.example.appFlutter")]
+    [InlineData("com.rift.app")]
+    [InlineData("com.rift.notification-extractor")]
+    public async Task ProcessIncrementalAsync_IgnoresRiftOwnedNotifications(string packageName)
     {
         var syncService = new RecordingNotificationSyncService();
         var observer = CreateObserver(syncService);
+
         await observer.ProcessIncrementalAsync(
-            [CreateNotification("notification-1", "First")],
-            CancellationToken.None);
-        syncService.Events.Clear();
-
-        await observer.ReconcileActiveAsync(
-            [CreateNotification("notification-2", "Second")],
+            [CreateNotification("rift-notification", "Mirrored notification", packageName)],
             CancellationToken.None);
 
-        Assert.Equal(["posted", "removed"], syncService.Events.Select(evt => evt.EventType));
-        var removal = syncService.Events[1];
-        Assert.Equal("notification-1", removal.Notification.NotificationId);
-        Assert.NotNull(removal.RemovedAt);
+        Assert.Empty(syncService.Events);
     }
 
-    private static MacOSNotificationSyncObserver CreateObserver(RecordingNotificationSyncService syncService) =>
+    private static MacOSNotificationSyncObserver CreateObserver(
+        RecordingNotificationSyncService syncService,
+        IMacOSNotificationExtractorClient? extractorClient = null) =>
         new(
-            new StubExtractorClient(),
+            extractorClient ?? new StubExtractorClient(),
             syncService,
             new StubIdentityManager(),
             NullLogger<MacOSNotificationSyncObserver>.Instance);
 
-    private static MacOSExtractedNotification CreateNotification(string id, string title) => new()
-    {
-        NotificationId = id,
-        PackageName = "com.example.app",
-        AppName = "Example",
-        Title = title,
-        BodyPreview = "Preview",
-        PostedAt = "2026-07-20T00:00:00.0000000+00:00",
-        IsDismissible = true,
-        IsOpenable = true
-    };
+    private static MacOSExtractedNotification CreateNotification(
+        string id,
+        string title,
+        string packageName = "com.example.app") => new()
+        {
+            NotificationId = id,
+            PackageName = packageName,
+            AppName = "Example",
+            Title = title,
+            BodyPreview = "Preview",
+            PostedAt = "2026-07-20T00:00:00.0000000+00:00",
+            IsDismissible = true,
+            IsOpenable = true
+        };
 
     private sealed class StubExtractorClient : IMacOSNotificationExtractorClient
     {
-        public Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<MacOSExtractorScanResult> RescanActiveNotificationsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public MacOSExtractorScanResult ScanResult { get; init; } = new();
+        public int RescanCalls { get; private set; }
+
+        public Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new MacOSExtractorStatus
+            {
+                DatabaseFound = true,
+                DatabaseReadable = true,
+                SchemaSupported = true,
+                State = "ready"
+            });
+
+        public Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken) =>
+            Task.FromResult(ScanResult);
+
+        public Task<MacOSExtractorScanResult> RescanActiveNotificationsAsync(CancellationToken cancellationToken)
+        {
+            RescanCalls++;
+            throw new NotSupportedException();
+        }
     }
 
     private sealed class StubIdentityManager : IIdentityManager

@@ -50,47 +50,33 @@ internal sealed class NotificationDatabaseReader
         }
     }
 
-    public NotificationScanResult RescanActiveNotifications() => Scan(cursor: null, activeOnly: true);
+    public NotificationScanResult RescanActiveNotifications() => throw new ExtractorException(
+        "activeStateUnavailable",
+        "Current macOS Notification Center data does not expose a reliable active-notification set.");
 
-    public NotificationScanResult ScanNotificationChanges(long cursor) => Scan(cursor, activeOnly: false);
+    public NotificationScanResult ScanNotificationChanges(long cursor) => Scan(cursor);
 
-    private NotificationScanResult Scan(long? cursor, bool activeOnly)
+    private NotificationScanResult Scan(long cursor)
     {
         using var snapshot = CreateSnapshot();
         using var connection = OpenReadOnly(snapshot.DatabasePath);
         EnsureSupportedSchema(connection);
-        if (activeOnly)
-        {
-            EnsureActiveStateSchema(connection);
-        }
 
         using var command = connection.CreateCommand();
-        command.CommandText = activeOnly
-            ? """
-              SELECT r.rec_id, r.uuid, a.identifier, r.data, r.delivered_date
-              FROM delivered AS d
-              INNER JOIN record AS r ON r.app_id = d.app_id AND r.uuid = d.list
-              INNER JOIN app AS a ON a.app_id = r.app_id
-              ORDER BY r.rec_id
-              LIMIT $limit;
-              """
-            : """
-              SELECT r.rec_id, r.uuid, a.identifier, r.data, r.delivered_date
-              FROM record AS r
-              INNER JOIN app AS a ON a.app_id = r.app_id
-              WHERE r.rec_id > $cursor
-              ORDER BY r.rec_id
-              LIMIT $limit;
-              """;
+        command.CommandText = """
+            SELECT r.rec_id, r.uuid, a.identifier, r.data, r.delivered_date
+            FROM record AS r
+            INNER JOIN app AS a ON a.app_id = r.app_id
+            WHERE r.rec_id > $cursor
+            ORDER BY r.rec_id
+            LIMIT $limit;
+            """;
         command.Parameters.AddWithValue("$limit", MaximumScanRecords);
-        if (!activeOnly)
-        {
-            command.Parameters.AddWithValue("$cursor", Math.Max(0, cursor ?? 0));
-        }
+        command.Parameters.AddWithValue("$cursor", Math.Max(0, cursor));
 
         var notifications = new List<ExtractedNotification>();
         var skippedRecords = 0;
-        var nextCursor = Math.Max(0, cursor ?? 0);
+        var nextCursor = Math.Max(0, cursor);
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -203,16 +189,6 @@ internal sealed class NotificationDatabaseReader
             throw new ExtractorException(
                 "unsupportedSchema",
                 "The macOS Notification Center database schema is not supported.");
-        }
-    }
-
-    private static void EnsureActiveStateSchema(SqliteConnection connection)
-    {
-        if (!HasColumns(connection, "delivered", ["app_id", "list"]))
-        {
-            throw new ExtractorException(
-                "unsupportedSchema",
-                "The macOS Notification Center active-state schema is not supported.");
         }
     }
 

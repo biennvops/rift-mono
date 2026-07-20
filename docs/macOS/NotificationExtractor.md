@@ -18,7 +18,7 @@ The process does not accept paths, SQL, shell commands, or generic file-read req
 
 Database access is read-only. Each scan uses SQLite's online backup API to create a private mode-`0600` snapshot, which includes committed WAL state without modifying Notification Center's database. The snapshot is deleted when the request completes.
 
-The extractor validates the expected `app`, `record`, and active-state `delivered` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Active notifications are resolved by matching the 16-byte `delivered.list` value to `record.uuid`; `record.presented` is historical presentation state and must not be used as active membership. Malformed notification payloads are skipped and counted without returning their content.
+The extractor validates the expected `app` and `record` columns before querying. Unknown schemas fail closed with `unsupportedSchema`. Neither `record.presented` nor `delivered.list` is a reliable active-notification set on current macOS: `delivered.list` retains historical per-app UUIDs after notifications are no longer visible. `rescanActiveNotifications` therefore fails closed with `activeStateUnavailable` rather than replaying stale notification history. Malformed notification payloads are skipped and counted without returning their content.
 
 macOS-origin records always report `isDismissible: false` and `isOpenable: false`, as required by notification sync v1. The extractor returns only the source bundle identifier, title, combined subtitle/body preview, timestamp, and stable notification identifier. It does not return the full property-list payload.
 
@@ -77,6 +77,8 @@ Expected status states are:
 - `fullDiskAccessRequired`
 - `unsupportedSchema`
 
-The macOS daemon launches the extractor through LaunchServices so TCC attributes FDA to the extractor bundle rather than the daemon. Requests and responses use per-call private temporary directories and mode-`0600` files. Calls time out after 10 seconds, responses are limited to 1 MiB, and malformed or oversized responses are rejected. The daemon polls incremental records and periodically reconciles the `delivered` UUID set to emit removals.
+The macOS daemon launches the extractor through LaunchServices so TCC attributes FDA to the extractor bundle rather than the daemon. Requests and responses use per-call private temporary directories and mode-`0600` files. Calls time out after 10 seconds, responses are limited to 1 MiB, and malformed or oversized responses are rejected. On startup the daemon advances its cursor without replaying historical records, then publishes only newly observed records. Rift-owned bundle identifiers are ignored to prevent mirrored notifications from being extracted and echoed back to peers.
+
+Current macOS data does not provide a validated dismissal lifecycle, so desktop-origin removals are not emitted in this phase. This is safer than treating retained `delivered.list` UUIDs as active and replaying stale notifications.
 
 Authenticated XPC and Seatbelt confinement are intentionally deferred. Standard input is the functional prototype transport and must not be treated as signed-peer authentication.
