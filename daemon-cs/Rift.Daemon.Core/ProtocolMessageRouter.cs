@@ -232,7 +232,9 @@ public sealed class ProtocolMessageRouter(
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = requestingDeviceId,
                 Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
-                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) ? positionElement.GetInt64() : null,
+                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) && positionElement.ValueKind == JsonValueKind.Number
+                    ? positionElement.GetInt64()
+                    : null,
                 RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null
             }, cancellationToken);
             return;
@@ -463,6 +465,35 @@ public sealed class ProtocolMessageRouter(
         };
     }
 
+    private static Dictionary<string, object?>? ParseObject(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var property in element.EnumerateObject())
+        {
+            result[property.Name] = ParseValue(property.Value);
+        }
+
+        return result;
+    }
+
+    private static object? ParseValue(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => ParseObject(element),
+        JsonValueKind.Array => element.EnumerateArray().Select(ParseValue).ToArray(),
+        JsonValueKind.String => element.GetString(),
+        JsonValueKind.Number when element.TryGetInt64(out var intValue) => intValue,
+        JsonValueKind.Number => element.GetDouble(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        _ => element.GetRawText()
+    };
+
     private static bool IsMediaMessageError(Exception exception) =>
         exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or MediaPlaybackSyncFailureException or UnauthorizedAccessException;
 
@@ -478,8 +509,8 @@ public sealed class ProtocolMessageRouter(
             Title = mediaPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,
             Artist = mediaPayload.TryGetProperty("artist", out var artistElement) ? artistElement.GetString() : null,
             Album = mediaPayload.TryGetProperty("album", out var albumElement) ? albumElement.GetString() : null,
-            Artwork = mediaPayload.TryGetProperty("artwork", out var artworkElement) && artworkElement.ValueKind is JsonValueKind.Object
-                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(artworkElement.GetRawText())
+            Artwork = mediaPayload.TryGetProperty("artwork", out var artworkElement)
+                ? ParseObject(artworkElement)
                 : null,
             PlaybackState = mediaPayload.GetProperty("playbackState").GetString() ?? string.Empty,
             PositionMs = mediaPayload.GetProperty("positionMs").GetInt64(),

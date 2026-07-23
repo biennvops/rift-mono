@@ -146,6 +146,7 @@ private struct MediaPlaybackSnapshot {
   let playbackState: String
   let positionMs: Int
   let durationMs: Int?
+  let artwork: [String: Any]?
   let canPlay: Bool
   let canPause: Bool
   let canSkipNext: Bool
@@ -201,6 +202,9 @@ private struct MediaPlaybackSnapshot {
     if let durationMs {
       payload["durationMs"] = durationMs
     }
+    if let artwork {
+      payload["artwork"] = artwork
+    }
     return payload
   }
 }
@@ -218,6 +222,8 @@ private final class MediaRemoteController {
     let durationSeconds = metadata[MPMediaItemPropertyPlaybackDuration] as? Double
     let elapsedSeconds = metadata[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double ?? 0
     let playbackRate = metadata[MPNowPlayingInfoPropertyPlaybackRate] as? Double ?? 0
+    let artwork = (metadata[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork)
+      .flatMap(Self.encodeArtwork)
     let playbackState = playbackRate > 0 ? "playing" : (elapsedSeconds > 0 ? "paused" : "stopped")
     let appId = "system.nowplaying"
     let appName = "Now Playing"
@@ -245,6 +251,7 @@ private final class MediaRemoteController {
         playbackState: playbackState,
         positionMs: max(0, Int(elapsedSeconds * 1000)),
         durationMs: durationSeconds == nil ? nil : max(0, Int(durationSeconds! * 1000)),
+        artwork: artwork,
         canPlay: playbackState != "playing",
         canPause: playbackState == "playing",
         canSkipNext: true,
@@ -256,10 +263,71 @@ private final class MediaRemoteController {
   }
 
   func performAction(action: String, positionMs: Int?) -> [String: Any] {
+    guard let command = mediaRemoteCommand(for: action) else {
+      return [
+        "success": false,
+        "failureReason": "CapabilityUnavailable",
+        "message": "Unsupported macOS media action.",
+      ]
+    }
+
+    guard sendMediaRemoteCommand(command) else {
+      return [
+        "success": false,
+        "failureReason": "CapabilityUnavailable",
+        "message": "Failed to send the macOS media command.",
+      ]
+    }
+
+    return ["success": true]
+  }
+
+  private static func encodeArtwork(_ artwork: MPMediaItemArtwork) -> [String: Any]? {
+    let image = artwork.image(at: NSSize(width: 512, height: 512))
+    guard let image,
+          let tiffData = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiffData),
+          let pngData = bitmap.representation(using: .png, properties: [:])
+    else {
+      return nil
+    }
+
     return [
-      "success": false,
-      "failureReason": "CapabilityUnavailable",
-      "message": "macOS media control bridge is not implemented on this build path.",
+      "dataBase64": pngData.base64EncodedString(),
+      "mimeType": "image/png",
     ]
+  }
+
+  private func mediaRemoteCommand(for action: String) -> Int? {
+    switch action {
+    case "play":
+      return 0
+    case "pause":
+      return 1
+    case "togglePlayPause":
+      return 2
+    case "next":
+      return 4
+    case "previous":
+      return 5
+    default:
+      return nil
+    }
+  }
+
+  private func sendMediaRemoteCommand(_ command: Int) -> Bool {
+    let frameworkPath = "/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote"
+    guard let handle = dlopen(frameworkPath, RTLD_LAZY) else {
+      return false
+    }
+    defer { dlclose(handle) }
+
+    typealias SendCommandFunction = @convention(c) (Int, CFDictionary?) -> Bool
+    guard let symbol = dlsym(handle, "MRMediaRemoteSendCommand") else {
+      return false
+    }
+
+    let function = unsafeBitCast(symbol, to: SendCommandFunction.self)
+    return function(command, nil)
   }
 }

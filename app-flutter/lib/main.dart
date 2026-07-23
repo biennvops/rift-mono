@@ -29,6 +29,9 @@ import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'src/media_playback/macos_media_playback_publisher.dart';
+import 'src/media_playback/windows_media_playback_publisher.dart';
+import 'src/media_playback/windows_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/linux_notifications.dart';
 import 'src/platform/macos_notifications.dart';
@@ -216,6 +219,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
+  MacOSMediaPlaybackPublisher? _macOSMediaPlaybackPublisher;
+  WindowsMediaPlaybackPublisher? _windowsMediaPlaybackPublisher;
+  WindowsRemoteMediaPlaybackCoordinator? _windowsRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -363,6 +369,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return mediaPlaybackResult;
     }
 
+    final windowsMediaPlaybackResult =
+        await _windowsRemoteMediaPlayback?.handlePlatformMethodCall(call);
+    if (windowsMediaPlaybackResult != null) {
+      return windowsMediaPlaybackResult;
+    }
+
     if (call.method == 'notificationActivated') {
       final arguments = call.arguments;
       if (arguments is Map) {
@@ -387,6 +399,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (Platform.isAndroid) {
       _androidRemoteMediaPlayback = AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
+    }
+    if (Platform.isMacOS) {
+      _macOSMediaPlaybackPublisher = MacOSMediaPlaybackPublisher(client);
+      unawaited(_macOSMediaPlaybackPublisher!.start());
+    }
+    if (Platform.isWindows) {
+      _windowsMediaPlaybackPublisher = WindowsMediaPlaybackPublisher(client);
+      _windowsRemoteMediaPlayback =
+          WindowsRemoteMediaPlaybackCoordinator(client);
+      unawaited(_windowsMediaPlaybackPublisher!.start());
+      unawaited(_windowsRemoteMediaPlayback!.start());
     }
   }
 
@@ -931,6 +954,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationActionRequestSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
+    unawaited(_macOSMediaPlaybackPublisher?.dispose());
+    unawaited(_windowsMediaPlaybackPublisher?.dispose());
+    unawaited(_windowsRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
     if (Platform.isAndroid && _clipboardServiceStarted) {
       unawaited(

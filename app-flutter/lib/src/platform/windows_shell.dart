@@ -46,6 +46,26 @@ class WindowsShell {
     return res ?? false;
   }
 
+  static Future<bool> showMediaPlayback({
+    required Map<String, Object?> playback,
+  }) async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('showMediaPlayback', {
+      'playback': playback,
+    });
+    return result ?? false;
+  }
+
+  static Future<bool> clearMediaPlayback() async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('clearMediaPlayback');
+    return result ?? false;
+  }
+
   static void setMethodCallHandler(
     Future<dynamic> Function(MethodCall call)? handler,
   ) {

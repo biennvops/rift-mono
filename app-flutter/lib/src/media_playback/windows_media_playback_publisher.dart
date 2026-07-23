@@ -1,32 +1,38 @@
 import 'dart:async';
 
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/macos_media_playback.dart';
+import 'package:app_flutter/src/platform/windows_media_playback.dart';
 import 'package:flutter/foundation.dart';
 
-class MacOSMediaPlaybackPublisher {
-  MacOSMediaPlaybackPublisher(this._client);
+class WindowsMediaPlaybackPublisher {
+  WindowsMediaPlaybackPublisher(this._client);
 
   final JsonRpcRiftClient _client;
   StreamSubscription<Map<String, dynamic>>? _eventSub;
   StreamSubscription<Map<String, dynamic>>? _actionRequestSub;
 
   Future<void> start() async {
-    if (!MacOSMediaPlaybackBridge.isSupported) {
+    if (!WindowsMediaPlaybackBridge.isSupported) {
       return;
     }
 
-    _eventSub = MacOSMediaPlaybackBridge.events.listen(_handlePlaybackEvent);
-    _actionRequestSub = _client.onMediaPlaybackActionRequest.listen(
-      _handleActionRequest,
-    );
-    await MacOSMediaPlaybackBridge.startObservation();
+    try {
+      _eventSub = WindowsMediaPlaybackBridge.events.listen(_handlePlaybackEvent);
+      _actionRequestSub = _client.onMediaPlaybackActionRequest.listen(
+        _handleActionRequest,
+      );
+      await WindowsMediaPlaybackBridge.startObservation();
+    } catch (error) {
+      debugPrint(
+        '[Media Playback] Windows local playback publishing is unavailable: $error',
+      );
+    }
   }
 
   Future<void> dispose() async {
     await _eventSub?.cancel();
     await _actionRequestSub?.cancel();
-    await MacOSMediaPlaybackBridge.stopObservation();
+    await WindowsMediaPlaybackBridge.stopObservation();
   }
 
   Future<void> _handlePlaybackEvent(Map<String, dynamic> event) async {
@@ -51,8 +57,6 @@ class MacOSMediaPlaybackPublisher {
       if (event['album'] != null) 'album': event['album']?.toString(),
       if (event['playbackState'] != null)
         'playbackState': event['playbackState']?.toString(),
-      if (event['artwork'] is Map)
-        'artwork': Map<String, Object?>.from(event['artwork'] as Map),
       if (event['positionMs'] is num)
         'positionMs': (event['positionMs'] as num).toInt(),
       if (event['durationMs'] is num)
@@ -72,7 +76,7 @@ class MacOSMediaPlaybackPublisher {
         payload: payload,
       );
     } catch (error) {
-      debugPrint('[Media Playback] Failed to publish macOS playback event: $error');
+      debugPrint('[Media Playback] Failed to publish Windows playback event: $error');
     }
   }
 
@@ -84,26 +88,20 @@ class MacOSMediaPlaybackPublisher {
     }
 
     final positionMs = (request['positionMs'] as num?)?.toInt();
-    debugPrint(
-      '[Media Playback][macOS] action request id=$requestId action=$action position=$positionMs',
-    );
     var success = false;
     String? failureReason;
     String? message;
     try {
-      final result = await MacOSMediaPlaybackBridge.performAction(
+      final result = await WindowsMediaPlaybackBridge.performAction(
         action: action,
         positionMs: positionMs,
       );
       success = result?['success'] == true;
       failureReason = result?['failureReason']?.toString();
       message = result?['message']?.toString();
-      debugPrint(
-        '[Media Playback][macOS] action result action=$action success=$success failureReason=$failureReason message=$message',
-      );
       if (result == null) {
         failureReason = 'CapabilityUnavailable';
-        message = 'The macOS playback bridge is unavailable.';
+        message = 'The Windows playback bridge is unavailable.';
       }
     } catch (error) {
       failureReason = 'PeerRejected';
@@ -116,9 +114,6 @@ class MacOSMediaPlaybackPublisher {
         success: success,
         failureReason: failureReason,
         message: message,
-      );
-      debugPrint(
-        '[Media Playback][macOS] reported action handled id=$requestId success=$success failureReason=$failureReason',
       );
     } catch (error) {
       debugPrint('[Media Playback] Failed to report handled action: $error');

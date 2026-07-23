@@ -89,4 +89,28 @@ void main() {
       },
     });
   });
+
+  test('WindowsShell forwards media playback payload unchanged', () async {
+    final shown = await WindowsShell.showMediaPlayback(
+      playback: const <String, Object?>{
+        'playbackId': 'playback-1',
+        'sourceDeviceId': 'rift-peer-1',
+        'title': 'Track',
+        'artist': 'Artist',
+        'canPlay': true,
+      },
+    );
+
+    expect(shown, isTrue);
+    expect(windowsCalls.single.method, 'showMediaPlayback');
+    expect(windowsCalls.single.arguments, <String, Object?>{
+      'playback': const <String, Object?>{
+        'playbackId': 'playback-1',
+        'sourceDeviceId': 'rift-peer-1',
+        'title': 'Track',
+        'artist': 'Artist',
+        'canPlay': true,
+      },
+    });
+  });
 }
