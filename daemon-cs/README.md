@@ -54,8 +54,77 @@ dotnet run --project Rift.Daemon.Linux/
 dotnet run --project Rift.Daemon.Windows/
 ```
 
+## macOS
+
+### Prerequisites and verification
+
+Install the .NET 10 SDK. From the repository root, build the macOS components directly because the full solution includes the Windows WPF host, which cannot be built on macOS:
+
+```bash
+dotnet build daemon-cs/Rift.Daemon.macOS/Rift.Daemon.macOS.csproj
+dotnet build daemon-cs/Rift.NotificationExtractor.macOS/Rift.NotificationExtractor.macOS.csproj
+dotnet test daemon-cs/Rift.Daemon.Tests/
+```
+
+### Run in the foreground
+
+Build the notification extractor app from the repository root:
+
+```bash
+daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
+```
+
+Add `dist/macos/Rift Notification Extractor.app` under **System Settings → Privacy & Security → Full Disk Access**, then run the daemon with the development extractor path:
+
+```bash
+RIFT_NOTIFICATION_EXTRACTOR_APP="$PWD/dist/macos/Rift Notification Extractor.app" \
+  dotnet run --project daemon-cs/Rift.Daemon.macOS/
+```
+
+Only the notification extractor should receive Full Disk Access. Do not grant it to the daemon or Flutter app.
+
+### Install and run as a LaunchAgent
+
+Build both app bundles, install the extractor at the daemon's default lookup path, and install the daemon LaunchAgent:
+
+```bash
+daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
+daemon-cs/Rift.Daemon.macOS/Tools/build_macos_daemon_app.sh
+
+mkdir -p "$HOME/Applications"
+rm -rf "$HOME/Applications/Rift Notification Extractor.app"
+cp -R "dist/macos/Rift Notification Extractor.app" "$HOME/Applications/"
+
+daemon-cs/Rift.Daemon.macOS/Tools/install_launchagent.sh
+```
+
+Grant `$HOME/Applications/Rift Notification Extractor.app` Full Disk Access before relying on notification sync. Use a stable signing identity and install path if the FDA grant must survive rebuilds.
+
+Check the agent and its logs with:
+
+```bash
+launchctl print "gui/$(id -u)/com.rift.daemon"
+tail -f "$HOME/Library/Logs/rift-daemon/stdout.log" \
+  "$HOME/Library/Logs/rift-daemon/stderr.log"
+```
+
+### Uninstall
+
+Unload the LaunchAgent and remove the installed daemon, extractor, plist, and logs:
+
+```bash
+launchctl unload "$HOME/Library/LaunchAgents/com.rift.daemon.plist" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/com.rift.daemon.plist"
+rm -rf "$HOME/Applications/Rift Daemon.app" \
+  "$HOME/Applications/Rift Notification Extractor.app" \
+  "$HOME/Library/Logs/rift-daemon"
+```
+
+Remove **Rift Notification Extractor** from Full Disk Access in System Settings. Uninstalling leaves daemon state in `$HOME/Library/Application Support/Rift` and identity material in Keychain intact so reinstalling can preserve device identity and trust.
+
 ## Related Docs
 
-- `../docs/macos-permissions.md`
+- `../docs/macOS/TCC.md`
+- `../docs/macOS/NotificationExtractor.md`
 - `../tests-conformance/README.md`
 - `../tests-interop/README.md`
