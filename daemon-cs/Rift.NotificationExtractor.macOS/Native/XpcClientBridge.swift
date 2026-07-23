@@ -46,10 +46,14 @@ public func riftNotificationXpcSend(
 
     responseBytes.pointee = nil
     responseLength.pointee = 0
+    guard let extractorRequirement = riftPeerCodeSigningRequirement(identifier: "com.rift.notification-extractor") else {
+        return 2
+    }
+
     let request = Data(bytes: requestBytes, count: Int(requestLength))
     let connection = NSXPCConnection(machServiceName: riftNotificationExtractorMachService)
     connection.remoteObjectInterface = NSXPCInterface(with: RiftNotificationExtractorXpcProtocol.self)
-    connection.setCodeSigningRequirement("identifier \"com.rift.notification-extractor\" and certificate leaf[subject.CN] = \"Rift Development Code Signing\"")
+    connection.setCodeSigningRequirement(extractorRequirement)
 
     let completed = DispatchSemaphore(value: 0)
     let state = ClientState()

@@ -35,9 +35,14 @@ private struct XpcProbeMain {
             exit(2)
         }
 
+        guard let extractorRequirement = riftPeerCodeSigningRequirement(identifier: "com.rift.notification-extractor") else {
+            fputs("unable to determine extractor signing requirement\n", stderr)
+            exit(3)
+        }
+
         let connection = NSXPCConnection(machServiceName: riftNotificationExtractorMachService)
         connection.remoteObjectInterface = NSXPCInterface(with: RiftNotificationExtractorXpcProtocol.self)
-        connection.setCodeSigningRequirement("identifier \"com.rift.notification-extractor\" and certificate leaf[subject.CN] = \"Rift Development Code Signing\"")
+        connection.setCodeSigningRequirement(extractorRequirement)
 
         let completed = DispatchSemaphore(value: 0)
         let state = ProbeState()

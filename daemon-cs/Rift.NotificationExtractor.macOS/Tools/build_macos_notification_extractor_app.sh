@@ -53,7 +53,9 @@ if [[ -n "${RIFT_CODESIGN_IDENTITY:-}" ]]; then
 elif /usr/bin/security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -Fq '"Rift Development Code Signing"'; then
   codesign_identity="Rift Development Code Signing"
 else
-  codesign_identity="-"
+  echo "ERROR: a certificate-backed code-signing identity is required." >&2
+  echo "Run daemon-cs/Tools/setup_rift_dev_signing.sh for local development." >&2
+  exit 1
 fi
 codesign --force --sign "$codesign_identity" --identifier com.rift.notification-extractor.worker "$worker"
 codesign --force --deep --sign "$codesign_identity" --identifier com.rift.notification-extractor "$app_dir"

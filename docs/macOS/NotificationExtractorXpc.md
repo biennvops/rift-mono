@@ -16,17 +16,11 @@ The broker accepts only the existing newline-delimited JSON operation contract o
 
 ## Peer authentication
 
-The listener calls `setConnectionCodeSigningRequirement` before activation. Development builds accept the ad-hoc signed daemon identifier:
+The listener calls `setConnectionCodeSigningRequirement` before activation. Each development build binds the daemon identifier to the exact certificate used to sign the broker:
 
 ```text
 identifier "com.rift.daemon"
-```
-
-Development builds bind the identifier to the local certificate subject:
-
-```text
-identifier "com.rift.daemon"
-and certificate leaf[subject.CN] = "Rift Development Code Signing"
+and certificate leaf = H"<certificate SHA-1>"
 ```
 
 Create the local identity once with:
@@ -37,16 +31,17 @@ daemon-cs/Tools/setup_rift_dev_signing.sh
 
 The script stores the private key only in the selected local keychain, refuses to replace an existing identity, and is safe to rerun. Both macOS app build scripts automatically prefer this identity when it is present. Rebuilds receive different code-directory hashes but retain the same designated certificate requirement, avoiding ad-hoc FDA churn.
 
-Production builds must replace the development subject requirement with the release team identifier and designated requirement. The listener rejects clients before its delegate receives a connection.
-
-The daemon loads a small Swift bridge dynamic library into the C# daemon process. The bridge connects to the Mach service and also requires:
+Production builds derive an Apple-anchored requirement from their signing Team ID instead:
 
 ```text
-identifier "com.rift.notification-extractor"
-and certificate leaf[subject.CN] = "Rift Development Code Signing"
+identifier "com.rift.daemon"
+and anchor apple generic
+and certificate leaf[subject.OU] = "<Team ID>"
 ```
 
-This keeps both ends of the peer identity check explicit. A separate command-line probe is provided only for signed-bundle testing and is not a production transport.
+The listener rejects clients before its delegate receives a connection.
+
+The daemon loads a small Swift bridge dynamic library into the C# daemon process. The bridge applies the corresponding certificate-pinned or Apple-anchored requirement to `com.rift.notification-extractor`. This keeps both ends of the peer identity check explicit without trusting a forgeable certificate subject. A separate command-line probe is provided only for signed-bundle testing and is not a production transport.
 
 ## Bundle and launchd layout
 
@@ -65,7 +60,7 @@ daemon-cs/Rift.NotificationExtractor.macOS/Tools/install_macos_notification_extr
 
 The installer refuses to overwrite an existing app bundle. It uses `launchctl bootstrap` for the current GUI user domain.
 
-The daemon app build now compiles the bridge library and signs the daemon executable with identifier `com.rift.daemon`. A stable Apple signing identity is required for production; ad-hoc signatures are suitable only for local authentication experiments and will not preserve FDA grants across rebuilds.
+The daemon app build now compiles the bridge library and signs the daemon executable with identifier `com.rift.daemon`. Both app builds require a certificate-backed signing identity; ad-hoc signatures cannot establish the pinned peer identity.
 
 ## Current status
 

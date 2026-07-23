@@ -20,7 +20,5 @@
 	<string>1</string>
 	<key>LSBackgroundOnly</key>
 	<true/>
-	<key>RiftAllowedClientRequirement</key>
-	<string>identifier "com.rift.daemon" and certificate leaf[subject.CN] = "Rift Development Code Signing"</string>
 </dict>
 </plist>

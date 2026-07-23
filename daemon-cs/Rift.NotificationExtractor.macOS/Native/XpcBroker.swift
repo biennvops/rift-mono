@@ -1,23 +1,48 @@
+import Darwin
 import Foundation
 
 private let maximumRequestBytes = 64 * 1024
 private let maximumResponseBytes = 1024 * 1024
+private let maximumErrorBytes = 1024 * 1024
 private let workerTimeout = DispatchTimeInterval.seconds(10)
+private let readChunkBytes = 16 * 1024
 
-private final class DataBox: @unchecked Sendable {
+private enum WorkerStream {
+    case standardOutput
+    case standardError
+}
+
+private final class WorkerOutput: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = Data()
+    private var standardOutput = Data()
+    private var standardError = Data()
+    private var exceededLimit: WorkerStream?
 
-    func set(_ data: Data) {
-        lock.lock()
-        value = data
-        lock.unlock()
-    }
-
-    func get() -> Data {
+    func append(_ data: Data, from stream: WorkerStream) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return value
+
+        guard exceededLimit == nil else { return false }
+        let currentCount = stream == .standardOutput ? standardOutput.count : standardError.count
+        let limit = stream == .standardOutput ? maximumResponseBytes : maximumErrorBytes
+        guard data.count <= limit - currentCount else {
+            exceededLimit = stream
+            return false
+        }
+
+        switch stream {
+        case .standardOutput:
+            standardOutput.append(data)
+        case .standardError:
+            standardError.append(data)
+        }
+        return true
+    }
+
+    func result() -> (Data, WorkerStream?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (standardOutput, exceededLimit)
     }
 }
 
@@ -47,57 +72,68 @@ private final class ExtractorService: NSObject, RiftNotificationExtractorXpcProt
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        let output = DataBox()
-        let errorOutput = DataBox()
-        let readers = DispatchGroup()
-        let terminated = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in terminated.signal() }
+        let output = WorkerOutput()
+        let io = DispatchGroup()
+        let stateChanged = DispatchSemaphore(value: 0)
+        let deadline = DispatchTime.now() + workerTimeout
+        process.terminationHandler = { _ in stateChanged.signal() }
 
         do {
             try process.run()
-            try? inputPipe.fileHandleForReading.close()
-            try? outputPipe.fileHandleForWriting.close()
-            try? errorPipe.fileHandleForWriting.close()
-
-            readers.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                output.set(outputPipe.fileHandleForReading.readDataToEndOfFile())
-                readers.leave()
-            }
-            readers.enter()
-            DispatchQueue.global(qos: .utility).async {
-                errorOutput.set(errorPipe.fileHandleForReading.readDataToEndOfFile())
-                readers.leave()
-            }
-
-            inputPipe.fileHandleForWriting.write(request)
-            inputPipe.fileHandleForWriting.write(Data([0x0a]))
-            try inputPipe.fileHandleForWriting.close()
         } catch {
-            try? inputPipe.fileHandleForReading.close()
-            try? inputPipe.fileHandleForWriting.close()
-            try? outputPipe.fileHandleForReading.close()
-            try? outputPipe.fileHandleForWriting.close()
-            try? errorPipe.fileHandleForReading.close()
-            try? errorPipe.fileHandleForWriting.close()
+            closePipes(inputPipe, outputPipe, errorPipe)
             return errorResponse(for: request, code: "workerLaunchFailed", message: "The notification extractor worker could not be started.")
         }
+        try? inputPipe.fileHandleForReading.close()
+        try? outputPipe.fileHandleForWriting.close()
+        try? errorPipe.fileHandleForWriting.close()
 
-        if terminated.wait(timeout: .now() + workerTimeout) == .timedOut {
-            process.terminate()
-            _ = terminated.wait(timeout: .now() + .seconds(2))
-            readers.wait()
-            return errorResponse(for: request, code: "workerTimeout", message: "The notification extractor worker timed out.")
+        io.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            read(outputPipe.fileHandleForReading, into: output, stream: .standardOutput, stateChanged: stateChanged)
+            io.leave()
+        }
+        io.enter()
+        DispatchQueue.global(qos: .utility).async {
+            read(errorPipe.fileHandleForReading, into: output, stream: .standardError, stateChanged: stateChanged)
+            io.leave()
+        }
+        io.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            var input = request
+            input.append(0x0a)
+            try? inputPipe.fileHandleForWriting.write(contentsOf: input)
+            try? inputPipe.fileHandleForWriting.close()
+            io.leave()
+        }
+        io.notify(queue: .global(qos: .userInitiated)) {
+            stateChanged.signal()
         }
 
-        readers.wait()
-        let response = output.get()
+        while true {
+            let (_, exceededLimit) = output.result()
+            if let exceededLimit {
+                stopWorker(process, inputPipe, outputPipe, errorPipe)
+                io.wait()
+                if exceededLimit == .standardOutput {
+                    return errorResponse(for: request, code: "responseTooLarge", message: "The notification extractor response exceeded 1 MiB.")
+                }
+                return errorResponse(for: request, code: "workerFailed", message: "The notification extractor worker produced too much error output.")
+            }
+
+            if !process.isRunning, io.wait(timeout: .now()) == .success {
+                break
+            }
+            if stateChanged.wait(timeout: deadline) == .timedOut {
+                stopWorker(process, inputPipe, outputPipe, errorPipe)
+                io.wait()
+                return errorResponse(for: request, code: "workerTimeout", message: "The notification extractor worker timed out.")
+            }
+        }
+
+        let (response, _) = output.result()
         guard process.terminationStatus == 0 else {
-            _ = errorOutput.get()
             return errorResponse(for: request, code: "workerFailed", message: "The notification extractor worker failed.")
-        }
-        guard response.count <= maximumResponseBytes else {
-            return errorResponse(for: request, code: "responseTooLarge", message: "The notification extractor response exceeded 1 MiB.")
         }
         guard !response.isEmpty else {
             return errorResponse(for: request, code: "invalidResponse", message: "The notification extractor worker returned an empty response.")
@@ -112,6 +148,36 @@ private final class ExtractorService: NSObject, RiftNotificationExtractorXpcProt
             .appendingPathComponent("rift-notification-extractor-worker")
             .path
     }
+}
+
+private func read(
+    _ handle: FileHandle,
+    into output: WorkerOutput,
+    stream: WorkerStream,
+    stateChanged: DispatchSemaphore
+) {
+    while let data = try? handle.read(upToCount: readChunkBytes), !data.isEmpty {
+        guard output.append(data, from: stream) else {
+            stateChanged.signal()
+            return
+        }
+    }
+}
+
+private func closePipes(_ inputPipe: Pipe, _ outputPipe: Pipe, _ errorPipe: Pipe) {
+    try? inputPipe.fileHandleForReading.close()
+    try? inputPipe.fileHandleForWriting.close()
+    try? outputPipe.fileHandleForReading.close()
+    try? outputPipe.fileHandleForWriting.close()
+    try? errorPipe.fileHandleForReading.close()
+    try? errorPipe.fileHandleForWriting.close()
+}
+
+private func stopWorker(_ process: Process, _ inputPipe: Pipe, _ outputPipe: Pipe, _ errorPipe: Pipe) {
+    if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+    }
+    closePipes(inputPipe, outputPipe, errorPipe)
 }
 
 private final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
@@ -147,9 +213,12 @@ private func errorResponse(for request: Data, code: String, message: String) -> 
 @main
 private struct XpcBrokerMain {
     static func main() {
+        guard let allowedClientRequirement = riftPeerCodeSigningRequirement(identifier: "com.rift.daemon") else {
+            fputs("Unable to determine daemon signing requirement.\n", stderr)
+            exit(1)
+        }
+
         let listener = NSXPCListener(machServiceName: riftNotificationExtractorMachService)
-        let allowedClientRequirement = Bundle.main.object(forInfoDictionaryKey: "RiftAllowedClientRequirement") as? String
-            ?? "identifier \"com.rift.daemon\" and certificate leaf[subject.CN] = \"Rift Development Code Signing\""
         listener.setConnectionCodeSigningRequirement(allowedClientRequirement)
         let delegate = ListenerDelegate()
         listener.delegate = delegate
