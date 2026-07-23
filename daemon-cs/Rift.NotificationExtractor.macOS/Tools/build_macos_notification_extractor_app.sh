@@ -3,7 +3,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 project="$repo_root/daemon-cs/Rift.NotificationExtractor.macOS/Rift.NotificationExtractor.macOS.csproj"
-info_plist="$repo_root/daemon-cs/Rift.NotificationExtractor.macOS/Resources/RiftNotificationExtractor.Info.plist"
+project_dir="$repo_root/daemon-cs/Rift.NotificationExtractor.macOS"
+info_plist="$project_dir/Resources/RiftNotificationExtractor.Info.plist"
+native_dir="$project_dir/Native"
 
 runtime="${1:-}"
 if [[ -z "$runtime" ]]; then
@@ -15,29 +17,50 @@ if [[ -z "$runtime" ]]; then
 fi
 
 out_root="$repo_root/dist/macos"
-publish_dir="$out_root/notification-extractor-publish-$runtime"
+mkdir -p "$out_root"
+publish_dir="$(mktemp -d "$out_root/notification-extractor-publish-$runtime.XXXXXX")"
+trap 'rm -rf "$publish_dir"' EXIT
 app_dir="$out_root/Rift Notification Extractor.app"
-executable="$app_dir/Contents/MacOS/rift-notification-extractor"
+broker="$app_dir/Contents/MacOS/rift-notification-extractor"
+worker="$app_dir/Contents/Helpers/rift-notification-extractor-worker"
 
 if [[ -e "$app_dir" ]]; then
   echo "ERROR: '$app_dir' already exists; move or remove it before rebuilding." >&2
   exit 1
 fi
 
-mkdir -p "$app_dir/Contents/MacOS"
+mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Helpers"
 cp "$info_plist" "$app_dir/Contents/Info.plist"
 
 dotnet publish "$project" -c Release -r "$runtime" --self-contained true -o "$publish_dir"
-cp -R "$publish_dir/"* "$app_dir/Contents/MacOS/"
+cp -R "$publish_dir/"* "$app_dir/Contents/Helpers/"
 
-if [[ ! -x "$executable" ]]; then
-  echo "ERROR: publish did not produce the expected executable." >&2
+published_worker="$app_dir/Contents/Helpers/rift-notification-extractor"
+if [[ ! -x "$published_worker" ]]; then
+  echo "ERROR: publish did not produce the expected worker executable." >&2
   exit 1
 fi
+mv "$published_worker" "$worker"
 
-codesign_identity="${RIFT_CODESIGN_IDENTITY:--}"
+xcrun swiftc \
+  "$native_dir/XpcProtocol.swift" \
+  "$native_dir/XpcBroker.swift" \
+  -framework Foundation \
+  -o "$broker"
+
+if [[ -n "${RIFT_CODESIGN_IDENTITY:-}" ]]; then
+  codesign_identity="$RIFT_CODESIGN_IDENTITY"
+elif /usr/bin/security find-identity -v -p codesigning "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null | grep -Fq '"Rift Development Code Signing"'; then
+  codesign_identity="Rift Development Code Signing"
+else
+  echo "ERROR: a certificate-backed code-signing identity is required." >&2
+  echo "Run daemon-cs/Tools/setup_rift_dev_signing.sh for local development." >&2
+  exit 1
+fi
+codesign --force --sign "$codesign_identity" --identifier com.rift.notification-extractor.worker "$worker"
 codesign --force --deep --sign "$codesign_identity" --identifier com.rift.notification-extractor "$app_dir"
 codesign --verify --deep --strict --verbose=2 "$app_dir"
 
 echo "Built: $app_dir"
-echo "Grant this app Full Disk Access before running getStatus or scan operations."
+echo "Install the extractor LaunchAgent before using the Mach service."
+echo "Grant this app Full Disk Access after installing it at its stable path."
