@@ -1,32 +1,24 @@
 using System.Runtime.Versioning;
+using System.Text;
 using System.Text.Json;
 using Rift.Daemon.macOS;
 
 namespace Rift.Daemon.Tests.Core;
 
 [SupportedOSPlatform("macos")]
-public sealed class MacOSNotificationExtractorClientTests : IDisposable
+public sealed class MacOSNotificationExtractorClientTests
 {
-    private readonly string _appPath = Directory.CreateTempSubdirectory("rift-extractor-app-").FullName;
-
     [Fact]
-    public async Task GetStatusAsync_UsesPrivateFilesAndParsesResponse()
+    public async Task GetStatusAsync_SendsFixedOperationAndParsesResponse()
     {
-        var client = new MacOSNotificationExtractorClient(
-            _appPath,
-            async (_, requestPath, responsePath, errorPath, cancellationToken) =>
-            {
-                AssertPrivateFile(requestPath);
-                AssertPrivateFile(responsePath);
-                AssertPrivateFile(errorPath);
-                using var request = JsonDocument.Parse(await File.ReadAllTextAsync(requestPath, cancellationToken));
-                Assert.Equal("getStatus", request.RootElement.GetProperty("operation").GetString());
-                var requestId = request.RootElement.GetProperty("id").GetString();
-                await File.WriteAllTextAsync(
-                    responsePath,
-                    $"{{\"id\":\"{requestId}\",\"ok\":true,\"result\":{{\"databaseFound\":true,\"databaseReadable\":true,\"schemaSupported\":true,\"state\":\"ready\"}}}}\n",
-                    cancellationToken);
-            });
+        var client = CreateClient(request =>
+        {
+            Assert.Equal("getStatus", request.RootElement.GetProperty("operation").GetString());
+            Assert.Equal(JsonValueKind.Null, request.RootElement.GetProperty("cursor").ValueKind);
+            return SuccessResponse(
+                request,
+                "{\"databaseFound\":true,\"databaseReadable\":true,\"schemaSupported\":true,\"state\":\"ready\"}");
+        });
 
         var status = await client.GetStatusAsync(CancellationToken.None);
 
@@ -37,10 +29,28 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanNotificationChangesAsync_SendsNonNegativeCursor()
+    {
+        var client = CreateClient(request =>
+        {
+            Assert.Equal("scanNotificationChanges", request.RootElement.GetProperty("operation").GetString());
+            Assert.Equal(0, request.RootElement.GetProperty("cursor").GetInt64());
+            return SuccessResponse(
+                request,
+                "{\"cursor\":0,\"notifications\":[],\"skippedRecords\":0}");
+        });
+
+        var result = await client.ScanNotificationChangesAsync(-10, CancellationToken.None);
+
+        Assert.Equal(0, result.Cursor);
+        Assert.Empty(result.Notifications);
+    }
+
+    [Fact]
     public async Task ScanNotificationChangesAsync_RejectsMalformedResponse()
     {
-        var client = CreateClient((_, responsePath, cancellationToken) =>
-            File.WriteAllTextAsync(responsePath, "not-json\n", cancellationToken));
+        var client = new MacOSNotificationExtractorClient(
+            (_, _, _) => Task.FromResult("not-json"u8.ToArray()));
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
             () => client.ScanNotificationChangesAsync(12, CancellationToken.None));
@@ -51,8 +61,8 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     [Fact]
     public async Task ScanNotificationChangesAsync_RejectsOversizedResponse()
     {
-        var client = CreateClient((_, responsePath, cancellationToken) =>
-            File.WriteAllTextAsync(responsePath, new string('x', 1024 * 1024 + 1) + "\n", cancellationToken));
+        var client = new MacOSNotificationExtractorClient(
+            (_, _, _) => Task.FromResult(new byte[1024 * 1024 + 1]));
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
             () => client.ScanNotificationChangesAsync(12, CancellationToken.None));
@@ -63,14 +73,10 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     [Fact]
     public async Task GetStatusAsync_ReportsExtractorError()
     {
-        var client = CreateClient(async (requestPath, responsePath, cancellationToken) =>
+        var client = CreateClient(request =>
         {
-            using var request = JsonDocument.Parse(await File.ReadAllTextAsync(requestPath, cancellationToken));
-            var requestId = request.RootElement.GetProperty("id").GetString();
-            await File.WriteAllTextAsync(
-                responsePath,
-                $"{{\"id\":\"{requestId}\",\"ok\":false,\"error\":{{\"code\":\"fullDiskAccessRequired\",\"message\":\"FDA required\"}}}}\n",
-                cancellationToken);
+            var id = request.RootElement.GetProperty("id").GetString();
+            return $"{{\"id\":\"{id}\",\"ok\":false,\"error\":{{\"code\":\"fullDiskAccessRequired\",\"message\":\"FDA required\"}}}}";
         });
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
@@ -83,11 +89,9 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     [Fact]
     public async Task GetStatusAsync_RejectsMismatchedResponseId()
     {
-        var client = CreateClient((_, responsePath, cancellationToken) =>
-            File.WriteAllTextAsync(
-                responsePath,
-                "{\"id\":\"wrong-id\",\"ok\":true,\"result\":{\"state\":\"ready\"}}\n",
-                cancellationToken));
+        var client = new MacOSNotificationExtractorClient(
+            (_, _, _) => Task.FromResult(
+                "{\"id\":\"wrong-id\",\"ok\":true,\"result\":{\"state\":\"ready\"}}"u8.ToArray()));
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
             () => client.GetStatusAsync(CancellationToken.None));
@@ -96,12 +100,15 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
     }
 
     [Fact]
-    public async Task GetStatusAsync_TimesOutWhenNoResponseArrives()
+    public async Task GetStatusAsync_MapsNativeTimeout()
     {
         var client = new MacOSNotificationExtractorClient(
-            _appPath,
-            (_, _, _, _, _) => Task.CompletedTask,
-            TimeSpan.FromMilliseconds(50));
+            async (_, timeout, _) =>
+            {
+                await Task.Delay(timeout);
+                throw new OperationCanceledException();
+            },
+            TimeSpan.FromMilliseconds(10));
 
         var exception = await Assert.ThrowsAsync<MacOSExtractorException>(
             () => client.GetStatusAsync(CancellationToken.None));
@@ -109,24 +116,16 @@ public sealed class MacOSNotificationExtractorClientTests : IDisposable
         Assert.Equal("extractorTimeout", exception.Code);
     }
 
-    private MacOSNotificationExtractorClient CreateClient(
-        Func<string, string, CancellationToken, Task> writeResponse) =>
-        new(
-            _appPath,
-            (_, requestPath, responsePath, _, cancellationToken) =>
-                writeResponse(requestPath, responsePath, cancellationToken));
-
-    private static void AssertPrivateFile(string path)
-    {
-        var mode = File.GetUnixFileMode(path);
-        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_appPath))
+    private static MacOSNotificationExtractorClient CreateClient(Func<JsonDocument, string> responseFactory) =>
+        new((requestBytes, _, _) =>
         {
-            Directory.Delete(_appPath, recursive: true);
-        }
+            using var request = JsonDocument.Parse(requestBytes);
+            return Task.FromResult(Encoding.UTF8.GetBytes(responseFactory(request)));
+        });
+
+    private static string SuccessResponse(JsonDocument request, string resultJson)
+    {
+        var id = request.RootElement.GetProperty("id").GetString();
+        return $"{{\"id\":\"{id}\",\"ok\":true,\"result\":{resultJson}}}";
     }
 }

@@ -36,14 +36,20 @@ The script defaults to the current architecture and creates:
 dist/macos/Rift Notification Extractor.app
 ```
 
-Development builds are ad-hoc signed. Set `RIFT_CODESIGN_IDENTITY` to use a stable Developer ID or Apple Development identity:
+Development builds automatically use `Rift Development Code Signing` when that local identity is available. Create it once with:
+
+```bash
+daemon-cs/Tools/setup_rift_dev_signing.sh
+```
+
+Set `RIFT_CODESIGN_IDENTITY` to override automatic selection with another stable identity:
 
 ```bash
 RIFT_CODESIGN_IDENTITY='Developer ID Application: Example (TEAMID)' \
   daemon-cs/Rift.NotificationExtractor.macOS/Tools/build_macos_notification_extractor_app.sh
 ```
 
-Use the same signing identity and bundle location between builds so macOS can retain the FDA grant reliably. Ad-hoc signatures change when the app is rebuilt and require the FDA entry to be removed and re-added.
+Use the same signing identity and bundle location between builds so macOS retains the FDA grant. Ad-hoc signatures change when the app is rebuilt and require the FDA entry to be removed and re-added. When migrating an existing ad-hoc installation, remove its old FDA entry before adding the certificate-signed bundle because TCC retains the previous CDHash requirement.
 
 ## Granting Full Disk Access
 
