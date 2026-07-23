@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Rift.NotificationExtractor.macOS;
 
@@ -65,6 +66,58 @@ public sealed class NotificationDatabaseReaderTests : IDisposable
         Assert.Equal("Build complete", notification.Title);
         Assert.Equal(4, result.Cursor);
         Assert.Equal(2, result.SkippedRecords);
+    }
+
+    [Fact]
+    public void ScanNotificationChanges_MaximumPageFitsClientResponseLimit()
+    {
+        var databasePath = CreateDatabase();
+        for (var recordId = 1; recordId <= 65; recordId++)
+        {
+            InsertNotification(
+                databasePath,
+                recordId,
+                Guid.NewGuid(),
+                presented: true,
+                Convert.FromBase64String(PayloadBase64));
+        }
+        var reader = new NotificationDatabaseReader(databasePath);
+
+        var result = reader.ScanNotificationChanges(0);
+        var nextResult = reader.ScanNotificationChanges(result.Cursor);
+
+        Assert.Equal(64, result.Notifications.Count);
+        Assert.Equal(64, result.Cursor);
+        Assert.Single(nextResult.Notifications);
+        Assert.Equal(65, nextResult.Cursor);
+
+        var maximumPreviewResult = new NotificationScanResult
+        {
+            Cursor = result.Cursor,
+            Notifications = result.Notifications.Select(notification => new ExtractedNotification
+            {
+                NotificationId = notification.NotificationId,
+                PackageName = notification.PackageName,
+                AppName = notification.AppName,
+                Title = new string('界', 256),
+                BodyPreview = new string('界', 1024),
+                PostedAt = notification.PostedAt,
+                IsDismissible = notification.IsDismissible,
+                IsOpenable = notification.IsOpenable
+            }).ToArray(),
+            SkippedRecords = result.SkippedRecords
+        };
+        var response = new ExtractorResponse
+        {
+            Id = Guid.NewGuid().ToString("D"),
+            Ok = true,
+            Result = maximumPreviewResult
+        };
+        var serializedBytes = JsonSerializer.SerializeToUtf8Bytes(
+            response,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.True(serializedBytes.Length + 1 <= 1024 * 1024);
     }
 
     [Fact]

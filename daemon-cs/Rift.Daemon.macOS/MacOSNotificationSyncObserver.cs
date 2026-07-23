@@ -8,7 +8,7 @@ internal sealed class MacOSNotificationSyncObserver(
     IIdentityManager identityManager,
     ILogger<MacOSNotificationSyncObserver> logger) : BackgroundService
 {
-    private const int ExtractorPageSize = 500;
+    private const int ExtractorPageSize = 64;
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
 
@@ -88,18 +88,23 @@ internal sealed class MacOSNotificationSyncObserver(
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
-            _cursor = Math.Max(_cursor, scan.Cursor);
-            if (scan.Notifications.Count > 0 || scan.SkippedRecords > 0)
-            {
-                logger.LogInformation(
-                    "macOS notification scan returned {NotificationCount} records and skipped {SkippedCount} at cursor {Cursor}.",
-                    scan.Notifications.Count,
-                    scan.SkippedRecords,
-                    _cursor);
-            }
-            await ProcessIncrementalAsync(scan.Notifications, cancellationToken).ConfigureAwait(false);
+            await PollOnceAsync(cancellationToken).ConfigureAwait(false);
             await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task PollOnceAsync(CancellationToken cancellationToken)
+    {
+        var scan = await extractorClient.ScanNotificationChangesAsync(_cursor, cancellationToken).ConfigureAwait(false);
+        await ProcessIncrementalAsync(scan.Notifications, cancellationToken).ConfigureAwait(false);
+        _cursor = Math.Max(_cursor, scan.Cursor);
+        if (scan.Notifications.Count > 0 || scan.SkippedRecords > 0)
+        {
+            logger.LogInformation(
+                "macOS notification scan returned {NotificationCount} records and skipped {SkippedCount} at cursor {Cursor}.",
+                scan.Notifications.Count,
+                scan.SkippedRecords,
+                _cursor);
         }
     }
 
@@ -122,8 +127,8 @@ internal sealed class MacOSNotificationSyncObserver(
                 continue;
             }
 
-            _fingerprints[notification.NotificationId] = fingerprint;
             var result = await PublishAsync(eventType, notification, removedAt: null, cancellationToken).ConfigureAwait(false);
+            _fingerprints[notification.NotificationId] = fingerprint;
             logger.LogInformation(
                 "macOS notification {EventType} processed (suppressed={Suppressed}, broadcastPeers={BroadcastPeerCount}).",
                 eventType,

@@ -31,6 +31,29 @@ public sealed class MacOSNotificationSyncObserverTests
     }
 
     [Fact]
+    public async Task PollOnceAsync_RetriesPageAndNotificationWhenPublicationFails()
+    {
+        var syncService = new RecordingNotificationSyncService { FailuresRemaining = 1 };
+        var extractorClient = new StubExtractorClient
+        {
+            ScanResult = new MacOSExtractorScanResult
+            {
+                Cursor = 42,
+                Notifications = [CreateNotification("notification-1", "First title")]
+            }
+        };
+        var observer = CreateObserver(syncService, extractorClient);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => observer.PollOnceAsync(CancellationToken.None));
+        await observer.PollOnceAsync(CancellationToken.None);
+        await observer.PollOnceAsync(CancellationToken.None);
+
+        Assert.Equal([0L, 0L, 42L], extractorClient.ScanCursors);
+        Assert.Equal(2, syncService.HandleCalls);
+        Assert.Single(syncService.Events);
+    }
+
+    [Fact]
     public async Task BootstrapAsync_AdvancesCursorWithoutReplayingHistoricalNotifications()
     {
         var syncService = new RecordingNotificationSyncService();
@@ -97,6 +120,7 @@ public sealed class MacOSNotificationSyncObserverTests
         public MacOSExtractorScanResult ScanResult { get; init; } = new();
         public int ScanCalls { get; private set; }
         public int RescanCalls { get; private set; }
+        public List<long> ScanCursors { get; } = [];
 
         public Task<MacOSExtractorStatus> GetStatusAsync(CancellationToken cancellationToken) =>
             Task.FromResult(new MacOSExtractorStatus
@@ -110,6 +134,7 @@ public sealed class MacOSNotificationSyncObserverTests
         public Task<MacOSExtractorScanResult> ScanNotificationChangesAsync(long cursor, CancellationToken cancellationToken)
         {
             ScanCalls++;
+            ScanCursors.Add(cursor);
             return Task.FromResult(ScanResult);
         }
 
@@ -135,6 +160,8 @@ public sealed class MacOSNotificationSyncObserverTests
     private sealed class RecordingNotificationSyncService : INotificationSyncService
     {
         public List<RecordedEvent> Events { get; } = [];
+        public int FailuresRemaining { get; set; }
+        public int HandleCalls { get; private set; }
 
         public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
             string eventType,
@@ -142,6 +169,13 @@ public sealed class MacOSNotificationSyncObserverTests
             string? removedAt,
             CancellationToken cancellationToken)
         {
+            HandleCalls++;
+            if (FailuresRemaining > 0)
+            {
+                FailuresRemaining--;
+                throw new InvalidOperationException("Publication failed.");
+            }
+
             Events.Add(new RecordedEvent(eventType, notification, removedAt));
             return Task.FromResult(new NotifyLocalNotificationEventResult
             {
