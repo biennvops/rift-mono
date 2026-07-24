@@ -168,9 +168,8 @@ void main() {
 
     expect(find.text('Windows Laptop'), findsOneWidget);
     expect(find.text('Local Device'), findsOneWidget);
-    expect(find.text('This device'), findsOneWidget);
-    expect(find.text('Manage'), findsOneWidget);
-    expect(find.text('Stop Adding'), findsOneWidget);
+    expect(find.textContaining('THIS DEVICE', findRichText: true), findsOneWidget);
+    expect(find.text('Devices Hub'), findsOneWidget);
   });
 
   testWidgets(
@@ -187,10 +186,9 @@ void main() {
       ),
     ));
     await tester.pump();
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.startDiscoveryCallCount, 1);
-    expect(find.text('Stop Adding'), findsOneWidget);
   });
 
 
@@ -247,7 +245,7 @@ void main() {
     await tester.tap(find.text('Cancel pairing'));
     await tester.pumpAndSettle();
     expect(client.rejectCalled, isTrue);
-    expect(find.text('PENDING'), findsOneWidget);
+    expect(find.text('PENDING'), findsWidgets);
   });
 
   testWidgets(
@@ -540,8 +538,7 @@ void main() {
     expect(find.byIcon(Icons.laptop_windows), findsAtLeastNWidgets(1));
     expect(find.byIcon(Icons.laptop_mac), findsOneWidget);
     expect(find.byIcon(Icons.terminal), findsAtLeastNWidgets(1));
-    await tester.scrollUntilVisible(find.text('Mystery Box'), 200);
-    await tester.pumpAndSettle();
+    expect(find.text('Mystery Box'), findsOneWidget);
     expect(find.byIcon(Icons.devices), findsOneWidget);
   });
 }

@@ -12,7 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'constants.dart';
 import 'package:app_flutter/screens/security_dashboard_screen.dart';
-import 'package:app_flutter/screens/operations_screen.dart';
+import 'screens/pair_device_screen.dart';
 import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
 import 'screens/clipboard_transfer_screen.dart';
@@ -983,17 +983,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     _activePairingDeviceId = deviceId;
-    navigator
-        .push<dynamic>(
-      MaterialPageRoute<dynamic>(
-        builder: (_) => PairingScreen(
-          initialDeviceId: deviceId,
-          initialDisplayName: payload['displayName']?.toString(),
-          initialPeerFingerprint: payload['fingerprint']?.toString(),
-          initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
-          initialCanApproveLocally: true,
-          initialStatus: 'Incoming pairing request',
-        ),
+    showDialog<dynamic>(
+      context: navigator.context,
+      barrierDismissible: false,
+      builder: (_) => PairingScreen(
+        initialDeviceId: deviceId,
+        initialDisplayName: payload['displayName']?.toString(),
+        initialPeerFingerprint: payload['fingerprint']?.toString(),
+        initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
+        initialCanApproveLocally: true,
+        initialStatus: 'Incoming pairing request',
       ),
     )
         .then((result) {
@@ -1608,32 +1607,31 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 ThemeData _buildRiftTheme() {
   const colorScheme = ColorScheme(
     brightness: Brightness.light,
-    primary: Color(0xFF00328a),
+    primary: Color(0xFF00327d),
     onPrimary: Color(0xFFffffff),
-    primaryContainer: Color(0xFF0047bb),
-    onPrimaryContainer: Color(0xFFafc1ff),
-    secondary: Color(0xFF006e06),
+    primaryContainer: Color(0xFF0047ab),
+    onPrimaryContainer: Color(0xFFa5bdff),
+    secondary: Color(0xFF545f73),
     onSecondary: Color(0xFFffffff),
-    secondaryContainer: Color(0xFF91f77e),
-    onSecondaryContainer: Color(0xFF007306),
-    tertiary: Color(0xFF701a00),
+    secondaryContainer: Color(0xFFd5e0f8),
+    onSecondaryContainer: Color(0xFF586377),
+    tertiary: Color(0xFF1a12af),
     onTertiary: Color(0xFFffffff),
-    tertiaryContainer: Color(0xFF982700),
-    onTertiaryContainer: Color(0xFFffb09a),
+    tertiaryContainer: Color(0xFF3636c5),
+    onTertiaryContainer: Color(0xFFb7b8ff),
     error: Color(0xFFba1a1a),
     onError: Color(0xFFffffff),
     errorContainer: Color(0xFFffdad6),
     onErrorContainer: Color(0xFF93000a),
-    surface: Color(0xFFfdf8f6),
-    onSurface: Color(0xFF1c1b1a),
-    surfaceContainerHighest: Color(0xFFe6e2df),
+    surface: Color(0xFFf8f9ff),
+    onSurface: Color(0xFF0b1c30),
+    surfaceContainerHighest: Color(0xFFd3e4fe),
     onSurfaceVariant: Color(0xFF434653),
-    outline: Color(0xFF737685),
-    outlineVariant: Color(0xFFc3c6d6),
+    outline: Color(0xFF737784),
+    outlineVariant: Color(0xFFc3c6d5),
   );
 
   final inter = GoogleFonts.interTextTheme();
-  final jetBrainsStyle = GoogleFonts.jetBrainsMono();
 
   return ThemeData(
     useMaterial3: true,
@@ -1641,25 +1639,22 @@ ThemeData _buildRiftTheme() {
     scaffoldBackgroundColor: colorScheme.surface,
     textTheme: inter.copyWith(
       headlineLarge: inter.headlineLarge?.copyWith(
-          fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
+          fontSize: 32, fontWeight: FontWeight.w600, letterSpacing: -0.01, height: 40/32),
       headlineMedium: inter.headlineMedium?.copyWith(
           fontSize: 24, fontWeight: FontWeight.w600, height: 32 / 24),
-      headlineSmall: inter.headlineSmall?.copyWith(
-          fontSize: 20, fontWeight: FontWeight.w600, height: 28 / 20),
       bodyLarge: inter.bodyLarge?.copyWith(
-          fontSize: 16, fontWeight: FontWeight.w400, height: 24 / 16),
+          fontSize: 18, fontWeight: FontWeight.w400, height: 28 / 18),
       bodyMedium: inter.bodyMedium?.copyWith(
+          fontSize: 16, fontWeight: FontWeight.w400, height: 24 / 16),
+      bodySmall: inter.bodySmall?.copyWith(
           fontSize: 14, fontWeight: FontWeight.w400, height: 20 / 14),
-      labelMedium: jetBrainsStyle.copyWith(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          letterSpacing: 0.05,
-          height: 16 / 13),
-      labelSmall: jetBrainsStyle.copyWith(
-          fontSize: 11, fontWeight: FontWeight.w400, height: 14 / 11),
+      labelMedium: inter.labelMedium?.copyWith(
+          fontSize: 14, fontWeight: FontWeight.w600, letterSpacing: 0.05, height: 16 / 14),
+      labelSmall: inter.labelSmall?.copyWith(
+          fontSize: 12, fontWeight: FontWeight.w500, height: 16 / 12),
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: colorScheme.surfaceContainerHigh,
+      backgroundColor: colorScheme.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
       ),
@@ -1672,6 +1667,7 @@ ThemeData _buildRiftTheme() {
     inputDecorationTheme: InputDecorationTheme(
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(4),
+        borderSide: BorderSide(color: colorScheme.outlineVariant),
       ),
       filled: true,
       fillColor: colorScheme.surface,
@@ -1693,20 +1689,19 @@ ThemeData _buildRiftTheme() {
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: colorScheme.surface,
-      indicatorColor: colorScheme.secondaryContainer,
+      indicatorColor: colorScheme.primaryContainer,
       labelTextStyle: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return jetBrainsStyle.copyWith(
-              fontSize: 11,
+          return inter.labelSmall!.copyWith(
               color: colorScheme.onSurface,
               fontWeight: FontWeight.w600);
         }
-        return jetBrainsStyle.copyWith(
-            fontSize: 11, color: colorScheme.onSurfaceVariant);
+        return inter.labelSmall!.copyWith(
+            color: colorScheme.onSurfaceVariant);
       }),
       iconTheme: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return IconThemeData(color: colorScheme.onSecondaryContainer);
+          return IconThemeData(color: colorScheme.onPrimaryContainer);
         }
         return IconThemeData(color: colorScheme.onSurfaceVariant);
       }),
@@ -1730,6 +1725,8 @@ class AppShell extends StatefulWidget {
 
 class AppShellState extends State<AppShell> {
   int _currentIndex = 0;
+  bool _isSidebarCollapsed = false;
+  double _sidebarWidth = 280.0;
 
   late final List<Widget> _screens = [
     const TrustedDevicesScreen(),
@@ -1738,7 +1735,7 @@ class AppShellState extends State<AppShell> {
       sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
     ),
     const SecurityDashboardScreen(),
-    const OperationsScreen(),
+    const SettingsScreen(),
   ];
 
   void showHistoryRoute(String route) {
@@ -1758,67 +1755,240 @@ class AppShellState extends State<AppShell> {
     showHistoryRoute(route);
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildSidebarItem(BuildContext context, int index, IconData icon, String label) {
     final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(Icons.shield, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
-            Text('RIFT',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
+    final isSelected = _currentIndex == index;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4.0),
+      child: InkWell(
+        onTap: () {
           setState(() {
             _currentIndex = index;
           });
         },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.devices),
-            selectedIcon: Icon(Icons.devices),
-            label: 'Devices',
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: EdgeInsets.symmetric(horizontal: _isSidebarCollapsed ? 0 : 16, vertical: 12),
+          alignment: _isSidebarCollapsed ? Alignment.center : Alignment.centerLeft,
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFF0047AB) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
+          child: Row(
+            mainAxisSize: _isSidebarCollapsed ? MainAxisSize.min : MainAxisSize.max,
+            children: [
+              Icon(
+                icon,
+                color: isSelected
+                    ? const Color(0xFFdae2ff)
+                    : const Color(0xFF8899b8),
+              ),
+              if (!_isSidebarCollapsed) ...[
+                const SizedBox(width: 16),
+                Text(
+                  label,
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: isSelected
+                        ? const Color(0xFFdae2ff)
+                        : const Color(0xFF8899b8),
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ],
+            ],
           ),
-          NavigationDestination(
-            icon: Icon(Icons.security),
-            selectedIcon: Icon(Icons.security),
-            label: 'Events',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.terminal_outlined),
-            selectedIcon: Icon(Icons.terminal),
-            label: 'Ops',
-          ),
-        ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+
+    if (isDesktop) {
+      return Scaffold(
+        body: Row(
+          children: [
+            // Sidebar
+            Container(
+              width: _isSidebarCollapsed ? 88 : _sidebarWidth,
+              color: const Color(0xFF213145), // inverse-surface
+              padding: EdgeInsets.all(_isSidebarCollapsed ? 16 : 24),
+              child: Column(
+                crossAxisAlignment: _isSidebarCollapsed ? CrossAxisAlignment.center : CrossAxisAlignment.stretch,
+                children: [
+                  // Header
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _isSidebarCollapsed = !_isSidebarCollapsed;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset('assets/images/rift_logo.png', width: 40, height: 40, fit: BoxFit.cover),
+                        ),
+                        if (!_isSidebarCollapsed) ...[
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Rift',
+                                  style: theme.textTheme.headlineMedium?.copyWith(
+                                    color: const Color(0xFFdae2ff), // primary-fixed
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                Text(
+                                  'Secure Sync v0.1',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: const Color(0xFFb1c5ff), // primary-fixed-dim
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  // Navigation
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        _buildSidebarItem(context, 0, Icons.devices, 'Devices'),
+                        _buildSidebarItem(context, 1, Icons.history, 'Activity'),
+                        _buildSidebarItem(context, 2, Icons.security, 'Security'),
+                        _buildSidebarItem(context, 3, Icons.settings, 'Settings'),
+                      ],
+                    ),
+                  ),
+                  // CTA
+                  FilledButton(
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => const Dialog(
+                          backgroundColor: Colors.transparent,
+                          surfaceTintColor: Colors.transparent,
+                          child: PairDeviceScreen(),
+                        ),
+                      );
+                    },
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: _isSidebarCollapsed 
+                        ? const Icon(Icons.add)
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add),
+                              SizedBox(width: 8),
+                              Text('Add Device'),
+                            ],
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            
+            // Resizable Handle for Sidebar
+            if (!_isSidebarCollapsed)
+              MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onPanUpdate: (details) {
+                    setState(() {
+                      _sidebarWidth = (_sidebarWidth + details.delta.dx).clamp(200.0, 500.0);
+                    });
+                  },
+                  child: Container(
+                    width: 8,
+                    color: Colors.transparent,
+                    child: Center(
+                      child: Container(
+                        width: 2,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Main Content
+            Expanded(
+              child: IndexedStack(
+                index: _currentIndex,
+                children: _screens,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Mobile
+    return Scaffold(
+      body: SafeArea(
+        child: IndexedStack(
+          index: _currentIndex,
+          children: _screens,
+        ),
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerLowest,
+          border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+        ),
+        child: NavigationBar(
+          selectedIndex: _currentIndex,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          indicatorColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+          onDestinationSelected: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+          },
+          destinations: [
+            NavigationDestination(
+              icon: Icon(Icons.devices_outlined, color: theme.colorScheme.outline),
+              selectedIcon: Icon(Icons.devices, color: theme.colorScheme.primary),
+              label: 'Devices',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.history_outlined, color: theme.colorScheme.outline),
+              selectedIcon: Icon(Icons.history, color: theme.colorScheme.primary),
+              label: 'Activity',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.security_outlined, color: theme.colorScheme.outline),
+              selectedIcon: Icon(Icons.security, color: theme.colorScheme.primary),
+              label: 'Security',
+            ),
+            NavigationDestination(
+              icon: Icon(Icons.settings_outlined, color: theme.colorScheme.outline),
+              selectedIcon: Icon(Icons.settings, color: theme.colorScheme.primary),
+              label: 'Settings',
+            ),
+          ],
+        ),
       ),
     );
   }

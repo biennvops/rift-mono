@@ -274,8 +274,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.shield,
-                          color: theme.colorScheme.primary, size: 28),
+                      Image.asset('assets/images/rift_logo.png',
+                          width: 28, height: 28),
                       const SizedBox(width: 8),
                       Text(
                         'RIFT',

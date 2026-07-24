@@ -1,8 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'event_log_screen.dart';
-import 'dart:async';
+import 'blocked_peers_screen.dart';
 
 class SecurityDashboardScreen extends StatefulWidget {
   const SecurityDashboardScreen({super.key});
@@ -225,43 +226,50 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     required int count,
     required Color color,
     required Color labelColor,
+    VoidCallback? onTap,
   }) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+    return Material(
+      color: theme.colorScheme.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontFamily: 'JetBrains Mono',
+                      letterSpacing: 1.0,
+                      color: labelColor,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  Icon(icon, color: color, size: 20),
+                ],
+              ),
+              const Spacer(),
               Text(
-                label,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontFamily: 'JetBrains Mono',
-                  letterSpacing: 1.0,
-                  color: labelColor,
-                  fontWeight: FontWeight.w500,
+                count.toString(),
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
                 ),
               ),
-              Icon(icon, color: color, size: 20),
             ],
           ),
-          const Spacer(),
-          Text(
-            count.toString(),
-            style: theme.textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -517,6 +525,13 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                         count: _blockedCount,
                         color: theme.colorScheme.error,
                         labelColor: theme.colorScheme.error,
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const BlockedPeersScreen(),
+                            ),
+                          );
+                        },
                       ),
                       _buildBentoCard(
                         context: context,
