@@ -6,6 +6,6 @@ Icon=dev.rift.Rift
 Terminal=false
 Type=Application
 Categories=Utility;
-MimeType=application/octet-stream;image/png;text/plain;
+MimeType=application/octet-stream;application/epub+zip;application/gzip;application/json;application/msword;application/pdf;application/rtf;application/vnd.ms-excel;application/vnd.ms-powerpoint;application/vnd.oasis.opendocument.presentation;application/vnd.oasis.opendocument.spreadsheet;application/vnd.oasis.opendocument.text;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/x-7z-compressed;application/x-bzip2;application/x-rar;application/x-tar;application/xml;application/zip;application/zstd;audio/flac;audio/mpeg;audio/ogg;audio/wav;image/bmp;image/gif;image/jpeg;image/png;image/svg+xml;image/tiff;image/webp;text/calendar;text/csv;text/html;text/markdown;text/plain;text/xml;video/mp4;video/mpeg;video/ogg;video/quicktime;video/webm;video/x-matroska;
 StartupNotify=true
 X-GNOME-UsesNotifications=true

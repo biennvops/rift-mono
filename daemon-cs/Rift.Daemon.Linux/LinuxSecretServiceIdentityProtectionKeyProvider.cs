@@ -26,31 +26,18 @@ internal sealed class LinuxSecretStore(ILogger<LinuxSecretStore> logger) : ILinu
 {
     private const string Label = "Rift device identity protection key";
     private const string ContentType = "application/octet-stream";
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(5);
 
     public SecretLookupResult Get(string scope)
     {
         try
         {
-            var collection = GetDefaultCollection();
-            if (collection is null)
-            {
-                return new SecretLookupResult(SecretLookupStatus.Unavailable);
-            }
-
-            var items = collection.SearchItemsAsync(CreateAttributes(scope)).GetAwaiter().GetResult();
-            if (items.Length == 0)
-            {
-                return new SecretLookupResult(SecretLookupStatus.Missing);
-            }
-
-            var item = items[0];
-            if (item.IsLockedAsync().GetAwaiter().GetResult())
-            {
-                item.UnlockAsync().GetAwaiter().GetResult();
-            }
-            return new SecretLookupResult(
-                SecretLookupStatus.Found,
-                item.GetSecretAsync().GetAwaiter().GetResult());
+            return WaitForOperation(GetAsync(scope), OperationTimeout);
+        }
+        catch (TimeoutException ex)
+        {
+            logger.LogWarning(ex, "Linux Secret Service timed out; Rift will use the filesystem identity-key fallback.");
+            return new SecretLookupResult(SecretLookupStatus.Unavailable);
         }
         catch (Exception ex)
         {
@@ -63,19 +50,12 @@ internal sealed class LinuxSecretStore(ILogger<LinuxSecretStore> logger) : ILinu
     {
         try
         {
-            var collection = GetDefaultCollection();
-            if (collection is null)
-            {
-                return false;
-            }
-
-            var item = collection.CreateItemAsync(
-                Label,
-                CreateAttributes(scope),
-                key,
-                ContentType,
-                replace: true).GetAwaiter().GetResult();
-            return item is not null;
+            return WaitForOperation(StoreAsync(scope, key), OperationTimeout);
+        }
+        catch (TimeoutException ex)
+        {
+            logger.LogWarning(ex, "Linux Secret Service timed out while storing the Rift identity key; Rift will use the filesystem fallback.");
+            return false;
         }
         catch (Exception ex)
         {
@@ -84,10 +64,54 @@ internal sealed class LinuxSecretStore(ILogger<LinuxSecretStore> logger) : ILinu
         }
     }
 
-    private static Collection? GetDefaultCollection()
+    internal static T WaitForOperation<T>(Task<T> operation, TimeSpan timeout) =>
+        operation.WaitAsync(timeout).GetAwaiter().GetResult();
+
+    private static async Task<SecretLookupResult> GetAsync(string scope)
     {
-        var service = SecretService.ConnectAsync(EncryptionType.Dh).GetAwaiter().GetResult();
-        return service.GetDefaultCollectionAsync().GetAwaiter().GetResult();
+        var collection = await GetDefaultCollectionAsync().ConfigureAwait(false);
+        if (collection is null)
+        {
+            return new SecretLookupResult(SecretLookupStatus.Unavailable);
+        }
+
+        var items = await collection.SearchItemsAsync(CreateAttributes(scope)).ConfigureAwait(false);
+        if (items.Length == 0)
+        {
+            return new SecretLookupResult(SecretLookupStatus.Missing);
+        }
+
+        var item = items[0];
+        if (await item.IsLockedAsync().ConfigureAwait(false))
+        {
+            await item.UnlockAsync().ConfigureAwait(false);
+        }
+        return new SecretLookupResult(
+            SecretLookupStatus.Found,
+            await item.GetSecretAsync().ConfigureAwait(false));
+    }
+
+    private static async Task<bool> StoreAsync(string scope, byte[] key)
+    {
+        var collection = await GetDefaultCollectionAsync().ConfigureAwait(false);
+        if (collection is null)
+        {
+            return false;
+        }
+
+        var item = await collection.CreateItemAsync(
+            Label,
+            CreateAttributes(scope),
+            key,
+            ContentType,
+            replace: true).ConfigureAwait(false);
+        return item is not null;
+    }
+
+    private static async Task<Collection?> GetDefaultCollectionAsync()
+    {
+        var service = await SecretService.ConnectAsync(EncryptionType.Dh).ConfigureAwait(false);
+        return await service.GetDefaultCollectionAsync().ConfigureAwait(false);
     }
 
     private static Dictionary<string, string> CreateAttributes(string scope) => new(StringComparer.Ordinal)
@@ -152,20 +176,25 @@ internal sealed class LinuxSecretServiceIdentityProtectionKeyProvider(
                 return Cache(scope, fileKey);
             }
 
+            byte[]? generatedKey = null;
             if (lookup.Status == SecretLookupStatus.Missing)
             {
-                var key = RandomNumberGenerator.GetBytes(KeyLength);
-                if (secretStore.Store(scope, key))
+                generatedKey = RandomNumberGenerator.GetBytes(KeyLength);
+                if (secretStore.Store(scope, generatedKey))
                 {
                     _backendName = "secret-service";
-                    return Cache(scope, key);
+                    return Cache(scope, generatedKey);
                 }
             }
 
             _backendName = "file";
             logger.LogWarning(
                 "Rift is using the filesystem fallback for Linux identity protection because Secret Service is unavailable.");
-            return Cache(scope, _fileProvider.GetOrCreateKey(keyFilePath, legacyKeyFilePath));
+            return Cache(
+                scope,
+                generatedKey is null
+                    ? _fileProvider.GetOrCreateKey(keyFilePath, legacyKeyFilePath)
+                    : _fileProvider.GetOrCreateKey(keyFilePath, generatedKey));
         }
     }
 

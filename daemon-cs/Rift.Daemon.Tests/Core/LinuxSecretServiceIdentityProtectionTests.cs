@@ -13,6 +13,15 @@ public sealed class LinuxSecretServiceIdentityProtectionTests : IDisposable
     private readonly string _tempDirectory = Directory.CreateTempSubdirectory("rift-secret-service").FullName;
 
     [Fact]
+    public void SecretServiceOperation_IsBoundedByTimeout()
+    {
+        var operation = new TaskCompletionSource<bool>();
+
+        Assert.Throws<TimeoutException>(() =>
+            LinuxSecretStore.WaitForOperation(operation.Task, TimeSpan.FromMilliseconds(25)));
+    }
+
+    [Fact]
     public void NewKey_IsStoredInSecretService()
     {
         var secrets = new FakeSecretStore();
@@ -25,6 +34,20 @@ public sealed class LinuxSecretServiceIdentityProtectionTests : IDisposable
         Assert.Equal("secret-service", provider.BackendName);
         Assert.Equal(key, secrets.StoredKey);
         Assert.False(File.Exists(keyPath));
+    }
+
+    [Fact]
+    public void SecretServiceWriteFailure_UsesTheAttemptedKeyForFileFallback()
+    {
+        var secrets = new FakeSecretStore { StoreResult = false };
+        var provider = CreateProvider(secrets);
+        var keyPath = Path.Combine(_tempDirectory, "write-failure.key");
+
+        var key = provider.GetOrCreateKey(keyPath, null);
+
+        Assert.Equal("file", provider.BackendName);
+        Assert.Equal(secrets.StoredKey, key);
+        Assert.Equal(key, File.ReadAllBytes(keyPath));
     }
 
     [Fact]
@@ -147,6 +170,7 @@ public sealed class LinuxSecretServiceIdentityProtectionTests : IDisposable
     {
         public SecretLookupStatus Status { get; set; } = SecretLookupStatus.Missing;
         public byte[]? StoredKey { get; set; }
+        public bool StoreResult { get; set; } = true;
 
         public SecretLookupResult Get(string scope) => new(Status, StoredKey);
 
@@ -154,7 +178,7 @@ public sealed class LinuxSecretServiceIdentityProtectionTests : IDisposable
         {
             StoredKey = key.ToArray();
             Status = SecretLookupStatus.Found;
-            return true;
+            return StoreResult;
         }
     }
 }

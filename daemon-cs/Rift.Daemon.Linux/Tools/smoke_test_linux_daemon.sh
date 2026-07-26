@@ -9,6 +9,8 @@ runtime_dir="$test_root/run"
 data_dir="$test_root/data"
 socket_path="$runtime_dir/rift-daemon/v0.1.sock"
 daemon_pid=""
+systemctl_path="$(command -v systemctl || true)"
+restart_user_daemon=false
 
 cleanup() {
   if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" >/dev/null 2>&1; then
@@ -16,8 +18,20 @@ cleanup() {
     wait "$daemon_pid" >/dev/null 2>&1 || true
   fi
   rm -rf "$test_root"
+  if [[ "$restart_user_daemon" == true ]]; then
+    "$systemctl_path" --user start rift-daemon.service >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
+
+if [[ -n "$systemctl_path" ]] && "$systemctl_path" --user is-active --quiet rift-daemon.service; then
+  "$systemctl_path" --user stop rift-daemon.service
+  restart_user_daemon=true
+fi
+if command -v ss >/dev/null 2>&1 && ss -H -ltn 'sport = :9140' | grep -q .; then
+  echo "TCP port 9140 is already in use by a non-systemd process; stop it before running this smoke test." >&2
+  exit 1
+fi
 
 mkdir -p "$runtime_dir" "$data_dir"
 chmod 700 "$runtime_dir"

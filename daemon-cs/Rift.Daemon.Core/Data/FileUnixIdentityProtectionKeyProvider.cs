@@ -50,6 +50,48 @@ public sealed class FileUnixIdentityProtectionKeyProvider : IUnixIdentityProtect
         return key;
     }
 
+    public byte[] GetOrCreateKey(string keyFilePath, byte[] key)
+    {
+        if (key.Length != KeyLength)
+        {
+            throw new InvalidOperationException("Unix identity protection key was malformed.");
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(keyFilePath)!);
+        var existingKey = LoadExistingKey(keyFilePath);
+        if (existingKey is not null)
+        {
+            return existingKey;
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                keyFilePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            stream.Write(key, 0, key.Length);
+        }
+        catch (IOException)
+        {
+            existingKey = LoadExistingKey(keyFilePath);
+            if (existingKey is not null)
+            {
+                return existingKey;
+            }
+            throw;
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+        {
+            File.SetUnixFileMode(
+                keyFilePath,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        return key;
+    }
+
     public byte[]? GetExistingKey(string keyFilePath, string? legacyKeyFilePath) =>
         LoadExistingKey(keyFilePath) ??
         (legacyKeyFilePath is null ? null : LoadExistingKey(legacyKeyFilePath));
