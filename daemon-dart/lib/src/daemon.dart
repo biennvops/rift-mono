@@ -380,7 +380,8 @@ class RiftDaemon {
   };
   IdentityManagerImpl? _identityManager;
   DiscoveryService? _discoveryService;
-  TransportImpl? _transport;
+  Transport? _transport;
+  int? _boundTransportPort;
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
@@ -412,6 +413,7 @@ class RiftDaemon {
   final Future<Uint8List> Function()? identityPrivateKeyProvider;
   final int port;
   final bool enableTransport;
+  final Transport? peerTransport;
   final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
   final Duration mediaPlaybackActionTimeout;
@@ -421,6 +423,7 @@ class RiftDaemon {
     this.identityPrivateKeyProvider,
     this.port = 11112,
     this.enableTransport = true,
+    this.peerTransport,
     this.enableDiscovery = true,
     this.onIpcEvent,
     this.mediaPlaybackActionTimeout = _defaultMediaPlaybackActionTimeout,
@@ -437,15 +440,24 @@ class RiftDaemon {
     await _trustStore!.initialize();
 
     if (enableTransport) {
-      // If the requested port is unavailable (common on dev devices), fall back
-      // to an ephemeral port rather than failing the entire IPC layer.
-      try {
-        _transport = TransportImpl(_identityManager!, port: port);
+      if (peerTransport != null) {
+        _transport = peerTransport;
         await _transport!.startServer();
-      } on SocketException {
-        _transport = TransportImpl(_identityManager!, port: 0);
-        await _transport!.startServer();
+      } else {
+        // If the requested port is unavailable (common on dev devices), fall back
+        // to an ephemeral port rather than failing the entire IPC layer.
+        try {
+          _transport = TransportImpl(_identityManager!, port: port);
+          await _transport!.startServer();
+        } on SocketException {
+          _transport = TransportImpl(_identityManager!, port: 0);
+          await _transport!.startServer();
+        }
       }
+      _boundTransportPort = switch (_transport) {
+        BoundTransport transport => transport.boundPort,
+        _ => port,
+      };
     }
 
     if (_transport != null) {
@@ -628,7 +640,7 @@ class RiftDaemon {
     }
 
     if (enableDiscovery) {
-      final advertisedPort = _transport?.boundPort ?? port;
+      final advertisedPort = _boundTransportPort ?? port;
       _discoveryService = discovery_factory.createDiscoveryService(
         port: advertisedPort,
         deviceIdHint: _identityManager!.deviceId,
@@ -3753,7 +3765,7 @@ class RiftDaemon {
             'params': {
               'status': 'running',
               'deviceId': daemon._identityManager!.deviceId,
-              'advertisedPort': daemon._transport?.boundPort ?? daemon.port,
+              'advertisedPort': daemon._boundTransportPort ?? daemon.port,
               'fingerprintPrefix': _fingerprintPrefix(
                 daemon._identityManager!.getDeviceFingerprint(),
               ),
