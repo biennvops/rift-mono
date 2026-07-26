@@ -18,6 +18,8 @@ import 'native_tls_api.dart';
 ///
 /// This is the real IPC binding described in `spec/doc/ipc.md` for Android.
 class AndroidDaemonIsolateTransport implements IpcTransport {
+  static const _identityChannel = MethodChannel('rift/android/identity');
+
   Isolate? _daemonIsolate;
   ReceivePort? _uiReceive;
   SendPort? _rpcPort;
@@ -51,6 +53,17 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     final storageDir = await getApplicationSupportDirectory();
     final storagePath = storageDir.path;
 
+    // Load the identity seed on the root isolate (platform channels are
+    // unavailable in the daemon isolate). The seed is wrapped by an Android
+    // Keystore AES key; a legacy plaintext identity.key is migrated once.
+    final identityKey = await _identityChannel.invokeMethod<Uint8List>(
+      'loadOrCreate',
+      {'legacyPath': '$storagePath/identity.key'},
+    );
+    if (identityKey == null) {
+      throw StateError('Android identity keystore returned no identity key.');
+    }
+
     _uiReceive = ReceivePort();
     _incoming = StreamController<String>();
     _errorPort = ReceivePort();
@@ -76,6 +89,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         'sendPort': _uiReceive!.sendPort,
         'rootIsolateToken': token,
         'tlsProxyPort': _tlsProxyHost!.requestPort,
+        'identityKey': identityKey,
         // Keep discovery on the root isolate so MethodChannel-based plugins
         // like `nsd` never run inside the daemon isolate.
         'enableDiscovery': false,

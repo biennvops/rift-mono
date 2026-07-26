@@ -3689,6 +3689,9 @@ class RiftDaemon {
     final port = args['port'] as int? ?? 11112;
     final enableDiscovery = args['enableDiscovery'] as bool? ?? true;
     final enableTransport = args['enableTransport'] as bool? ?? true;
+    // Identity seed loaded by the host (e.g. from a platform keystore) before
+    // spawning; the daemon isolate itself cannot use platform channels.
+    final identityKey = args['identityKey'];
 
     final daemon = RiftDaemon(
       storagePath: storagePath,
@@ -3696,6 +3699,9 @@ class RiftDaemon {
       enableDiscovery: enableDiscovery,
       enableTransport: enableTransport,
       peerTransportFactory: peerTransportFactory,
+      identityPrivateKeyProvider: identityKey is Uint8List
+          ? () async => identityKey
+          : null,
       onIpcEvent: (event) => sendPort?.send(event),
     );
 

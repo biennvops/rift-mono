@@ -53,6 +53,7 @@ class MainActivity: FlutterActivity() {
     private val clipboardChannelName = "com.biennvops.rift/clipboard"
     private val shellChannelName = "rift/android/shell"
     private val tlsChannelName = "rift/android/tls"
+    private val identityChannelName = "rift/android/identity"
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
@@ -167,6 +168,29 @@ class MainActivity: FlutterActivity() {
         tlsChannel?.setMethodCallHandler { call, result ->
             tlsBridge.handle(call, result)
         }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, identityChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "loadOrCreate" -> {
+                        try {
+                            val legacyPath =
+                                (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
+                            result.success(
+                                AndroidIdentityKeystore.loadOrCreate(this, legacyPath),
+                            )
+                        } catch (error: Exception) {
+                            Log.e(tag, "Identity keystore failure", error)
+                            result.error(
+                                "identity_keystore_error",
+                                error.message,
+                                null,
+                            )
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         shellChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, shellChannelName)
