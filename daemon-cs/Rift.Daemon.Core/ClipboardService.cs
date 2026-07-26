@@ -380,7 +380,17 @@ public sealed class ClipboardService : IClipboardService
                     // The response handler transitions to Done just before
                     // resolving the completion source, so a rejected expiry
                     // means the result is about to arrive.
-                    return await pendingFetch.CompletionSource.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                    try
+                    {
+                        return await pendingFetch.CompletionSource.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Keep the typed error contract even if the imminent
+                        // result never materializes.
+                        LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
+                        throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
+                    }
                 }
                 LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
                 throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
