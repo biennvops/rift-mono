@@ -39,6 +39,7 @@ final class IOSNativeTlsBridge {
           let certificatePem = args["certificatePem"] as? String,
           let privateKeyPem = args["privateKeyPem"] as? String,
           let identity = makeIdentity(certificatePem: certificatePem, privateKeyPem: privateKeyPem) else {
+      NSLog("[Rift TLS] iOS native identity construction failed.")
       result(FlutterError(code: "invalid_arguments", message: "TLS identity is invalid.", details: nil))
       return
     }
@@ -60,6 +61,7 @@ final class IOSNativeTlsBridge {
       }
       listener.stateUpdateHandler = { state in
         if case .failed(let error) = state {
+          NSLog("[Rift TLS] iOS listener failed: %@", error.localizedDescription)
           result(FlutterError(code: "start_server_failed", message: error.localizedDescription, details: nil))
         } else if case .ready = state {
           result(["port": listener.port?.rawValue ?? requestedPort])
@@ -137,8 +139,17 @@ final class IOSNativeTlsBridge {
     let parameters = NWParameters(tls: options)
     let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: parameters)
     connection.stateUpdateHandler = { [weak self] state in
+      if case .failed(let error) = state {
+        NSLog("[Rift TLS] iOS outbound connection failed: %@", error.localizedDescription)
+        result(FlutterError(code: "connect_failed", message: error.localizedDescription, details: nil))
+        return
+      }
       guard case .ready = state, let self else { return }
-      guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else { return }
+      guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else {
+        NSLog("[Rift TLS] iOS outbound connection had no TLS metadata.")
+        result(FlutterError(code: "connect_failed", message: "TLS metadata unavailable.", details: nil))
+        return
+      }
       let certificate = self.peerCertificate(from: metadata) ?? Data()
       let id = self.register(connection, certificate: certificate)
       result([
@@ -217,7 +228,10 @@ final class IOSNativeTlsBridge {
   }
 
   private func peerCertificate(from metadata: NWProtocolMetadata) -> Data? {
-    guard let tlsMetadata = metadata as? NWProtocolTLS.Metadata else { return nil }
+    guard let tlsMetadata = metadata as? NWProtocolTLS.Metadata else {
+      NSLog("[Rift TLS] iOS peer metadata was not TLS metadata.")
+      return nil
+    }
     var certificateData: Data?
     sec_protocol_metadata_access_peer_certificate_chain(tlsMetadata.securityProtocolMetadata) { certificate in
       certificateData = SecCertificateCopyData(sec_certificate_copy_ref(certificate).takeUnretainedValue()) as Data
