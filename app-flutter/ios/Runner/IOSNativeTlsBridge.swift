@@ -34,6 +34,13 @@ final class IOSNativeTlsBridge {
     stopServer(result: { _ in })
   }
 
+  /// FlutterResult callbacks must run on the main thread. Invoking them from
+  /// the bridge queue deadlocks: the engine syncs to main while main may be
+  /// blocked in `queue.sync`, which libdispatch aborts with EXC_BREAKPOINT.
+  private func deliver(_ result: @escaping FlutterResult, _ value: Any?) {
+    DispatchQueue.main.async { result(value) }
+  }
+
   private func startServer(_ arguments: Any?, result: @escaping FlutterResult) {
     guard let args = arguments as? [String: Any],
           let certificatePem = args["certificatePem"] as? String,
@@ -62,18 +69,18 @@ final class IOSNativeTlsBridge {
         self?.prepare(connection)
       }
       var reported = false
-      listener.stateUpdateHandler = { state in
+      listener.stateUpdateHandler = { [weak self] state in
         NSLog("[Rift TLS] iOS listener state: %@", String(describing: state))
         if case .failed(let error) = state {
           NSLog("[Rift TLS] iOS listener failed: %@", error.localizedDescription)
           if !reported {
             reported = true
-            result(FlutterError(code: "start_server_failed", message: error.localizedDescription, details: nil))
+            self?.deliver(result, FlutterError(code: "start_server_failed", message: error.localizedDescription, details: nil))
           }
         } else if case .ready = state, !reported {
           reported = true
           NSLog("[Rift TLS] iOS listener ready on port %d", listener.port?.rawValue ?? 0)
-          result(["port": listener.port?.rawValue ?? requestedPort])
+          self?.deliver(result, ["port": listener.port?.rawValue ?? requestedPort])
         }
       }
       self.listener = listener
@@ -120,7 +127,7 @@ final class IOSNativeTlsBridge {
       // Already running on `queue`; a nested queue.sync here deadlocks.
       if let pending = self.pendingAccept {
         self.pendingAccept = nil
-        pending(response)
+        self.deliver(pending, response)
       } else {
         self.accepted.append(response)
       }
@@ -165,7 +172,7 @@ final class IOSNativeTlsBridge {
         NSLog("[Rift TLS] iOS outbound connection failed: %@", error.localizedDescription)
         if !completed {
           completed = true
-          result(FlutterError(code: "connect_failed", message: error.localizedDescription, details: nil))
+          self?.deliver(result, FlutterError(code: "connect_failed", message: error.localizedDescription, details: nil))
         }
         return
       }
@@ -173,14 +180,14 @@ final class IOSNativeTlsBridge {
       guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else {
         NSLog("[Rift TLS] iOS outbound connection had no TLS metadata.")
         completed = true
-        result(FlutterError(code: "connect_failed", message: "TLS metadata unavailable.", details: nil))
+        self.deliver(result, FlutterError(code: "connect_failed", message: "TLS metadata unavailable.", details: nil))
         return
       }
       completed = true
       let certificate = self.peerCertificate(from: metadata) ?? Data()
       NSLog("[Rift TLS] iOS outbound connection ready, peer cert bytes: %d", certificate.count)
       let id = self.register(connection, certificate: certificate)
-      result([
+      self.deliver(result, [
         "connectionId": id,
         "peerCertificateBase64": certificate.base64EncodedString(),
         "remoteAddress": host,
@@ -197,13 +204,13 @@ final class IOSNativeTlsBridge {
       result(FlutterError(code: "connection_not_found", message: "TLS connection not found.", details: nil))
       return
     }
-    record.connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { data, _, isComplete, error in
+    record.connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
       if let error {
-        result(FlutterError(code: "read_failed", message: error.localizedDescription, details: nil))
+        self?.deliver(result, FlutterError(code: "read_failed", message: error.localizedDescription, details: nil))
       } else if isComplete && (data == nil || data?.isEmpty == true) {
-        result(["eof": true])
+        self?.deliver(result, ["eof": true])
       } else {
-        result(["eof": false, "dataBase64": (data ?? Data()).base64EncodedString()])
+        self?.deliver(result, ["eof": false, "dataBase64": (data ?? Data()).base64EncodedString()])
       }
     }
   }
@@ -217,11 +224,11 @@ final class IOSNativeTlsBridge {
       result(FlutterError(code: "invalid_write", message: "TLS write arguments are invalid.", details: nil))
       return
     }
-    record.connection.send(content: data, completion: .contentProcessed { error in
+    record.connection.send(content: data, completion: .contentProcessed { [weak self] error in
       if let error {
-        result(FlutterError(code: "write_failed", message: error.localizedDescription, details: nil))
+        self?.deliver(result, FlutterError(code: "write_failed", message: error.localizedDescription, details: nil))
       } else {
-        result(true)
+        self?.deliver(result, true)
       }
     })
   }
@@ -247,7 +254,9 @@ final class IOSNativeTlsBridge {
       pendingAccept = nil
       return current
     }
-    pending?(FlutterError(code: "server_stopped", message: "TLS server stopped.", details: nil))
+    if let pending {
+      deliver(pending, FlutterError(code: "server_stopped", message: "TLS server stopped.", details: nil))
+    }
     result(true)
   }
 
