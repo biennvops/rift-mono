@@ -52,6 +52,16 @@ public sealed class LinuxMediaPlaybackServiceTests
             "org.mpris.MediaPlayer2.example",
             root,
             player);
+        snapshot = snapshot with
+        {
+            Artwork = new Dictionary<string, object?>
+            {
+                ["dataBase64"] = "cG5n",
+                ["mediaType"] = "image/png",
+                ["uri"] = snapshot.ArtworkUrl
+            },
+            ArtworkVersion = "4:1"
+        };
         var record = snapshot.ToRecord();
 
         Assert.Equal("org.mpris.MediaPlayer2.example:/track/42", record.PlaybackId);
@@ -67,6 +77,8 @@ public sealed class LinuxMediaPlaybackServiceTests
         Assert.True(record.CanSkipNext);
         Assert.False(record.CanSkipPrevious);
         Assert.Equal("file:///tmp/art.png", record.Artwork!["uri"]);
+        Assert.Equal("cG5n", record.Artwork["dataBase64"]);
+        Assert.Equal("image/png", record.Artwork["mediaType"]);
 
         player["CanControl"] = false;
         var uncontrolled = LinuxMprisClient.CreateSnapshot(
@@ -77,6 +89,103 @@ public sealed class LinuxMediaPlaybackServiceTests
         Assert.False(uncontrolled.CanPause);
         Assert.False(uncontrolled.CanSkipNext);
         Assert.False(uncontrolled.CanSeek);
+    }
+
+    [Fact]
+    public async Task ArtworkLoader_EncodesLocalImageWithDetectedMediaType()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"rift-art-{Guid.NewGuid():N}");
+        var bytes = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3 };
+        await File.WriteAllBytesAsync(path, bytes);
+        try
+        {
+            var loader = new LinuxMprisArtworkLoader(
+                NullLogger<LinuxMprisArtworkLoader>.Instance);
+
+            var artwork = await loader.LoadAsync(new Uri(path).AbsoluteUri, CancellationToken.None);
+
+            Assert.NotNull(artwork);
+            Assert.Equal("image/png", artwork.Payload["mediaType"]);
+            Assert.Equal(Convert.ToBase64String(bytes), artwork.Payload["dataBase64"]);
+            Assert.Equal(new Uri(path).AbsoluteUri, artwork.Payload["uri"]);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("https://example.com/art.png")]
+    [InlineData("file://remote-host/tmp/art.png")]
+    [InlineData("not a URI")]
+    public async Task ArtworkLoader_RejectsNonLocalUris(string artworkUrl)
+    {
+        var loader = new LinuxMprisArtworkLoader(
+            NullLogger<LinuxMprisArtworkLoader>.Instance);
+
+        Assert.Null(await loader.LoadAsync(artworkUrl, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ArtworkLoader_RejectsUnsupportedFileContent()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"rift-art-text-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(path, "not an image");
+        try
+        {
+            var loader = new LinuxMprisArtworkLoader(
+                NullLogger<LinuxMprisArtworkLoader>.Instance);
+
+            Assert.Null(await loader.LoadAsync(new Uri(path).AbsoluteUri, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ArtworkLoader_DetectsSupportedImageTypes()
+    {
+        Assert.Equal("image/png", LinuxMprisArtworkLoader.DetectMediaType(
+            [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        Assert.Equal("image/jpeg", LinuxMprisArtworkLoader.DetectMediaType([0xff, 0xd8, 0xff]));
+        Assert.Equal("image/gif", LinuxMprisArtworkLoader.DetectMediaType("GIF89a"u8));
+        Assert.Equal("image/webp", LinuxMprisArtworkLoader.DetectMediaType("RIFF1234WEBP"u8));
+    }
+
+    [Fact]
+    public async Task ArtworkLoader_RejectsOversizedImage()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"rift-art-large-{Guid.NewGuid():N}");
+        await using (var stream = File.Create(path))
+        {
+            stream.SetLength(LinuxMprisArtworkLoader.MaxArtworkBytes + 1L);
+        }
+        try
+        {
+            var loader = new LinuxMprisArtworkLoader(
+                NullLogger<LinuxMprisArtworkLoader>.Instance);
+
+            Assert.Null(await loader.LoadAsync(new Uri(path).AbsoluteUri, CancellationToken.None));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CreateFingerprint_ChangesWhenArtworkChanges()
+    {
+        var snapshot = CreateSnapshot("playing", positionMs: 1_000);
+
+        var changed = snapshot with { ArtworkVersion = "100:2" };
+
+        Assert.NotEqual(
+            LinuxMediaPlaybackService.CreateFingerprint(snapshot),
+            LinuxMediaPlaybackService.CreateFingerprint(changed));
     }
 
     [Fact]
@@ -141,6 +250,8 @@ public sealed class LinuxMediaPlaybackServiceTests
         Artist: "Artist",
         Album: "Album",
         ArtworkUrl: null,
+        Artwork: null,
+        ArtworkVersion: null,
         PlaybackState: state,
         PositionMs: positionMs,
         DurationMs: 30_000,

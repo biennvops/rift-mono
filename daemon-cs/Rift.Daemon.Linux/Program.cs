@@ -13,6 +13,7 @@ builder.Services.AddSingleton<ILocalIdentityStore>(sp => new SqliteLocalIdentity
     sp.GetRequiredService<DatabaseContext>(),
     sp.GetRequiredService<IUnixIdentityProtectionKeyProvider>()));
 builder.Services.AddSingleton<IIpcListener, LinuxIpcListener>();
+builder.Services.AddSingleton<ILinuxMprisArtworkLoader, LinuxMprisArtworkLoader>();
 builder.Services.AddSingleton<ILinuxMprisClient, LinuxMprisClient>();
 builder.Services.AddSingleton<LinuxMediaPlaybackService>();
 builder.Services.AddSingleton<ILocalMediaPlaybackActionHandler>(sp =>

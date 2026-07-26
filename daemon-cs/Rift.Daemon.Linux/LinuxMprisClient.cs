@@ -25,6 +25,8 @@ internal sealed record LinuxMprisSnapshot(
     string? Artist,
     string? Album,
     string? ArtworkUrl,
+    IReadOnlyDictionary<string, object?>? Artwork,
+    string? ArtworkVersion,
     string PlaybackState,
     long PositionMs,
     long? DurationMs,
@@ -44,9 +46,7 @@ internal sealed record LinuxMprisSnapshot(
         Title = Title,
         Artist = Artist,
         Album = Album,
-        Artwork = string.IsNullOrWhiteSpace(ArtworkUrl)
-            ? null
-            : new Dictionary<string, object?> { ["uri"] = ArtworkUrl },
+        Artwork = Artwork,
         PlaybackState = PlaybackState,
         PositionMs = PositionMs,
         DurationMs = DurationMs,
@@ -59,7 +59,9 @@ internal sealed record LinuxMprisSnapshot(
     };
 }
 
-internal sealed class LinuxMprisClient(ILogger<LinuxMprisClient> logger) : ILinuxMprisClient
+internal sealed class LinuxMprisClient(
+    ILinuxMprisArtworkLoader artworkLoader,
+    ILogger<LinuxMprisClient> logger) : ILinuxMprisClient
 {
     private const string MprisObjectPath = "/org/mpris/MediaPlayer2";
     private const string PropertiesInterface = "org.freedesktop.DBus.Properties";
@@ -89,6 +91,14 @@ internal sealed class LinuxMprisClient(ILogger<LinuxMprisClient> logger) : ILinu
                 var root = await GetAllPropertiesAsync(serviceName, RootInterface).ConfigureAwait(false);
                 var player = await GetAllPropertiesAsync(serviceName, PlayerInterface).ConfigureAwait(false);
                 var snapshot = CreateSnapshot(serviceName, root, player);
+                var artwork = await artworkLoader.LoadAsync(
+                    snapshot.ArtworkUrl,
+                    cancellationToken).ConfigureAwait(false);
+                snapshot = snapshot with
+                {
+                    Artwork = artwork?.Payload,
+                    ArtworkVersion = artwork?.Version
+                };
                 snapshots.Add(snapshot);
                 endpoints[snapshot.PlaybackId] = new MprisEndpoint(serviceName, snapshot.TrackId);
             }
@@ -204,6 +214,8 @@ internal sealed class LinuxMprisClient(ILogger<LinuxMprisClient> logger) : ILinu
             Artist: artist,
             Album: album,
             ArtworkUrl: GetString(metadata, "mpris:artUrl"),
+            Artwork: null,
+            ArtworkVersion: null,
             PlaybackState: playbackState,
             PositionMs: positionMicros / 1000L,
             DurationMs: durationMicros.HasValue ? Math.Max(0L, durationMicros.Value / 1000L) : null,

@@ -204,6 +204,8 @@ internal sealed class LinuxMediaPlaybackService(
             snapshot.Title ?? string.Empty,
             snapshot.Artist ?? string.Empty,
             snapshot.Album ?? string.Empty,
+            snapshot.ArtworkUrl ?? string.Empty,
+            snapshot.ArtworkVersion ?? string.Empty,
             snapshot.PlaybackState,
             positionBucket,
             snapshot.DurationMs ?? -1L,
