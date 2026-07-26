@@ -78,10 +78,10 @@ class SendQueueEntry {
   }
 
   static SendQueueEntry? fromDaemonQueueMap(Map<String, dynamic> map) {
-    final localPath = map['localPath']?.toString();
-    final fileName = map['fileName']?.toString();
-    final mediaType = map['mediaType']?.toString();
-    final byteSize = (map['byteSize'] as num?)?.toInt();
+    final localPath = (map['localPath'] ?? map['LocalPath'])?.toString();
+    final fileName = (map['fileName'] ?? map['FileName'])?.toString();
+    final mediaType = (map['mediaType'] ?? map['MediaType'])?.toString();
+    final byteSize = ((map['byteSize'] ?? map['ByteSize']) as num?)?.toInt();
     if (localPath == null ||
         localPath.isEmpty ||
         fileName == null ||
@@ -93,19 +93,20 @@ class SendQueueEntry {
     }
 
     final entry = SendQueueEntry(
-      queueItemId: map['queueItemId']?.toString(),
+      queueItemId: (map['queueItemId'] ?? map['QueueItemId'])?.toString(),
       localPath: localPath,
       fileName: fileName,
       mediaType: mediaType,
       byteSize: byteSize,
     );
-    entry.transferId = map['lastTransferId']?.toString();
-    entry.operationId = map['currentOperationId']?.toString();
-    entry.targetDeviceId = map['targetDeviceId']?.toString();
-    entry.errorMessage = map['failureMessage']?.toString();
-    entry.status = _statusFromDaemon(map['status']?.toString());
+    entry.transferId = (map['lastTransferId'] ?? map['LastTransferId'])?.toString();
+    entry.operationId = (map['currentOperationId'] ?? map['CurrentOperationId'])?.toString();
+    entry.targetDeviceId = (map['targetDeviceId'] ?? map['TargetDeviceId'])?.toString();
+    entry.errorMessage = (map['failureMessage'] ?? map['FailureMessage'])?.toString();
+    final statusRaw = (map['status'] ?? map['Status'])?.toString();
+    entry.status = _statusFromDaemon(statusRaw);
     entry.autoRetryWhenPeerAvailable = entry.status == SendQueueStatus.queued &&
-        (map['status']?.toString() == 'waiting_for_peer');
+        (statusRaw?.toLowerCase() == 'waiting_for_peer');
     return entry;
   }
 

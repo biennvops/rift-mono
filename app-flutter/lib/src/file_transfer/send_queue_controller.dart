@@ -89,13 +89,22 @@ class SendQueueController extends ChangeNotifier {
     }
     final listed = await client.listSendQueue();
     final restored = List<Map<String, dynamic>>.from(
-      (listed['items'] as List? ?? const <dynamic>[]).map(
+      (listed['items'] as List? ?? listed['Items'] as List? ?? const <dynamic>[]).map(
         (item) => Map<String, dynamic>.from(item as Map),
       ),
     ).map(SendQueueEntry.fromDaemonQueueMap).whereType<SendQueueEntry>();
+    final restoredList = restored.toList();
+    final provisionalToKeep = _items.where((item) {
+      final id = item.queueItemId;
+      if (id == null || id.startsWith('provisional-')) {
+        return !restoredList.any((r) => r.localPath == item.localPath);
+      }
+      return false;
+    });
     _items
       ..clear()
-      ..addAll(restored);
+      ..addAll(restoredList)
+      ..addAll(provisionalToKeep);
     notifyListeners();
   }
 
