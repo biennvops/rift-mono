@@ -57,7 +57,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -96,7 +96,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -135,7 +135,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -223,7 +223,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -460,7 +460,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -532,7 +532,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -569,7 +569,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -606,7 +606,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -637,7 +637,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -664,7 +664,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -702,7 +702,7 @@ public sealed class FileTransferServiceTests : IDisposable
         {
             _transport.BlockChunkSends = false;
             _transport.ReleaseBlockedChunkSends();
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -739,7 +739,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -775,7 +775,7 @@ public sealed class FileTransferServiceTests : IDisposable
         finally
         {
             _notifications.ReleaseTransferFailedNotification();
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -793,7 +793,7 @@ public sealed class FileTransferServiceTests : IDisposable
 
         var path = CreateTempFile("hello");
         var offer = await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
-        File.Delete(path);
+        await TestFiles.DeleteWithRetryAsync(path);
 
         await _service.HandleAcceptReceivedAsync("rift-peer", offer.TransferId, "rift-peer", 262144, CancellationToken.None);
         await WaitForConditionAsync(
@@ -846,7 +846,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -882,7 +882,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -919,7 +919,7 @@ public sealed class FileTransferServiceTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -963,7 +963,7 @@ public sealed class FileTransferServiceTests : IDisposable
         {
             _transport.BlockChunkSends = false;
             _transport.ReleaseBlockedChunkSends();
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -1288,23 +1288,7 @@ public sealed class FileTransferServiceTests : IDisposable
         return path;
     }
 
-    // On Windows the released background chunk sender can still hold the source
-    // file open for a short moment, so deletion needs a bounded retry.
-    private static async Task DeleteTempFileAsync(string path)
-    {
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                File.Delete(path);
-                return;
-            }
-            catch (IOException) when (attempt < 50)
-            {
-                await Task.Delay(20);
-            }
-        }
-    }
+    private static Task DeleteTempFileAsync(string path) => TestFiles.DeleteWithRetryAsync(path);
 
     private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
     {

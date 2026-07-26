@@ -118,11 +118,8 @@ public sealed class ClipboardFileInteropTests : IDisposable
         }
         finally
         {
-            File.Delete(sourcePath);
-            if (File.Exists(destinationPath))
-            {
-                File.Delete(destinationPath);
-            }
+            await TestFiles.DeleteWithRetryAsync(sourcePath);
+            await TestFiles.DeleteWithRetryAsync(destinationPath);
         }
 
         cancellation.Cancel();
@@ -177,7 +174,7 @@ public sealed class ClipboardFileInteropTests : IDisposable
         }
         finally
         {
-            File.Delete(sourcePath);
+            await TestFiles.DeleteWithRetryAsync(sourcePath);
         }
 
         cancellation.Cancel();
@@ -243,11 +240,8 @@ public sealed class ClipboardFileInteropTests : IDisposable
         }
         finally
         {
-            File.Delete(sourcePath);
-            if (File.Exists(destinationPath))
-            {
-                File.Delete(destinationPath);
-            }
+            await TestFiles.DeleteWithRetryAsync(sourcePath);
+            await TestFiles.DeleteWithRetryAsync(destinationPath);
         }
 
         cancellation.Cancel();

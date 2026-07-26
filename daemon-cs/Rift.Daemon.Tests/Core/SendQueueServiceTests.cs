@@ -23,7 +23,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -49,7 +49,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -67,7 +67,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -98,7 +98,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -136,7 +136,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -173,7 +173,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -210,7 +210,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -260,7 +260,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -298,7 +298,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -325,7 +325,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
             SqliteConnection.ClearAllPools();
             if (File.Exists(databasePath))
             {
@@ -431,7 +431,7 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(localPath);
+            await TestFiles.DeleteWithRetryAsync(localPath);
             SqliteConnection.ClearAllPools();
             if (File.Exists(databasePath))
             {
@@ -480,9 +480,9 @@ public sealed class SendQueueServiceTests
         }
         finally
         {
-            File.Delete(firstPath);
-            File.Delete(secondPath);
-            File.Delete(thirdPath);
+            await TestFiles.DeleteWithRetryAsync(firstPath);
+            await TestFiles.DeleteWithRetryAsync(secondPath);
+            await TestFiles.DeleteWithRetryAsync(thirdPath);
         }
     }
 

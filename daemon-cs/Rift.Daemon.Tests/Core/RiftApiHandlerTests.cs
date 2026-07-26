@@ -259,7 +259,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -309,7 +309,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         {
             if (File.Exists(tempFile))
             {
-                File.Delete(tempFile);
+                await TestFiles.DeleteWithRetryAsync(tempFile);
             }
         }
     }

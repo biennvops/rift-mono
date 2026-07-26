@@ -380,10 +380,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         }
         finally
         {
-            if (File.Exists(tempFile))
-            {
-                File.Delete(tempFile);
-            }
+            await TestFiles.DeleteWithRetryAsync(tempFile);
         }
     }
 
