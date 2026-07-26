@@ -146,7 +146,7 @@ class PairingManager {
     _localApprovals.add(peerDeviceId);
 
     try {
-      RiftLog.info(
+      RiftLog.debug(
         '[Pairing] About to send pairing.start to $peerDeviceId '
         'state=${record.state.toJson()} outbound=${_outboundPairings.contains(peerDeviceId)}',
       );
@@ -162,7 +162,7 @@ class PairingManager {
           'displayName': identityManager.displayName,
         },
       });
-      RiftLog.info('[Pairing] pairing.start sent to $peerDeviceId');
+      RiftLog.debug('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
       _cancelTimeoutTimer(peerDeviceId);
       _localApprovals.remove(peerDeviceId);

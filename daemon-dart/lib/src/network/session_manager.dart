@@ -297,7 +297,7 @@ class SessionManager {
     Map<String, dynamic> payload,
   ) async {
     final ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] sendMessage type=${payload['type']} peerDeviceId=$peerDeviceId '
       '${_describeContext(ctx)}',
     );
@@ -312,7 +312,7 @@ class SessionManager {
       peerDeviceId,
       Uint8List.fromList(utf8.encode(json.encode(payload))),
     );
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] sendMessage completed type=${payload['type']} peerDeviceId=$peerDeviceId',
     );
   }
@@ -651,7 +651,7 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     var ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] _handleSessionHello entered for $peerDeviceId ${_describeContext(ctx)}',
     );
     if (ctx == null) {
@@ -712,7 +712,7 @@ class SessionManager {
       );
     }
     ctx.remoteHelloReceived = true;
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] Marked remoteHelloReceived for $peerDeviceId ${_describeContext(ctx)}',
     );
 
@@ -932,7 +932,7 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     final ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] _handleSessionAccept entered for $peerDeviceId ${_describeContext(ctx)}',
     );
 
@@ -1092,7 +1092,7 @@ class SessionManager {
       '[Session] Verified session.accept from $peerDeviceId; marking established and starting capability negotiation.',
     );
     ctx.handshakeState = HandshakeState.established;
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] Marked established after session.accept for $peerDeviceId ${_describeContext(ctx)}',
     );
     _transport.setPeerAuthenticated(peerDeviceId);

@@ -222,32 +222,17 @@ class AndroidRootDiscoveryBridge {
     final discovery = _discovery;
     if (discovery == null) return;
 
-    debugPrint(
-        '[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
     final mdnsSnapshot = <AndroidDiscoveredPeer>[];
     for (final service in discovery.services) {
-      debugPrint(
-          '[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
       final peer = _peerFromService(service);
       if (peer != null) {
-        debugPrint(
-            '[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
         if (peer.deviceIdHint != deviceIdHint) {
           if (_shouldSuppressMdnsPeer(peer)) {
-            debugPrint(
-              '[mDNS Debug] Suppressed stale mDNS peer: ${peer.instanceId} '
-              'at ${peer.address}:${peer.port}',
-            );
             continue;
           }
           mdnsSnapshot.add(peer);
-        } else {
-          debugPrint('[mDNS Debug] Ignored self peer.');
         }
-      } else if (service.name == _instanceId) {
-        debugPrint(
-            '[mDNS Debug] Ignored own broadcast service: ${service.name}');
-      } else {
+      } else if (service.name != _instanceId) {
         debugPrint(
             '[mDNS Debug] Failed to parse peer from service: ${service.name}');
       }
@@ -277,9 +262,6 @@ class AndroidRootDiscoveryBridge {
       _peerDiscoveredController.add(peer);
     }
     for (final peer in delta.updated) {
-      debugPrint(
-        '[mDNS Debug] Updated peer: ${peer.instanceId} now at ${peer.address}:${peer.port}',
-      );
       _peerDiscoveredController.add(peer);
     }
   }
@@ -434,9 +416,6 @@ class AndroidRootDiscoveryBridge {
         peer: peer,
         lastSeen: DateTime.now(),
       );
-      debugPrint(
-        '[mDNS Debug] Parsed fallback peer: ${peer.instanceId} at ${peer.address}:${peer.port}',
-      );
       _ingestMergedSnapshot();
       _sendDirectPingPong(peer);
     } catch (e) {
@@ -513,25 +492,19 @@ class AndroidRootDiscoveryBridge {
     final bytes = Uint8List.fromList(utf8.encode(payload));
 
     try {
-      final b1 = socket.send(
+      socket.send(
           bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
-      debugPrint(
-          '[mDNS Debug] Ping-pong unicast to $targetAddress sent $b1 bytes.');
 
       final parts = targetAddress.split('.');
       if (parts.length == 4) {
         final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
-        final b2 = socket.send(
+        socket.send(
             bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
-        debugPrint(
-            '[mDNS Debug] Ping-pong subnet to $subnetBroadcast sent $b2 bytes.');
       }
 
       // TCP Reverse-Connect Hack for Android Hotspot Asymmetry
       final endpointKey = '${targetPeer.address}:${targetPeer.port}';
       if (_recentlyTcpPinged.add(endpointKey)) {
-        debugPrint(
-            '[mDNS Debug] Reverse TCP Pinging new endpoint $endpointKey');
         _reverseTcpPingController.add(targetPeer);
         // Clear after a while so we can ping again if it gets lost
         Timer(const Duration(seconds: 15),

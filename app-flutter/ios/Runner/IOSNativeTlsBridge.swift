@@ -64,13 +64,10 @@ final class IOSNativeTlsBridge {
       let requestedPort = (args["port"] as? NSNumber)?.uint16Value ?? 0
       let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: requestedPort)!)
       listener.newConnectionHandler = { [weak self] connection in
-        NSLog("[Rift TLS] iOS listener received inbound connection from %@",
-              String(describing: connection.endpoint))
         self?.prepare(connection)
       }
       var reported = false
       listener.stateUpdateHandler = { [weak self] state in
-        NSLog("[Rift TLS] iOS listener state: %@", String(describing: state))
         if case .failed(let error) = state {
           NSLog("[Rift TLS] iOS listener failed: %@", error.localizedDescription)
           if !reported {
@@ -79,7 +76,6 @@ final class IOSNativeTlsBridge {
           }
         } else if case .ready = state, !reported {
           reported = true
-          NSLog("[Rift TLS] iOS listener ready on port %d", listener.port?.rawValue ?? 0)
           self?.deliver(result, ["port": listener.port?.rawValue ?? requestedPort])
         }
       }
@@ -93,7 +89,6 @@ final class IOSNativeTlsBridge {
   private func prepare(_ connection: NWConnection) {
     var delivered = false
     connection.stateUpdateHandler = { [weak self] state in
-      NSLog("[Rift TLS] iOS inbound connection state: %@", String(describing: state))
       if case .failed(let error) = state {
         NSLog("[Rift TLS] iOS inbound connection failed: %@", error.localizedDescription)
         return
@@ -106,7 +101,6 @@ final class IOSNativeTlsBridge {
         return
       }
       let certificate = self.peerCertificate(from: metadata) ?? Data()
-      NSLog("[Rift TLS] iOS inbound connection ready, peer cert bytes: %d", certificate.count)
       let id = self.register(connection, certificate: certificate)
       let endpoint = connection.currentPath?.remoteEndpoint
       let address: String
@@ -167,7 +161,6 @@ final class IOSNativeTlsBridge {
     let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: parameters)
     var completed = false
     connection.stateUpdateHandler = { [weak self] state in
-      NSLog("[Rift TLS] iOS outbound connection state: %@", String(describing: state))
       if case .failed(let error) = state {
         NSLog("[Rift TLS] iOS outbound connection failed: %@", error.localizedDescription)
         if !completed {
@@ -185,7 +178,6 @@ final class IOSNativeTlsBridge {
       }
       completed = true
       let certificate = self.peerCertificate(from: metadata) ?? Data()
-      NSLog("[Rift TLS] iOS outbound connection ready, peer cert bytes: %d", certificate.count)
       let id = self.register(connection, certificate: certificate)
       self.deliver(result, [
         "connectionId": id,
