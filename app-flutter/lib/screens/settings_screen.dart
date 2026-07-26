@@ -903,7 +903,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-                if (Platform.isLinux) ...[
+                if (LinuxNotifications.isSupported) ...[
                   Container(
                     color: theme.colorScheme.surfaceContainer,
                     padding: const EdgeInsets.all(16),
@@ -950,7 +950,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   ),
                 ],
-                if (!Platform.isAndroid && !Platform.isLinux) ...[
+                if (!Platform.isAndroid &&
+                    !LinuxNotifications.isSupported) ...[
                   Padding(
                     padding: const EdgeInsets.all(16.0),
                     child: Text(

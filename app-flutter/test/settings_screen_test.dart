@@ -153,6 +153,7 @@ void main() {
   testWidgets('SettingsScreen reports real Linux runtime status',
       (WidgetTester tester) async {
     AndroidShell.debugIsAndroidOverride = false;
+    LinuxNotifications.debugIsLinuxOverride = true;
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
