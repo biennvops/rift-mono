@@ -53,6 +53,39 @@ dotnet run --project Rift.Daemon.Linux/
 ```powershell
 dotnet run --project Rift.Daemon.Windows/
 ```
+## Linux
+
+Install the Linux daemon as a per-user systemd service:
+
+```bash
+Rift.Daemon.Linux/Tools/build_linux_daemon.sh
+Rift.Daemon.Linux/Tools/install_user_service.sh
+systemctl --user status rift-daemon.service
+```
+
+The installer places the self-contained daemon under
+`~/.local/lib/rift-daemon` and preserves identity and trust data under
+`~/.local/share/rift-daemon` during upgrades or uninstall.
+
+Linux protects the local identity encryption key with the desktop Secret
+Service when available. Existing mode-`0600` key files are migrated after a
+successful identity decrypt. Headless sessions without Secret Service retain
+the mode-`0600` filesystem fallback; the active backend is reported by
+`rift.getDeviceInfo` as `IdentityProtectionBackend`.
+
+On Linux, the daemon observes MPRIS players on the user session D-Bus and
+publishes their playback state to trusted peers. Remote play, pause, toggle,
+next, previous, and seek actions are routed back to the originating MPRIS
+player.
+
+Run the isolated Linux daemon smoke test with:
+
+```bash
+Rift.Daemon.Linux/Tools/smoke_test_linux_daemon.sh
+```
+
+The smoke test verifies Unix IPC startup, Linux device information, media IPC,
+and identity persistence across a daemon restart.
 
 ## macOS
 

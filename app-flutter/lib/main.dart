@@ -33,6 +33,7 @@ import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
+import 'src/platform/linux_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_shell.dart';
@@ -108,6 +109,10 @@ Future<void> _writeDesktopClipboardContent(
   );
 }
 
+@visibleForTesting
+bool shouldStartDesktopHidden(List<String> arguments) =>
+    arguments.contains('--background');
+
 DesktopClipboardManager _createDesktopClipboardManager(
     JsonRpcRiftClient client) {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -122,10 +127,12 @@ DesktopClipboardManager _createDesktopClipboardManager(
   return DesktopClipboardManager(client);
 }
 
-void main() async {
+void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  final startDesktopHidden = isDesktop && shouldStartDesktopHidden(arguments);
+  if (isDesktop) {
     await windowManager.ensureInitialized();
     WindowOptions windowOptions = const WindowOptions(
       size: Size(800, 600),
@@ -134,10 +141,13 @@ void main() async {
       titleBarStyle: TitleBarStyle.normal,
     );
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-      // override close button
       await windowManager.setPreventClose(true);
+      if (startDesktopHidden) {
+        await windowManager.hide();
+      } else {
+        await windowManager.show();
+        await windowManager.focus();
+      }
     });
   }
 
@@ -311,6 +321,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     IOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    if (Platform.isLinux) {
+      LinuxSendFiles.setMethodCallHandler(_handleLinuxSendFilesMethodCall);
+      unawaited(_consumePendingLinuxSendItems());
+    }
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
@@ -404,6 +418,30 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_iosRemoteMediaPlayback!.start());
     }
+  }
+
+  Future<void> _consumePendingLinuxSendItems() async {
+    final pendingItems = await LinuxSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleLinuxSendFilesMethodCall(MethodCall call) async {
+    if (call.method != LinuxSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = LinuxSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    return null;
   }
 
   Future<dynamic> _handleMacOSSendFilesMethodCall(MethodCall call) async {
@@ -889,7 +927,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   Future<void> _initSystemTray() async {
     try {
       await trayManager.setIcon(
-        Platform.isWindows ? 'app_icon.ico' : 'app_icon.png',
+        Platform.isWindows
+            ? 'app_icon.ico'
+            : Platform.isLinux
+                ? 'assets/dev.rift.Rift.png'
+                : 'app_icon.png',
       );
     } catch (e) {
       debugPrint('Failed to load tray icon: $e');

@@ -273,6 +273,7 @@ class MockTransport implements IpcTransport {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'IdentityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]
@@ -405,6 +406,7 @@ void main() {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'identityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]

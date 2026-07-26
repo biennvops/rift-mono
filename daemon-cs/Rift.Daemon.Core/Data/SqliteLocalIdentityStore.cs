@@ -5,20 +5,32 @@ using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Core.Data;
 
-public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : ILocalIdentityStore
+public sealed class SqliteLocalIdentityStore : ILocalIdentityStore
 {
     private static readonly byte[] WindowsProtectedPrivateKeyPrefix = [0x52, 0x49, 0x46, 0x54, 0x01];
     private static readonly byte[] WindowsProtectedTlsCertificatePrefix = [0x52, 0x49, 0x46, 0x54, 0x02];
     private static readonly byte[] UnixProtectedPrivateKeyPrefix = [0x52, 0x49, 0x46, 0x54, 0x11];
     private static readonly byte[] UnixProtectedTlsCertificatePrefix = [0x52, 0x49, 0x46, 0x54, 0x12];
-    private readonly string _keyFilePath = CreateScopedKeyFilePath(databaseContext.DatabasePath);
-    private readonly string _legacyKeyFilePath = Path.Combine(
-        Path.GetDirectoryName(databaseContext.DatabasePath)!,
-        ".rift-secrets.key");
+    private readonly DatabaseContext _databaseContext;
+    private readonly IUnixIdentityProtectionKeyProvider _unixKeyProvider;
+    private readonly string _keyFilePath;
+    private readonly string _legacyKeyFilePath;
+
+    public SqliteLocalIdentityStore(
+        DatabaseContext databaseContext,
+        IUnixIdentityProtectionKeyProvider? unixKeyProvider = null)
+    {
+        _databaseContext = databaseContext;
+        _unixKeyProvider = unixKeyProvider ?? new FileUnixIdentityProtectionKeyProvider();
+        _keyFilePath = CreateScopedKeyFilePath(databaseContext.DatabasePath);
+        _legacyKeyFilePath = Path.Combine(
+            Path.GetDirectoryName(databaseContext.DatabasePath)!,
+            ".rift-secrets.key");
+    }
 
     public LocalIdentityRecord? GetIdentity()
     {
-        using var connection = databaseContext.CreateOpenConnection();
+        using var connection = _databaseContext.CreateOpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
@@ -84,7 +96,7 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
     {
         ArgumentNullException.ThrowIfNull(identity);
 
-        using var connection = databaseContext.CreateOpenConnection();
+        using var connection = _databaseContext.CreateOpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText =
             """
@@ -121,7 +133,12 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
             return [.. windowsPrefix, .. protectedBytes];
         }
 
-        return UnixFileKeyProtector.Protect(plaintext, unixPrefix, _keyFilePath);
+        return UnixFileKeyProtector.Protect(
+            plaintext,
+            unixPrefix,
+            _keyFilePath,
+            _legacyKeyFilePath,
+            _unixKeyProvider);
     }
 
     private byte[]? ProtectOptionalBlob(byte[]? plaintext, byte[] windowsPrefix, byte[] unixPrefix)
@@ -150,7 +167,8 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 storedValue,
                 unixPrefix,
                 _keyFilePath,
-                legacyKeyFilePath: _legacyKeyFilePath);
+                _legacyKeyFilePath,
+                _unixKeyProvider);
         }
 
         // Legacy compatibility: older rows may contain raw identity material without an at-rest
@@ -181,19 +199,24 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
 
     private static class UnixFileKeyProtector
     {
-        private const int KeyLength = 32;
         private const int NonceLength = 12;
         private const int TagLength = 16;
 
-        public static byte[] Protect(byte[] plaintext, byte[] prefix, string keyFilePath)
+        public static byte[] Protect(
+            byte[] plaintext,
+            byte[] prefix,
+            string keyFilePath,
+            string? legacyKeyFilePath,
+            IUnixIdentityProtectionKeyProvider keyProvider)
         {
-            var key = LoadOrCreateKey(keyFilePath);
+            var key = keyProvider.GetOrCreateKey(keyFilePath, legacyKeyFilePath);
             var nonce = RandomNumberGenerator.GetBytes(NonceLength);
             var ciphertext = new byte[plaintext.Length];
             var tag = new byte[TagLength];
 
             using var aes = new AesGcm(key, TagLength);
             aes.Encrypt(nonce, plaintext, ciphertext, tag);
+            keyProvider.OnKeyUseSucceeded(keyFilePath, legacyKeyFilePath);
 
             return [.. prefix, .. nonce, .. tag, .. ciphertext];
         }
@@ -202,7 +225,8 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
             byte[] storedValue,
             byte[] prefix,
             string keyFilePath,
-            string? legacyKeyFilePath = null)
+            string? legacyKeyFilePath,
+            IUnixIdentityProtectionKeyProvider keyProvider)
         {
             var minimumLength = prefix.Length + NonceLength + TagLength;
             if (storedValue.Length < minimumLength)
@@ -210,8 +234,7 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 throw new InvalidOperationException("Protected local identity material was malformed.");
             }
 
-            var key = LoadExistingKey(keyFilePath)
-                ?? (legacyKeyFilePath is not null ? LoadExistingKey(legacyKeyFilePath) : null)
+            var key = keyProvider.GetExistingKey(keyFilePath, legacyKeyFilePath)
                 ?? throw new InvalidOperationException(
                     "Unix identity protection key was missing for persisted identity material.");
             var nonceOffset = prefix.Length;
@@ -226,60 +249,9 @@ public sealed class SqliteLocalIdentityStore(DatabaseContext databaseContext) : 
                 storedValue.AsSpan(ciphertextOffset, ciphertextLength),
                 storedValue.AsSpan(tagOffset, TagLength),
                 plaintext);
+            keyProvider.OnKeyUseSucceeded(keyFilePath, legacyKeyFilePath);
 
             return plaintext;
-        }
-
-        private static byte[] LoadOrCreateKey(string keyFilePath)
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(keyFilePath)!);
-
-            var existingKey = LoadExistingKey(keyFilePath);
-            if (existingKey is not null) return existingKey;
-
-            var key = RandomNumberGenerator.GetBytes(KeyLength);
-            try
-            {
-                using (var stream = new FileStream(
-                           keyFilePath,
-                           FileMode.CreateNew,
-                           FileAccess.Write,
-                           FileShare.None))
-                {
-                    stream.Write(key, 0, key.Length);
-                }
-                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-                {
-                    File.SetUnixFileMode(
-                        keyFilePath,
-                        UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                }
-            }
-            catch (IOException)
-            {
-                // Another process may have created the key between our read and write.
-                existingKey = LoadExistingKey(keyFilePath);
-                if (existingKey is not null) return existingKey;
-                throw;
-            }
-
-            return key;
-        }
-
-        private static byte[]? LoadExistingKey(string keyFilePath)
-        {
-            if (!File.Exists(keyFilePath))
-            {
-                return null;
-            }
-
-            var existingKey = File.ReadAllBytes(keyFilePath);
-            if (existingKey.Length != KeyLength)
-            {
-                throw new InvalidOperationException("Unix identity protection key was malformed.");
-            }
-
-            return existingKey;
         }
     }
 

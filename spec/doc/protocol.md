@@ -371,6 +371,13 @@ The v1 playback record fields are:
 | `canSeek`         | Yes      | boolean             | Whether remote `seek` is currently allowed                          |
 | `updatedAt`       | Yes      | RFC 3339 UTC string | Audit timestamp for the latest local observation                    |
 
+When `artwork` is present, it contains `dataBase64` with the encoded image bytes and
+`mediaType` with the detected image MIME type. Implementations MAY additionally
+include the source `uri` as diagnostic metadata, but receivers MUST NOT fetch a
+source-device-local URI. Originators MUST omit artwork that is unavailable,
+unsupported, malformed, or larger than 20 MiB before Base64 encoding. Media
+playback sync v1 supports PNG, JPEG, GIF, and WebP artwork.
+
 `media.playbackPosted` payload fields: the full playback record above.
 
 `media.playbackUpdated` payload fields: the full playback record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, playbackId)` tuple.

@@ -14,6 +14,7 @@ public sealed class DeviceInfoResult
     public string Fingerprint { get; init; } = string.Empty;
     public string ImplementationId { get; init; } = string.Empty;
     public string ProtocolVersion { get; init; } = string.Empty;
+    public string? IdentityProtectionBackend { get; init; }
     public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
 }
 

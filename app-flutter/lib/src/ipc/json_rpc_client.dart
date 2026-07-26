@@ -174,6 +174,7 @@ class JsonRpcRiftClient {
     'ExpiresInMs': 'expiresInMs',
     'ImplementationId': 'implementationId',
     'ProtocolVersion': 'protocolVersion',
+    'IdentityProtectionBackend': 'identityProtectionBackend',
     'Capabilities': 'capabilities',
     'Name': 'name',
     'Version': 'version',
