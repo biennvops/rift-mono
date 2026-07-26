@@ -14,6 +14,8 @@ reference material, not sprint history.
 - `../AGENTS.md` - agent-facing repo guidance
 - `macos-permissions.md` - focused platform notes for macOS runtime behavior
 - `macOS`/`Windows`/`Linux` - useful tips and tricks for each platform
+- `macOS/NotificationExtractor.md` - macOS Full Disk Access notification-extractor boundary
+- `macOS/NotificationExtractorXpc.md` - authenticated extractor IPC prototype
 
 ## Supporting Docs
 

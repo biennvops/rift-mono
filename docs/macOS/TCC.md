@@ -1,4 +1,4 @@
-# macOS Permissions (Local Network, Notifications)
+# macOS Permissions (Local Network, Notifications, Full Disk Access)
 
 ## Local Network
 
@@ -25,4 +25,10 @@ Reset (global):
 ```bash
 tccutil reset Notifications
 ```
+
+## Full Disk Access
+
+Notification Center metadata is protected by Full Disk Access on current macOS releases. Only the dedicated **Rift Notification Extractor** app should receive this permission. The network-facing daemon and Flutter UI must not receive FDA.
+
+See [NotificationExtractor.md](NotificationExtractor.md) for the fixed extractor API, build instructions, and security boundary.
 

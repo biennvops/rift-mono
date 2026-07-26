@@ -26,6 +26,7 @@
   <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
     <ProjectReference Include="..\Rift.Daemon.Linux\Rift.Daemon.Linux.csproj" />
     <ProjectReference Include="..\Rift.Daemon.macOS\Rift.Daemon.macOS.csproj" />
+    <ProjectReference Include="..\Rift.NotificationExtractor.macOS\Rift.NotificationExtractor.macOS.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
