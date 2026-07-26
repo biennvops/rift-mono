@@ -628,6 +628,7 @@ class SessionManager {
       'rift': '0.1-draft',
       'type': 'session.reject',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {'failureReason': failureReason, 'message': message},

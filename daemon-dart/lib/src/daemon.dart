@@ -2280,6 +2280,8 @@ class RiftDaemon {
             await _sessionManager!.sendMessage(peer.deviceId, {
               'rift': '0.1-draft',
               'type': 'clipboard.offer',
+              'id': const Uuid().v4(),
+              'messageId': const Uuid().v4(),
               'sourceDeviceId': _identityManager!.deviceId,
               'destinationDeviceId': peer.deviceId,
               'payload': offerPayload,
