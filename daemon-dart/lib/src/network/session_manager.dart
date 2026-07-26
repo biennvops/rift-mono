@@ -637,6 +637,8 @@ class SessionManager {
         peerDeviceId,
         Uint8List.fromList(utf8.encode(json.encode(payload))),
       );
+    } on StateError {
+      // The peer socket may already be gone; rejection is best-effort.
     } finally {
       _transport.disconnect(peerDeviceId);
     }
@@ -1119,10 +1121,17 @@ class SessionManager {
     ctx.capabilityNegotiationTimer?.cancel();
     ctx.capabilityNegotiationTimer = Timer(const Duration(seconds: 5), () {
       if (ctx.negotiatedCapabilities.isEmpty) {
-        _rejectSession(
-          ctx.peerDeviceId,
-          'Timeout',
-          'Capability negotiation timed out',
+        unawaited(
+          _rejectSession(
+            ctx.peerDeviceId,
+            'Timeout',
+            'Capability negotiation timed out',
+          ).catchError((Object error) {
+            RiftLog.warn(
+              '[Session] Best-effort negotiation-timeout reject failed for '
+              '${ctx.peerDeviceId}: $error',
+            );
+          }),
         );
       }
     });
