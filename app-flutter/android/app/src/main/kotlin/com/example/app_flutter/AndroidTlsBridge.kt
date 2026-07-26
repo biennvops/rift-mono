@@ -99,6 +99,8 @@ class AndroidTlsBridge {
                         certificate?.encoded ?: ByteArray(0),
                         Base64.NO_WRAP,
                     ),
+                    "remoteAddress" to socket.inetAddress.hostAddress,
+                    "remotePort" to socket.port,
                 )
                 val callback = synchronized(this) {
                     val current = pendingAccept
@@ -141,6 +143,8 @@ class AndroidTlsBridge {
                             certificate?.encoded ?: ByteArray(0),
                             Base64.NO_WRAP,
                         ),
+                        "remoteAddress" to socket.inetAddress.hostAddress,
+                        "remotePort" to socket.port,
                     ),
                 )
             } catch (error: Throwable) {

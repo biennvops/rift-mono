@@ -6,20 +6,31 @@ class AndroidTlsConnection {
   const AndroidTlsConnection({
     required this.connectionId,
     required this.peerCertificateBase64,
+    required this.remoteAddress,
+    required this.remotePort,
   });
 
   final int connectionId;
   final String peerCertificateBase64;
+  final String remoteAddress;
+  final int remotePort;
 
   factory AndroidTlsConnection.fromMap(Map<dynamic, dynamic> map) {
     final connectionId = map['connectionId'];
     final certificate = map['peerCertificateBase64'];
-    if (connectionId is! int || certificate is! String) {
+    final remoteAddress = map['remoteAddress'];
+    final remotePort = map['remotePort'];
+    if (connectionId is! int ||
+        certificate is! String ||
+        remoteAddress is! String ||
+        remotePort is! int) {
       throw const FormatException('Invalid native TLS connection response.');
     }
     return AndroidTlsConnection(
       connectionId: connectionId,
       peerCertificateBase64: certificate,
+      remoteAddress: remoteAddress,
+      remotePort: remotePort,
     );
   }
 }

@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:flutter/services.dart';
 
+import 'android_native_peer_transport.dart';
+
 /// Background isolate entrypoint for the Android daemon.
 ///
 /// The daemon isolate itself must stay plugin-free on Android release builds:
@@ -20,5 +22,9 @@ void androidDaemonIsolateEntrypoint(Map<String, dynamic> args) {
   // full plugin set would re-register `nsd` on the background isolate and
   // crash release builds with "Background isolates do not support
   // setMessageHandler()". The daemon isolate uses pure Dart services only.
-  RiftDaemon.isolateEntryPoint(args);
+  RiftDaemon.isolateEntryPoint(
+    args,
+    peerTransportFactory: (identityManager, port) =>
+        AndroidNativePeerTransport(identityManager, port: port),
+  );
 }
