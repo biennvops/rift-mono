@@ -1042,7 +1042,16 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         }
 
         pending.ExpiryTimer?.Dispose();
-        _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+        try
+        {
+            _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+        }
+        catch (Exception ex)
+        {
+            // Timer-thread callback: an unhandled exception here would crash the
+            // whole daemon process, so expiry bookkeeping failures are logged only.
+            _logger.LogWarning(ex, "Failed to expire pending media playback action {OperationId}.", operationId);
+        }
     }
 
     private sealed record PendingPlaybackAction(string OperationId, string PlaybackId, string SourceDeviceId, string Action)

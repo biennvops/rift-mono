@@ -326,7 +326,9 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     public async Task PerformMediaPlaybackActionAsync_RejectsDuplicateAndExpiresLostResult()
     {
         const string peerDeviceId = "rift-peer";
-        var service = CreateService(actionTimeout: TimeSpan.FromMilliseconds(50));
+        // Wide enough that the duplicate request below always lands inside the
+        // pending window, even on slow CI machines.
+        var service = CreateService(actionTimeout: TimeSpan.FromMilliseconds(500));
         _presenceService.UpdatePeerPresence(peerDeviceId, "online", DateTimeOffset.UtcNow.ToString("O"), ["media.playback"]);
         await service.HandleMediaPlaybackPostedAsync(CreatePlayback(peerDeviceId, "playback-1", "Track"), CancellationToken.None);
 
@@ -335,7 +337,11 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None));
         Assert.Equal(-32010, duplicate.ErrorCode);
 
-        await Task.Delay(150);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_operationService.GetOperation(first.OperationId).State != "Expired" && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
         var expired = _operationService.GetOperation(first.OperationId);
         Assert.Equal("Expired", expired.State);
         Assert.Equal("Timeout", expired.FailureReason);

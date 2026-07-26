@@ -165,7 +165,7 @@ public sealed class SendQueueServiceTests
 
             fileTransfer.OfferException = null;
             transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
-            await Task.Delay(50);
+            await WaitForStatusAsync(service, result.QueueItemId, "dispatching");
 
             var retried = await service.GetSendQueueItemAsync(result.QueueItemId, CancellationToken.None);
             Assert.Equal("dispatching", retried.Status);
@@ -378,7 +378,7 @@ public sealed class SendQueueServiceTests
             Assert.Equal("waiting_for_peer", restored.Status);
 
             transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs("rift-peer", isOnline: true, selectedCapabilities: ["file.transfer"], allowsProtectedTraffic: true));
-            await Task.Delay(50);
+            await WaitForStatusAsync(service, "queue-1", "dispatching");
 
             var retried = await service.GetSendQueueItemAsync("queue-1", CancellationToken.None);
             Assert.Equal("dispatching", retried.Status);
@@ -388,11 +388,7 @@ public sealed class SendQueueServiceTests
         {
             var item = store.ListItems().Single();
             File.Delete(item.LocalPath);
-            SqliteConnection.ClearAllPools();
-            if (File.Exists(databasePath))
-            {
-                File.Delete(databasePath);
-            }
+            await DeleteDatabaseAsync(databasePath);
         }
     }
 
@@ -495,6 +491,51 @@ public sealed class SendQueueServiceTests
         var path = Path.Combine(Path.GetTempPath(), $"rift-send-queue-{Guid.NewGuid():N}.txt");
         File.WriteAllText(path, content);
         return path;
+    }
+
+    // Background dispatch can briefly reopen store connections after
+    // ClearAllPools, which keeps the file locked on Windows.
+    private static async Task DeleteDatabaseAsync(string databasePath)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            SqliteConnection.ClearAllPools();
+            try
+            {
+                if (File.Exists(databasePath))
+                {
+                    File.Delete(databasePath);
+                }
+                return;
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                await Task.Delay(20);
+            }
+        }
+    }
+
+    // Reconnect-triggered retries dispatch on a background task, so status
+    // assertions must poll rather than rely on a fixed delay.
+    private static async Task WaitForStatusAsync(SendQueueService service, string queueItemId, string expectedStatus)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            var item = await service.GetSendQueueItemAsync(queueItemId, CancellationToken.None);
+            if (item.Status == expectedStatus)
+            {
+                return;
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"Queue item {queueItemId} did not reach status '{expectedStatus}' (last: '{item.Status}').");
+            }
+
+            await Task.Delay(20);
+        }
     }
 
     private sealed class InMemoryTrustStore : ITrustStore
