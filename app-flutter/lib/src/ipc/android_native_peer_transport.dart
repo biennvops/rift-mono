@@ -102,12 +102,16 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     );
     final peerDeviceId = _deviceIdForKey(peerEd25519Key);
     final existing = _peers[peerDeviceId];
+    final wasAuthenticated = _authenticatedPeers.contains(peerDeviceId);
 
-    if (existing != null && _authenticatedPeers.contains(peerDeviceId)) {
-      // Keep an authenticated session and drop the newcomer.
+    if (existing != null && wasAuthenticated && !isServer) {
+      // Our own redundant outbound dial; keep the authenticated session.
       await _tls.close(connection.connectionId);
       return peerDeviceId;
     }
+    // A fresh inbound connection from an authenticated peer means its side
+    // of the old socket is dead (mobile apps are killed/suspended without a
+    // clean TCP close), so the newcomer must replace the stale session.
 
     final peer = _NativePeerConnection(
       connectionId: connection.connectionId,
@@ -124,7 +128,11 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     // for the peer we are actively replacing.
     _peers[peerDeviceId] = peer;
     if (existing != null) {
-      await _closeConnection(existing, notify: false);
+      _authenticatedPeers.remove(peerDeviceId);
+      // Notify for authenticated replacements so the session layer discards
+      // its established context; otherwise the peer's new session.hello is
+      // rejected by the duplicate-session tie-breaker.
+      await _closeConnection(existing, notify: wasAuthenticated);
     }
     _startReadLoop(peer);
     return peerDeviceId;
