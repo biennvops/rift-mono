@@ -129,6 +129,131 @@ public sealed class ClipboardFileInteropTests : IDisposable
         await listenerTask;
     }
 
+    [Fact]
+    public async Task TrustedDesktopPeers_RejectedOfferFailsSenderOperation()
+    {
+        using var cancellation = new CancellationTokenSource(ScenarioTimeout);
+        var token = cancellation.Token;
+        var listenerTask = await ConnectAsync(token);
+
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"rift-interop-reject-{Guid.NewGuid():N}.bin");
+        await File.WriteAllTextAsync(sourcePath, "reject me", token);
+
+        try
+        {
+            var senderFailed = new TaskCompletionSource<FileTransferLifecycleEventArgs>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _sender.FileTransfer.TransferUpdated += (_, args) =>
+            {
+                if (args.State == "failed")
+                {
+                    senderFailed.TrySetResult(args);
+                }
+            };
+
+            var offerResult = await _sender.FileTransfer.OfferFileAsync(
+                _receiver.DeviceId,
+                sourcePath,
+                "reject.bin",
+                "application/octet-stream",
+                token);
+
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListIncomingFileOffersAsync()).Offers
+                    .Any(offer => offer.TransferId == offerResult.TransferId),
+                token);
+
+            await _receiver.FileTransfer.RejectFileOfferAsync(
+                offerResult.TransferId,
+                "PolicyDenied",
+                "User declined",
+                token);
+
+            var failure = await senderFailed.Task.WaitAsync(token);
+            Assert.Equal(offerResult.TransferId, failure.TransferId);
+            Assert.Equal("PolicyDenied", failure.FailureReason);
+            Assert.Equal("Failed", _sender.Operations.GetOperation(offerResult.OperationId).State);
+            Assert.Empty((await _receiver.FileTransfer.ListIncomingFileOffersAsync()).Offers);
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+        }
+
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
+    [Fact]
+    public async Task TrustedDesktopPeers_ReceiverCancelStopsSenderTransfer()
+    {
+        using var cancellation = new CancellationTokenSource(ScenarioTimeout);
+        var token = cancellation.Token;
+        var listenerTask = await ConnectAsync(token);
+
+        // Large enough that cancellation lands while chunks are in flight.
+        var payload = new byte[8_000_000];
+        RandomNumberGenerator.Fill(payload);
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"rift-interop-cancel-src-{Guid.NewGuid():N}.bin");
+        var destinationPath = Path.Combine(Path.GetTempPath(), $"rift-interop-cancel-dst-{Guid.NewGuid():N}.bin");
+        await File.WriteAllBytesAsync(sourcePath, payload, token);
+
+        try
+        {
+            var offerResult = await _sender.FileTransfer.OfferFileAsync(
+                _receiver.DeviceId,
+                sourcePath,
+                "cancel.bin",
+                "application/octet-stream",
+                token);
+
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListIncomingFileOffersAsync()).Offers
+                    .Any(offer => offer.TransferId == offerResult.TransferId),
+                token);
+
+            await _receiver.FileTransfer.AcceptFileOfferAsync(
+                offerResult.TransferId,
+                destinationPath,
+                overwrite: false,
+                token);
+
+            // Cancel as soon as the incoming transfer is active on the receiver.
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListFileTransfersAsync()).Transfers
+                    .Any(transfer => transfer.TransferId == offerResult.TransferId),
+                token);
+            var cancelled = await _receiver.FileTransfer.CancelTransferAsync(offerResult.TransferId, token);
+
+            Assert.Equal("Failed", cancelled.State);
+            Assert.Equal("Cancelled", cancelled.FailureReason);
+
+            // The sender must observe the cancel and stop the outgoing transfer.
+            await WaitForConditionAsync(
+                async () => !(await _sender.FileTransfer.ListFileTransfersAsync()).Transfers
+                    .Any(transfer => transfer.TransferId == offerResult.TransferId &&
+                                     transfer.State is "sending" or "offered"),
+                token);
+            await WaitForConditionAsync(
+                () => Task.FromResult(
+                    _sender.Operations.GetOperation(offerResult.OperationId).State is "Failed" or "Done"),
+                token);
+            Assert.Equal("Failed", _sender.Operations.GetOperation(offerResult.OperationId).State);
+            Assert.False(File.Exists(destinationPath), "A cancelled transfer must not commit the destination file.");
+        }
+        finally
+        {
+            File.Delete(sourcePath);
+            if (File.Exists(destinationPath))
+            {
+                File.Delete(destinationPath);
+            }
+        }
+
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
     private async Task<Task> ConnectAsync(CancellationToken token)
     {
         var listenerTask = _receiver.Transport.StartListeningAsync(token);
