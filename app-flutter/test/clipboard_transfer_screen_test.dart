@@ -13,6 +13,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   FakeTransferJsonRpcClient({
     List<Map<String, dynamic>>? transfers,
     List<Map<String, dynamic>>? clipboardOffers,
+    List<Map<String, dynamic>>? incomingFileOffers,
     this.sendQueueSupported = false,
     List<Map<String, dynamic>>? queueItems,
     bool isConnected = true,
@@ -33,6 +34,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
               },
             ],
         clipboardOffers = clipboardOffers ?? const <Map<String, dynamic>>[],
+        incomingFileOffers =
+            incomingFileOffers ?? const <Map<String, dynamic>>[],
         queueItems = queueItems ?? <Map<String, dynamic>>[],
         _isConnected = isConnected,
         super(FakeTransport());
@@ -42,6 +45,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _connectionChangedController = StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
+  final List<Map<String, dynamic>> incomingFileOffers;
+  int listClipboardOffersCallCount = 0;
   final List<Map<String, dynamic>> notifications = <Map<String, dynamic>>[];
   final bool sendQueueSupported;
   final List<Map<String, dynamic>> queueItems;
@@ -117,10 +122,14 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
 
   @override
-  Future<dynamic> listClipboardOffers() async => {'offers': clipboardOffers};
+  Future<dynamic> listClipboardOffers() async {
+    listClipboardOffersCallCount += 1;
+    return {'offers': clipboardOffers};
+  }
 
   @override
-  Future<dynamic> listIncomingFileOffers() async => {'offers': []};
+  Future<dynamic> listIncomingFileOffers() async =>
+      {'offers': incomingFileOffers};
 
   @override
   Future<dynamic> listNotifications() async => {
@@ -382,6 +391,7 @@ void main() {
     await tester.tap(find.text('Send File'));
     await tester.pumpAndSettle();
 
+    expect(find.text('Send Queue'), findsOneWidget);
     expect(find.textContaining('Now sending 1 file(s) to Pixel 9 Pro'),
         findsOneWidget);
     expect(find.text('View Activity'), findsOneWidget);
@@ -393,7 +403,8 @@ void main() {
     expect(find.text('deck.pptx'), findsOneWidget);
   });
 
-  testWidgets('Transfer activity tab shows badge for active outgoing transfers',
+  testWidgets(
+      'Transfer activity and Incoming Offers tabs show badges for total items',
       (WidgetTester tester) async {
     final client = FakeTransferJsonRpcClient(
       transfers: const [
@@ -417,6 +428,24 @@ void main() {
           'state': 'pending',
           'direction': 'outgoing',
         },
+        {
+          'transferId': 'transfer-6',
+          'peerDeviceId': 'rift-peer-1',
+          'fileName': 'doc-3.pdf',
+          'mediaType': 'application/pdf',
+          'byteSize': 100,
+          'bytesTransferred': 100,
+          'state': 'done',
+          'direction': 'incoming',
+        },
+      ],
+      incomingFileOffers: const [
+        {
+          'offerId': 'offer-1',
+          'sourceDeviceId': 'rift-peer-1',
+          'fileName': 'incoming-1.png',
+          'byteSize': 2048,
+        },
       ],
     );
 
@@ -429,7 +458,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Transfer Activity'), findsOneWidget);
-    expect(find.text('2'), findsOneWidget);
+    expect(find.text('Incoming Offers'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    expect(find.text('1'), findsOneWidget);
   });
 
   testWidgets('Route notifier can switch History screen sections',
@@ -487,9 +518,115 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Clipboard History'), findsNothing);
-    expect(find.text('Pixel 9 Pro'), findsOneWidget);
-    expect(find.textContaining('Text'), findsWidgets);
+    expect(find.textContaining('Sync is fully automatic'), findsOneWidget);
+    expect(find.text('ITEMS'), findsOneWidget);
+    expect(find.text('TOTAL SIZE'), findsOneWidget);
+    expect(find.text('All devices'), findsOneWidget);
+    expect(find.text('All types'), findsOneWidget);
+    expect(find.text('Pixel 9 Pro'), findsWidgets);
+    expect(find.text('Encrypted text clip ready to fetch'), findsOneWidget);
+  });
+
+  testWidgets('clipboard source filter narrows visible offers',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-remote-1',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'text/plain',
+          'byteSize': 24,
+          'sha256': 'abc123',
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+        {
+          'offerId': 'offer-remote-2',
+          'sourceDeviceId': 'rift-peer-2',
+          'contentType': 'image/png',
+          'byteSize': 512,
+          'sha256': 'def456',
+          'expiresAt': '2099-01-02T00:00:00Z',
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel 9 Pro',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'Galaxy Tab',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pixel 9 Pro'), findsWidgets);
+    expect(find.text('Galaxy Tab'), findsWidgets);
+
+    await tester.ensureVisible(find.text('All devices'));
+    await tester.tap(find.text('All devices'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Checkbox).at(0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 of 2'), findsOneWidget);
+  });
+
+  testWidgets('clipboard type filter narrows visible offers',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-remote-1',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'text/plain',
+          'byteSize': 24,
+          'sha256': 'abc123',
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+        {
+          'offerId': 'offer-remote-2',
+          'sourceDeviceId': 'rift-peer-2',
+          'contentType': 'image/png',
+          'byteSize': 512,
+          'sha256': 'def456',
+          'expiresAt': '2099-01-02T00:00:00Z',
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('All types'), findsOneWidget);
+    await tester.tap(find.text('All types'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(Checkbox).at(0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 of 2'), findsOneWidget);
   });
 
   testWidgets('send flow uses daemon queue actions when supported',
@@ -526,7 +663,10 @@ void main() {
 
     await tester.tap(find.text('Send File'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Send Unassigned'));
+    final sendButton = find.text('Send to 1 device');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    await tester.tap(sendButton);
     await tester.pumpAndSettle();
 
     expect(client.offeredFiles, isEmpty);
@@ -616,7 +756,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('demo-1.txt'), findsOneWidget);
 
-    await tester.tap(find.text('Clear Sent'));
+    final removeButton = find.widgetWithText(OutlinedButton, 'Remove');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -300));
+    await tester.pumpAndSettle();
+    await tester.tap(removeButton);
     await tester.pump();
     await tester.pumpAndSettle();
 
@@ -703,7 +846,10 @@ void main() {
 
     await tester.tap(find.text('Send File'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.stop_circle_outlined));
+    final cancelButton = find.widgetWithText(OutlinedButton, 'Cancel');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -220));
+    await tester.pumpAndSettle();
+    await tester.tap(cancelButton);
     await tester.pumpAndSettle();
 
     expect(client.removedQueueItems, ['queue-1']);
