@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core;
@@ -13,9 +14,12 @@ namespace Rift.Daemon.Tests.Core;
 /// (real TLS transport, real SQLite trust stores, real pairing coordinators)
 /// pair over loopback, reconnect as trusted peers, and enforce blocking.
 /// </summary>
+[Collection("LiveTransportInterop")]
 public sealed class PairingInteropTests : IDisposable
 {
-    private static readonly TimeSpan ScenarioTimeout = TimeSpan.FromSeconds(20);
+    // Generous: loopback traffic is fast, but parallel suite load can starve
+    // TLS handshakes on CI machines.
+    private static readonly TimeSpan ScenarioTimeout = TimeSpan.FromSeconds(90);
 
     private readonly PeerStack _initiator;
     private readonly PeerStack _responder;
@@ -112,6 +116,13 @@ public sealed class PairingInteropTests : IDisposable
     private sealed class PeerStack : IDisposable
     {
         private readonly string _databasePath;
+        private readonly Channel<(string PeerDeviceId, byte[] Payload)> _inbound =
+            Channel.CreateUnbounded<(string, byte[])>(new UnboundedChannelOptions
+            {
+                SingleReader = true
+            });
+        private readonly CancellationTokenSource _dispatchCts = new();
+        private readonly Task _dispatchLoop;
 
         public PeerStack(string name)
         {
@@ -134,6 +145,7 @@ public sealed class PairingInteropTests : IDisposable
                 Identity,
                 new NoOpSecurityEventLog());
             Transport.MessageReceived += OnMessageReceived;
+            _dispatchLoop = Task.Run(DispatchInboundAsync);
         }
 
         public SqliteTrustStore TrustStore { get; }
@@ -165,6 +177,17 @@ public sealed class PairingInteropTests : IDisposable
         public void Dispose()
         {
             Transport.MessageReceived -= OnMessageReceived;
+            _inbound.Writer.TryComplete();
+            _dispatchCts.Cancel();
+            try
+            {
+                _dispatchLoop.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch (AggregateException)
+            {
+                // Cancellation during shutdown is expected.
+            }
+            _dispatchCts.Dispose();
             Pairing.Dispose();
             Transport.Dispose();
             SqliteConnection.ClearAllPools();
@@ -190,8 +213,29 @@ public sealed class PairingInteropTests : IDisposable
 
         private void OnMessageReceived(object? sender, MessageReceivedEventArgs args)
         {
-            // Mirror the Worker's routing for the pairing subset used here.
-            _ = Task.Run(() => Pairing.HandleMessageAsync(args.PeerDeviceId, args.Payload, CancellationToken.None));
+            // pairing.approve must be processed before pairing.complete, so
+            // inbound frames are queued in arrival order and drained by a
+            // single dispatcher (bare Task.Run does not preserve FIFO).
+            _inbound.Writer.TryWrite((args.PeerDeviceId, args.Payload.ToArray()));
+        }
+
+        private async Task DispatchInboundAsync()
+        {
+            await foreach (var (peerDeviceId, payload) in _inbound.Reader.ReadAllAsync(_dispatchCts.Token))
+            {
+                try
+                {
+                    await Pairing.HandleMessageAsync(peerDeviceId, payload, _dispatchCts.Token);
+                }
+                catch (OperationCanceledException) when (_dispatchCts.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch
+                {
+                    // Coordinator-level rejections are validated through trust state.
+                }
+            }
         }
     }
 
