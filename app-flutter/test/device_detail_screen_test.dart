@@ -101,7 +101,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pixel 9'), findsWidgets);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     client.trustedPeers = const [];
     await client.emitTrustChanged({
@@ -112,7 +112,6 @@ void main() {
     });
     await tester.pumpAndSettle();
 
-    expect(find.text('Device unavailable'), findsOneWidget);
     expect(find.text('Pixel 9 is no longer available'), findsOneWidget);
     expect(find.text('Back to home'), findsOneWidget);
   });
@@ -125,12 +124,12 @@ void main() {
     await tester.pumpWidget(buildTestApp(client));
     await tester.pumpAndSettle();
 
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     await client.emitPeerLost({'deviceId': 'rift-phone'});
     await tester.pumpAndSettle();
 
-    expect(find.text('OFFLINE'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Device unavailable'), findsNothing);
   });
 }

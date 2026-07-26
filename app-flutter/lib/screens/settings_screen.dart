@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
@@ -18,13 +19,16 @@ import '../widgets/rift_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, this.onClose});
+
+  final VoidCallback? onClose;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  String _activeTab = 'general';
   static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
   static const _androidTestNotificationPackage = 'com.example.app_flutter';
   static const _androidTestNotificationAppName = 'Rift';
@@ -41,6 +45,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       TextEditingController();
   Timer? _notificationPolicyDebounceTimer;
   String? _defaultDownloadPath;
+  double _sidebarWidth = 220.0;
 
   bool get _isDesktopPlatform =>
       WindowsShell.isSupported ||
@@ -426,90 +431,613 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildSectionHeader(String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Text(
-        title.toUpperCase(),
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              fontFamily: 'JetBrains Mono',
-              color: Theme.of(context).colorScheme.primary,
-              letterSpacing: 1.0,
+  Widget _buildTabRail(ThemeData theme, bool isSmallScreen) {
+    final tabs = [
+      ('general', 'General', Icons.tune),
+      ('identity', 'Identity', Icons.badge_outlined),
+      ('permissions', 'Permissions', Icons.security),
+      ('system', 'System Checks', Icons.check_box_outlined),
+      ('filetransfer', 'File Transfer', Icons.folder_shared_outlined),
+      ('trust', 'Trust Store', Icons.shield_outlined),
+      ('about', 'About', Icons.info_outline),
+    ];
+
+    return Container(
+      width: isSmallScreen ? 64 : _sidebarWidth,
+      color: theme.colorScheme.surfaceContainerLow,
+      padding: const EdgeInsets.all(8),
+      child: ListView(
+        children: tabs.map((tab) {
+          final id = tab.$1;
+          final label = tab.$2;
+          final icon = tab.$3;
+          final isActive = _activeTab == id;
+
+          final itemContent = Row(
+            mainAxisAlignment: isSmallScreen ? MainAxisAlignment.center : MainAxisAlignment.start,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.85),
+              ),
+              if (!isSmallScreen) ...[
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                      color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ],
+          );
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Material(
+              color: isActive ? theme.colorScheme.surface : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+              child: InkWell(
+                onTap: () => setState(() => _activeTab = id),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 0 : 10, vertical: 10),
+                  decoration: isActive ? BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+                  ) : null,
+                  child: isSmallScreen
+                      ? Tooltip(message: label, child: itemContent)
+                      : itemContent,
+                ),
+              ),
             ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildListTile({
-    required String title,
-    required String subtitle,
-    Widget? leading,
-    Widget? trailing,
-    VoidCallback? onTap,
-    bool isError = false,
-  }) {
-    final theme = Theme.of(context);
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          border: Border(
-              bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+  Widget _buildBadge(ThemeData theme, String text, Color bgColor, Color textColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(9999),
+      ),
+      child: Text(
+        text.toUpperCase(),
+        style: TextStyle(
+          fontFamily: 'JetBrains Mono',
+          fontSize: 9.5,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.6,
+          color: textColor,
         ),
-        child: Row(
+      ),
+    );
+  }
+
+  Widget _buildAndroidBadge(ThemeData theme) => _buildBadge(theme, 'Android', const Color(0xFF6E3FB0).withValues(alpha: 0.10), const Color(0xFF6E3FB0));
+  Widget _buildDesktopBadge(ThemeData theme) => _buildBadge(theme, 'Desktop', const Color(0xFF3636C5).withValues(alpha: 0.10), const Color(0xFF3636C5));
+  Widget _buildLinuxBadge(ThemeData theme) => _buildBadge(theme, 'Linux', const Color(0xFF3636C5).withValues(alpha: 0.10), const Color(0xFF3636C5));
+  Widget _buildGrantedChip(ThemeData theme) => _buildBadge(theme, 'Granted', const Color(0xFF12744F).withValues(alpha: 0.10), const Color(0xFF12744F));
+
+  Widget _buildSuccessIcon(ThemeData theme) {
+    return Container(
+      width: 26,
+      height: 26,
+      decoration: BoxDecoration(
+        color: const Color(0xFF12744F).withValues(alpha: 0.10),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(Icons.check, size: 15, color: Color(0xFF12744F)),
+    );
+  }
+
+  Widget _buildIconButton(ThemeData theme, IconData icon, String tooltip, VoidCallback onPressed) {
+    return IconButton(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      tooltip: tooltip,
+      style: IconButton.styleFrom(
+        foregroundColor: theme.colorScheme.onSurfaceVariant,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+    );
+  }
+
+  void _copyToClipboard(String text, String message) {
+    Clipboard.setData(ClipboardData(text: text));
+    RiftSnackbar.show(
+      context: context,
+      message: message,
+      type: RiftSnackbarType.success,
+    );
+  }
+
+  Widget _buildPanelHeader(ThemeData theme, String title, String desc, {Widget? badge}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            if (leading != null) ...[
-              leading,
-              const SizedBox(width: 16),
-            ],
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      color: isError
-                          ? theme.colorScheme.error
-                          : theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: isError
-                          ? theme.colorScheme.error.withValues(alpha: 0.8)
-                          : theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
+            Text(
+              title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: theme.colorScheme.onSurface,
               ),
             ),
-            if (trailing != null) ...[
-              const SizedBox(width: 16),
-              trailing,
+            if (badge != null) ...[
+              const SizedBox(width: 8),
+              badge,
             ],
           ],
         ),
+        const SizedBox(height: 4),
+        Text(
+          desc,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  Widget _buildGroupLabel(ThemeData theme, String label, {Widget? badge}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, top: 16),
+      child: Row(
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontFamily: 'JetBrains Mono',
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.0,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          if (badge != null) ...[
+            const SizedBox(width: 8),
+            badge,
+          ],
+        ],
       ),
     );
   }
 
-  Widget _buildStatusRow({
-    required IconData icon,
-    required Color color,
+  Widget _buildRow({
+    required ThemeData theme,
     required String title,
     required String subtitle,
+    Widget? leadingIcon,
     Widget? trailing,
+    Widget? titleBadge,
+    bool isMonoTitle = false,
+    bool isMonoSubtitle = false,
+    VoidCallback? onTap,
   }) {
-    return _buildListTile(
-      leading: Icon(icon, color: color),
-      title: title,
-      subtitle: subtitle,
-      trailing: trailing,
+    final content = Container(
+      padding: const EdgeInsets.symmetric(vertical: 13),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
+      ),
+      child: Row(
+        children: [
+          if (leadingIcon != null) ...[
+            leadingIcon,
+            const SizedBox(width: 16),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontFamily: isMonoTitle ? 'JetBrains Mono' : null,
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                    ),
+                    if (titleBadge != null) ...[
+                      const SizedBox(width: 8),
+                      titleBadge,
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontFamily: isMonoSubtitle ? 'JetBrains Mono' : null,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 16),
+            trailing,
+          ],
+        ],
+      ),
+    );
+
+    if (onTap != null) {
+      return InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: content,
+      );
+    }
+    return content;
+  }
+
+  Widget _buildGeneralPanel(ThemeData theme, String displayName) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'General', 'Basic identity and pairing preferences for this device.'),
+        _buildRow(
+          theme: theme,
+          title: 'Device name',
+          subtitle: displayName,
+          trailing: _buildIconButton(theme, Icons.edit, 'Rename device', () => _showEditDeviceNameDialog(displayName)),
+          onTap: () => _showEditDeviceNameDialog(displayName),
+        ),
+        _buildRow(
+          theme: theme,
+          title: 'Pair by IP',
+          subtitle: 'Manually pair with a device using its IP address',
+          trailing: _buildIconButton(theme, Icons.router, 'Pair by IP', _showManualPairDialog),
+          onTap: _showManualPairDialog,
+        ),
+        _buildRow(
+          theme: theme,
+          title: 'Theme',
+          subtitle: 'System default',
+          trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
+          onTap: () {},
+        ),
+      ],
+    );
+  }
+
+  Widget _buildIdentityPanel(ThemeData theme, String deviceId, String fingerprint) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'Identity', 'Your device\'s unique cryptographic identity, used to verify trust with peers.'),
+        _buildRow(
+          theme: theme,
+          title: 'Device ID',
+          subtitle: deviceId,
+          isMonoSubtitle: true,
+          trailing: _buildIconButton(theme, Icons.copy, 'Copy Device ID', () => _copyToClipboard(deviceId, 'Device ID copied to clipboard')),
+        ),
+        _buildRow(
+          theme: theme,
+          title: 'Fingerprint',
+          subtitle: fingerprint,
+          isMonoSubtitle: true,
+          trailing: _buildIconButton(theme, Icons.copy, 'Copy Fingerprint', () => _copyToClipboard(fingerprint, 'Fingerprint copied to clipboard')),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPermissionsPanel(ThemeData theme, String localNetworkSubtitle, String backgroundExecSubtitle) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'Permissions & System Sync', 'Control what Rift can access on this device and how notifications mirror across your devices.'),
+        _buildGroupLabel(theme, 'SYSTEM ACCESS'),
+        _buildRow(
+          theme: theme,
+          title: 'Local Network',
+          subtitle: localNetworkSubtitle,
+          leadingIcon: _buildSuccessIcon(theme),
+        ),
+        _buildRow(
+          theme: theme,
+          title: 'Notifications',
+          subtitle: _notificationPermissionSubtitle,
+          leadingIcon: Icon(_notificationPermissionIcon, color: _notificationPermissionColor(theme), size: 20),
+          trailing: _notificationsAuthorized
+              ? _buildGrantedChip(theme)
+              : (_canManageNotificationSettings
+                  ? ElevatedButton(
+                      onPressed: _handleNotificationPermissionAction,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: theme.colorScheme.primary,
+                        foregroundColor: theme.colorScheme.onPrimary,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      ),
+                      child: Text(_notificationPermissionActionLabel, style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.bold)),
+                    )
+                  : null),
+        ),
+        if (AndroidShell.isSupported)
+          _buildRow(
+            theme: theme,
+            title: 'Notification access',
+            subtitle: _notificationAccessSubtitle,
+            titleBadge: _buildAndroidBadge(theme),
+            leadingIcon: Icon(_notificationAccessIcon, color: _notificationAccessColor(theme), size: 20),
+            trailing: _notificationAccessAuthorized
+                ? _buildGrantedChip(theme)
+                : ElevatedButton(
+                    onPressed: _openNotificationAccessSettings,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    ),
+                    child: const Text('OPEN SETTINGS', style: TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+          ),
+        _buildRow(
+          theme: theme,
+          title: 'Background Exec',
+          subtitle: backgroundExecSubtitle,
+        ),
+        _buildGroupLabel(theme, 'NOTIFICATION SYNC'),
+        _buildRow(
+          theme: theme,
+          title: 'Clipboard received notifications',
+          subtitle: 'Off by default. Shows a system notification when automatic clipboard sync receives content.',
+          trailing: Switch(
+            value: _clipboardNotificationsEnabled,
+            onChanged: _setClipboardNotificationsEnabled,
+          ),
+        ),
+        _buildRow(
+          theme: theme,
+          title: 'Android notification sync',
+          subtitle: _notificationAccessAuthorized
+              ? 'Mirror Android notifications to trusted desktop devices only.'
+              : 'On by default, but Android notification access must be enabled before sync can work.',
+          titleBadge: _buildAndroidBadge(theme),
+          trailing: Switch(
+            value: _notificationSyncEnabled,
+            onChanged: (enabled) async {
+              setState(() {
+                _notificationSyncEnabled = enabled;
+              });
+              await _persistNotificationSyncPolicy();
+            },
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Notification blacklist', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface)),
+              const SizedBox(height: 2),
+              Text('One Android package per line. Blacklisted apps stay local.', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _notificationBlacklistController,
+                minLines: 2,
+                maxLines: 4,
+                style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 13),
+                onChanged: (_) => _scheduleNotificationSyncPolicyPersist(),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: theme.colorScheme.surfaceContainerLow,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: theme.colorScheme.outlineVariant)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6))),
+                  contentPadding: const EdgeInsets.all(12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              if (AndroidShell.isSupported)
+                OutlinedButton.icon(
+                  onPressed: _showTestNotification,
+                  icon: const Icon(Icons.notifications_active_outlined, size: 16),
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Test notification '),
+                      _buildAndroidBadge(theme),
+                    ],
+                  ),
+                ),
+              if (_isDesktopPlatform)
+                OutlinedButton.icon(
+                  onPressed: _showDesktopTestNotification,
+                  icon: const Icon(Icons.desktop_windows_outlined, size: 16),
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Test desktop sync '),
+                      _buildDesktopBadge(theme),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSystemPanel(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(
+          theme,
+          'System Checks',
+          'Platform-level dependencies Rift needs to discover and sync with other devices.',
+          badge: Platform.isLinux ? _buildLinuxBadge(theme) : (Platform.isAndroid ? _buildAndroidBadge(theme) : _buildDesktopBadge(theme)),
+        ),
+        if (Platform.isLinux) ...[
+          _buildRow(theme: theme, title: 'avahi-daemon', subtitle: 'running', leadingIcon: _buildSuccessIcon(theme), isMonoTitle: true, isMonoSubtitle: true),
+          _buildRow(theme: theme, title: 'appindicator', subtitle: 'supported', leadingIcon: _buildSuccessIcon(theme), isMonoTitle: true, isMonoSubtitle: true),
+        ] else if (Platform.isAndroid) ...[
+          _buildRow(theme: theme, title: 'Android Clipboard Monitoring', subtitle: 'Rift uses platform clipboard APIs and foreground service flow. Accessibility Service is not required.', leadingIcon: _buildSuccessIcon(theme)),
+        ] else ...[
+          _buildRow(theme: theme, title: 'Platform check', subtitle: 'No platform-specific checks for ${Platform.operatingSystem} yet.'),
+        ],
+        if (Platform.isAndroid) ...[
+          _buildGroupLabel(theme, 'CLIPBOARD', badge: _buildAndroidBadge(theme)),
+          _buildRow(theme: theme, title: 'Background clipboard monitoring', subtitle: 'Uses Rift foreground service when background sync is active'),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildFileTransferPanel(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'File Transfer', 'Where files received from trusted devices are saved.'),
+        _buildRow(
+          theme: theme,
+          title: 'Default Download Location',
+          subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
+          isMonoSubtitle: true,
+          trailing: _buildIconButton(theme, Icons.folder_open, 'Choose folder', _pickDefaultDownloadPath),
+          onTap: _pickDefaultDownloadPath,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTrustPanel(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'Trust Store', 'Manage the cryptographic keys and certificates of every device you\'ve trusted.'),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () {
+              RiftSnackbar.show(context: context, message: 'Trust Store management is under development.', type: RiftSnackbarType.info);
+            },
+            icon: const Icon(Icons.folder_outlined, size: 18),
+            label: const Text('MANAGE TRUST STORE', style: TextStyle(fontFamily: 'JetBrains Mono', fontWeight: FontWeight.bold)),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildAboutPanel(ThemeData theme, String implementationId, String protocolVersion) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(theme, 'About Application', 'Build, protocol, and audit information.'),
+        _buildRow(theme: theme, title: 'Implementation', subtitle: implementationId),
+        _buildRow(theme: theme, title: 'Protocol version', subtitle: protocolVersion, isMonoSubtitle: true),
+        _buildRow(
+          theme: theme,
+          title: 'Event log',
+          subtitle: 'Open the full local audit trail',
+          trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const EventLogScreen(),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActivePanel(
+    ThemeData theme,
+    String displayName,
+    String deviceId,
+    String fingerprint,
+    String implementationId,
+    String protocolVersion,
+    String localNetworkSubtitle,
+    String backgroundExecSubtitle,
+  ) {
+    Widget content;
+    switch (_activeTab) {
+      case 'identity':
+        content = _buildIdentityPanel(theme, deviceId, fingerprint);
+        break;
+      case 'permissions':
+        content = _buildPermissionsPanel(theme, localNetworkSubtitle, backgroundExecSubtitle);
+        break;
+      case 'system':
+        content = _buildSystemPanel(theme);
+        break;
+      case 'filetransfer':
+        content = _buildFileTransferPanel(theme);
+        break;
+      case 'trust':
+        content = _buildTrustPanel(theme);
+        break;
+      case 'about':
+        content = _buildAboutPanel(theme, implementationId, protocolVersion);
+        break;
+      case 'general':
+      default:
+        content = _buildGeneralPanel(theme, displayName);
+        break;
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (_error != null) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.errorContainer,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                _error!,
+                style: TextStyle(color: theme.colorScheme.onErrorContainer),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+          content,
+        ],
+      ),
     );
   }
 
@@ -521,9 +1049,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return Scaffold(
         backgroundColor: theme.colorScheme.surface,
         appBar: AppBar(
+            automaticallyImplyLeading: widget.onClose == null,
+            titleSpacing: widget.onClose != null ? 16 : null,
             title: const Text('Settings',
                 style: TextStyle(
-                    fontFamily: 'Inter', fontWeight: FontWeight.bold))),
+                    fontFamily: 'Inter', fontSize: 22, fontWeight: FontWeight.w700)),
+            actions: widget.onClose != null
+                ? [
+                    IconButton(
+                      onPressed: widget.onClose,
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Close Settings',
+                    ),
+                    const SizedBox(width: 8),
+                  ]
+                : null),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -544,429 +1084,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? 'Rift uses a foreground service; some vendors may still restrict background work'
         : 'Handled by the desktop session and local daemon';
 
+    final isSmallScreen = MediaQuery.of(context).size.width < 720;
+
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: theme.colorScheme.surface,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        automaticallyImplyLeading: widget.onClose == null,
         iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
-        titleSpacing: 0,
+        titleSpacing: widget.onClose != null ? 16 : null,
         title: Text(
           'Settings',
-          style: theme.textTheme.headlineMedium?.copyWith(
-            fontWeight: FontWeight.bold,
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontFamily: 'Inter',
+            fontSize: 22,
+            fontWeight: FontWeight.w700,
             color: theme.colorScheme.onSurface,
-            letterSpacing: -0.5,
           ),
         ),
+        actions: [
+          if (widget.onClose != null) ...[
+            IconButton(
+              onPressed: widget.onClose,
+              icon: const Icon(Icons.close, size: 20),
+              tooltip: 'Close Settings',
+            ),
+            const SizedBox(width: 8),
+          ],
+        ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+        ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (_error != null) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              color: theme.colorScheme.errorContainer,
-              child: Text(_error!,
-                  style: TextStyle(color: theme.colorScheme.onErrorContainer)),
-            ),
-            const SizedBox(height: 24),
-          ],
-          _buildSectionHeader('General'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _buildListTile(
-                  title: 'Device name',
-                  subtitle: displayName,
-                  trailing: Icon(Icons.edit, color: theme.colorScheme.outline),
-                  onTap: () {
-                    _showEditDeviceNameDialog(displayName);
-                  },
-                ),
-                _buildListTile(
-                  title: 'Pair by IP',
-                  subtitle: 'Manually pair with a device using its IP address',
-                  trailing: Icon(Icons.router, color: theme.colorScheme.outline),
-                  onTap: () {
-                    _showManualPairDialog();
-                  },
-                ),
-                _buildListTile(
-                  title: 'Theme',
-                  subtitle: 'System default',
-                  trailing: Icon(Icons.chevron_right,
-                      color: theme.colorScheme.outline),
-                  onTap: () {},
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('Identity'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _buildListTile(
-                  title: 'Device ID',
-                  subtitle: deviceId,
-                ),
-                _buildListTile(
-                  title: 'Fingerprint',
-                  subtitle: fingerprint,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('Permissions'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _buildStatusRow(
-                  icon: Icons.check_circle,
-                  color: theme.colorScheme.secondary,
-                  title: 'Local Network',
-                  subtitle: localNetworkSubtitle,
-                ),
-                _buildStatusRow(
-                  icon: _notificationPermissionIcon,
-                  color: _notificationPermissionColor(theme),
-                  title: 'Notifications',
-                  subtitle: _notificationPermissionSubtitle,
-                  trailing: !_notificationsAuthorized &&
-                          _canManageNotificationSettings
-                      ? ElevatedButton(
-                          onPressed: _handleNotificationPermissionAction,
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: theme.colorScheme.primary,
-                            foregroundColor: theme.colorScheme.onPrimary,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                          ),
-                          child: Text(
-                            _notificationPermissionActionLabel,
-                            style: const TextStyle(
-                              fontFamily: 'JetBrains Mono',
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        )
-                      : null,
-                ),
-                if (AndroidShell.isSupported)
-                  _buildStatusRow(
-                    icon: _notificationAccessIcon,
-                    color: _notificationAccessColor(theme),
-                    title: 'Notification access',
-                    subtitle: _notificationAccessSubtitle,
-                    trailing: !_notificationAccessAuthorized
-                        ? ElevatedButton(
-                            onPressed: _openNotificationAccessSettings,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: theme.colorScheme.primary,
-                              foregroundColor: theme.colorScheme.onPrimary,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                            ),
-                            child: const Text(
-                              'OPEN SETTINGS',
-                              style: TextStyle(
-                                fontFamily: 'JetBrains Mono',
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          )
-                        : null,
-                  ),
-                _buildStatusRow(
-                  icon: Icons.info,
-                  color: theme.colorScheme.outline,
-                  title: 'Background Exec',
-                  subtitle: backgroundExecSubtitle,
-                ),
-                Material(
+          _buildTabRail(theme, isSmallScreen),
+          if (!isSmallScreen)
+            MouseRegion(
+              cursor: SystemMouseCursors.resizeColumn,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onPanUpdate: (details) {
+                  setState(() {
+                    _sidebarWidth = (_sidebarWidth + details.delta.dx).clamp(160.0, 400.0);
+                  });
+                },
+                child: Container(
+                  width: 8,
                   color: Colors.transparent,
-                  child: SwitchListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    secondary: Icon(
-                      Icons.content_paste,
-                      color: theme.colorScheme.outline,
-                    ),
-                    title: const Text('Clipboard received notifications'),
-                    subtitle: Text(
-                      'Off by default. Show a system notification when automatic clipboard sync receives content.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
+                  child: Center(
+                    child: Container(
+                      width: 2,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(1),
                       ),
-                    ),
-                    value: _clipboardNotificationsEnabled,
-                    onChanged: _setClipboardNotificationsEnabled,
-                  ),
-                ),
-                Material(
-                  color: Colors.transparent,
-                  child: SwitchListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    secondary: Icon(
-                      Icons.notifications_active,
-                      color: theme.colorScheme.outline,
-                    ),
-                    title: const Text('Android notification sync'),
-                    subtitle: Text(
-                      _notificationAccessAuthorized
-                          ? 'On by default. Mirror Android notifications to trusted desktop devices only.'
-                          : 'On by default, but Android notification access must be enabled before sync can work.',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    value: _notificationSyncEnabled,
-                    onChanged: (enabled) async {
-                      setState(() {
-                        _notificationSyncEnabled = enabled;
-                      });
-                      await _persistNotificationSyncPolicy();
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  child: TextField(
-                    controller: _notificationBlacklistController,
-                    minLines: 2,
-                    maxLines: 4,
-                    onChanged: (_) {
-                      _scheduleNotificationSyncPolicyPersist();
-                    },
-                    decoration: const InputDecoration(
-                      labelText: 'Notification blacklist',
-                      helperText:
-                          'One Android package per line. Blacklisted apps stay local.',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                 ),
-                if (AndroidShell.isSupported)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _showTestNotification,
-                        icon: const Icon(Icons.notifications_active_outlined),
-                        label: const Text('Test notification'),
-                      ),
-                    ),
-                  ),
-                if (_isDesktopPlatform)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _showDesktopTestNotification,
-                        icon: const Icon(Icons.desktop_windows_outlined),
-                        label: const Text('Test desktop sync'),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('System Checks'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (Platform.isAndroid) ...[
-                  Container(
-                    color: theme.colorScheme.surfaceContainer,
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Android Clipboard Monitoring',
-                          style: theme.textTheme.bodyLarge
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Rift uses the platform clipboard APIs and foreground service flow for clipboard syncing. Accessibility Service is not required.',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (Platform.isLinux) ...[
-                  Container(
-                    color: theme.colorScheme.surfaceContainer,
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Linux Daemon Dependencies',
-                            style: theme.textTheme.bodyLarge
-                                ?.copyWith(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(Icons.done,
-                                size: 16, color: theme.colorScheme.secondary),
-                            const SizedBox(width: 8),
-                            Text('avahi-daemon: running',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    fontFamily: 'JetBrains Mono',
-                                    color: theme.colorScheme.secondary)),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(Icons.done,
-                                size: 16, color: theme.colorScheme.secondary),
-                            const SizedBox(width: 8),
-                            Text('appindicator: supported',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    fontFamily: 'JetBrains Mono',
-                                    color: theme.colorScheme.secondary)),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (!Platform.isAndroid && !Platform.isLinux) ...[
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Text(
-                        'No platform-specific checks for ${Platform.operatingSystem} yet.',
-                        style: theme.textTheme.bodyMedium),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          if (Platform.isAndroid) ...[
-            const SizedBox(height: 32),
-            _buildSectionHeader('Clipboard'),
-            Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLow,
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-                borderRadius: BorderRadius.circular(8),
               ),
-              child: Column(
-                children: [
-                  _buildListTile(
-                    title: 'Background clipboard monitoring',
-                    subtitle:
-                        'Uses Rift foreground service when background sync is active',
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 32),
-          _buildSectionHeader('File Transfer'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _buildListTile(
-                  title: 'Default Download Location',
-                  subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
-                  trailing: Icon(Icons.folder_open, color: theme.colorScheme.outline),
-                  onTap: _pickDefaultDownloadPath,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('Trust Store'),
-          OutlinedButton.icon(
-            onPressed: () {},
-            icon: const Icon(Icons.folder),
-            label: const Text('MANAGE TRUST STORE',
-                style: TextStyle(
-                    fontFamily: 'JetBrains Mono', fontWeight: FontWeight.bold)),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.all(16),
-              foregroundColor: theme.colorScheme.primary,
-              side: BorderSide(color: theme.colorScheme.outlineVariant),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-              backgroundColor: theme.colorScheme.surfaceContainer,
-            ),
-          ),
-          const SizedBox(height: 32),
-          _buildSectionHeader('About Application'),
-          Container(
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _buildListTile(
-                  title: 'Implementation',
-                  subtitle: implementationId,
-                ),
-                _buildListTile(
-                  title: 'Protocol version',
-                  subtitle: protocolVersion,
-                ),
-                _buildListTile(
-                  title: 'Event log',
-                  subtitle: 'Open the full local audit trail',
-                  trailing: Icon(Icons.chevron_right,
-                      color: theme.colorScheme.outline),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const EventLogScreen(),
-                      ),
-                    );
-                  },
-                ),
-              ],
+            )
+          else
+            VerticalDivider(width: 1, thickness: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+          Expanded(
+            child: _buildActivePanel(
+              theme,
+              displayName,
+              deviceId,
+              fingerprint,
+              implementationId,
+              protocolVersion,
+              localNetworkSubtitle,
+              backgroundExecSubtitle,
             ),
           ),
         ],

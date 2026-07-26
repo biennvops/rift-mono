@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_drop
   screen_retriever_linux
   sqlite3_flutter_libs
   tray_manager

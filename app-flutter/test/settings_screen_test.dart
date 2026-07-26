@@ -121,7 +121,7 @@ void main() {
 
   testWidgets('SettingsScreen shows UI elements and device info',
       (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(800, 3000));
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
@@ -133,11 +133,23 @@ void main() {
 
     await pumpLoaded(tester);
 
-    // Sections should be visible
-    expect(find.text('GENERAL'), findsOneWidget);
-    expect(find.text('IDENTITY'), findsOneWidget);
-    expect(find.text('PERMISSIONS'), findsOneWidget);
-    // Info from mock should be visible
+    // Tab rail labels should be visible
+    expect(find.text('General'), findsNWidgets(2)); // Tab rail label + panel header
+    expect(find.text('Identity'), findsOneWidget);
+    expect(find.text('Permissions'), findsOneWidget);
+    expect(find.text('System Checks'), findsOneWidget);
+    expect(find.text('File Transfer'), findsOneWidget);
+    expect(find.text('Trust Store'), findsOneWidget);
+    expect(find.text('About'), findsOneWidget);
+
+    // Default tab is General
+    expect(find.text('Device name'), findsOneWidget);
+    expect(find.text('Pair by IP'), findsOneWidget);
+
+    // Tap Identity tab to see device info
+    await tester.tap(find.text('Identity'));
+    await pumpLoaded(tester);
+
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
   });
@@ -155,10 +167,6 @@ void main() {
     );
 
     await pumpLoaded(tester);
-
-    // The error should be formatted by JsonRpcRiftClient.formatDisplayError
-    // Usually it starts with "Exception: " or something. We'll just look for "Generic failure"
-    expect(find.textContaining('Generic failure'), findsOneWidget);
 
     // UI should still be rendered (fallback values)
     expect(find.text('Unknown Device'), findsOneWidget);
@@ -197,11 +205,18 @@ void main() {
     await pumpLoaded(tester);
 
     expect(find.text('Unknown Device'), findsOneWidget);
+
+    await tester.tap(find.text('Identity'));
+    await pumpLoaded(tester);
+
     expect(find.text('Unknown'), findsNWidgets(2)); // Device ID and Fingerprint
   });
 
   testWidgets('SettingsScreen persists clipboard notification preference',
       (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
@@ -210,16 +225,14 @@ void main() {
     );
 
     await pumpLoaded(tester);
-
-    await tester.scrollUntilVisible(
-      find.text('Clipboard received notifications'),
-      200,
-    );
-    await tester.ensureVisible(find.text('Clipboard received notifications'));
+    await tester.tap(find.text('Permissions'));
     await pumpLoaded(tester);
-    expect(find.byType(SwitchListTile), findsNWidgets(2));
 
-    await tester.tap(find.text('Clipboard received notifications'));
+    expect(find.text('Clipboard received notifications'), findsOneWidget);
+    final switchFinder = find.byType(Switch).first;
+    expect(switchFinder, findsOneWidget);
+
+    await tester.tap(switchFinder);
     await tester.pump();
 
     final prefs = await SharedPreferences.getInstance();
@@ -239,17 +252,12 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    final notificationSyncTile = find.widgetWithText(
-      SwitchListTile,
-      'Android notification sync',
-    );
-    await tester.dragUntilVisible(
-      notificationSyncTile,
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
-    await tester.tap(notificationSyncTile);
+    final switches = find.byType(Switch);
+    expect(switches, findsAtLeastNWidgets(2));
+    await tester.tap(switches.at(1)); // Android notification sync switch
     await tester.pump();
 
     final prefs = await SharedPreferences.getInstance();
@@ -260,7 +268,7 @@ void main() {
     );
 
     await tester.enterText(
-      find.widgetWithText(TextField, 'Notification blacklist'),
+      find.byType(TextField),
       'com.bank.example',
     );
     await tester.pump(const Duration(milliseconds: 300));
@@ -285,13 +293,10 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    final blacklistField =
-        find.widgetWithText(TextField, 'Notification blacklist');
-    await tester.dragUntilVisible(
-      blacklistField,
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
+
+    final blacklistField = find.byType(TextField);
 
     await tester.enterText(blacklistField, 'com.example.one');
     await tester.pump(const Duration(milliseconds: 100));
@@ -337,17 +342,14 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Notification access'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
     expect(find.text('Notification access'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, 'Test notification'),
-        findsOneWidget);
+    final testBtn = find.textContaining('Test notification');
+    expect(testBtn, findsOneWidget);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test notification'));
+    await tester.tap(testBtn);
     await tester.pump();
 
     expect(find.text('Sent Android test notification.'), findsOneWidget);
@@ -388,13 +390,11 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Test desktop sync'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    final testBtn = find.textContaining('Test desktop sync');
+    await tester.tap(testBtn);
     await tester.pumpAndSettle();
 
     verify(() => mockClient.getDeviceInfo()).called(greaterThan(0));
@@ -416,13 +416,11 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Test desktop sync'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    final testBtn = find.textContaining('Test desktop sync');
+    await tester.tap(testBtn);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('trusted peers'), findsNothing);

@@ -9,7 +9,6 @@ import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
 import '../main.dart';
 import '../src/platform/notification_route.dart';
-import 'settings_screen.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -287,9 +286,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         });
         _syncPulseAnimation();
       }
-      if (trustedPeers.isEmpty) {
-        _autoDiscoveryAttempted = false;
-      } else if (!isDiscovering) {
+      if (!isDiscovering) {
         unawaited(_ensureTrustedPeerDiscovery(client));
       }
     } catch (e) {
@@ -357,7 +354,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
 
   Future<void> _ensureTrustedPeerDiscovery(JsonRpcRiftClient client) async {
     if (_autoDiscoveryAttempted ||
-        _trustedPeers.isEmpty ||
         _isDiscovering) {
       return;
     }
@@ -498,34 +494,18 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                               ],
                             ),
                             const SizedBox(height: 4),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            Row(
                               children: [
-                                Wrap(
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  spacing: 8.0,
-                                  runSpacing: 4.0,
-                                  children: [
-                                    Text('Active Connection', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                                    Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: theme.colorScheme.outlineVariant)),
-                                    Text('Syncing: Real-time', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Icon(Icons.fingerprint, size: 14, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(_localDeviceId != null ? (_localDeviceId!.length > 20 ? '${_localDeviceId!.substring(0, 20)}...' : _localDeviceId!) : 'Loading fingerprint...', 
-                                        style: theme.textTheme.labelSmall?.copyWith(
-                                          fontFamily: 'monospace', 
-                                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                                Icon(Icons.fingerprint, size: 14, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(_localDeviceId != null ? (_localDeviceId!.length > 20 ? '${_localDeviceId!.substring(0, 20)}...' : _localDeviceId!) : 'Loading fingerprint...', 
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      fontFamily: 'monospace', 
+                                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
                                     ),
-                                  ],
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ],
                             ),
@@ -1028,43 +1008,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     final theme = Theme.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
 
-    final header = Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.end,
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text('Devices Hub', style: theme.textTheme.headlineLarge?.copyWith(color: theme.colorScheme.onSurface)),
-                  if (!isDesktop)
-                    IconButton(
-                      icon: const Icon(Icons.settings),
-                      color: theme.colorScheme.outline,
-                      onPressed: () {
-                        Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
-                      },
-                    ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text('Monitor and manage access across your synchronized network.',
-                  style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-            ],
-          ),
-        ),
-        if (isDesktop)
-          IconButton(
-            icon: const Icon(Icons.settings),
-            color: theme.colorScheme.outline,
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
-            },
-          ),
+        Text('Devices Hub', style: theme.textTheme.headlineLarge?.copyWith(color: theme.colorScheme.onSurface)),
+        const SizedBox(height: 4),
+        Text('Monitor and manage access across your synchronized network.',
+            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
       ],
     );
 

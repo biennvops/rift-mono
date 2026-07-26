@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
+import 'package:app_flutter/src/platform/linux_notifications.dart';
 import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
@@ -59,6 +60,18 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackUpdated =>
+      const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
+      const Stream.empty();
+
+  @override
   Stream<Map<String, dynamic>> get onSendQueueChanged =>
       const Stream<Map<String, dynamic>>.empty();
 
@@ -100,6 +113,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
+
+  @override
+  Future<dynamic> listMediaPlayback() async => {'playback': []};
+
+  @override
+  Future<dynamic> listNotifications() async => {'notifications': []};
 
   @override
   Future<bool> supportsSendQueue() async => false;
@@ -189,7 +208,8 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     MacOSNotifications.debugIsMacOSOverride = true;
-    WindowsShell.debugIsWindowsOverride = null;
+    WindowsShell.debugIsWindowsOverride = false;
+    LinuxNotifications.debugIsLinuxOverride = false;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
     notificationPostedController = StreamController<Map<String, dynamic>>.broadcast();
@@ -232,6 +252,12 @@ void main() {
         .thenAnswer((_) => notificationUpdatedController.stream);
     when(() => mockClient.onNotificationRemoved)
         .thenAnswer((_) => notificationRemovedController.stream);
+    when(() => mockClient.onMediaPlaybackPosted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackRemoved)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onNotificationActionResult)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
@@ -256,6 +282,10 @@ void main() {
         )).thenAnswer((_) async => {'operations': [], 'total': 0});
     when(() => mockClient.listClipboardOffers())
         .thenAnswer((_) async => {'offers': []});
+    when(() => mockClient.listMediaPlayback())
+        .thenAnswer((_) async => {'playback': []});
+    when(() => mockClient.listNotifications())
+        .thenAnswer((_) async => {'notifications': []});
     when(() => mockClient.supportsSendQueue()).thenAnswer((_) async => false);
     when(() => mockClient.listSendQueue())
         .thenAnswer((_) async => {'items': []});
@@ -325,6 +355,13 @@ void main() {
         return null;
       },
     );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('desktop_drop'),
+      (call) async {
+        return null;
+      },
+    );
   });
 
   tearDown(() {
@@ -351,11 +388,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Devices'), findsOneWidget);
-    expect(find.text('History'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
-    expect(find.text('Ops'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    expect(find.text('RIFT'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+    expect(find.text('Rift'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsWidgets);
+    expect(find.byTooltip('Notifications'), findsWidgets);
   });
 
   test('MockClient getDeviceInfo test', () async {
@@ -386,11 +423,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
+    expect(find.textContaining('Linux Laptop'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });

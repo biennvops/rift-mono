@@ -17,6 +17,7 @@ import 'screens/pairing_screen.dart';
 import 'screens/trusted_devices_screen.dart';
 import 'screens/clipboard_transfer_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/notifications_and_media_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,6 +29,8 @@ import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'widgets/rift_snackbar.dart';
 import 'widgets/premium_dialog.dart';
+import 'widgets/file_drop_overlay.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
@@ -828,8 +831,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _appShellKey.currentState?.showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
-      case NotificationRoute.historyNotifications:
         _appShellKey.currentState?.showHistoryRoute(route);
+        return;
+      case NotificationRoute.historyNotifications:
+        _appShellKey.currentState?.showNotificationsRoute();
         return;
       case NotificationRoute.pairing:
         _openIncomingPairingRequest(payload);
@@ -1234,7 +1239,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     unawaited(() async {
       try {
-        if (Platform.isAndroid) {
+        if (AndroidShell.isSupported) {
           final sourcePlatform = event['sourcePlatform']?.toString();
           if (sourcePlatform != 'windows' &&
               sourcePlatform != 'macos' &&
@@ -1249,7 +1254,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isWindows) {
+        if (WindowsShell.isSupported) {
           await WindowsShell.showNotification(
             title: notificationTitle,
             body: notificationBody,
@@ -1258,7 +1263,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isLinux) {
+        if (LinuxNotifications.isSupported) {
           await LinuxNotifications.show(
             title: notificationTitle,
             body: notificationBody,
@@ -1268,7 +1273,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
-        if (Platform.isMacOS) {
+        if (MacOSNotifications.isSupported) {
           await MacOSNotifications.show(
             title: notificationTitle,
             body: notificationBody,
@@ -1727,6 +1732,63 @@ class AppShellState extends State<AppShell> {
   int _currentIndex = 0;
   bool _isSidebarCollapsed = false;
   double _sidebarWidth = 280.0;
+  bool _isDragOverlayVisible = false;
+
+  String _guessMediaTypeFromName(String fileName) {
+    final normalized = fileName.toLowerCase();
+    if (normalized.endsWith('.txt')) return 'text/plain';
+    if (normalized.endsWith('.json')) return 'application/json';
+    if (normalized.endsWith('.pdf')) return 'application/pdf';
+    if (normalized.endsWith('.csv')) return 'text/csv';
+    if (normalized.endsWith('.md')) return 'text/markdown';
+    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+    if (normalized.endsWith('.png')) return 'image/png';
+    if (normalized.endsWith('.gif')) return 'image/gif';
+    if (normalized.endsWith('.webp')) return 'image/webp';
+    if (normalized.endsWith('.heic')) return 'image/heic';
+    if (normalized.endsWith('.mp4')) return 'video/mp4';
+    if (normalized.endsWith('.webm')) return 'video/webm';
+    if (normalized.endsWith('.mov')) return 'video/quicktime';
+    if (normalized.endsWith('.mkv')) return 'video/x-matroska';
+    if (normalized.endsWith('.avi')) return 'video/x-msvideo';
+    if (normalized.endsWith('.mp3')) return 'audio/mpeg';
+    if (normalized.endsWith('.wav')) return 'audio/wav';
+    if (normalized.endsWith('.zip')) return 'application/zip';
+    if (normalized.endsWith('.7z')) return 'application/x-7z-compressed';
+    if (normalized.endsWith('.tar')) return 'application/x-tar';
+    if (normalized.endsWith('.gz')) return 'application/gzip';
+    return 'application/octet-stream';
+  }
+
+  Future<void> _handleFilesDropped(List<dynamic> files) async {
+    if (files.isEmpty) return;
+    
+    final requests = <Map<String, String>>[];
+    for (final file in files) {
+      requests.add({
+        'localPath': file.path,
+        'fileName': file.name,
+        'mediaType': _guessMediaTypeFromName(file.name),
+      });
+    }
+    
+    // Auto enqueue to SendQueueController
+    if (!mounted) return;
+    final queue = context.read<SendQueueController>();
+    await queue.enqueueRequests(requests);
+    
+    // Switch to activity / send tab if not already there
+    showHistoryRoute(NotificationRoute.historySend);
+    
+    if (mounted) {
+      final messenger = ScaffoldMessenger.of(context);
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: 'Dropped ${files.length} file(s). Select devices to send.',
+        type: RiftSnackbarType.success,
+      );
+    }
+  }
 
   late final List<Widget> _screens = [
     const TrustedDevicesScreen(),
@@ -1743,6 +1805,10 @@ class AppShellState extends State<AppShell> {
       _currentIndex = 1;
     });
     widget.historyRouteNotifier?.value = route;
+  }
+
+  void showNotificationsRoute() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const NotificationsAndMediaScreen()));
   }
 
   void showRoute(String route) {
@@ -1802,13 +1868,181 @@ class AppShellState extends State<AppShell> {
     );
   }
 
+  Widget _buildDesktopTopBar(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3),
+          ),
+        ),
+      ),
+      child: Row(
+        children: [
+          if (_isSidebarCollapsed) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.asset('assets/images/rift_logo.png', width: 44, height: 44, fit: BoxFit.cover),
+            ),
+            const SizedBox(width: 12),
+            Text(
+              'Rift',
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+          ],
+          const Spacer(),
+          if (_isSidebarCollapsed)
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              tooltip: 'Add Device',
+              onPressed: () => _showAddDeviceDialog(context),
+              style: IconButton.styleFrom(
+                foregroundColor: theme.colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            Tooltip(
+              message: 'Add Device',
+              child: FilledButton.icon(
+                onPressed: () => _showAddDeviceDialog(context),
+                icon: const Icon(Icons.add_circle_outline, size: 18),
+                label: const Text('Add Device'),
+                style: FilledButton.styleFrom(
+                  foregroundColor: theme.colorScheme.onPrimary,
+                  backgroundColor: theme.colorScheme.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+              ),
+            ),
+          SizedBox(width: _isSidebarCollapsed ? 6 : 14),
+          _TopBarPopoverButton(
+            icon: Icons.notifications_outlined,
+            activeIcon: Icons.notifications,
+            tooltip: 'Notifications',
+            offset: const Offset(-340, 48),
+            popoverBuilder: (close) => _buildNotificationsPopover(context, close),
+          ),
+          SizedBox(width: _isSidebarCollapsed ? 6 : 14),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () => _showSettingsDialog(context),
+            style: IconButton.styleFrom(
+              foregroundColor: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddDeviceDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => const Dialog(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        child: PairDeviceScreen(),
+      ),
+    );
+  }
+
+  void _showSettingsDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => _ResizableDialogContainer(
+        child: SettingsScreen(
+          onClose: () => Navigator.of(dialogContext).pop(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNotificationsPopover(BuildContext context, VoidCallback close) {
+    final theme = Theme.of(context);
+    return Container(
+      width: 380,
+      constraints: const BoxConstraints(maxHeight: 480),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+            child: Row(
+              children: [
+                Icon(Icons.notifications_outlined, size: 20, color: theme.colorScheme.primary),
+                const SizedBox(width: 10),
+                Text(
+                  'Notifications',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () {
+                    close();
+                    showNotificationsRoute();
+                  },
+                  child: const Text('View All'),
+                ),
+              ],
+            ),
+          ),
+          Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+          Flexible(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.notifications_none, size: 48, color: theme.colorScheme.outlineVariant),
+                    const SizedBox(height: 12),
+                    Text(
+                      'No new notifications',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
 
+    Widget content;
     if (isDesktop) {
-      return Scaffold(
+      content = Scaffold(
         body: Row(
           children: [
             // Sidebar
@@ -1831,8 +2065,8 @@ class AppShellState extends State<AppShell> {
                       mainAxisAlignment: _isSidebarCollapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
                       children: [
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.asset('assets/images/rift_logo.png', width: 40, height: 40, fit: BoxFit.cover),
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.asset('assets/images/rift_logo.png', width: 52, height: 52, fit: BoxFit.cover),
                         ),
                         if (!_isSidebarCollapsed) ...[
                           const SizedBox(width: 16),
@@ -1842,7 +2076,7 @@ class AppShellState extends State<AppShell> {
                               children: [
                                 Text(
                                   'Rift',
-                                  style: theme.textTheme.headlineMedium?.copyWith(
+                                  style: theme.textTheme.headlineLarge?.copyWith(
                                     color: const Color(0xFFdae2ff), // primary-fixed
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -1868,36 +2102,8 @@ class AppShellState extends State<AppShell> {
                         _buildSidebarItem(context, 0, Icons.devices, 'Devices'),
                         _buildSidebarItem(context, 1, Icons.history, 'Activity'),
                         _buildSidebarItem(context, 2, Icons.security, 'Security'),
-                        _buildSidebarItem(context, 3, Icons.settings, 'Settings'),
                       ],
                     ),
-                  ),
-                  // CTA
-                  FilledButton(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => const Dialog(
-                          backgroundColor: Colors.transparent,
-                          surfaceTintColor: Colors.transparent,
-                          child: PairDeviceScreen(),
-                        ),
-                      );
-                    },
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    child: _isSidebarCollapsed 
-                        ? const Icon(Icons.add)
-                        : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.add),
-                              SizedBox(width: 8),
-                              Text('Add Device'),
-                            ],
-                          ),
                   ),
                 ],
               ),
@@ -1933,61 +2139,366 @@ class AppShellState extends State<AppShell> {
 
             // Main Content
             Expanded(
-              child: IndexedStack(
-                index: _currentIndex,
-                children: _screens,
+              child: Column(
+                children: [
+                  _buildDesktopTopBar(context),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentIndex,
+                      children: _screens,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
       );
+    } else {
+      // Mobile
+      final mobileNavIndex = _currentIndex <= 2 ? _currentIndex : -1;
+      content = Scaffold(
+        body: SafeArea(
+          child: Column(
+            children: [
+              // App bar
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surface,
+                  border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5))),
+                ),
+                child: Row(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.asset('assets/images/rift_logo.png', width: 48, height: 48, fit: BoxFit.cover),
+                    ),
+                    const SizedBox(width: 14),
+                    Text(
+                      'Rift',
+                      style: theme.textTheme.headlineLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      tooltip: 'Add Device',
+                      color: theme.colorScheme.onSurfaceVariant,
+                      onPressed: () => _showAddDeviceDialog(context),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.notifications_outlined),
+                      tooltip: 'Notifications',
+                      color: theme.colorScheme.onSurfaceVariant,
+                      onPressed: showNotificationsRoute,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.settings_outlined),
+                      tooltip: 'Settings',
+                      color: theme.colorScheme.onSurfaceVariant,
+                      onPressed: () => _showSettingsDialog(context),
+                    ),
+                  ],
+                ),
+              ),
+              // Content
+              Expanded(
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _screens,
+                ),
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLowest,
+            border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+          ),
+          child: NavigationBar(
+            selectedIndex: mobileNavIndex == -1 ? 0 : mobileNavIndex,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            indicatorColor: mobileNavIndex == -1 ? Colors.transparent : theme.colorScheme.primary.withValues(alpha: 0.08),
+            onDestinationSelected: (index) {
+              setState(() {
+                _currentIndex = index;
+              });
+            },
+            destinations: [
+              NavigationDestination(
+                icon: Icon(Icons.devices_outlined, color: theme.colorScheme.outline),
+                selectedIcon: Icon(Icons.devices, color: theme.colorScheme.primary),
+                label: 'Devices',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.history_outlined, color: theme.colorScheme.outline),
+                selectedIcon: Icon(Icons.history, color: theme.colorScheme.primary),
+                label: 'Activity',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.security_outlined, color: theme.colorScheme.outline),
+                selectedIcon: Icon(Icons.security, color: theme.colorScheme.primary),
+                label: 'Security',
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
-    // Mobile
-    return Scaffold(
-      body: SafeArea(
-        child: IndexedStack(
-          index: _currentIndex,
-          children: _screens,
+    // Determine active peers count for the drop overlay animation effect.
+    // If we had a dedicated state for it, we would use context.watch or context.select.
+    // For now, we fall back to a non-zero number to ensure the animation runs when the overlay is visible.
+    final activePeersCount = 1;
+
+    return DropTarget(
+      onDragEntered: (details) {
+        setState(() => _isDragOverlayVisible = true);
+      },
+      onDragExited: (details) {
+        setState(() => _isDragOverlayVisible = false);
+      },
+      onDragDone: (details) async {
+        setState(() => _isDragOverlayVisible = false);
+        await _handleFilesDropped(details.files);
+      },
+      child: Stack(
+        children: [
+          content,
+          FileDropOverlay(
+            isVisible: _isDragOverlayVisible,
+            activeDeviceCount: activePeersCount,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ResizableDialogContainer extends StatefulWidget {
+  final Widget child;
+
+  const _ResizableDialogContainer({required this.child});
+
+  @override
+  State<_ResizableDialogContainer> createState() => _ResizableDialogContainerState();
+}
+
+class _ResizableDialogContainerState extends State<_ResizableDialogContainer> {
+  double? _width;
+  double? _height;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final defaultWidth = (screenSize.width * 0.85).clamp(360.0, 1200.0);
+    final defaultHeight = (screenSize.height * 0.8).clamp(360.0, 540.0);
+
+    final currentWidth = (_width ?? defaultWidth).clamp(320.0, screenSize.width * 0.98);
+    final currentHeight = (_height ?? defaultHeight).clamp(320.0, screenSize.height * 0.98);
+
+    final theme = Theme.of(context);
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      child: Center(
+        child: Container(
+          width: currentWidth,
+          height: currentHeight,
+          margin: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.1),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(
+              children: [
+                Positioned.fill(child: widget.child),
+                // Right resize edge
+                Positioned(
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  width: 8,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onPanUpdate: (details) {
+                        setState(() {
+                          _width = (currentWidth + details.delta.dx).clamp(320.0, screenSize.width * 0.98);
+                        });
+                      },
+                      child: Container(color: Colors.transparent),
+                    ),
+                  ),
+                ),
+                // Bottom resize edge
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: 8,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeRow,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onPanUpdate: (details) {
+                        setState(() {
+                          _height = (currentHeight + details.delta.dy).clamp(320.0, screenSize.height * 0.98);
+                        });
+                      },
+                      child: Container(color: Colors.transparent),
+                    ),
+                  ),
+                ),
+                // Bottom-Right corner resize handle
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  width: 24,
+                  height: 24,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeUpLeftDownRight,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onPanUpdate: (details) {
+                        setState(() {
+                          _width = (currentWidth + details.delta.dx).clamp(320.0, screenSize.width * 0.98);
+                          _height = (currentHeight + details.delta.dy).clamp(320.0, screenSize.height * 0.98);
+                        });
+                      },
+                      child: Container(
+                        alignment: Alignment.bottomRight,
+                        padding: const EdgeInsets.all(4),
+                        child: Icon(
+                          Icons.open_in_full,
+                          size: 12,
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerLowest,
-          border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
-        ),
-        child: NavigationBar(
-          selectedIndex: _currentIndex,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          indicatorColor: theme.colorScheme.primary.withValues(alpha: 0.08),
-          onDestinationSelected: (index) {
-            setState(() {
-              _currentIndex = index;
-            });
-          },
-          destinations: [
-            NavigationDestination(
-              icon: Icon(Icons.devices_outlined, color: theme.colorScheme.outline),
-              selectedIcon: Icon(Icons.devices, color: theme.colorScheme.primary),
-              label: 'Devices',
+    );
+  }
+}
+
+class _TopBarPopoverButton extends StatefulWidget {
+  final IconData icon;
+  final IconData activeIcon;
+  final String tooltip;
+  final Offset offset;
+  final Widget Function(VoidCallback close) popoverBuilder;
+
+  const _TopBarPopoverButton({
+    required this.icon,
+    required this.activeIcon,
+    required this.tooltip,
+    this.offset = const Offset(-340, 48),
+    required this.popoverBuilder,
+  });
+
+  @override
+  State<_TopBarPopoverButton> createState() => _TopBarPopoverButtonState();
+}
+
+class _TopBarPopoverButtonState extends State<_TopBarPopoverButton> {
+  final LayerLink _layerLink = LayerLink();
+  OverlayEntry? _overlayEntry;
+  bool _isOpen = false;
+
+  bool get _isActive => _isOpen;
+
+  void _togglePopover() {
+    if (_isOpen) {
+      _closePopover();
+    } else {
+      _openPopover();
+    }
+  }
+
+  void _openPopover() {
+    if (_overlayEntry != null) return;
+    setState(() => _isOpen = true);
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) => Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: _closePopover,
+              child: const SizedBox.shrink(),
             ),
-            NavigationDestination(
-              icon: Icon(Icons.history_outlined, color: theme.colorScheme.outline),
-              selectedIcon: Icon(Icons.history, color: theme.colorScheme.primary),
-              label: 'Activity',
+          ),
+          CompositedTransformFollower(
+            link: _layerLink,
+            showWhenUnlinked: false,
+            offset: widget.offset,
+            child: Material(
+              color: Colors.transparent,
+              child: widget.popoverBuilder(_closePopover),
             ),
-            NavigationDestination(
-              icon: Icon(Icons.security_outlined, color: theme.colorScheme.outline),
-              selectedIcon: Icon(Icons.security, color: theme.colorScheme.primary),
-              label: 'Security',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined, color: theme.colorScheme.outline),
-              selectedIcon: Icon(Icons.settings, color: theme.colorScheme.primary),
-              label: 'Settings',
-            ),
-          ],
+          ),
+        ],
+      ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+  }
+
+  void _closePopover() {
+    if (!_isOpen) return;
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+    if (mounted) {
+      setState(() => _isOpen = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _overlayEntry?.remove();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return CompositedTransformTarget(
+      link: _layerLink,
+      child: IconButton(
+        icon: Icon(_isActive ? widget.activeIcon : widget.icon),
+        tooltip: widget.tooltip,
+        onPressed: _togglePopover,
+        style: IconButton.styleFrom(
+          foregroundColor: _isActive
+              ? theme.colorScheme.primary
+              : theme.colorScheme.onSurfaceVariant,
+          backgroundColor: _isActive
+              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
+              : null,
         ),
       ),
     );
