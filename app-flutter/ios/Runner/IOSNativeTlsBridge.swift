@@ -57,13 +57,22 @@ final class IOSNativeTlsBridge {
       let requestedPort = (args["port"] as? NSNumber)?.uint16Value ?? 0
       let listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: requestedPort)!)
       listener.newConnectionHandler = { [weak self] connection in
+        NSLog("[Rift TLS] iOS listener received inbound connection from %@",
+              String(describing: connection.endpoint))
         self?.prepare(connection)
       }
+      var reported = false
       listener.stateUpdateHandler = { state in
+        NSLog("[Rift TLS] iOS listener state: %@", String(describing: state))
         if case .failed(let error) = state {
           NSLog("[Rift TLS] iOS listener failed: %@", error.localizedDescription)
-          result(FlutterError(code: "start_server_failed", message: error.localizedDescription, details: nil))
-        } else if case .ready = state {
+          if !reported {
+            reported = true
+            result(FlutterError(code: "start_server_failed", message: error.localizedDescription, details: nil))
+          }
+        } else if case .ready = state, !reported {
+          reported = true
+          NSLog("[Rift TLS] iOS listener ready on port %d", listener.port?.rawValue ?? 0)
           result(["port": listener.port?.rawValue ?? requestedPort])
         }
       }
@@ -75,10 +84,22 @@ final class IOSNativeTlsBridge {
   }
 
   private func prepare(_ connection: NWConnection) {
+    var delivered = false
     connection.stateUpdateHandler = { [weak self] state in
-      guard case .ready = state, let self else { return }
-      guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else { return }
+      NSLog("[Rift TLS] iOS inbound connection state: %@", String(describing: state))
+      if case .failed(let error) = state {
+        NSLog("[Rift TLS] iOS inbound connection failed: %@", error.localizedDescription)
+        return
+      }
+      guard case .ready = state, let self, !delivered else { return }
+      delivered = true
+      guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else {
+        NSLog("[Rift TLS] iOS inbound connection had no TLS metadata.")
+        connection.cancel()
+        return
+      }
       let certificate = self.peerCertificate(from: metadata) ?? Data()
+      NSLog("[Rift TLS] iOS inbound connection ready, peer cert bytes: %d", certificate.count)
       let id = self.register(connection, certificate: certificate)
       let endpoint = connection.currentPath?.remoteEndpoint
       let address: String
@@ -137,19 +158,27 @@ final class IOSNativeTlsBridge {
     }, queue)
     let parameters = NWParameters(tls: options)
     let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: parameters)
+    var completed = false
     connection.stateUpdateHandler = { [weak self] state in
+      NSLog("[Rift TLS] iOS outbound connection state: %@", String(describing: state))
       if case .failed(let error) = state {
         NSLog("[Rift TLS] iOS outbound connection failed: %@", error.localizedDescription)
-        result(FlutterError(code: "connect_failed", message: error.localizedDescription, details: nil))
+        if !completed {
+          completed = true
+          result(FlutterError(code: "connect_failed", message: error.localizedDescription, details: nil))
+        }
         return
       }
-      guard case .ready = state, let self else { return }
+      guard case .ready = state, let self, !completed else { return }
       guard let metadata = connection.metadata(definition: NWProtocolTLS.definition) else {
         NSLog("[Rift TLS] iOS outbound connection had no TLS metadata.")
+        completed = true
         result(FlutterError(code: "connect_failed", message: "TLS metadata unavailable.", details: nil))
         return
       }
+      completed = true
       let certificate = self.peerCertificate(from: metadata) ?? Data()
+      NSLog("[Rift TLS] iOS outbound connection ready, peer cert bytes: %d", certificate.count)
       let id = self.register(connection, certificate: certificate)
       result([
         "connectionId": id,
@@ -158,7 +187,6 @@ final class IOSNativeTlsBridge {
         "remotePort": Int(port),
       ])
     }
-    connection.stateUpdateHandler = connection.stateUpdateHandler
     connection.start(queue: queue)
   }
 
