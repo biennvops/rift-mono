@@ -71,6 +71,40 @@ pass/fail per device pair.
 | 5.1 | Send a file A→B | Offer on B; accept completes transfer; hash verified |
 | 5.2 | Send a file B→A | Same |
 
+### 6. Presence
+
+| # | Step | Expected |
+|---|------|----------|
+| 6.1 | Both connected; open device detail for the peer | Peer shows online |
+| 6.2 | Kill the peer's app; refresh device detail | Peer flips to offline (heartbeats stop within ~60 s) |
+| 6.3 | Reopen the peer's app | Peer flips back to online after reconnect |
+
+### 7. Notification sync (Android → iOS / Android → Android only)
+
+iOS cannot publish notifications: Apple provides no API for third-party apps
+to read other apps' notifications (reserved for MFi/ANCS accessories). This
+is a permanent platform asymmetry — iOS devices are consumers only.
+
+| # | Step | Expected |
+|---|------|----------|
+| 7.1 | Grant notification listener access to Rift on Android (Settings → Notification access; in a work profile the toggle lives in the work tab) | Listener connects (`RiftNotifListener` in logcat) |
+| 7.2 | Receive any notification on Android | Notification appears on the paired device via Rift |
+| 7.3 | Dismiss the notification on Android | Removal syncs to the paired device |
+
+### 8. Media playback (Android publisher → any consumer)
+
+iOS cannot publish media state for other apps (`MPNowPlayingInfoCenter` is
+write-only for the local app; system-wide now-playing requires private
+APIs). Permanent platform asymmetry — iOS devices are consumers only.
+Requires notification listener access on Android (same permission as §7).
+
+| # | Step | Expected |
+|---|------|----------|
+| 8.1 | Play media on Android (any app with a MediaSession) | Peer shows the track metadata (title/artist/artwork) |
+| 8.2 | Pause/resume from the peer | Android playback follows the remote action |
+| 8.3 | Skip next/previous from the peer | Same |
+| 8.4 | Stop playback on Android | Peer's media entry clears |
+
 ## Failure signatures
 
 Known past regressions and where they show up:
@@ -90,5 +124,6 @@ Known past regressions and where they show up:
 |------|------|-------|-------|--------|
 | 2026-07-26 | Pixel (Android 17, work profile) ↔ iPhone XR (iOS 18.7) | `feat/mobile-parity` @ `a16050d` | 1.1–1.2, 2.1–2.3, 3.1–3.2, 4.1–4.4, 5.1–5.2 | Pass |
 | 2026-07-26 | same | same | 3.4 | Pending overnight soak |
+| — | Pixel ↔ iPhone XR | — | 6.x–8.x | Not yet run |
 | — | Android ↔ Android | — | — | Not yet run |
 | — | iOS ↔ iOS | — | — | Not yet run |
