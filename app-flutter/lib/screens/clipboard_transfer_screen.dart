@@ -118,8 +118,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       shouldRevealCompletedTransferDestination();
   bool get _exportCompletedTransfers =>
       widget.exportCompletedTransfersOverride ?? Platform.isIOS;
+  // Manual clipboard send is available on both mobile platforms: iOS has no
+  // background clipboard access at all, and Android work profiles lack the
+  // quick-settings tile that normally triggers sends.
   bool get _iosClipboardActions =>
-      widget.iosClipboardActionsOverride ?? Platform.isIOS;
+      widget.iosClipboardActionsOverride ??
+      Platform.isIOS || Platform.isAndroid;
   late final SendQueueController _sendQueueController;
   SendQueueController get _sendQueue => _sendQueueController;
   SendQueueModeCoordinator get _queueMode =>
@@ -547,6 +551,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         }
       } else if (Platform.isIOS) {
         content = await IOSClipboard.readContent();
+      } else if (Platform.isAndroid) {
+        content = await _readAndroidClipboardContent();
       } else {
         final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
         if (text != null) {
@@ -599,6 +605,29 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         ),
       );
     }
+  }
+
+  Future<IOSClipboardContent?> _readAndroidClipboardContent() async {
+    const channel = MethodChannel('com.biennvops.rift/clipboard');
+    final payload =
+        await channel.invokeMethod<Object>('getCurrentClipboardPayload');
+    if (payload is Map) {
+      final contentType = payload['contentType']?.toString();
+      final contentBase64 = payload['contentBase64']?.toString();
+      if (contentType != null && contentBase64 != null) {
+        return IOSClipboardContent(
+          contentType: contentType,
+          bytes: base64Decode(contentBase64),
+        );
+      }
+    }
+
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (text == null) return null;
+    return IOSClipboardContent(
+      contentType: 'text/plain',
+      bytes: Uint8List.fromList(utf8.encode(text)),
+    );
   }
 
   Future<void> _copyClipboardOffer(Map<String, dynamic> offer) async {
