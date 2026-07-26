@@ -17,6 +17,7 @@ import 'package:daemon_dart/src/network/discovery_service_factory.dart'
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
+import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
@@ -353,6 +354,9 @@ Future<bool> allowPeerHandshake({
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
 /// hosted by an Android Foreground Service.
+typedef PeerTransportFactory =
+    Transport Function(IdentityManager identityManager, int port);
+
 class RiftDaemon {
   static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
   static const Duration _defaultMediaPlaybackActionTimeout = Duration(
@@ -414,6 +418,7 @@ class RiftDaemon {
   final int port;
   final bool enableTransport;
   final Transport? peerTransport;
+  final PeerTransportFactory? peerTransportFactory;
   final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
   final Duration mediaPlaybackActionTimeout;
@@ -424,6 +429,7 @@ class RiftDaemon {
     this.port = 11112,
     this.enableTransport = true,
     this.peerTransport,
+    this.peerTransportFactory,
     this.enableDiscovery = true,
     this.onIpcEvent,
     this.mediaPlaybackActionTimeout = _defaultMediaPlaybackActionTimeout,
@@ -440,8 +446,10 @@ class RiftDaemon {
     await _trustStore!.initialize();
 
     if (enableTransport) {
-      if (peerTransport != null) {
-        _transport = peerTransport;
+      final injectedTransport =
+          peerTransport ?? peerTransportFactory?.call(_identityManager!, port);
+      if (injectedTransport != null) {
+        _transport = injectedTransport;
         await _transport!.startServer();
       } else {
         // If the requested port is unavailable (common on dev devices), fall back
@@ -3668,7 +3676,10 @@ class RiftDaemon {
   }
 
   /// The static entry point for spawning the Isolate from Flutter
-  static void isolateEntryPoint(Map<String, dynamic> args) async {
+  static void isolateEntryPoint(
+    Map<String, dynamic> args, {
+    PeerTransportFactory? peerTransportFactory,
+  }) async {
     final storagePath = args['storagePath'] as String;
     final sendPort = args.containsKey('sendPort')
         ? args['sendPort'] as SendPort
@@ -3682,6 +3693,7 @@ class RiftDaemon {
       port: port,
       enableDiscovery: enableDiscovery,
       enableTransport: enableTransport,
+      peerTransportFactory: peerTransportFactory,
       onIpcEvent: (event) => sendPort?.send(event),
     );
 
