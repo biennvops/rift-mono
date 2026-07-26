@@ -18,6 +18,30 @@ README.
 - `test/` - lightweight automated interop-oriented tests and harness code
 - `pubspec.*` - Dart package metadata for the harness
 
+The tests in this package run two in-memory **Dart** daemon session stacks
+against each other. They validate Android-side protocol behavior, not
+desktop-to-desktop interoperability.
+
+## Desktop-to-Desktop Interop
+
+Desktop-to-desktop (Windows/macOS/Linux) interoperability is exercised by the
+C# live-transport interop suites in
+`daemon-cs/Rift.Daemon.Tests/Core/`:
+
+- `TlsTransportTests` - mutual TLS bootstrap, capability negotiation, and
+  bidirectional protected traffic between two live transports
+- `PairingInteropTests` - pairing, trusted reconnect, and block enforcement
+  between two full daemon-core stacks over loopback sockets
+- `ClipboardFileInteropTests` - clipboard text/binary offer+fetch with hash
+  verification, and the file transfer lifecycle (complete, reject, cancel,
+  resume-after-disconnect) through the production message router
+
+Run them on each desktop platform with:
+
+```bash
+dotnet test daemon-cs/Rift.Daemon.Tests/Rift.Daemon.Tests.csproj
+```
+
 ## Usage
 
 Run from `tests-interop/`:
