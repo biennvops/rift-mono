@@ -23,8 +23,8 @@ README.
 Run from `tests-interop/`:
 
 ```bash
-dart pub get
-dart test
+flutter pub get
+flutter test
 ```
 
 Use this directory for reproducible interop procedures and evidence templates.
