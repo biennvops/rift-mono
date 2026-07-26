@@ -364,7 +364,24 @@ public sealed class ClipboardService : IClipboardService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+                // The response can complete the fetch concurrently with the
+                // timeout firing; a delivered result must win over expiry.
+                if (pendingFetch.CompletionSource.Task.IsCompletedSuccessfully)
+                {
+                    return await pendingFetch.CompletionSource.Task;
+                }
+
+                try
+                {
+                    _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+                }
+                catch (OperationTransitionException)
+                {
+                    // The response handler transitions to Done just before
+                    // resolving the completion source, so a rejected expiry
+                    // means the result is about to arrive.
+                    return await pendingFetch.CompletionSource.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                }
                 LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
                 throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
             }
