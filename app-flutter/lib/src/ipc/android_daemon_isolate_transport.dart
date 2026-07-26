@@ -11,6 +11,7 @@ import 'package:stream_channel/stream_channel.dart';
 import 'android_root_discovery_bridge.dart';
 import 'ipc_transport.dart';
 import 'android_daemon_isolate_entrypoint.dart';
+import 'native_tls_api.dart';
 
 /// Android transport that spawns the Dart daemon in a background isolate and
 /// connects to its JSON-RPC bridge using SendPort/ReceivePort.
@@ -28,6 +29,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
+  NativeTlsProxyHost? _tlsProxyHost;
   AndroidRootDiscoveryBridge? _discoveryBridge;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
@@ -62,12 +64,18 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
           'RootIsolateToken is null; cannot start Android daemon isolate');
     }
 
+    // TLS platform-channel calls must run on the root isolate: replies to a
+    // dead daemon isolate's binary messenger response handle abort the engine.
+    _tlsProxyHost?.dispose();
+    _tlsProxyHost = NativeTlsProxyHost()..start();
+
     _daemonIsolate = await Isolate.spawn(
       androidDaemonIsolateEntrypoint,
       <String, dynamic>{
         'storagePath': storagePath,
         'sendPort': _uiReceive!.sendPort,
         'rootIsolateToken': token,
+        'tlsProxyPort': _tlsProxyHost!.requestPort,
         // Keep discovery on the root isolate so MethodChannel-based plugins
         // like `nsd` never run inside the daemon isolate.
         'enableDiscovery': false,
@@ -421,6 +429,8 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
   @override
   Future<void> disconnect() async {
+    await _tlsProxyHost?.dispose();
+    _tlsProxyHost = null;
     await _discoveryAddedSub?.cancel();
     _discoveryAddedSub = null;
     await _discoveryLostSub?.cancel();

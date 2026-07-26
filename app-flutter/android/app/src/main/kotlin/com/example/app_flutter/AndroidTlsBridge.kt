@@ -21,6 +21,10 @@ import javax.net.ssl.X509TrustManager
 
 class AndroidTlsBridge {
     private val executor = Executors.newCachedThreadPool()
+    // Bumped whenever the owning daemon isolate tears down the server. Replies
+    // guarded by an older generation are dropped instead of being posted to a
+    // dead isolate port, which is a fatal engine check (did_send).
+    private val generation = AtomicInteger(0)
     private val nextConnectionId = AtomicInteger(1)
     private val connections = ConcurrentHashMap<Int, SSLSocket>()
     private var server: SSLServerSocket? = null
@@ -86,7 +90,8 @@ class AndroidTlsBridge {
     }
 
     private fun acceptLoop(listener: SSLServerSocket) {
-        while (!listener.isClosed) {
+        val gen = generation.get()
+        while (!listener.isClosed && generation.get() == gen) {
             try {
                 val socket = listener.accept() as SSLSocket
                 socket.useClientMode = false
@@ -111,15 +116,7 @@ class AndroidTlsBridge {
                     }
                     current
                 }
-                // Replying on a dead isolate's messenger aborts the engine, so
-                // swallow reply failures from a torn-down Dart side.
-                try {
-                    callback?.success(response)
-                } catch (_: Throwable) {
-                    connections.remove(response["connectionId"])?.let { stale ->
-                        runCatching { stale.close() }
-                    }
-                }
+                callback?.success(response)
             } catch (_: Throwable) {
                 if (listener.isClosed) return
             }
@@ -127,7 +124,9 @@ class AndroidTlsBridge {
     }
 
     private fun connect(arguments: Map<*, *>?, result: MethodChannel.Result) {
+        val gen = generation.get()
         executor.execute {
+            if (generation.get() != gen) return@execute
             try {
                 val host = arguments?.get("host") as? String
                     ?: throw IllegalArgumentException("host is required")
@@ -156,7 +155,9 @@ class AndroidTlsBridge {
                     ),
                 )
             } catch (error: Throwable) {
-                result.error("connect_failed", error.message, null)
+                if (generation.get() == gen) {
+                    result.error("connect_failed", error.message, null)
+                }
             }
         }
     }
@@ -168,10 +169,12 @@ class AndroidTlsBridge {
             result.error("connection_not_found", "TLS connection is not available", null)
             return
         }
+        val gen = generation.get()
         executor.execute {
             try {
                 val buffer = ByteArray(16 * 1024)
                 val count = socket.inputStream.read(buffer)
+                if (generation.get() != gen) return@execute
                 if (count < 0) {
                     result.success(mapOf("eof" to true))
                 } else {
@@ -183,7 +186,9 @@ class AndroidTlsBridge {
                     )
                 }
             } catch (error: Throwable) {
-                result.error("read_failed", error.message, null)
+                if (generation.get() == gen) {
+                    result.error("read_failed", error.message, null)
+                }
             }
         }
     }
@@ -196,14 +201,19 @@ class AndroidTlsBridge {
             result.error("invalid_write", "connectionId and dataBase64 are required", null)
             return
         }
+        val gen = generation.get()
         executor.execute {
             try {
                 val bytes = Base64.decode(data, Base64.DEFAULT)
                 socket.outputStream.write(bytes)
                 socket.outputStream.flush()
-                result.success(true)
+                if (generation.get() == gen) {
+                    result.success(true)
+                }
             } catch (error: Throwable) {
-                result.error("write_failed", error.message, null)
+                if (generation.get() == gen) {
+                    result.error("write_failed", error.message, null)
+                }
             }
         }
     }
@@ -225,6 +235,7 @@ class AndroidTlsBridge {
     }
 
     private fun stopServerInternal() {
+        generation.incrementAndGet()
         synchronized(this) {
             // Do not reply to a pending accept here: the daemon isolate that
             // issued it may already be dead, and replying to a dead response

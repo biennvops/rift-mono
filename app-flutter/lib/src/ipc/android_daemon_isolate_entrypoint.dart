@@ -1,9 +1,11 @@
+import 'dart:isolate';
 import 'dart:ui' as ui;
 
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:flutter/services.dart';
 
 import 'android_native_peer_transport.dart';
+import 'native_tls_api.dart';
 
 /// Background isolate entrypoint for the Android daemon.
 ///
@@ -22,9 +24,18 @@ void androidDaemonIsolateEntrypoint(Map<String, dynamic> args) {
   // full plugin set would re-register `nsd` on the background isolate and
   // crash release builds with "Background isolates do not support
   // setMessageHandler()". The daemon isolate uses pure Dart services only.
+  //
+  // TLS platform-channel calls are proxied through the root isolate: platform
+  // replies sent directly to a daemon isolate that later dies are a fatal
+  // engine check (did_send), so the daemon isolate must never own them.
+  final tlsProxyPort = args['tlsProxyPort'];
+  if (tlsProxyPort is! SendPort) {
+    throw StateError('Missing tlsProxyPort for Android daemon isolate');
+  }
+  final tlsApi = SendPortNativeTlsApi(tlsProxyPort);
   RiftDaemon.isolateEntryPoint(
     args,
     peerTransportFactory: (identityManager, port) =>
-        AndroidNativePeerTransport(identityManager, port: port),
+        AndroidNativePeerTransport(identityManager, port: port, tlsApi: tlsApi),
   );
 }

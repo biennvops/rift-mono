@@ -6,12 +6,18 @@ import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/daemon_dart.dart';
 
 import '../platform/android_native_tls.dart';
+import 'native_tls_api.dart';
 
 class AndroidNativePeerTransport implements Transport, BoundTransport {
-  AndroidNativePeerTransport(this._identityManager, {required int port})
-      : _requestedPort = port;
+  AndroidNativePeerTransport(
+    this._identityManager, {
+    required int port,
+    NativeTlsApi? tlsApi,
+  })  : _requestedPort = port,
+        _tls = tlsApi ?? MethodChannelNativeTlsApi();
 
   final IdentityManager _identityManager;
+  final NativeTlsApi _tls;
   final int _requestedPort;
   final Map<String, _NativePeerConnection> _peers = {};
   final Set<String> _authenticatedPeers = {};
@@ -34,7 +40,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   @override
   Future<void> startServer() async {
     _stopping = false;
-    _boundPort = await AndroidNativeTls.startServer(
+    _boundPort = await _tls.startServer(
       certificatePem: _identityManager.tlsCertificatePem,
       privateKeyPem: _identityManager.tlsPrivateKeyPem,
       port: _requestedPort,
@@ -45,7 +51,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   Future<void> _acceptLoop() async {
     while (!_stopping) {
       try {
-        final connection = await AndroidNativeTls.accept();
+        final connection = await _tls.accept();
         await _registerConnection(connection, isServer: true);
       } catch (_) {
         if (!_stopping) {
@@ -66,7 +72,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       disconnect(expectedDeviceId);
     }
 
-    final connection = await AndroidNativeTls.connect(
+    final connection = await _tls.connect(
       host: host,
       port: port,
       certificatePem: _identityManager.tlsCertificatePem,
@@ -76,7 +82,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     if (expectedDeviceId != null &&
         RegExp(r'^rift-[a-z2-7]{32}$').hasMatch(expectedDeviceId) &&
         expectedDeviceId != peerDeviceId) {
-      await AndroidNativeTls.close(connection.connectionId);
+      await _tls.close(connection.connectionId);
       throw const RiftAuthenticationFailedException(
         'Peer certificate device ID does not match the expected identity',
       );
@@ -158,7 +164,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   Future<void> _readLoop(_NativePeerConnection peer) async {
     try {
       while (_peers[peer.peerDeviceId] == peer && !_stopping) {
-        final result = await AndroidNativeTls.read(peer.connectionId);
+        final result = await _tls.read(peer.connectionId);
         if (result['eof'] == true) break;
         final encoded = result['dataBase64'];
         if (encoded is! String) {
@@ -186,7 +192,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     await peer.frameSubscription?.cancel();
     await peer.chunkController?.close();
     try {
-      await AndroidNativeTls.close(peer.connectionId);
+      await _tls.close(peer.connectionId);
     } catch (_) {}
     if (notify && !_disconnects.isClosed) {
       _disconnects.add(peer.peerDeviceId);
@@ -200,7 +206,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       throw StateError('Peer $deviceId is not connected');
     }
     final frame = RiftFrameCodec.encodeBytes(message);
-    await AndroidNativeTls.write(peer.connectionId, base64.encode(frame));
+    await _tls.write(peer.connectionId, base64.encode(frame));
   }
 
   @override
@@ -243,7 +249,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     for (final peer in peers) {
       await _closeConnection(peer, notify: false);
     }
-    await AndroidNativeTls.stopServer();
+    await _tls.stopServer();
     await _messages.close();
     await _disconnects.close();
   }
