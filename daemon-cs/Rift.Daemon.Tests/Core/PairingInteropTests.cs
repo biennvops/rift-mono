@@ -48,8 +48,10 @@ public sealed class PairingInteropTests : IDisposable
 
         Assert.False(_initiator.Transport.HasProtectedSession(_responder.DeviceId));
         Assert.False(_responder.Transport.HasProtectedSession(_initiator.DeviceId));
-        Assert.Equal(TrustState.Discovered, _initiator.TrustStore.GetPeer(_responder.DeviceId)!.State);
-        Assert.Equal(TrustState.Discovered, _responder.TrustStore.GetPeer(_initiator.DeviceId)!.State);
+        await WaitForConditionAsync(
+            () => _initiator.TrustStore.GetPeer(_responder.DeviceId)?.State == TrustState.Discovered &&
+                  _responder.TrustStore.GetPeer(_initiator.DeviceId)?.State == TrustState.Discovered,
+            token);
 
         // 2. Mutual pairing approval over the live session.
         await _initiator.Pairing.NotifyLocalPairingStartedAsync(_responder.DeviceId, token);
