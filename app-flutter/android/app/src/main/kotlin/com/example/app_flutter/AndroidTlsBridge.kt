@@ -111,7 +111,15 @@ class AndroidTlsBridge {
                     }
                     current
                 }
-                callback?.success(response)
+                // Replying on a dead isolate's messenger aborts the engine, so
+                // swallow reply failures from a torn-down Dart side.
+                try {
+                    callback?.success(response)
+                } catch (_: Throwable) {
+                    connections.remove(response["connectionId"])?.let { stale ->
+                        runCatching { stale.close() }
+                    }
+                }
             } catch (_: Throwable) {
                 if (listener.isClosed) return
             }
@@ -218,7 +226,10 @@ class AndroidTlsBridge {
 
     private fun stopServerInternal() {
         synchronized(this) {
-            pendingAccept?.error("server_stopped", "TLS server stopped", null)
+            // Do not reply to a pending accept here: the daemon isolate that
+            // issued it may already be dead, and replying to a dead response
+            // port is a fatal engine check (did_send). The stale Dart future
+            // is owned by the old isolate and simply goes away with it.
             pendingAccept = null
             acceptedConnections.clear()
         }
