@@ -96,13 +96,12 @@ final class IOSNativeTlsBridge {
         "remoteAddress": address,
         "remotePort": port,
       ]
-      self.queue.sync {
-        if let pending = self.pendingAccept {
-          self.pendingAccept = nil
-          pending(response)
-        } else {
-          self.accepted.append(response)
-        }
+      // Already running on `queue`; a nested queue.sync here deadlocks.
+      if let pending = self.pendingAccept {
+        self.pendingAccept = nil
+        pending(response)
+      } else {
+        self.accepted.append(response)
       }
     }
     connection.start(queue: queue)
@@ -166,7 +165,7 @@ final class IOSNativeTlsBridge {
   private func read(_ arguments: Any?, result: @escaping FlutterResult) {
     guard let args = arguments as? [String: Any],
           let id = (args["connectionId"] as? NSNumber)?.intValue,
-          let record = connections[id] else {
+          let record = queue.sync(execute: { connections[id] }) else {
       result(FlutterError(code: "connection_not_found", message: "TLS connection not found.", details: nil))
       return
     }
@@ -186,7 +185,7 @@ final class IOSNativeTlsBridge {
           let id = (args["connectionId"] as? NSNumber)?.intValue,
           let encoded = args["dataBase64"] as? String,
           let data = Data(base64Encoded: encoded),
-          let record = connections[id] else {
+          let record = queue.sync(execute: { connections[id] }) else {
       result(FlutterError(code: "invalid_write", message: "TLS write arguments are invalid.", details: nil))
       return
     }
@@ -205,18 +204,22 @@ final class IOSNativeTlsBridge {
       result(FlutterError(code: "invalid_arguments", message: "connectionId is required.", details: nil))
       return
     }
-    connections.removeValue(forKey: id)?.connection.cancel()
+    queue.sync { connections.removeValue(forKey: id) }?.connection.cancel()
     result(true)
   }
 
   private func stopServer(result: @escaping FlutterResult) {
-    listener?.cancel()
-    listener = nil
-    connections.values.forEach { $0.connection.cancel() }
-    connections.removeAll()
-    accepted.removeAll()
-    pendingAccept?(FlutterError(code: "server_stopped", message: "TLS server stopped.", details: nil))
-    pendingAccept = nil
+    let pending: FlutterResult? = queue.sync {
+      listener?.cancel()
+      listener = nil
+      connections.values.forEach { $0.connection.cancel() }
+      connections.removeAll()
+      accepted.removeAll()
+      let current = pendingAccept
+      pendingAccept = nil
+      return current
+    }
+    pending?(FlutterError(code: "server_stopped", message: "TLS server stopped.", details: nil))
     result(true)
   }
 
