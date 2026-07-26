@@ -281,6 +281,7 @@ public sealed class ClipboardServiceTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-response", CancellationToken.None);
+        await WaitForFetchRequestSentAsync("rift-peer-owner-removed");
         RemoveRemoteOffer("offer-removed-response");
 
         await _clipboardService.HandleFetchResponseAsync(
@@ -337,6 +338,7 @@ public sealed class ClipboardServiceTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-reject", CancellationToken.None);
+        await WaitForFetchRequestSentAsync("rift-peer-owner-reject");
         RemoveRemoteOffer("offer-removed-reject");
 
         await _clipboardService.HandleFetchRejectAsync(
@@ -736,6 +738,24 @@ public sealed class ClipboardServiceTests : IDisposable
         if (File.Exists(_databasePath))
         {
             File.Delete(_databasePath);
+        }
+    }
+
+    // The fetch request is sent asynchronously inside FetchClipboardContentAsync;
+    // spoofed response/reject tests must not race ahead of it.
+    private async Task WaitForFetchRequestSentAsync(string peerDeviceId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!_transport.SentMessages.Any(message =>
+                   message.PeerDeviceId == peerDeviceId &&
+                   message.Type == "clipboard.fetchRequest"))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"clipboard.fetchRequest to {peerDeviceId} was never sent.");
+            }
+
+            await Task.Delay(10);
         }
     }
 
