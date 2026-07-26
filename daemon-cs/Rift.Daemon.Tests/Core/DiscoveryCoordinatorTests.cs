@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Data.Sqlite;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
@@ -232,6 +233,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
 
     public void Dispose()
     {
+        SqliteConnection.ClearAllPools();
         if (File.Exists(_databasePath))
         {
             File.Delete(_databasePath);

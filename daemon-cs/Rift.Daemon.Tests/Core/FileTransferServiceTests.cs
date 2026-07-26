@@ -499,7 +499,7 @@ public sealed class FileTransferServiceTests : IDisposable
         {
             _transport.BlockChunkSends = false;
             _transport.ReleaseBlockedChunkSends();
-            File.Delete(path);
+            await DeleteTempFileAsync(path);
         }
     }
 
@@ -1286,6 +1286,24 @@ public sealed class FileTransferServiceTests : IDisposable
         var path = Path.Combine(Path.GetTempPath(), $"rift-file-{Guid.NewGuid():N}.tmp");
         File.WriteAllText(path, content);
         return path;
+    }
+
+    // On Windows the released background chunk sender can still hold the source
+    // file open for a short moment, so deletion needs a bounded retry.
+    private static async Task DeleteTempFileAsync(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Delete(path);
+                return;
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                await Task.Delay(20);
+            }
+        }
     }
 
     private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
