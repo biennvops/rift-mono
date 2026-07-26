@@ -236,7 +236,11 @@ class AndroidTlsBridge {
 
     private fun buildContext(certificatePem: String, privateKeyPem: String): SSLContext {
         val certificate = parseCertificate(certificatePem)
-        val keyBytes = decodePem(privateKeyPem, "PRIVATE KEY")
+        val keyBytes = if (privateKeyPem.contains("BEGIN EC PRIVATE KEY")) {
+            wrapEcPrivateKey(decodePem(privateKeyPem, "EC PRIVATE KEY"))
+        } else {
+            decodePem(privateKeyPem, "PRIVATE KEY")
+        }
         val privateKey = KeyFactory.getInstance("EC")
             .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(keyBytes))
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
@@ -266,5 +270,23 @@ class AndroidTlsBridge {
             .replace("-----END $label-----", "")
             .replace(Regex("\\s"), "")
         return Base64.decode(body, Base64.DEFAULT)
+    }
+
+    private fun wrapEcPrivateKey(sec1: ByteArray): ByteArray {
+        val algorithm = byteArrayOf(
+            0x30, 0x13, 0x06, 0x07, 0x2a, 0x86.toByte(), 0x48, 0xce.toByte(),
+            0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86.toByte(), 0x48,
+            0xce.toByte(), 0x3d, 0x03, 0x01, 0x07,
+        )
+        val version = byteArrayOf(0x02, 0x01, 0x00)
+        val privateKey = byteArrayOf(0x04) + encodeDerLength(sec1.size) + sec1
+        val contents = version + algorithm + privateKey
+        return byteArrayOf(0x30) + encodeDerLength(contents.size) + contents
+    }
+
+    private fun encodeDerLength(length: Int): ByteArray = when {
+        length < 0x80 -> byteArrayOf(length.toByte())
+        length <= 0xff -> byteArrayOf(0x81.toByte(), length.toByte())
+        else -> byteArrayOf(0x82.toByte(), (length shr 8).toByte(), length.toByte())
     }
 }
