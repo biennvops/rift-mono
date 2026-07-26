@@ -678,29 +678,21 @@ class SessionManager {
         '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
       );
     } else if (ctx.handshakeState == HandshakeState.established) {
-      final localDeviceId = _identityManager.deviceId;
-      if (localDeviceId.compareTo(peerDeviceId) > 0) {
-        RiftLog.info(
-          '[Session] Tie-break (we win): Rejecting inbound duplicate session.hello from $peerDeviceId.',
-        );
-        await _rejectSession(
-          peerDeviceId,
-          'ProtocolError',
-          'Duplicate session.hello rejected by tie-breaker',
-        );
-        throw SessionException(
-          'ProtocolError: Duplicate connection rejected by tie-breaker for $peerDeviceId',
-        );
-      } else {
-        RiftLog.info(
-          '[Session] Tie-break (peer wins): Dropping existing outbound connection and accepting inbound from $peerDeviceId.',
-        );
-        _transport.disconnect(peerDeviceId);
-        ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
-        final record = await _trustStore.getPeer(peerDeviceId);
-        ctx.trustState = record?.state ?? TrustState.discovered;
-        _sessions[peerDeviceId] = ctx;
-      }
+      // The peer would not send a fresh session.hello if it still considered
+      // the session alive; mobile apps get killed/suspended without a clean
+      // TCP close, leaving us with a zombie established context. Treat the
+      // hello as a peer restart and rebuild the session on the connection it
+      // arrived over. Do not touch the transport: the hello came in on the
+      // transport's current (live) connection for this peer.
+      RiftLog.info(
+        '[Session] Peer $peerDeviceId sent session.hello over an established '
+        'session; assuming peer restart and rebuilding session.',
+      );
+      ctx.dispose();
+      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
+      final record = await _trustStore.getPeer(peerDeviceId);
+      ctx.trustState = record?.state ?? TrustState.discovered;
+      _sessions[peerDeviceId] = ctx;
     } else {
       await _rejectSession(
         peerDeviceId,
