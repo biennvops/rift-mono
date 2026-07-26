@@ -31,6 +31,13 @@
 
   <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
     <Compile Remove="Core\LinuxIpcListenerTests.cs" />
+    <Compile Remove="Core\LinuxMediaPlaybackServiceTests.cs" />
+    <Compile Remove="Core\LinuxSecretServiceIdentityProtectionTests.cs" />
+    <Compile Remove="Core\MacIpcListenerTests.cs" />
+    <Compile Remove="Core\MacOSMediaPlaybackServiceTests.cs" />
+    <Compile Remove="Core\MacOSNotificationExtractorClientTests.cs" />
+    <Compile Remove="Core\MacOSNotificationSyncObserverTests.cs" />
+    <Compile Remove="Core\NotificationDatabaseReaderTests.cs" />
   </ItemGroup>
 
 </Project>
