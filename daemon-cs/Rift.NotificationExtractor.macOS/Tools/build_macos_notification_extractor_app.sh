@@ -58,7 +58,16 @@ else
   exit 1
 fi
 codesign --force --sign "$codesign_identity" --identifier com.rift.notification-extractor.worker "$worker"
-codesign --force --deep --sign "$codesign_identity" --identifier com.rift.notification-extractor "$app_dir"
+codesign --force --sign "$codesign_identity" --identifier com.rift.notification-extractor "$app_dir"
+
+broker_identifier="$(codesign -dvv "$broker" 2>&1 | awk -F= '$1 == "Identifier" { print $2; exit }')"
+worker_identifier="$(codesign -dvv "$worker" 2>&1 | awk -F= '$1 == "Identifier" { print $2; exit }')"
+if [[ "$broker_identifier" != "com.rift.notification-extractor" || "$worker_identifier" != "com.rift.notification-extractor.worker" ]]; then
+  echo "ERROR: signed bundle identifiers are incorrect." >&2
+  echo "Broker: $broker_identifier" >&2
+  echo "Worker: $worker_identifier" >&2
+  exit 1
+fi
 codesign --verify --deep --strict --verbose=2 "$app_dir"
 
 echo "Built: $app_dir"
