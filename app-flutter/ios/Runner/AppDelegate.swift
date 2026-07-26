@@ -14,6 +14,7 @@ import UserNotifications
   private var documentsChannel: FlutterMethodChannel?
   private var notificationsChannel: FlutterMethodChannel?
   private var mediaPlaybackChannel: FlutterMethodChannel?
+  private let iosTlsBridge = IOSNativeTlsBridge()
   private var mediaPlaybackCommandTargets: [Any] = []
   private var currentMediaPlaybackSourceDeviceId: String?
   private var currentMediaPlaybackId: String?
@@ -392,6 +393,14 @@ import UserNotifications
       }
     }
     self.mediaPlaybackChannel = mediaPlaybackChannel
+
+    let tlsChannel = FlutterMethodChannel(
+      name: "rift/ios/tls",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    tlsChannel.setMethodCallHandler { [weak self] call, result in
+      self?.iosTlsBridge.handle(call, result: result)
+    }
 
     let channel = FlutterMethodChannel(
       name: "rift/ios/identity",

@@ -36,9 +36,11 @@ class AndroidTlsConnection {
 }
 
 class AndroidNativeTls {
-  static const MethodChannel _channel = MethodChannel('rift/android/tls');
+  static MethodChannel get _channel => MethodChannel(
+        Platform.isIOS ? 'rift/ios/tls' : 'rift/android/tls',
+      );
 
-  static bool get isSupported => Platform.isAndroid;
+  static bool get isSupported => Platform.isAndroid || Platform.isIOS;
 
   static Future<int> startServer({
     required String certificatePem,
