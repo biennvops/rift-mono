@@ -52,9 +52,12 @@ class MainActivity: FlutterActivity() {
 
     private val clipboardChannelName = "com.biennvops.rift/clipboard"
     private val shellChannelName = "rift/android/shell"
+    private val tlsChannelName = "rift/android/tls"
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
+    private var tlsChannel: MethodChannel? = null
+    private val tlsBridge = AndroidTlsBridge()
     private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
@@ -158,6 +161,11 @@ class MainActivity: FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+
+        tlsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, tlsChannelName)
+        tlsChannel?.setMethodCallHandler { call, result ->
+            tlsBridge.handle(call, result)
         }
 
         shellChannel =
@@ -356,6 +364,7 @@ class MainActivity: FlutterActivity() {
             notificationSyncReceiverRegistered = false
         }
         remoteMediaPlaybackManager.stop()
+        tlsBridge.dispose()
         super.onDestroy()
     }
 
