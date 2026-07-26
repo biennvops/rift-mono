@@ -248,6 +248,107 @@ public sealed class ClipboardFileInteropTests : IDisposable
         await listenerTask;
     }
 
+    [Fact]
+    public async Task TrustedDesktopPeers_ResumeInterruptedTransferAfterReconnect()
+    {
+        using var cancellation = new CancellationTokenSource(ScenarioTimeout);
+        var token = cancellation.Token;
+        var listenerTask = await ConnectAsync(token);
+
+        // Throttle the receiver's transport thread so TCP backpressure keeps
+        // the sender mid-send when the disconnect lands.
+        _receiver.InboundChunkIoDelayMs = 100;
+        var payload = new byte[8_000_000];
+        RandomNumberGenerator.Fill(payload);
+        var sourcePath = Path.Combine(Path.GetTempPath(), $"rift-interop-resume-src-{Guid.NewGuid():N}.bin");
+        var destinationPath = Path.Combine(Path.GetTempPath(), $"rift-interop-resume-dst-{Guid.NewGuid():N}.bin");
+        await File.WriteAllBytesAsync(sourcePath, payload, token);
+
+        try
+        {
+            var offerResult = await _sender.FileTransfer.OfferFileAsync(
+                _receiver.DeviceId,
+                sourcePath,
+                "resume.bin",
+                "application/octet-stream",
+                token);
+
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListIncomingFileOffersAsync()).Offers
+                    .Any(offer => offer.TransferId == offerResult.TransferId),
+                token);
+
+            var firstProgress = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _receiver.FileTransfer.TransferUpdated += (_, args) =>
+            {
+                if (args.TransferId != offerResult.TransferId)
+                {
+                    return;
+                }
+                if (args.State == "active" && args.BytesTransferred > 0)
+                {
+                    firstProgress.TrySetResult();
+                }
+                if (args.State == "done")
+                {
+                    completed.TrySetResult();
+                }
+            };
+
+            // The recoverable pause is surfaced only through the sender's
+            // lifecycle event; the paused transfer keeps its operation state.
+            var senderPaused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _sender.FileTransfer.TransferUpdated += (_, args) =>
+            {
+                if (args.TransferId == offerResult.TransferId &&
+                    args.FailureReason == "ConnectionLost")
+                {
+                    senderPaused.TrySetResult();
+                }
+            };
+
+            await _receiver.FileTransfer.AcceptFileOfferAsync(
+                offerResult.TransferId,
+                destinationPath,
+                overwrite: false,
+                token);
+
+            // Drop the session while chunks are flowing.
+            await firstProgress.Task.WaitAsync(token);
+            await _receiver.Transport.DisconnectPeerAsync(_sender.DeviceId, token);
+
+            // The sender must classify the interruption as recoverable and pause.
+            await senderPaused.Task.WaitAsync(token);
+
+            // Reconnect; the receiver requests file.resume from its verified offset
+            // and the transfer completes without restarting from zero.
+            _receiver.InboundChunkIoDelayMs = 0;
+            var reconnected = _sender.WaitForSessionOnline(_receiver.DeviceId);
+            var port = await _receiver.WaitForListeningPortAsync(token);
+            await _sender.Transport.ConnectToPeerWithIdentityAsync("127.0.0.1", port, token);
+            await reconnected.WaitAsync(token);
+
+            await completed.Task.WaitAsync(token);
+
+            var received = await File.ReadAllBytesAsync(destinationPath, token);
+            Assert.Equal(payload.Length, received.Length);
+            Assert.Equal(Sha256Hex(payload), Sha256Hex(received));
+            await WaitForConditionAsync(
+                () => Task.FromResult(
+                    _sender.Operations.GetOperation(offerResult.OperationId).State == "Done"),
+                token);
+        }
+        finally
+        {
+            await TestFiles.DeleteWithRetryAsync(sourcePath);
+            await TestFiles.DeleteWithRetryAsync(destinationPath);
+        }
+
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
     private async Task<Task> ConnectAsync(CancellationToken token)
     {
         var listenerTask = _receiver.Transport.StartListeningAsync(token);
@@ -322,6 +423,12 @@ public sealed class ClipboardFileInteropTests : IDisposable
             });
         private readonly CancellationTokenSource _dispatchCts = new();
         private readonly Task _dispatchLoop;
+
+        /// <summary>
+        /// When positive, delays the transport IO thread for inbound
+        /// file.chunk frames so TCP backpressure builds up on the peer.
+        /// </summary>
+        public volatile int InboundChunkIoDelayMs;
 
         public FullPeerStack(string name)
         {
@@ -468,10 +575,18 @@ public sealed class ClipboardFileInteropTests : IDisposable
 
         private void OnMessageReceived(object? sender, MessageReceivedEventArgs args)
         {
+            var payload = args.Payload.ToArray();
+            var delayMs = InboundChunkIoDelayMs;
+            if (delayMs > 0 &&
+                Encoding.UTF8.GetString(payload).Contains("\"file.chunk\"", StringComparison.Ordinal))
+            {
+                Thread.Sleep(delayMs);
+            }
+
             // Chunked file transfers rely on strictly ordered processing, so
             // inbound frames are queued in arrival order and drained by a
             // single dispatcher (Task.Run + semaphore does not preserve FIFO).
-            _inbound.Writer.TryWrite((args.Session, args.Payload.ToArray()));
+            _inbound.Writer.TryWrite((args.Session, payload));
         }
 
         private async Task DispatchInboundAsync()
