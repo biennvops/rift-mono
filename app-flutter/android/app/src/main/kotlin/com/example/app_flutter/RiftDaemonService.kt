@@ -7,9 +7,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 
 class RiftDaemonService : Service() {
@@ -48,7 +50,19 @@ class RiftDaemonService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                startForeground(notificationId, buildNotification())
+                // connectedDevice: peer TLS sessions with other devices on the
+                // LAN. Unlike dataSync it has no runtime cap on Android 15+,
+                // which previously killed the app after ~6 hours.
+                ServiceCompat.startForeground(
+                    this,
+                    notificationId,
+                    buildNotification(),
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                    } else {
+                        0
+                    },
+                )
                 return START_STICKY
             }
         }
