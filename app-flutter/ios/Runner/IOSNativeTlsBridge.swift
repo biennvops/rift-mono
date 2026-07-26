@@ -243,13 +243,13 @@ final class IOSNativeTlsBridge {
     guard let certificateData = pemData(certificatePem, label: "CERTIFICATE"),
           let certificate = SecCertificateCreateWithData(nil, certificateData as CFData),
           let sec1 = pemData(privateKeyPem, label: "EC PRIVATE KEY"),
-          let scalar = ecPrivateScalar(from: sec1) else { return nil }
+          let x963 = ecX963PrivateKey(from: sec1) else { return nil }
     let attributes: [CFString: Any] = [
-      kSecAttrKeyType: kSecAttrKeyTypeEC,
+      kSecAttrKeyType: kSecAttrKeyTypeECSECPrimeRandom,
       kSecAttrKeyClass: kSecAttrKeyClassPrivate,
       kSecAttrKeySizeInBits: 256,
     ]
-    guard let key = SecKeyCreateWithData(scalar as NSData as CFData, attributes as CFDictionary, nil),
+    guard let key = SecKeyCreateWithData(x963 as NSData as CFData, attributes as CFDictionary, nil),
           let identity = SecIdentityCreate(nil, certificate, key) else { return nil }
     return sec_identity_create(identity)
   }
@@ -262,19 +262,58 @@ final class IOSNativeTlsBridge {
     return Data(base64Encoded: body)
   }
 
-  private func ecPrivateScalar(from der: Data) -> Data? {
+  /// Converts an RFC 5915 SEC1 EC private key into the X9.63 layout
+  /// (0x04 || X || Y || K) required by SecKeyCreateWithData.
+  private func ecX963PrivateKey(from der: Data) -> Data? {
     let bytes = [UInt8](der)
-    guard bytes.count > 4, bytes[0] == 0x30 else { return nil }
-    var index = 2
-    guard bytes[index] == 0x02 else { return nil }
-    index += 2
-    guard bytes[index] == 0x01, bytes[index + 1] == 0x00 else { return nil }
-    index += 2
-    guard bytes[index] == 0x04 else { return nil }
+    var index = 0
+
+    func readLength() -> Int? {
+      guard index < bytes.count else { return nil }
+      var length = Int(bytes[index])
+      index += 1
+      if length & 0x80 != 0 {
+        let byteCount = length & 0x7f
+        guard byteCount >= 1, byteCount <= 2, index + byteCount <= bytes.count else { return nil }
+        length = 0
+        for _ in 0..<byteCount {
+          length = (length << 8) | Int(bytes[index])
+          index += 1
+        }
+      }
+      return length
+    }
+
+    guard index < bytes.count, bytes[index] == 0x30 else { return nil }
     index += 1
-    let length = Int(bytes[index])
+    guard readLength() != nil else { return nil }
+
+    guard index < bytes.count, bytes[index] == 0x02 else { return nil }
     index += 1
-    guard length == 32, index + length <= bytes.count else { return nil }
-    return Data(bytes[index..<(index + length)])
+    guard let versionLength = readLength(), index + versionLength <= bytes.count else { return nil }
+    index += versionLength
+
+    guard index < bytes.count, bytes[index] == 0x04 else { return nil }
+    index += 1
+    guard let scalarLength = readLength(), scalarLength == 32, index + 32 <= bytes.count else { return nil }
+    let scalar = bytes[index..<(index + 32)]
+    index += 32
+
+    if index < bytes.count, bytes[index] == 0xA0 {
+      index += 1
+      guard let parametersLength = readLength(), index + parametersLength <= bytes.count else { return nil }
+      index += parametersLength
+    }
+
+    guard index < bytes.count, bytes[index] == 0xA1 else { return nil }
+    index += 1
+    guard readLength() != nil else { return nil }
+    guard index < bytes.count, bytes[index] == 0x03 else { return nil }
+    index += 1
+    guard let bitStringLength = readLength(), bitStringLength >= 66,
+          index + bitStringLength <= bytes.count,
+          bytes[index] == 0x00, bytes[index + 1] == 0x04 else { return nil }
+    let point = bytes[(index + 1)..<(index + 1 + 65)]
+    return Data(point) + Data(scalar)
   }
 }
