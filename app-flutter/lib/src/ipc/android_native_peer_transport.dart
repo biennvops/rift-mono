@@ -103,16 +103,10 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     final peerDeviceId = _deviceIdForKey(peerEd25519Key);
     final existing = _peers[peerDeviceId];
 
-    if (existing != null) {
-      // Mirror TransportImpl duplicate semantics: keep an authenticated
-      // session and drop the newcomer, but for pre-auth duplicates the peer
-      // reconnecting implies the old socket is stale, so the new connection
-      // always replaces it.
-      if (_authenticatedPeers.contains(peerDeviceId)) {
-        await _tls.close(connection.connectionId);
-        return peerDeviceId;
-      }
-      await _closeConnection(existing, notify: false);
+    if (existing != null && _authenticatedPeers.contains(peerDeviceId)) {
+      // Keep an authenticated session and drop the newcomer.
+      await _tls.close(connection.connectionId);
+      return peerDeviceId;
     }
 
     final peer = _NativePeerConnection(
@@ -124,7 +118,14 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       remotePort: connection.remotePort,
       isServer: isServer,
     );
+    // Install the replacement before tearing down a stale pre-auth
+    // connection: the old read loop's failure callback must observe the new
+    // owner in _peers so it neither removes the entry nor emits a disconnect
+    // for the peer we are actively replacing.
     _peers[peerDeviceId] = peer;
+    if (existing != null) {
+      await _closeConnection(existing, notify: false);
+    }
     _startReadLoop(peer);
     return peerDeviceId;
   }
