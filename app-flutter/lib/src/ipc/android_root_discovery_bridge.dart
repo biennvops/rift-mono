@@ -124,7 +124,7 @@ class AndroidRootDiscoveryBridge {
   Stream<AndroidDiscoveredPeer> get onPeerDiscovered =>
       _peerDiscoveredController.stream;
   Stream<AndroidDiscoveredPeer> get onPeerLost => _peerLostController.stream;
-  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested => 
+  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested =>
       _reverseTcpPingController.stream;
 
   bool get isDiscovering => _discovery != null;
@@ -245,7 +245,8 @@ class AndroidRootDiscoveryBridge {
           debugPrint('[mDNS Debug] Ignored self peer.');
         }
       } else if (service.name == _instanceId) {
-        debugPrint('[mDNS Debug] Ignored own broadcast service: ${service.name}');
+        debugPrint(
+            '[mDNS Debug] Ignored own broadcast service: ${service.name}');
       } else {
         debugPrint(
             '[mDNS Debug] Failed to parse peer from service: ${service.name}');
@@ -256,14 +257,19 @@ class AndroidRootDiscoveryBridge {
 
   void _ingestMergedSnapshot(
       [Iterable<AndroidDiscoveredPeer> mdnsSnapshot = const []]) {
-    final mergedByInstanceId = <String, AndroidDiscoveredPeer>{
-      for (final peer in mdnsSnapshot) peer.instanceId: peer,
+    // Merge mDNS and UDP-fallback observations by stable identity (device ID
+    // hint when available) so one device never yields duplicate entries.
+    // mDNS wins over fallback for the same device.
+    final merged = <String, AndroidDiscoveredPeer>{
       for (final entry in _fallbackPeersByInstanceId.entries)
         if (entry.value.peer.deviceIdHint != deviceIdHint)
-          entry.key: entry.value.peer,
+          AndroidDiscoveryPeerTracker._trackingKey(entry.value.peer):
+              entry.value.peer,
+      for (final peer in mdnsSnapshot)
+        AndroidDiscoveryPeerTracker._trackingKey(peer): peer,
     };
 
-    final delta = tracker.ingest(mergedByInstanceId.values);
+    final delta = tracker.ingest(merged.values);
     for (final peer in delta.removed) {
       _peerLostController.add(peer);
     }
@@ -507,26 +513,33 @@ class AndroidRootDiscoveryBridge {
     final bytes = Uint8List.fromList(utf8.encode(payload));
 
     try {
-      final b1 = socket.send(bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
-      debugPrint('[mDNS Debug] Ping-pong unicast to $targetAddress sent $b1 bytes.');
+      final b1 = socket.send(
+          bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
+      debugPrint(
+          '[mDNS Debug] Ping-pong unicast to $targetAddress sent $b1 bytes.');
 
       final parts = targetAddress.split('.');
       if (parts.length == 4) {
         final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
-        final b2 = socket.send(bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
-        debugPrint('[mDNS Debug] Ping-pong subnet to $subnetBroadcast sent $b2 bytes.');
+        final b2 = socket.send(
+            bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
+        debugPrint(
+            '[mDNS Debug] Ping-pong subnet to $subnetBroadcast sent $b2 bytes.');
       }
-      
+
       // TCP Reverse-Connect Hack for Android Hotspot Asymmetry
       final endpointKey = '${targetPeer.address}:${targetPeer.port}';
       if (_recentlyTcpPinged.add(endpointKey)) {
-        debugPrint('[mDNS Debug] Reverse TCP Pinging new endpoint $endpointKey');
+        debugPrint(
+            '[mDNS Debug] Reverse TCP Pinging new endpoint $endpointKey');
         _reverseTcpPingController.add(targetPeer);
         // Clear after a while so we can ping again if it gets lost
-        Timer(const Duration(seconds: 15), () => _recentlyTcpPinged.remove(endpointKey));
+        Timer(const Duration(seconds: 15),
+            () => _recentlyTcpPinged.remove(endpointKey));
       }
     } catch (e) {
-      debugPrint('[mDNS Debug] Failed immediate ping-pong to $targetAddress: $e');
+      debugPrint(
+          '[mDNS Debug] Failed immediate ping-pong to $targetAddress: $e');
     }
   }
 
@@ -588,7 +601,7 @@ class AndroidRootDiscoveryBridge {
             InternetAddress(endpoint.address),
             _fallbackDiscoveryPort,
           );
-          
+
           final parts = endpoint.address.split('.');
           if (parts.length == 4) {
             final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
@@ -613,29 +626,39 @@ class AndroidDiscoveryPeerTracker {
   List<AndroidDiscoveredPeer> get currentPeers =>
       _seenPeers.values.toList(growable: false);
 
+  /// Tracking key: peers advertising a device ID hint are keyed by that
+  /// stable identity, so mDNS instance-name churn (advertisers regenerate
+  /// `rift-peer-` instance names) is an update rather than a remove+add
+  /// flap. Hint-less peers fall back to the instance name.
+  static String _trackingKey(AndroidDiscoveredPeer peer) =>
+      peer.deviceIdHint ?? 'instance:${peer.instanceId}';
+
   AndroidDiscoverySnapshotDelta ingest(Iterable<AndroidDiscoveredPeer> peers) {
-    final snapshot = peers.toList(growable: false);
-    final currentIds = {for (final peer in snapshot) peer.instanceId};
+    // Deduplicate by tracking key; the last observation wins.
+    final snapshot = <String, AndroidDiscoveredPeer>{};
+    for (final peer in peers) {
+      snapshot[_trackingKey(peer)] = peer;
+    }
 
     final removed = <AndroidDiscoveredPeer>[];
-    final lostIds = _seenPeers.keys.toSet().difference(currentIds);
+    final lostIds = _seenPeers.keys.toSet().difference(snapshot.keys.toSet());
     for (final id in lostIds) {
       removed.add(_seenPeers.remove(id)!);
     }
 
     final added = <AndroidDiscoveredPeer>[];
     final updated = <AndroidDiscoveredPeer>[];
-    for (final peer in snapshot) {
-      final existing = _seenPeers[peer.instanceId];
+    for (final entry in snapshot.entries) {
+      final existing = _seenPeers[entry.key];
       if (existing == null) {
-        _seenPeers[peer.instanceId] = peer;
-        added.add(peer);
+        _seenPeers[entry.key] = entry.value;
+        added.add(entry.value);
         continue;
       }
 
-      if (!_samePeer(existing, peer)) {
-        _seenPeers[peer.instanceId] = peer;
-        updated.add(peer);
+      if (!_samePeer(existing, entry.value)) {
+        _seenPeers[entry.key] = entry.value;
+        updated.add(entry.value);
       }
     }
 
