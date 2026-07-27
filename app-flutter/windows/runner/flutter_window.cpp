@@ -18,7 +18,10 @@
 namespace {
 
 constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
-constexpr UINT kRiftShellNotifyId = 9001;
+// tray_manager owns icon 1 and WM_USER + 1. Native balloons temporarily
+// borrow that icon so Rift has only one notification-area entry.
+constexpr UINT kTrayManagerNotifyMessage = WM_USER + 1;
+constexpr UINT kRiftShellNotifyId = 1;
 // WM_COPYDATA identifier for file handoff from a second app instance.
 constexpr ULONG_PTR kRiftSendFilesCopyDataId = 0x52465446;  // 'RFTF'
 
@@ -162,6 +165,17 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       if (notification_event == NIN_BALLOONHIDE ||
           notification_event == NIN_BALLOONTIMEOUT) {
         CleanupShellNotificationIcon();
+        return 0;
+      }
+      if (notification_event == WM_LBUTTONUP) {
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        CleanupShellNotificationIcon();
+        return 0;
+      }
+      if (notification_event == WM_RBUTTONUP) {
+        CleanupShellNotificationIcon();
+        PostMessageW(hwnd, kTrayManagerNotifyMessage, wparam, lparam);
         return 0;
       }
       break;
@@ -575,22 +589,10 @@ void FlutterWindow::InitializeShellNotificationIcon() {
   icon_data.cbSize = sizeof(icon_data);
   icon_data.hWnd = GetHandle();
   icon_data.uID = kRiftShellNotifyId;
-  icon_data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+  icon_data.uFlags = NIF_MESSAGE;
   icon_data.uCallbackMessage = kRiftShellNotifyMessage;
-  icon_data.hIcon = static_cast<HICON>(LoadImageW(
-      GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 0,
-      0, LR_DEFAULTSIZE));
-  wcscpy_s(icon_data.szTip, L"Rift");
-
   shell_notification_icon_registered_ =
-      Shell_NotifyIconW(NIM_ADD, &icon_data) == TRUE;
-  if (shell_notification_icon_registered_) {
-    icon_data.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &icon_data);
-  }
-  if (icon_data.hIcon != nullptr) {
-    DestroyIcon(icon_data.hIcon);
-  }
+      Shell_NotifyIconW(NIM_MODIFY, &icon_data) == TRUE;
 }
 
 void FlutterWindow::CleanupShellNotificationIcon() {
@@ -602,7 +604,9 @@ void FlutterWindow::CleanupShellNotificationIcon() {
   icon_data.cbSize = sizeof(icon_data);
   icon_data.hWnd = GetHandle();
   icon_data.uID = kRiftShellNotifyId;
-  Shell_NotifyIconW(NIM_DELETE, &icon_data);
+  icon_data.uFlags = NIF_MESSAGE;
+  icon_data.uCallbackMessage = kTrayManagerNotifyMessage;
+  Shell_NotifyIconW(NIM_MODIFY, &icon_data);
   shell_notification_icon_registered_ = false;
 }
 
