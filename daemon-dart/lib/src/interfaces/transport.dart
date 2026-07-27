@@ -19,7 +19,7 @@ class TransportMessage {
   final Uint8List? peerCertDer;
 
   TransportMessage({
-    required this.peerDeviceId, 
+    required this.peerDeviceId,
     required this.payload,
     this.peerEd25519Key,
     this.peerCertDer,
@@ -38,9 +38,14 @@ abstract class Transport {
   void disconnect(String peerDeviceId);
   void setPeerAuthenticated(String peerDeviceId);
   Stream<TransportMessage> get onMessageReceived;
+
   /// Emits a peer's deviceId whenever that peer is disconnected.
   Stream<String> get onPeerDisconnected;
   Future<void> sendMessage(String deviceId, Uint8List message);
   Uint8List? getPeerCert(String peerDeviceId);
   PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId);
+}
+
+abstract interface class BoundTransport {
+  int get boundPort;
 }

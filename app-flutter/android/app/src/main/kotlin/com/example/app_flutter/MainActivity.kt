@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.util.UUID
@@ -52,9 +53,16 @@ class MainActivity: FlutterActivity() {
 
     private val clipboardChannelName = "com.biennvops.rift/clipboard"
     private val shellChannelName = "rift/android/shell"
+    private val tlsChannelName = "rift/android/tls"
+    private val identityChannelName = "rift/android/identity"
+    private val mediaObserverChannelName = "rift/android/media_playback"
+    private val mediaObserverEventChannelName = "rift/android/media_playback_events"
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
+    private var tlsChannel: MethodChannel? = null
+    private val tlsBridge = AndroidTlsBridge()
+    private var mediaSessionObserver: AndroidMediaSessionObserver? = null
     private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
@@ -159,6 +167,78 @@ class MainActivity: FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        tlsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, tlsChannelName)
+        tlsChannel?.setMethodCallHandler { call, result ->
+            tlsBridge.handle(call, result)
+        }
+
+        val mediaObserver = AndroidMediaSessionObserver(this)
+        mediaSessionObserver = mediaObserver
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverEventChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    mediaObserver.setEventSink(events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    mediaObserver.setEventSink(null)
+                }
+            })
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startObservation" -> result.success(mediaObserver.startObservation())
+                    "stopObservation" -> {
+                        mediaObserver.stopObservation()
+                        result.success(true)
+                    }
+                    "performAction" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val playbackId = args?.get("playbackId") as? String
+                        val action = args?.get("action") as? String
+                        if (playbackId == null || action == null) {
+                            result.error(
+                                "invalid_args",
+                                "playbackId and action are required",
+                                null,
+                            )
+                        } else {
+                            result.success(
+                                mediaObserver.performAction(
+                                    playbackId,
+                                    action,
+                                    (args["positionMs"] as? Number)?.toLong(),
+                                ),
+                            )
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, identityChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "loadOrCreate" -> {
+                        try {
+                            val legacyPath =
+                                (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
+                            result.success(
+                                AndroidIdentityKeystore.loadOrCreate(this, legacyPath),
+                            )
+                        } catch (error: Exception) {
+                            Log.e(tag, "Identity keystore failure", error)
+                            result.error(
+                                "identity_keystore_error",
+                                error.message,
+                                null,
+                            )
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
 
         shellChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, shellChannelName)
@@ -356,6 +436,9 @@ class MainActivity: FlutterActivity() {
             notificationSyncReceiverRegistered = false
         }
         remoteMediaPlaybackManager.stop()
+        mediaSessionObserver?.stopObservation()
+        mediaSessionObserver = null
+        tlsBridge.dispose()
         super.onDestroy()
     }
 

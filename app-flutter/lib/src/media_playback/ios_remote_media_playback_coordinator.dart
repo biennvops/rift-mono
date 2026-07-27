@@ -167,7 +167,8 @@ class IOSRemoteMediaPlaybackCoordinator {
         return candidate;
       }
     }
-    return candidates.first;
+    // Only stopped playbacks remain; show nothing rather than a dead player.
+    return null;
   }
 
   String _keyFor(Map<String, dynamic> playback) =>
