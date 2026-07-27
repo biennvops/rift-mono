@@ -5,7 +5,14 @@
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/standard_method_codec.h>
 
+#include <algorithm>
 #include <cstring>
+
+namespace Gdiplus {
+using std::max;
+using std::min;
+}  // namespace Gdiplus
+
 #include <gdiplus.h>
 #include <limits>
 #include <objidl.h>
