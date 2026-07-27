@@ -6,7 +6,9 @@
 #include <flutter/standard_method_codec.h>
 
 #include <cstring>
+#include <gdiplus.h>
 #include <limits>
+#include <objidl.h>
 #include <optional>
 #include <shellapi.h>
 #include <string>
@@ -76,6 +78,113 @@ bool ReadGlobalMemory(HANDLE handle, std::vector<uint8_t>* bytes) {
   bytes->assign(data, data + size);
   GlobalUnlock(handle);
   return true;
+}
+
+bool ReadDibAsPng(HGLOBAL handle, std::vector<uint8_t>* png_bytes) {
+  if (handle == nullptr || png_bytes == nullptr) {
+    return false;
+  }
+
+  const SIZE_T size = GlobalSize(handle);
+  if (size < sizeof(BITMAPINFOHEADER)) {
+    return false;
+  }
+
+  const auto* dib = static_cast<const uint8_t*>(GlobalLock(handle));
+  if (dib == nullptr) {
+    return false;
+  }
+
+  const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(dib);
+  const size_t header_size = header->biSize;
+  const size_t mask_size =
+      header->biCompression == BI_BITFIELDS && header_size == sizeof(BITMAPINFOHEADER)
+          ? 3 * sizeof(DWORD)
+          : 0;
+  const size_t color_count = header->biBitCount <= 8
+                                 ? (header->biClrUsed != 0
+                                        ? header->biClrUsed
+                                        : (1u << header->biBitCount))
+                                 : 0;
+  const size_t pixel_offset =
+      header_size + mask_size + color_count * sizeof(RGBQUAD);
+  if (header_size < sizeof(BITMAPINFOHEADER) || pixel_offset > size ||
+      header->biWidth <= 0 || header->biHeight == 0 || header->biPlanes != 1) {
+    GlobalUnlock(handle);
+    return false;
+  }
+
+  HDC screen_dc = GetDC(nullptr);
+  HBITMAP bitmap = CreateDIBitmap(
+      screen_dc, header, CBM_INIT, dib + pixel_offset,
+      reinterpret_cast<const BITMAPINFO*>(dib), DIB_RGB_COLORS);
+  ReleaseDC(nullptr, screen_dc);
+  GlobalUnlock(handle);
+  if (bitmap == nullptr) {
+    return false;
+  }
+
+  Gdiplus::GdiplusStartupInput startup_input;
+  ULONG_PTR startup_token = 0;
+  if (Gdiplus::GdiplusStartup(&startup_token, &startup_input, nullptr) !=
+      Gdiplus::Ok) {
+    DeleteObject(bitmap);
+    return false;
+  }
+
+  bool success = false;
+  {
+    Gdiplus::Bitmap image(bitmap, nullptr);
+    UINT encoder_count = 0;
+    UINT encoder_bytes = 0;
+    if (image.GetLastStatus() == Gdiplus::Ok &&
+        Gdiplus::GetImageEncodersSize(&encoder_count, &encoder_bytes) ==
+            Gdiplus::Ok) {
+      std::vector<uint8_t> encoder_buffer(encoder_bytes);
+      auto* encoders = reinterpret_cast<Gdiplus::ImageCodecInfo*>(
+          encoder_buffer.data());
+      if (Gdiplus::GetImageEncoders(encoder_count, encoder_bytes, encoders) ==
+          Gdiplus::Ok) {
+        CLSID png_encoder = {};
+        for (UINT i = 0; i < encoder_count; ++i) {
+          if (wcscmp(encoders[i].MimeType, L"image/png") == 0) {
+            png_encoder = encoders[i].Clsid;
+            break;
+          }
+        }
+
+        IStream* stream = nullptr;
+        if (png_encoder.Data1 != 0 &&
+            SUCCEEDED(CreateStreamOnHGlobal(nullptr, TRUE, &stream))) {
+          if (image.Save(stream, &png_encoder, nullptr) == Gdiplus::Ok) {
+            STATSTG stat = {};
+            LARGE_INTEGER origin = {};
+            if (SUCCEEDED(stream->Stat(&stat, STATFLAG_NONAME)) &&
+                stat.cbSize.QuadPart <=
+                    static_cast<ULONGLONG>(std::numeric_limits<size_t>::max()) &&
+                stat.cbSize.QuadPart <= std::numeric_limits<ULONG>::max() &&
+                SUCCEEDED(stream->Seek(origin, STREAM_SEEK_SET, nullptr))) {
+              png_bytes->resize(static_cast<size_t>(stat.cbSize.QuadPart));
+              ULONG bytes_read = 0;
+              success = SUCCEEDED(stream->Read(
+                                  png_bytes->data(),
+                                  static_cast<ULONG>(png_bytes->size()),
+                                  &bytes_read)) &&
+                        bytes_read == png_bytes->size();
+              if (!success) {
+                png_bytes->clear();
+              }
+            }
+          }
+          stream->Release();
+        }
+      }
+    }
+  }
+
+  Gdiplus::GdiplusShutdown(startup_token);
+  DeleteObject(bitmap);
+  return success;
 }
 
 HGLOBAL CreateDibV5FromPng(const std::vector<uint8_t>& png_bytes) {
@@ -372,6 +481,26 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
             if (ReadGlobalMemory(handle, &bytes)) {
               CloseClipboard();
               LogClipboardMessage("read image/png payload (" +
+                                  std::to_string(bytes.size()) + " bytes).");
+              flutter::EncodableMap payload;
+              payload[flutter::EncodableValue("contentType")] =
+                  flutter::EncodableValue("image/png");
+              payload[flutter::EncodableValue("bytes")] =
+                  flutter::EncodableValue(bytes);
+              result->Success(flutter::EncodableValue(payload));
+              return;
+            }
+          }
+
+          const UINT dib_format = IsClipboardFormatAvailable(CF_DIBV5)
+                                      ? CF_DIBV5
+                                      : CF_DIB;
+          if (IsClipboardFormatAvailable(dib_format)) {
+            HANDLE handle = GetClipboardData(dib_format);
+            std::vector<uint8_t> bytes;
+            if (ReadDibAsPng(handle, &bytes)) {
+              CloseClipboard();
+              LogClipboardMessage("read standard bitmap as image/png payload (" +
                                   std::to_string(bytes.size()) + " bytes).");
               flutter::EncodableMap payload;
               payload[flutter::EncodableValue("contentType")] =
