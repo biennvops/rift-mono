@@ -127,6 +127,12 @@ class AndroidMediaSessionObserver(private val context: Context) {
     private fun syncControllers(controllers: List<MediaController>) {
         val nextIds = HashSet<String>()
         for (controller in controllers) {
+            // Never observe our own sessions: RemoteMediaPlaybackManager
+            // creates a MediaSessionCompat to display *remote* playback, and
+            // republishing it would echo peers' media back at them in a loop.
+            if (controller.packageName == context.packageName) {
+                continue
+            }
             val id = playbackIdFor(controller)
             nextIds.add(id)
             if (!controllersById.containsKey(id)) {
