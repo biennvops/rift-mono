@@ -6,10 +6,13 @@
 #include <flutter/standard_method_codec.h>
 
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <shellapi.h>
 #include <string>
 #include <vector>
+#include <wincodec.h>
+#include <wrl/client.h>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "resource.h"
@@ -73,6 +76,100 @@ bool ReadGlobalMemory(HANDLE handle, std::vector<uint8_t>* bytes) {
   bytes->assign(data, data + size);
   GlobalUnlock(handle);
   return true;
+}
+
+HGLOBAL CreateDibV5FromPng(const std::vector<uint8_t>& png_bytes) {
+  if (png_bytes.empty() ||
+      png_bytes.size() > std::numeric_limits<DWORD>::max()) {
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                              CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&factory)))) {
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IWICStream> stream;
+  if (FAILED(factory->CreateStream(&stream)) ||
+      FAILED(stream->InitializeFromMemory(
+          const_cast<BYTE*>(png_bytes.data()),
+          static_cast<DWORD>(png_bytes.size())))) {
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+  if (FAILED(factory->CreateDecoderFromStream(
+          stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad, &decoder))) {
+    return nullptr;
+  }
+
+  Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+  Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+  if (FAILED(decoder->GetFrame(0, &frame)) ||
+      FAILED(factory->CreateFormatConverter(&converter)) ||
+      FAILED(converter->Initialize(
+          frame.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone,
+          nullptr, 0.0, WICBitmapPaletteTypeCustom))) {
+    return nullptr;
+  }
+
+  UINT width = 0;
+  UINT height = 0;
+  if (FAILED(converter->GetSize(&width, &height)) || width == 0 || height == 0 ||
+      width > static_cast<UINT>(std::numeric_limits<LONG>::max()) ||
+      height > static_cast<UINT>(std::numeric_limits<LONG>::max())) {
+    return nullptr;
+  }
+
+  const uint64_t stride64 = static_cast<uint64_t>(width) * 4;
+  const uint64_t image_size64 = stride64 * height;
+  const uint64_t allocation_size64 = sizeof(BITMAPV5HEADER) + image_size64;
+  if (stride64 > std::numeric_limits<UINT>::max() ||
+      image_size64 > std::numeric_limits<UINT>::max() ||
+      allocation_size64 > std::numeric_limits<SIZE_T>::max()) {
+    return nullptr;
+  }
+
+  HGLOBAL memory =
+      GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(allocation_size64));
+  if (memory == nullptr) {
+    return nullptr;
+  }
+
+  auto* header = static_cast<BITMAPV5HEADER*>(GlobalLock(memory));
+  if (header == nullptr) {
+    GlobalFree(memory);
+    return nullptr;
+  }
+
+  ZeroMemory(header, sizeof(BITMAPV5HEADER));
+  header->bV5Size = sizeof(BITMAPV5HEADER);
+  header->bV5Width = static_cast<LONG>(width);
+  header->bV5Height = -static_cast<LONG>(height);
+  header->bV5Planes = 1;
+  header->bV5BitCount = 32;
+  header->bV5Compression = BI_BITFIELDS;
+  header->bV5SizeImage = static_cast<DWORD>(image_size64);
+  header->bV5RedMask = 0x00FF0000;
+  header->bV5GreenMask = 0x0000FF00;
+  header->bV5BlueMask = 0x000000FF;
+  header->bV5AlphaMask = 0xFF000000;
+  header->bV5CSType = LCS_sRGB;
+  header->bV5Intent = LCS_GM_IMAGES;
+
+  auto* pixels = reinterpret_cast<BYTE*>(header) + sizeof(BITMAPV5HEADER);
+  const HRESULT copy_result = converter->CopyPixels(
+      nullptr, static_cast<UINT>(stride64), static_cast<UINT>(image_size64),
+      pixels);
+  GlobalUnlock(memory);
+  if (FAILED(copy_result)) {
+    GlobalFree(memory);
+    return nullptr;
+  }
+
+  return memory;
 }
 
 }  // namespace
@@ -345,6 +442,7 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
           bool applied = false;
           UINT clipboard_format = 0;
           HGLOBAL memory = nullptr;
+          HGLOBAL dib_memory = nullptr;
           if (*content_type == "text/plain" || *content_type == "clipboard") {
             std::string utf8_text(bytes->begin(), bytes->end());
             std::wstring utf16_text = Utf16FromUtf8(utf8_text);
@@ -381,13 +479,14 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
                 memory = nullptr;
               }
             }
+            dib_memory = CreateDibV5FromPng(*bytes);
           }
           if (*content_type != "text/plain" && *content_type != "clipboard" &&
               *content_type != "image/png") {
             LogClipboardMessage("unsupported write content type " + *content_type);
           }
 
-          if (memory == nullptr) {
+          if (memory == nullptr && dib_memory == nullptr) {
             result->Success(flutter::EncodableValue(false));
             return;
           }
@@ -395,6 +494,7 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
           if (!OpenClipboard(GetHandle())) {
             LogClipboardMessage("OpenClipboard failed for write.");
             GlobalFree(memory);
+            GlobalFree(dib_memory);
             result->Success(flutter::EncodableValue(false));
             return;
           }
@@ -402,25 +502,38 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
           if (!EmptyClipboard()) {
             LogClipboardMessage("EmptyClipboard failed for write.");
             GlobalFree(memory);
+            GlobalFree(dib_memory);
             CloseClipboard();
             result->Success(flutter::EncodableValue(false));
             return;
           }
 
-          applied = SetClipboardData(clipboard_format, memory) != nullptr;
+          const bool primary_applied =
+              memory != nullptr &&
+              SetClipboardData(clipboard_format, memory) != nullptr;
+          if (!primary_applied) {
+            GlobalFree(memory);
+          }
+          applied = primary_applied;
           if (*content_type == "text/plain" || *content_type == "clipboard") {
             LogClipboardMessage(std::string("write text/plain payload (") +
                                 std::to_string(bytes->size()) +
                                 " bytes) success=" +
                                 (applied ? "true" : "false"));
           } else if (*content_type == "image/png") {
+            const bool dib_applied =
+                dib_memory != nullptr &&
+                SetClipboardData(CF_DIBV5, dib_memory) != nullptr;
+            if (!dib_applied) {
+              GlobalFree(dib_memory);
+            }
+            applied = primary_applied || dib_applied;
             LogClipboardMessage(std::string("write image/png payload (") +
                                 std::to_string(bytes->size()) +
-                                " bytes) success=" +
-                                (applied ? "true" : "false"));
-          }
-          if (!applied) {
-            GlobalFree(memory);
+                                " bytes) png=" +
+                                (primary_applied ? "true" : "false") +
+                                " dibv5=" +
+                                (dib_applied ? "true" : "false"));
           }
 
           CloseClipboard();
