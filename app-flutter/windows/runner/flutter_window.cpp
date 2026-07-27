@@ -19,6 +19,8 @@ namespace {
 
 constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
 constexpr UINT kRiftShellNotifyId = 9001;
+// WM_COPYDATA identifier for file handoff from a second app instance.
+constexpr ULONG_PTR kRiftSendFilesCopyDataId = 0x52465446;  // 'RFTF'
 
 std::wstring Utf16FromUtf8(const std::string& utf8_string);
 
@@ -96,6 +98,7 @@ bool FlutterWindow::OnCreate() {
   RegisterClipboardEventChannel();
   RegisterClipboardMethodChannel();
   RegisterWindowsShellMethodChannel();
+  RegisterSendFilesMethodChannel();
   InitializeShellNotificationIcon();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
@@ -121,6 +124,8 @@ void FlutterWindow::OnDestroy() {
   clipboard_method_channel_.reset();
   CleanupShellNotificationIcon();
   windows_shell_method_channel_.reset();
+  send_files_method_channel_.reset();
+  send_files_channel_ready_ = false;
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -154,6 +159,37 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         return 0;
       }
       break;
+    case WM_COPYDATA: {
+      const auto* copy_data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+      if (copy_data != nullptr &&
+          copy_data->dwData == kRiftSendFilesCopyDataId &&
+          copy_data->lpData != nullptr &&
+          copy_data->cbData >= sizeof(wchar_t) &&
+          copy_data->cbData % sizeof(wchar_t) == 0) {
+        // Payload: double-null-terminated UTF-16 path list.
+        const auto* data = static_cast<const wchar_t*>(copy_data->lpData);
+        const size_t length = copy_data->cbData / sizeof(wchar_t);
+        std::vector<std::wstring> paths;
+        size_t start = 0;
+        while (start < length && data[start] != L'\0') {
+          size_t end = start;
+          while (end < length && data[end] != L'\0') {
+            ++end;
+          }
+          if (end == length) {
+            break;
+          }
+          paths.emplace_back(data + start, end - start);
+          start = end + 1;
+        }
+        QueueSendFiles(paths);
+        // Bring the existing window to the foreground for the user.
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        return TRUE;
+      }
+      break;
+    }
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
@@ -456,6 +492,71 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
         }
         result->Success(flutter::EncodableValue(shown));
       });
+}
+
+void FlutterWindow::QueueSendFiles(const std::vector<std::wstring>& paths) {
+  for (const auto& path : paths) {
+    // Only hand off readable regular files, mirroring the Linux runner.
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      continue;
+    }
+
+    std::wstring file_name = path;
+    const size_t separator = file_name.find_last_of(L"\\/");
+    if (separator != std::wstring::npos) {
+      file_name = file_name.substr(separator + 1);
+    }
+    if (file_name.empty()) {
+      continue;
+    }
+
+    flutter::EncodableMap item;
+    item[flutter::EncodableValue("localPath")] =
+        flutter::EncodableValue(Utf8FromUtf16(path.c_str()));
+    item[flutter::EncodableValue("fileName")] =
+        flutter::EncodableValue(Utf8FromUtf16(file_name.c_str()));
+    pending_send_files_.push_back(flutter::EncodableValue(item));
+  }
+
+  DispatchQueuedSendFiles();
+}
+
+void FlutterWindow::RegisterSendFilesMethodChannel() {
+  auto messenger = flutter_controller_->engine()->messenger();
+  send_files_method_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          messenger, "rift/windows/send_files",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  send_files_method_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        if (call.method_name() == "consumePendingItems") {
+          send_files_channel_ready_ = true;
+          flutter::EncodableList pending = std::move(pending_send_files_);
+          pending_send_files_.clear();
+          result->Success(flutter::EncodableValue(pending));
+          return;
+        }
+
+        result->NotImplemented();
+      });
+}
+
+void FlutterWindow::DispatchQueuedSendFiles() {
+  if (!send_files_channel_ready_ || send_files_method_channel_ == nullptr ||
+      pending_send_files_.empty()) {
+    return;
+  }
+
+  flutter::EncodableList items = std::move(pending_send_files_);
+  pending_send_files_.clear();
+  send_files_method_channel_->InvokeMethod(
+      "sendFilesSelected",
+      std::make_unique<flutter::EncodableValue>(items));
 }
 
 void FlutterWindow::InitializeShellNotificationIcon() {

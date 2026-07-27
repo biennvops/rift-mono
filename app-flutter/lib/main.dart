@@ -36,6 +36,7 @@ import 'src/platform/linux_notifications.dart';
 import 'src/platform/linux_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
+import 'src/platform/windows_send_files.dart';
 import 'src/platform/windows_shell.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
@@ -328,6 +329,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
+    if (Platform.isWindows) {
+      WindowsSendFiles.setMethodCallHandler(_handleWindowsSendFilesMethodCall);
+      unawaited(_consumePendingWindowsSendItems());
+    }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
 
     if (IOSNotifications.isSupported) {
@@ -450,6 +455,30 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     final items = MacOSSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  Future<void> _consumePendingWindowsSendItems() async {
+    final pendingItems = await WindowsSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleWindowsSendFilesMethodCall(MethodCall call) async {
+    if (call.method != WindowsSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = WindowsSendFiles.parseCallbackArguments(call.arguments);
     if (items.isEmpty) {
       return null;
     }

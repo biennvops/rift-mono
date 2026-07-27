@@ -9,6 +9,8 @@
 #include <flutter/method_channel.h>
 
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "win32_window.h"
 
@@ -18,6 +20,10 @@ class FlutterWindow : public Win32Window {
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
   explicit FlutterWindow(const flutter::DartProject& project);
   virtual ~FlutterWindow();
+
+  // Queues files opened with the app (Open With / file association) for
+  // handoff into the Dart send queue once the channel is ready.
+  void QueueSendFiles(const std::vector<std::wstring>& paths);
 
  protected:
   // Win32Window:
@@ -30,6 +36,8 @@ class FlutterWindow : public Win32Window {
   void RegisterClipboardEventChannel();
   void RegisterClipboardMethodChannel();
   void RegisterWindowsShellMethodChannel();
+  void RegisterSendFilesMethodChannel();
+  void DispatchQueuedSendFiles();
   void InitializeShellNotificationIcon();
   void CleanupShellNotificationIcon();
   bool ShowTransferNotification(
@@ -57,6 +65,10 @@ class FlutterWindow : public Win32Window {
       clipboard_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       windows_shell_method_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      send_files_method_channel_;
+  flutter::EncodableList pending_send_files_;
+  bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
   std::wstring pending_notification_destination_path_;
