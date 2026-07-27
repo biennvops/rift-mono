@@ -96,6 +96,10 @@ class AndroidTlsBridge {
                 val socket = listener.accept() as SSLSocket
                 socket.useClientMode = false
                 socket.startHandshake()
+                if (generation.get() != gen || listener.isClosed) {
+                    socket.close()
+                    return
+                }
                 val id = register(socket)
                 val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate
                 val response = mapOf(
@@ -107,14 +111,28 @@ class AndroidTlsBridge {
                     "remoteAddress" to socket.inetAddress.hostAddress,
                     "remotePort" to socket.port,
                 )
+                if (generation.get() != gen || listener.isClosed) {
+                    connections.remove(id)
+                    socket.close()
+                    return
+                }
                 val callback = synchronized(this) {
-                    val current = pendingAccept
-                    if (current != null) {
-                        pendingAccept = null
+                    if (generation.get() != gen || listener.isClosed) {
+                        null
                     } else {
-                        acceptedConnections.addLast(response)
+                        val current = pendingAccept
+                        if (current != null) {
+                            pendingAccept = null
+                        } else {
+                            acceptedConnections.addLast(response)
+                        }
+                        current
                     }
-                    current
+                }
+                if (generation.get() != gen || listener.isClosed) {
+                    connections.remove(id)
+                    socket.close()
+                    return
                 }
                 callback?.success(response)
             } catch (_: Throwable) {
@@ -141,10 +159,13 @@ class AndroidTlsBridge {
                 socket.useClientMode = true
                 socket.connect(InetSocketAddress(host, port), 10_000)
                 socket.startHandshake()
+                if (generation.get() != gen) {
+                    socket.close()
+                    return@execute
+                }
                 val id = register(socket)
                 val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate
-                result.success(
-                    mapOf(
+                val response = mapOf(
                         "connectionId" to id,
                         "peerCertificateBase64" to Base64.encodeToString(
                             certificate?.encoded ?: ByteArray(0),
@@ -152,8 +173,13 @@ class AndroidTlsBridge {
                         ),
                         "remoteAddress" to socket.inetAddress.hostAddress,
                         "remotePort" to socket.port,
-                    ),
-                )
+                    )
+                if (generation.get() != gen) {
+                    connections.remove(id)
+                    socket.close()
+                    return@execute
+                }
+                result.success(response)
             } catch (error: Throwable) {
                 if (generation.get() == gen) {
                     result.error("connect_failed", error.message, null)
