@@ -253,6 +253,14 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> cancelFileTransfer(String transferId) async {
     cancelledTransfers.add(transferId);
+    final transfer = transfers.firstWhere(
+      (entry) => entry['transferId'] == transferId,
+      orElse: () => <String, dynamic>{},
+    );
+    if (transfer.isNotEmpty) {
+      transfer['state'] = 'failed';
+      transfer['failureReason'] = 'Cancelled';
+    }
     return {
       'transferId': transferId,
       'cancelled': true,
@@ -945,6 +953,39 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Queue Empty'), findsOneWidget);
+  });
+
+  testWidgets('Transfer activity cancels an incoming transfer',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      transfers: [
+        {
+          'transferId': 'incoming-transfer-1',
+          'peerDeviceId': 'rift-peer-1',
+          'fileName': 'large.bin',
+          'mediaType': 'application/octet-stream',
+          'byteSize': 100,
+          'bytesTransferred': 20,
+          'state': 'active',
+          'direction': 'incoming',
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+        routeNotifier:
+            ValueNotifier<String?>(NotificationRoute.historyTransferActivity),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(client.cancelledTransfers, ['incoming-transfer-1']);
   });
 
   testWidgets('Send tab cancels active daemon-backed transfer',
