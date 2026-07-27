@@ -31,6 +31,11 @@ Mobile peer transport will use native platform TLS for the socket boundary:
 - Native code will expose framed byte streams, peer certificate DER, endpoint
   state, and connection lifecycle events to the Dart daemon. It will not
   implement pairing, trust transitions, capabilities, or operations.
+- Dart continues to generate each process-lifetime ephemeral P-256 TLS key and
+  its self-signed certificate containing the permanent Ed25519 public key. The
+  certificate and ephemeral private-key PEM are provisioned to the native TLS
+  bridge over an in-process Flutter method channel. The permanent Ed25519 seed
+  is never sent through this transport bridge.
 - The existing 4-byte big-endian frame format remains unchanged.
 
 No plaintext peer bootstrap or certificate material in discovery records will
@@ -40,8 +45,11 @@ remain authoritative.
 ## Consequences
 
 - Native code must be added to both mobile targets and bridged to the daemon.
-- TLS identity key and certificate handling must be compatible with the native
-  APIs without exposing private keys through Flutter IPC.
+- The ephemeral TLS identity key and certificate cross the in-process Flutter
+  method-channel boundary. They are not persisted by the bridge and are
+  regenerated when the daemon starts. The permanent Ed25519 identity seed
+  remains protected by Android Keystore/iOS Keychain-backed storage and does
+  not cross the native TLS bridge.
 - Real-device tests are required for Android-to-Android, Android-to-iOS, and
   iOS-to-iOS pairing.
 - The existing Dart transport remains useful for desktop/standalone tests until
@@ -56,6 +64,8 @@ remain authoritative.
 3. Pairing works in both initiation directions for all three mobile platform
    combinations.
 4. Trusted reconnect uses the pinned identity and survives endpoint changes.
-5. No private key is returned through the native bridge or Dart IPC.
+5. The native bridge never returns private-key material; only the ephemeral
+   P-256 TLS private key may be provisioned from Dart to native code. The
+   permanent Ed25519 identity seed never crosses the TLS bridge.
 6. The transport passes real-device framing, disconnect, duplicate-session, and
    network-change tests.
