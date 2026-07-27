@@ -106,6 +106,35 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void ListDiscoveredPeers_PrioritizesReachablePacketSourceOverVirtualAddresses()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-interface-peer",
+            instanceName: "inst-interface-peer",
+            host: "10.0.3.2",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-interface-peer" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("192.168.2.27"), 5353),
+            observedAddresses: ["10.0.3.2", "192.168.2.27"]));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal("192.168.2.27", peer.Address);
+        Assert.Equal(
+            ["192.168.2.27", "10.0.3.2"],
+            peer.ObservedEndpoints.Select(endpoint => endpoint.Address));
+    }
+
+    [Fact]
     public void ListDiscoveredPeers_PreservesMultipleObservedEndpointsForOnePeer()
     {
         var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, new FakeIdentityManager(), timeProvider: _timeProvider);
