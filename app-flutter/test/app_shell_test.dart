@@ -375,6 +375,28 @@ void main() {
     expect(find.text('RIFT'), findsOneWidget);
   });
 
+  testWidgets('tray right-click opens the configured context menu',
+      (WidgetTester tester) async {
+    const trayChannel = MethodChannel('tray_manager');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(trayChannel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(trayChannel, null);
+    });
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    final dynamic appState = tester.state(find.byType(RiftApp));
+    appState.onTrayIconRightMouseDown();
+    await tester.pump();
+
+    expect(calls.map((call) => call.method), contains('popUpContextMenu'));
+  });
+
   testWidgets('AppShell applies a history route queued before mount',
       (WidgetTester tester) async {
     final routeNotifier = ValueNotifier<String?>(NotificationRoute.historySend);

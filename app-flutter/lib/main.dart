@@ -1039,6 +1039,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   @override
+  void onTrayIconRightMouseDown() {
+    unawaited(trayManager.popUpContextMenu());
+  }
+
+  @override
   void onTrayMenuItemClick(MenuItem menuItem) {
     if (!_enableDesktopShellIntegration) return;
     if (menuItem.key == 'show_window') {
