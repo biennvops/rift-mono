@@ -375,6 +375,31 @@ void main() {
     expect(find.text('RIFT'), findsOneWidget);
   });
 
+  testWidgets('AppShell applies a history route queued before mount',
+      (WidgetTester tester) async {
+    final routeNotifier = ValueNotifier<String?>(NotificationRoute.historySend);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          Provider<JsonRpcRiftClient>.value(value: mockClient),
+          ChangeNotifierProvider<SendQueueController>(
+            create: (_) => SendQueueController(mockClient, false),
+          ),
+        ],
+        child: MaterialApp(
+          home: AppShell(historyRouteNotifier: routeNotifier),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        1);
+    expect(routeNotifier.value, isNull);
+  });
+
   test('MockClient getDeviceInfo test', () async {
     // Test the mock setup directly
     expect(mockClient.isConnected, isTrue);

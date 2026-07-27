@@ -431,7 +431,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return;
     }
     await _enqueueSharedSendItems(pendingItems);
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
   }
 
   Future<dynamic> _handleLinuxSendFilesMethodCall(MethodCall call) async {
@@ -445,7 +445,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     unawaited(_enqueueSharedSendItems(items));
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
     return null;
   }
 
@@ -460,7 +460,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     unawaited(_enqueueSharedSendItems(items));
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
     return null;
   }
 
@@ -470,7 +470,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return;
     }
     await _enqueueSharedSendItems(pendingItems);
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
   }
 
   Future<dynamic> _handleWindowsSendFilesMethodCall(MethodCall call) async {
@@ -484,8 +484,23 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     unawaited(_enqueueSharedSendItems(items));
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
     return null;
+  }
+
+  void _showHistoryRoute(String route) {
+    final shell = _appShellKey.currentState;
+    if (shell == null) {
+      _historyRouteNotifier.value = route;
+    } else {
+      shell.showHistoryRoute(route);
+    }
+
+    if (_enableDesktopShellIntegration) {
+      unawaited(_clipboardManager?.setWindowVisible(true));
+      unawaited(windowManager.show());
+      unawaited(windowManager.focus());
+    }
   }
 
   Future<bool?> _confirmIncomingFileOffer({
@@ -775,18 +790,18 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           unawaited(_enqueueSharedSendItems(items));
         }
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
       case NotificationRoute.historyNotifications:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:
         _openIncomingPairingRequest(payload);
         return;
       case NotificationRoute.historyIncomingOffers:
       case NotificationRoute.historyTransferActivity:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
     }
   }
@@ -1707,7 +1722,13 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  int _currentIndex = 0;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.historyRouteNotifier?.value == null ? 0 : 1;
+  }
 
   late final List<Widget> _screens = [
     const TrustedDevicesScreen(),
