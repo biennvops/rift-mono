@@ -14,7 +14,6 @@ public sealed class FileTransferService : IFileTransferService
     private const int DefaultChunkSize = 256 * 1024;
     private const int MaxChunkSize = 4 * 1024 * 1024;
     private const int DefaultOfferExpiryMs = 300000;
-    private const long MaxIncomingOfferByteSize = 32L * 1024 * 1024;
     private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DuplicateReconnectRetryDelay = TimeSpan.FromSeconds(1);
     private const int DuplicateReconnectRetryAttempts = 3;
@@ -417,11 +416,6 @@ public sealed class FileTransferService : IFileTransferService
             !string.Equals(offer.RequiredCapability, RequiredCapability, StringComparison.Ordinal))
         {
             throw new FileTransferFailureException("ProtocolError", -32001, "Malformed file.offer payload.");
-        }
-
-        if (offer.ByteSize > MaxIncomingOfferByteSize)
-        {
-            throw new FileTransferFailureException("PayloadTooLarge", -32007, "Incoming file offer exceeded the maximum supported size.");
         }
 
         _remoteOffers[offer.TransferId] = new RemoteFileOfferState

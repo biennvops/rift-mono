@@ -262,7 +262,7 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleOfferReceivedAsync_RejectsOversizedIncomingOffer()
+    public async Task HandleOfferReceivedAsync_AcceptsFileLargerThanFrameLimit()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -273,25 +273,24 @@ public sealed class FileTransferServiceTests : IDisposable
         });
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
 
-        var ex = await Assert.ThrowsAsync<FileTransferFailureException>(() =>
-            _service.HandleOfferReceivedAsync(new ReceivedFileOffer
-            {
-                DeviceId = "rift-peer",
-                PayloadSourceDeviceId = "rift-peer",
-                TransferId = "transfer-oversized",
-                FileName = "huge.bin",
-                MediaType = "application/octet-stream",
-                ByteSize = (32L * 1024 * 1024) + 1,
-                Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
-                ChunkSize = 262144,
-                ChunkCount = 1,
-                ExpiresInMs = 120000,
-                RequiredCapability = "file.transfer"
-            }, CancellationToken.None));
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = "transfer-large",
+            FileName = "large.bin",
+            MediaType = "application/octet-stream",
+            ByteSize = (32L * 1024 * 1024) + 1,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ChunkSize = 262144,
+            ChunkCount = 129,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
 
-        Assert.Equal("PayloadTooLarge", ex.FailureReason);
-        var offers = await _service.ListIncomingFileOffersAsync();
-        Assert.DoesNotContain(offers.Offers, offer => offer.TransferId == "transfer-oversized");
+        var offer = Assert.Single((await _service.ListIncomingFileOffersAsync()).Offers);
+        Assert.Equal("transfer-large", offer.TransferId);
+        Assert.Equal((32L * 1024 * 1024) + 1, offer.ByteSize);
     }
 
     [Theory]
