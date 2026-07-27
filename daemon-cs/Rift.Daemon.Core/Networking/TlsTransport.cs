@@ -30,6 +30,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly SessionBootstrap _sessionBootstrap;
     private readonly SessionCapabilityCoordinator _sessionCapabilityCoordinator = new();
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly int _listenPort;
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
@@ -42,23 +43,27 @@ public sealed class TlsTransport : ITransport, IDisposable
         ILogger<TlsTransport> logger,
         IIdentityManager identityManager,
         ITrustStore? trustStore = null,
-        ISecurityEventLog? securityEventLog = null)
+        ISecurityEventLog? securityEventLog = null,
+        int listenPort = RiftNetworkDefaults.DefaultPort)
     {
         _logger = logger;
         _identityManager = identityManager;
         _trustStore = trustStore;
         _securityEventLog = securityEventLog;
+        _listenPort = listenPort;
         _sessionBootstrap = new SessionBootstrap(NullLogger<SessionBootstrap>.Instance, identityManager);
     }
+
+    internal int? ListeningPort => (_listener?.LocalEndpoint as IPEndPoint)?.Port;
 
     public async Task StartListeningAsync(CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
 
-        _listener = new TcpListener(IPAddress.Any, RiftNetworkDefaults.DefaultPort);
+        _listener = new TcpListener(IPAddress.Any, _listenPort);
         _listener.Start();
-        _logger.LogInformation("TlsTransport listening on port {Port}.", RiftNetworkDefaults.DefaultPort);
+        _logger.LogInformation("TlsTransport listening on port {Port}.", ListeningPort);
 
         try
         {

@@ -371,19 +371,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             await WaitForConditionAsync(
                 () => _clipboardTransport.SentMessages.Any(sent =>
                     sent.PeerDeviceId == "rift-peer-file-accept" &&
-                    sent.Type == "file.chunk"),
-                TimeSpan.FromSeconds(1));
+                    sent.Type == "file.complete"),
+                TimeSpan.FromSeconds(5));
 
             Assert.Contains(_clipboardTransport.SentMessages, sent =>
                 sent.PeerDeviceId == "rift-peer-file-accept" &&
-                sent.Type == "file.complete");
+                sent.Type == "file.chunk");
         }
         finally
         {
-            if (File.Exists(tempFile))
-            {
-                File.Delete(tempFile);
-            }
+            await TestFiles.DeleteWithRetryAsync(tempFile);
         }
     }
 
