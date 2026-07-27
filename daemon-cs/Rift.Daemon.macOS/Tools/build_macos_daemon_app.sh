@@ -37,7 +37,6 @@ else
   echo "Run daemon-cs/Tools/setup_rift_dev_signing.sh for local development." >&2
   exit 1
 fi
-codesign --force --sign "$codesign_identity" --identifier com.rift.daemon "$publish_dir/Rift.Daemon.macOS"
 mkdir -p "$app_dir/Contents/MacOS"
 
 cp "$repo_root/daemon-cs/Rift.Daemon.macOS/Resources/RiftDaemon.Info.plist" \
@@ -55,6 +54,19 @@ else
   exit 1
 fi
 
+# MSBuild copies framework symlink targets as directories. Restore the canonical
+# framework layout before signing so codesign does not see an ambiguous bundle.
+media_remote_framework="$app_dir/Contents/MacOS/MediaRemoteAdapter/MediaRemoteAdapter.framework"
+if [[ -d "$media_remote_framework/Versions/A" ]]; then
+  rm -rf \
+    "$media_remote_framework/MediaRemoteAdapter" \
+    "$media_remote_framework/Resources" \
+    "$media_remote_framework/Versions/Current"
+  ln -s "Versions/Current/MediaRemoteAdapter" "$media_remote_framework/MediaRemoteAdapter"
+  ln -s "Versions/Current/Resources" "$media_remote_framework/Resources"
+  ln -s "A" "$media_remote_framework/Versions/Current"
+fi
+
 xcrun swiftc \
   "$xpc_native_dir/XpcProtocol.swift" \
   "$xpc_native_dir/XpcClientBridge.swift" \
@@ -63,10 +75,9 @@ xcrun swiftc \
   -module-name RiftNotificationXpcClient \
   -o "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
 
-codesign --force --sign "$codesign_identity" "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
-codesign --force --sign "$codesign_identity" --identifier com.rift.daemon "$app_dir/Contents/MacOS/rift-daemon"
-codesign --verify --strict --verbose=2 "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
-codesign --verify --strict --verbose=2 "$app_dir/Contents/MacOS/rift-daemon"
+codesign --deep --force --sign "$codesign_identity" \
+  --identifier com.rift.daemon "$app_dir"
+codesign --verify --deep --strict --verbose=2 "$app_dir"
 
 echo "Done."
 echo "Next:"
