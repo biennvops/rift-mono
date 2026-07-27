@@ -130,14 +130,18 @@ final class IOSNativeTlsBridge {
   }
 
   private func accept(result: @escaping FlutterResult) {
-    queue.sync {
+    let immediate: Any? = queue.sync {
       if !accepted.isEmpty {
-        result(accepted.removeFirst())
+        return accepted.removeFirst()
       } else if pendingAccept != nil {
-        result(FlutterError(code: "accept_pending", message: "Accept already pending.", details: nil))
+        return FlutterError(code: "accept_pending", message: "Accept already pending.", details: nil)
       } else {
         pendingAccept = result
+        return nil
       }
+    }
+    if let immediate {
+      deliver(result, immediate)
     }
   }
 
