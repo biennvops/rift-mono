@@ -47,13 +47,15 @@ class AndroidMediaSessionObserver(private val context: Context) {
             Log.w(tag, "Notification listener access not granted; media observation unavailable")
             return false
         }
+        val component = ComponentName(context, RiftNotificationListenerService::class.java)
         if (sessionsListener != null) {
+            val manager = sessionManager ?: return false
+            syncControllers(manager.getActiveSessions(component), forceReplay = true)
             return true
         }
 
         val manager =
             context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
-        val component = ComponentName(context, RiftNotificationListenerService::class.java)
         val listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
             syncControllers(controllers ?: emptyList())
         }
@@ -124,7 +126,10 @@ class AndroidMediaSessionObserver(private val context: Context) {
         return enabled.contains(context.packageName)
     }
 
-    private fun syncControllers(controllers: List<MediaController>) {
+    private fun syncControllers(
+        controllers: List<MediaController>,
+        forceReplay: Boolean = false,
+    ) {
         val nextIds = HashSet<String>()
         for (controller in controllers) {
             // Never observe our own sessions: RemoteMediaPlaybackManager
@@ -153,7 +158,7 @@ class AndroidMediaSessionObserver(private val context: Context) {
                 controllersById[id] = controller
                 callbacksById[id] = callback
             }
-            emitSnapshot(id)
+            emitSnapshot(id, forcePosted = forceReplay)
         }
 
         val removed = controllersById.keys.filter { it !in nextIds }
@@ -176,7 +181,7 @@ class AndroidMediaSessionObserver(private val context: Context) {
         }
     }
 
-    private fun emitSnapshot(id: String) {
+    private fun emitSnapshot(id: String, forcePosted: Boolean = false) {
         val controller = controllersById[id] ?: return
         val state = controller.playbackState ?: return
         val playbackState = when (state.state) {
@@ -194,7 +199,7 @@ class AndroidMediaSessionObserver(private val context: Context) {
 
         val actions = state.actions
         val payload = mutableMapOf<String, Any?>(
-            "eventType" to if (postedIds.contains(id)) "updated" else "posted",
+            "eventType" to if (!forcePosted && postedIds.contains(id)) "updated" else "posted",
             "playbackId" to id,
             "sourcePlatform" to "android",
             "appId" to controller.packageName,
