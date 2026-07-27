@@ -972,11 +972,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     try {
       await trayManager.setIcon(
         Platform.isWindows
-            ? 'app_icon.ico'
+            ? 'windows/runner/resources/app_icon.ico'
             : Platform.isLinux
                 ? 'assets/dev.rift.Rift.png'
                 : 'app_icon.png',
       );
+      await trayManager.setToolTip(AppStrings.appTitle);
     } catch (e) {
       debugPrint('Failed to load tray icon: $e');
     }

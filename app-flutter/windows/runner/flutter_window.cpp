@@ -99,7 +99,6 @@ bool FlutterWindow::OnCreate() {
   RegisterClipboardMethodChannel();
   RegisterWindowsShellMethodChannel();
   RegisterSendFilesMethodChannel();
-  InitializeShellNotificationIcon();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -153,12 +152,20 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         clipboard_event_sink_->Success(flutter::EncodableValue(true));
       }
       return 0;
-    case kRiftShellNotifyMessage:
-      if (lparam == NIN_BALLOONUSERCLICK) {
+    case kRiftShellNotifyMessage: {
+      const UINT notification_event = LOWORD(lparam);
+      if (notification_event == NIN_BALLOONUSERCLICK) {
         DispatchPendingNotificationAction();
+        CleanupShellNotificationIcon();
+        return 0;
+      }
+      if (notification_event == NIN_BALLOONHIDE ||
+          notification_event == NIN_BALLOONTIMEOUT) {
+        CleanupShellNotificationIcon();
         return 0;
       }
       break;
+    }
     case WM_COPYDATA: {
       const auto* copy_data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
       if (copy_data != nullptr &&
@@ -633,7 +640,11 @@ bool FlutterWindow::ShowNotification(
   icon_data.dwInfoFlags = NIIF_USER | NIIF_NOSOUND;
   wcsncpy_s(icon_data.szInfoTitle, title.c_str(), _TRUNCATE);
   wcsncpy_s(icon_data.szInfo, body.c_str(), _TRUNCATE);
-  return Shell_NotifyIconW(NIM_MODIFY, &icon_data) == TRUE;
+  const bool shown = Shell_NotifyIconW(NIM_MODIFY, &icon_data) == TRUE;
+  if (!shown) {
+    CleanupShellNotificationIcon();
+  }
+  return shown;
 }
 
 void FlutterWindow::DispatchPendingNotificationAction() {
