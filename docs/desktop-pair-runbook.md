@@ -1,0 +1,133 @@
+# Desktop Pair Validation Runbook
+
+Status: active qualification procedure.
+
+This runbook qualifies real desktop-to-desktop continuity between two physical
+machines on the same local network. It complements the automated loopback
+interop suites in `daemon-cs/Rift.Daemon.Tests/Core/` (`TlsTransportTests`,
+`PairingInteropTests`, `ClipboardFileInteropTests`), which prove protocol
+correctness but not discovery, UI, installers, or real network behavior.
+
+Record results per pair in the evidence table at the bottom. A pair passes
+only when every step passes in **both directions**.
+
+## Pairs
+
+| Pair | Machines |
+|---|---|
+| P1 | Windows ↔ macOS |
+| P2 | Linux ↔ macOS |
+| P3 | Windows ↔ Linux |
+
+## Prerequisites (per machine)
+
+1. Build and start the daemon with the platform service model:
+   - **Windows:** `dotnet run --project daemon-cs/Rift.Daemon.Windows/` (console)
+     or the installed Windows Service.
+   - **Linux:** `Rift.Daemon.Linux/Tools/build_linux_daemon.sh` +
+     `install_user_service.sh`, or `dotnet run --project daemon-cs/Rift.Daemon.Linux/`.
+   - **macOS:** installed LaunchAgent (`launchctl print gui/$(id -u)/com.rift.daemon`
+     shows `state = running`), or `dotnet run --project daemon-cs/Rift.Daemon.macOS/`.
+2. Start the Flutter app (`flutter run -d windows|linux|macos` or an installed
+   build). Settings must show `Daemon IPC: connected` (Linux) or a populated
+   device identity.
+3. Both machines on the same Wi-Fi/LAN segment. mDNS (UDP 5353) and TCP 9140
+   must not be blocked:
+   - **Windows:** allow the daemon through Windows Defender Firewall
+     (private network profile).
+   - **Linux:** check `firewalld`/`ufw` if discovery fails.
+   - **macOS:** approve the Local Network prompt; verify under
+     System Settings → Privacy & Security → Local Network.
+
+## Scenarios
+
+### S1 — Discovery
+
+1. On machine A, open the pairing screen and start discovery.
+2. Machine B appears within ~10 s with a stable instance entry.
+3. Repeat in the other direction.
+
+**Fail notes to capture:** missing peer, duplicate entries, wrong address
+family (e.g. unusable link-local IPv6), peer flapping.
+
+### S2 — Pairing with fingerprint verification
+
+1. From A, start pairing with B.
+2. B shows an incoming pairing request with a fingerprint.
+3. Verify the fingerprint matches on both screens **before** approving.
+4. Approve on both sides. Both device lists show the peer as trusted.
+5. Security event log on both sides records the pairing completion.
+
+### S3 — Clipboard text (both directions)
+
+1. Copy a short text on A → paste on B. Expect ≤ ~2 s latency.
+2. Copy text with non-ASCII content (accents/emoji) on B → paste on A;
+   content must be byte-identical.
+3. Hide the app window to tray on both machines and repeat step 1.
+   Clipboard sync must keep working from the tray.
+
+### S4 — Clipboard image (both directions)
+
+1. Copy an image (screenshot region is fine) on A → paste into an image
+   editor on B. Pixels must match.
+2. Repeat B → A.
+
+### S5 — File transfer (both directions)
+
+1. Send a small file (< 1 MB) from A → accept on B → contents identical.
+2. Send a large file (≥ 100 MB) from B → A. Progress advances smoothly;
+   final file hash matches the source
+   (`shasum -a 256` / `sha256sum` / `Get-FileHash`).
+3. Reject an incoming offer; sender shows the typed failure.
+4. Cancel an in-flight large transfer from the receiver; sender stops
+   sending and no partial file is committed at the destination.
+
+### S6 — Interruption and resume
+
+1. Start a large transfer A → B.
+2. Mid-transfer, disable Wi-Fi on B (or A) for ~10 s, then re-enable.
+3. After the session re-establishes, the transfer resumes from its prior
+   offset (watch progress; it must not restart at 0) and completes with a
+   matching hash.
+
+### S7 — Restart persistence and trusted reconnect
+
+1. Restart the daemon on A (service restart or Ctrl-C + rerun).
+2. A keeps its device identity (same fingerprint in Settings).
+3. B reconnects to A as trusted without any new pairing prompt.
+4. Clipboard sync works again without user action.
+
+### S8 — Trust removal and block
+
+1. On A, remove trust for B. B's session ends; B sees the peer as removed.
+2. Re-pair to restore trust (S2), confirming the forget path is clean.
+3. On A, block B. B cannot re-establish a session; A's event log records
+   the rejected connection.
+4. Unblock and re-pair to leave the pair in a clean trusted state.
+
+## Evidence table
+
+Copy one table per pair into the results section below (or into
+`docs/final-test-report.md` when that lands).
+
+```markdown
+### Pair: <P1|P2|P3> — <machine A> ↔ <machine B>   Date: YYYY-MM-DD
+
+| Scenario | A→B | B→A | Notes |
+|---|---|---|---|
+| S1 Discovery | | | |
+| S2 Pairing | | (mutual) | |
+| S3 Clipboard text | | | |
+| S4 Clipboard image | | | |
+| S5 File transfer | | | |
+| S6 Interrupt/resume | | | |
+| S7 Restart persistence | | | |
+| S8 Remove/block | | | |
+
+Versions: daemon commit <sha>, app commit <sha>
+OS versions: <A>, <B>
+```
+
+## Results
+
+_None recorded yet._
