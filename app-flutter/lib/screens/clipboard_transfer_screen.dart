@@ -87,6 +87,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   final Set<String> _clipboardFilteredSourceDeviceIds = <String>{};
   final Set<String> _clipboardFilteredTypes = <String>{};
   final Set<String> _selectedIncomingOffers = <String>{};
+  final Set<String> _expandedHashOffers = <String>{};
+  String? _activityDeviceFilter;
+  String? _activityStatusFilter;
   final Set<String> _selectedSendDeviceIds = <String>{};
   bool _hasUserModifiedSendDevices = false;
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
@@ -1663,19 +1666,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     }
   }
 
-  Color _transferStateColor(ThemeData theme, String state) {
-    switch (state.toLowerCase()) {
-      case 'done':
-        return theme.colorScheme.secondary;
-      case 'failed':
-        return theme.colorScheme.error;
-      case 'active':
-        return theme.colorScheme.primary;
-      default:
-        return theme.colorScheme.onSurfaceVariant;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     context.watch<SendQueueController>();
@@ -1683,13 +1673,6 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final showScreenHeader = true;
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-      appBar: _activeSection == _HistorySection.incomingOffers &&
-              _selectedIncomingOffers.isNotEmpty
-          ? PreferredSize(
-              preferredSize: const Size.fromHeight(64),
-              child: _buildBulkSelectionBar(theme),
-            )
-          : null,
       body: RefreshIndicator(
         onRefresh: _refreshAll,
         child: ListView(
@@ -1770,6 +1753,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildBulkSelectionBar(ThemeData theme) {
     return Container(
       height: 64,
@@ -3244,7 +3228,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         : (file.bytesTransferred / file.byteSize).clamp(0, 1).toDouble();
     final canRetry = file.status == SendQueueStatus.failed;
     final canRetarget = _hasUnavailableTarget(file);
-    final canCancel = file.status != SendQueueStatus.sent;
+    final canCancel = true;
 
     final ext = _fileExtension(file.fileName);
     final targetText =
@@ -3325,61 +3309,59 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           ),
           const SizedBox(width: 16),
           _buildQueueStatusCapsule(theme, file.status),
-          if (canCancel || canRetry || canRetarget) ...[
-            const SizedBox(width: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (canRetry) ...[
-                  OutlinedButton(
-                    onPressed: () => _retryFailedStagedFile(file),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: theme.colorScheme.primary),
-                      foregroundColor: theme.colorScheme.primary,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                      minimumSize: const Size(0, 28),
-                    ),
-                    child: const Text('Retry', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          const SizedBox(width: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (canRetry) ...[
+                OutlinedButton(
+                  onPressed: () => _retryFailedStagedFile(file),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    foregroundColor: theme.colorScheme.primary,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                    minimumSize: const Size(0, 28),
                   ),
-                  const SizedBox(width: 6),
-                ],
-                if (canRetarget && !canRetry) ...[
-                  OutlinedButton(
-                    onPressed: () => _chooseDeviceForStagedFile(file),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide(color: theme.colorScheme.primary),
-                      foregroundColor: theme.colorScheme.primary,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
-                      minimumSize: const Size(0, 28),
-                    ),
-                    child: const Text('Retarget', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                  ),
-                  const SizedBox(width: 6),
-                ],
-                if (canCancel)
-                  OutlinedButton.icon(
-                    onPressed: () => _cancelStagedFile(file),
-                    icon: Icon(
-                      file.status == SendQueueStatus.sending
-                          ? Icons.stop_circle_outlined
-                          : Icons.close,
-                      size: 14,
-                    ),
-                    label: Text(
-                      file.status == SendQueueStatus.sending
-                          ? 'Cancel'
-                          : 'Remove',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      side: BorderSide.none,
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                      minimumSize: const Size(0, 28),
-                    ),
-                  ),
+                  child: const Text('Retry', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+                const SizedBox(width: 6),
               ],
-            ),
-          ],
+              if (canRetarget && !canRetry) ...[
+                OutlinedButton(
+                  onPressed: () => _chooseDeviceForStagedFile(file),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    foregroundColor: theme.colorScheme.primary,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+                    minimumSize: const Size(0, 28),
+                  ),
+                  child: const Text('Retarget', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
+                const SizedBox(width: 6),
+              ],
+              if (canCancel)
+                OutlinedButton.icon(
+                  onPressed: () => _cancelStagedFile(file),
+                  icon: Icon(
+                    file.status == SendQueueStatus.sending
+                        ? Icons.stop_circle_outlined
+                        : Icons.close,
+                    size: 14,
+                  ),
+                  label: Text(
+                    file.status == SendQueueStatus.sending
+                        ? 'Cancel'
+                        : 'Remove',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide.none,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    minimumSize: const Size(0, 28),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -3822,6 +3804,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         return theme.colorScheme.secondaryContainer;
       case 'failed':
         return theme.colorScheme.errorContainer;
+      case 'active':
+      case 'uploading':
+      case 'downloading':
+      case 'sending':
+      case 'dispatched':
+        return theme.colorScheme.primaryContainer;
       default:
         return theme.colorScheme.surfaceContainerHighest;
     }
@@ -3833,6 +3821,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         return theme.colorScheme.onSecondaryContainer;
       case 'failed':
         return theme.colorScheme.onErrorContainer;
+      case 'active':
+      case 'uploading':
+      case 'downloading':
+      case 'sending':
+      case 'dispatched':
+        return theme.colorScheme.onPrimaryContainer;
       default:
         return theme.colorScheme.onSurfaceVariant;
     }
@@ -3939,257 +3933,283 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     final offers = _incomingFileOffers;
     if (offers.isEmpty) {
       return Container(
-        padding: const EdgeInsets.symmetric(vertical: 48),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerLowest,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+        ),
         alignment: Alignment.center,
-        child: Text(
-          'No incoming file offers in this section.',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          textAlign: TextAlign.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              alignment: Alignment.center,
+              child: Icon(Icons.move_to_inbox,
+                  size: 24, color: theme.colorScheme.secondary),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No incoming offers',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Files sent to you by trusted devices will show up here.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
         ),
       );
     }
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildIncomingOffersBulkBar(theme, offers),
+        const SizedBox(height: 16),
+        ...offers.map((offer) => _buildIncomingOfferCard(theme, offer)),
+      ],
+    );
+  }
+
+  Widget _buildIncomingOffersBulkBar(
+      ThemeData theme, List<Map<String, dynamic>> offers) {
     final allSelected =
         offers.isNotEmpty && _selectedIncomingOffers.length == offers.length;
+    final anySelected = _selectedIncomingOffers.isNotEmpty;
 
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
+        color: theme.colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
-      child: Column(
+      child: Row(
         children: [
-          // Header Row
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLow,
-              border: Border(
-                  bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(12)),
-            ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 48,
-                  child: Checkbox(
-                    value: allSelected,
-                    onChanged: (val) {
-                      setState(() {
-                        if (val == true) {
-                          _selectedIncomingOffers.addAll(
-                              offers.map((o) => o['transferId'].toString()));
-                        } else {
-                          _selectedIncomingOffers.clear();
-                        }
-                      });
-                    },
-                  ),
-                ),
-                Expanded(
-                  flex: 4,
-                  child: Text(
-                    'SOURCE DEVICE',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.secondary,
-                      letterSpacing: 1.2,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'DATA PACKAGE',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.secondary,
-                      letterSpacing: 1.2,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
-                    'SIZE',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.secondary,
-                      letterSpacing: 1.2,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Container(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      'TIME',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.secondary,
-                        letterSpacing: 1.2,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+          Checkbox(
+            tristate: true,
+            value: !anySelected ? false : (allSelected ? true : null),
+            onChanged: (val) {
+              setState(() {
+                if (val == true || val == null) {
+                  _selectedIncomingOffers.addAll(offers
+                      .map((o) => o['transferId']?.toString() ?? '')
+                      .where((id) => id.isNotEmpty));
+                } else {
+                  _selectedIncomingOffers.clear();
+                }
+              });
+            },
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${_selectedIncomingOffers.length} selected',
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurface,
             ),
           ),
-          // Rows
-          ...offers.map((offer) {
-            final transferId = offer['transferId']?.toString() ?? '';
-            final sourceDeviceId = offer['sourceDeviceId']?.toString() ?? '';
-            final mediaType =
-                offer['mediaType']?.toString() ?? 'application/octet-stream';
-            final byteSize = (offer['byteSize'] as num?)?.toDouble() ?? 0;
-            final timeStr = _formatRelativeTime(
-              DateTime.tryParse(offer['createdAt']?.toString() ?? '') ??
-                  DateTime.now(),
-            );
-            final isSelected = _selectedIncomingOffers.contains(transferId);
-
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? theme.colorScheme.surfaceContainerHighest
-                        .withValues(alpha: 0.3)
-                    : Colors.transparent,
-                border: Border(
-                    bottom:
-                        BorderSide(color: theme.colorScheme.outlineVariant)),
+          const Spacer(),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton(
+                onPressed: !anySelected ? null : _saveSelectedOffers,
+                style: OutlinedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  minimumSize: const Size(0, 32),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6)),
+                ),
+                child: const Text('Accept Selected',
+                    style:
+                        TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
               ),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 48,
-                    child: Checkbox(
-                      value: isSelected,
-                      onChanged: (val) {
-                        setState(() {
-                          if (val == true) {
-                            _selectedIncomingOffers.add(transferId);
-                          } else {
-                            _selectedIncomingOffers.remove(transferId);
-                          }
-                        });
-                      },
-                    ),
+              OutlinedButton(
+                onPressed: !anySelected ? null : _rejectSelectedOffers,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                  side: BorderSide(
+                      color: !anySelected
+                          ? theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.3)
+                          : theme.colorScheme.error),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  minimumSize: const Size(0, 32),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6)),
+                ),
+                child: const Text('Reject Selected',
+                    style:
+                        TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIncomingOfferCard(ThemeData theme, Map<String, dynamic> offer) {
+    final transferId = offer['transferId']?.toString() ?? '';
+    final sourceDeviceId = offer['sourceDeviceId']?.toString();
+    final fileName = offer['fileName']?.toString() ?? 'Unknown file';
+    final byteSize = (offer['byteSize'] as num?)?.toDouble() ?? 0;
+    final mediaType =
+        offer['mediaType']?.toString() ?? 'application/octet-stream';
+    final isSelected = _selectedIncomingOffers.contains(transferId);
+    final isExpanded = _expandedHashOffers.contains(transferId);
+    final hashStr = offer['fileHash']?.toString() ??
+        offer['sha256']?.toString() ??
+        offer['hash']?.toString() ??
+        'Unavailable (not provided by sender)';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isSelected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Checkbox(
+            value: isSelected,
+            onChanged: (val) {
+              setState(() {
+                if (val == true) {
+                  _selectedIncomingOffers.add(transferId);
+                } else {
+                  _selectedIncomingOffers.remove(transferId);
+                }
+              });
+            },
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fileName,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
                   ),
-                  Expanded(
-                    flex: 4,
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primaryContainer
-                                .withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          alignment: Alignment.center,
-                          child: Icon(
-                            _platformIcon(offer['platform']?.toString()),
-                            color: theme.colorScheme.primaryContainer,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _peerDisplayName(sourceDeviceId),
-                                style: theme.textTheme.bodyMedium?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(
-                                sourceDeviceId.isEmpty
-                                    ? 'Unknown Device'
-                                    : 'Trusted',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.secondary,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${_formatSize(byteSize)} • from ${_peerDisplayName(sourceDeviceId)} • ${mediaType.split('/').last.toUpperCase()}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
-                  Expanded(
-                    flex: 3,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          offer['fileName']?.toString() ?? 'Unknown file',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      if (isExpanded) {
+                        _expandedHashOffers.remove(transferId);
+                      } else {
+                        _expandedHashOffers.add(transferId);
+                      }
+                    });
+                  },
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        isExpanded ? 'Hide file hash' : 'Verify file hash',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
                         ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.secondaryContainer,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                mediaType.split('/').last.toUpperCase(),
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  fontSize: 10,
-                                  color: theme.colorScheme.onSecondaryContainer,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    flex: 2,
-                    child: Text(
-                      _formatSize(byteSize),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurface,
                       ),
-                    ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        isExpanded
+                            ? Icons.arrow_drop_up
+                            : Icons.arrow_drop_down,
+                        size: 16,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ],
                   ),
-                  Expanded(
-                    flex: 2,
-                    child: Container(
-                      alignment: Alignment.centerRight,
-                      child: Text(
-                        timeStr,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.secondary,
-                        ),
+                ),
+                if (isExpanded) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.5)),
+                    ),
+                    child: Text(
+                      'sha256: $hashStr',
+                      style: const TextStyle(
+                        fontFamily: 'JetBrains Mono',
+                        fontSize: 11,
                       ),
                     ),
                   ),
                 ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                onPressed: () => _acceptIncomingOffer(offer),
+                style: FilledButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  minimumSize: const Size(0, 36),
+                ),
+                child: const Text('Accept'),
               ),
-            );
-          }),
+              OutlinedButton(
+                onPressed: () => _rejectIncomingOffer(offer),
+                style: OutlinedButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  minimumSize: const Size(0, 36),
+                ),
+                child: const Text('Reject'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -4197,133 +4217,362 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   Widget _buildTransferActivitySection(ThemeData theme) {
     final transfers = _fileTransfers;
-    if (transfers.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 48),
-        alignment: Alignment.center,
-        child: Text(
-          'No file transfer activity in this section.',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
+    final filteredTransfers = transfers.where((transfer) {
+      if (_activityDeviceFilter != null && _activityDeviceFilter!.isNotEmpty) {
+        if (transfer['peerDeviceId']?.toString() != _activityDeviceFilter) {
+          return false;
+        }
+      }
+      if (_activityStatusFilter != null && _activityStatusFilter!.isNotEmpty) {
+        final state = transfer['state']?.toString().toLowerCase() ?? '';
+        if (_activityStatusFilter == 'active') {
+          if (state != 'active' &&
+              state != 'uploading' &&
+              state != 'downloading' &&
+              state != 'pending' &&
+              state != 'dispatched' &&
+              state != 'sending') {
+            return false;
+          }
+        } else if (state != _activityStatusFilter) {
+          return false;
+        }
+      }
+      return true;
+    }).toList(growable: false);
+
+    final peers = _fileCapablePeers;
+    final deviceButtonLabel = _activityDeviceFilter == null
+        ? 'All devices ▾'
+        : '${_peerDisplayName(_activityDeviceFilter)} ▾';
+    final statusButtonLabel = _activityStatusFilter == null
+        ? 'All statuses ▾'
+        : '${_activityStatusFilter!.toUpperCase()} ▾';
 
     final toolbar = Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: theme.colorScheme.primary,
-              side: BorderSide(color: theme.colorScheme.outlineVariant),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20)),
-            ),
-            onPressed: () {},
-            icon: const Icon(Icons.filter_list, size: 16),
-            label: const Text('Filter Types'),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              PopupMenuButton<String?>(
+                initialValue: _activityDeviceFilter,
+                onSelected: (val) =>
+                    setState(() => _activityDeviceFilter = val),
+                itemBuilder: (context) => [
+                  const PopupMenuItem<String?>(
+                      value: null, child: Text('All devices')),
+                  ...peers.map((p) => PopupMenuItem<String?>(
+                        value: p['deviceId']?.toString(),
+                        child: Text(
+                            _peerDisplayName(p['deviceId']?.toString())),
+                      )),
+                ],
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _activityDeviceFilter != null
+                        ? theme.colorScheme.primaryContainer
+                        : theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Text(
+                    deviceButtonLabel,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: _activityDeviceFilter != null
+                          ? theme.colorScheme.onPrimaryContainer
+                          : theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+              PopupMenuButton<String?>(
+                initialValue: _activityStatusFilter,
+                onSelected: (val) =>
+                    setState(() => _activityStatusFilter = val),
+                itemBuilder: (context) => const [
+                  PopupMenuItem<String?>(
+                      value: null, child: Text('All statuses')),
+                  PopupMenuItem<String?>(
+                      value: 'active', child: Text('Active / Uploading')),
+                  PopupMenuItem<String?>(value: 'done', child: Text('Done')),
+                  PopupMenuItem<String?>(
+                      value: 'failed', child: Text('Failed')),
+                ],
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _activityStatusFilter != null
+                        ? theme.colorScheme.primaryContainer
+                        : theme.colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Text(
+                    statusButtonLabel,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: _activityStatusFilter != null
+                          ? theme.colorScheme.onPrimaryContainer
+                          : theme.colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
-          Text(
-            '${transfers.length} items • ${_activeOutgoingTransfers.length} active',
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
+          Text.rich(
+            TextSpan(
+              text: '${filteredTransfers.length}\n',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+                height: 1.1,
+              ),
+              children: [
+                TextSpan(
+                  text: 'TRANSFERS',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    letterSpacing: 0.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
+            textAlign: TextAlign.end,
           ),
         ],
       ),
     );
 
-    return Column(
-      children: [
-        toolbar,
-        ...transfers.take(12).map((transfer) {
-          final mediaType =
-              transfer['mediaType']?.toString() ?? 'application/octet-stream';
-          final byteSize = (transfer['byteSize'] as num?)?.toDouble() ?? 0;
-          final transferred =
-              (transfer['bytesTransferred'] as num?)?.toDouble() ?? 0;
-          final state = transfer['state']?.toString() ?? 'pending';
-          final direction = transfer['direction']?.toString() ?? 'unknown';
-          final destinationPath = transfer['destinationPath']?.toString() ?? '';
-          final progress = byteSize <= 0
-              ? null
-              : (transferred / byteSize).clamp(0, 1).toDouble();
-          final stateColor = _transferStateColor(theme, state);
-          final canOpenDestination = direction == 'incoming' &&
-              destinationPath.trim().isNotEmpty &&
-              state.toLowerCase() == 'done';
-          return Container(
-            margin: const EdgeInsets.only(top: 12),
-            padding: const EdgeInsets.all(16),
+    if (filteredTransfers.isEmpty) {
+      return Column(
+        children: [
+          toolbar,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
             decoration: BoxDecoration(
               color: theme.colorScheme.surfaceContainerLowest,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: theme.colorScheme.outlineVariant),
             ),
+            alignment: Alignment.center,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Icon(
-                      direction == 'incoming' ? Icons.download : Icons.upload,
-                      size: 16,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      _mediaTypeIcon(mediaType),
-                      size: 16,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        transfer['fileName']?.toString() ?? 'Unknown file',
-                        style: theme.textTheme.labelMedium?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      _transferStateLabel(state),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: stateColor,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  alignment: Alignment.center,
+                  child: Icon(Icons.swap_horiz,
+                      size: 24, color: theme.colorScheme.secondary),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'No transfer activity',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${_transferPeerSummary(transfer)} • $mediaType • ${_formatSize(byteSize)}',
-                  style: theme.textTheme.labelSmall?.copyWith(
+                  'File transfers to and from your devices will appear here.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        toolbar,
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerLowest,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Column(
+            children: [
+              for (int i = 0; i < filteredTransfers.length; i++) ...[
+                if (i > 0)
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.5),
+                  ),
+                _buildTransferActivityRowItem(theme, filteredTransfers[i]),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTransferActivityRowItem(
+      ThemeData theme, Map<String, dynamic> transfer) {
+    final direction = transfer['direction']?.toString() ?? 'unknown';
+    final isIncoming = direction == 'incoming';
+    final state = transfer['state']?.toString() ?? 'pending';
+    final byteSize = (transfer['byteSize'] as num?)?.toDouble() ?? 0;
+    final transferred =
+        (transfer['bytesTransferred'] as num?)?.toDouble() ?? 0;
+    final destinationPath = transfer['destinationPath']?.toString() ?? '';
+    final progress = byteSize <= 0
+        ? null
+        : (transferred / byteSize).clamp(0, 1).toDouble();
+    final canOpenDestination = isIncoming &&
+        destinationPath.trim().isNotEmpty &&
+        state.toLowerCase() == 'done';
+    final peerName = _peerDisplayName(transfer['peerDeviceId']?.toString());
+    final fileName = transfer['fileName']?.toString() ?? 'Unknown file';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: isIncoming
+                  ? const Color(0xFF12744F).withValues(alpha: 0.1)
+                  : theme.colorScheme.tertiaryContainer.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(
+              isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
+              size: 16,
+              color: isIncoming
+                  ? const Color(0xFF12744F)
+                  : theme.colorScheme.tertiary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text.rich(
+                  TextSpan(
+                    text: isIncoming ? 'Received from ' : 'Sending to ',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: peerName,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        fileName,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      progress != null && state.toLowerCase() != 'done'
+                          ? ' • ${_formatSize(transferred)} / ${_formatSize(byteSize)}'
+                          : ' • ${_formatSize(byteSize)}',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
                 if (canOpenDestination) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Saved to: $destinationPath',
-                    style: theme.textTheme.labelSmall?.copyWith(
+                    style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.primary,
                     ),
                   ),
-                ],
-                if (progress != null) ...[
                   const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: state.toLowerCase() == 'failed' ? null : progress,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if (_revealCompletedTransfersInFolder)
+                        OutlinedButton.icon(
+                          onPressed: () => _openTransferDestination(
+                            destinationPath,
+                            revealInFolder: true,
+                          ),
+                          icon: const Icon(Icons.folder_open, size: 14),
+                          label: const Text('Open Folder',
+                              style: TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w600)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
+                            minimumSize: const Size(0, 28),
+                          ),
+                        ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openTransferDestination(
+                          destinationPath,
+                          revealInFolder: false,
+                        ),
+                        icon: const Icon(Icons.open_in_new, size: 14),
+                        label: const Text('Open File',
+                            style: TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          minimumSize: const Size(0, 28),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_formatSize(transferred)} / ${_formatSize(byteSize)}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                ],
+                if (progress != null &&
+                    state.toLowerCase() != 'done' &&
+                    state.toLowerCase() != 'failed') ...[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 5,
                     ),
                   ),
                 ],
@@ -4336,37 +4585,18 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                     ),
                   ),
                 ],
-                if (canOpenDestination) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      if (_revealCompletedTransfersInFolder) ...[
-                        OutlinedButton.icon(
-                          onPressed: () => _openTransferDestination(
-                            destinationPath,
-                            revealInFolder: true,
-                          ),
-                          icon: const Icon(Icons.folder_open),
-                          label: const Text('Open Folder'),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      OutlinedButton.icon(
-                        onPressed: () => _openTransferDestination(
-                          destinationPath,
-                          revealInFolder: false,
-                        ),
-                        icon: const Icon(Icons.open_in_new),
-                        label: const Text('Open File'),
-                      ),
-                    ],
-                  ),
-                ],
               ],
             ),
-          );
-        }),
-      ],
+          ),
+          const SizedBox(width: 12),
+          _buildTransferStatusBadge(
+            theme,
+            _transferStateLabel(state),
+            tone: _transferStateBadgeTone(theme, state),
+            foreground: _transferStateBadgeForeground(theme, state),
+          ),
+        ],
+      ),
     );
   }
 }
