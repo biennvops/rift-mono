@@ -27,6 +27,27 @@ String joinPlatformPath(String a, String b) {
   return '$a${Platform.pathSeparator}$b';
 }
 
+String? selectLinuxIncomingDownloadsPath({
+  required String? xdgDownloadsPath,
+  required String? homePath,
+}) {
+  if (xdgDownloadsPath != null &&
+      xdgDownloadsPath.trim().isNotEmpty &&
+      xdgDownloadsPath.startsWith('/')) {
+    return xdgDownloadsPath;
+  }
+
+  if (homePath == null ||
+      homePath.trim().isEmpty ||
+      !homePath.startsWith('/')) {
+    return null;
+  }
+
+  return homePath.endsWith('/')
+      ? '${homePath}Downloads'
+      : '$homePath/Downloads';
+}
+
 Future<Directory?> resolveIncomingDownloadsDirectory() async {
   if (Platform.isIOS) {
     final documents = await getApplicationDocumentsDirectory();
@@ -46,11 +67,24 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
     }
 
     final downloads = await getDownloadsDirectory();
+    if (Platform.isLinux) {
+      final path = selectLinuxIncomingDownloadsPath(
+        xdgDownloadsPath: downloads?.path,
+        homePath: Platform.environment['HOME'],
+      );
+      return path == null ? null : Directory(path);
+    }
     if (downloads != null) {
       return downloads;
     }
   } catch (_) {
-    // Fall through to platform-specific defaults.
+    if (Platform.isLinux) {
+      final path = selectLinuxIncomingDownloadsPath(
+        xdgDownloadsPath: null,
+        homePath: Platform.environment['HOME'],
+      );
+      return path == null ? null : Directory(path);
+    }
   }
 
   try {
@@ -69,7 +103,7 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
     // Fall through to final fallback.
   }
 
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid || Platform.isLinux) {
     return null;
   }
 

@@ -51,6 +51,62 @@ void main() {
     });
   });
 
+  group('Linux Downloads path selection', () {
+    test('prefers a valid XDG Downloads path', () {
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: '/home/user/Transfers',
+          homePath: '/home/user',
+        ),
+        '/home/user/Transfers',
+      );
+    });
+
+    test('falls back to HOME when XDG resolution is unavailable', () {
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: null,
+          homePath: '/home/user',
+        ),
+        '/home/user/Downloads',
+      );
+    });
+
+    test('falls back to HOME for empty or relative XDG paths', () {
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: '',
+          homePath: '/home/user',
+        ),
+        '/home/user/Downloads',
+      );
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: 'Downloads',
+          homePath: '/home/user',
+        ),
+        '/home/user/Downloads',
+      );
+    });
+
+    test('returns null when neither XDG nor HOME is usable', () {
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: null,
+          homePath: null,
+        ),
+        isNull,
+      );
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: null,
+          homePath: 'relative/home',
+        ),
+        isNull,
+      );
+    });
+  });
+
   group('sanitizeIncomingFileName', () {
     test('falls back for dot-only names', () {
       expect(storage.sanitizeIncomingFileName('.'), 'incoming.bin');
