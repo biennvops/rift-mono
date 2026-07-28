@@ -42,8 +42,9 @@ class AppShellState extends State<AppShell> {
     if (normalized.endsWith('.pdf')) return 'application/pdf';
     if (normalized.endsWith('.csv')) return 'text/csv';
     if (normalized.endsWith('.md')) return 'text/markdown';
-    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg'))
+    if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
       return 'image/jpeg';
+    }
     if (normalized.endsWith('.png')) return 'image/png';
     if (normalized.endsWith('.gif')) return 'image/gif';
     if (normalized.endsWith('.webp')) return 'image/webp';
