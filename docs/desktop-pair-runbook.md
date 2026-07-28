@@ -130,4 +130,19 @@ OS versions: <A>, <B>
 
 ## Results
 
-_None recorded yet._
+### Pair: P1 — Windows ↔ macOS   Date: 2026-07-28
+
+| Scenario | Windows→macOS | macOS→Windows | Notes |
+|---|---|---|---|
+| S1 Discovery | Pass | Pass | Discovery recovered cleanly after unpairing; no duplicate peer entries. |
+| S2 Pairing | Pass | (mutual) | Fingerprint-verified pairing completed over the LAN. |
+| S3 Clipboard text | Pass | Pass | Plain text, Unicode, and tray-hidden synchronization passed. |
+| S4 Clipboard image | Pass | Pass | Windows compatibility also verified in Paint and Photopea. |
+| S5 File transfer | Pass | Pass | Small and ≥100 MB transfers passed with matching hashes; reject and receiver-side cancel passed without committing a partial destination file. |
+| S6 Interrupt/resume | Pass | Pass | Transfers resumed from their prior offsets after a ~10 s network interruption and completed with matching hashes. |
+| S7 Restart persistence | Pass | Pass | Restarting either daemon preserved identity and restored the trusted session automatically. |
+| S8 Remove/block | Pending | Pending | Not yet qualified on the physical pair. |
+
+Versions: qualification branch `e59ec6e`; daemon large-file fix `73b8c64`
+
+OS versions: Windows version not recorded; macOS 26.6 (25G72)
