@@ -146,3 +146,20 @@ OS versions: <A>, <B>
 Versions: qualification branch `98cdb7f`; daemon large-file fix `73b8c64`
 
 OS versions: Windows version not recorded; macOS 26.6 (25G72)
+
+### Pair: P2 — Linux ↔ macOS   Date: 2026-07-28
+
+| Scenario | Linux→macOS | macOS→Linux | Notes |
+|---|---|---|---|
+| S1 Discovery | Partial | Partial | Linux discovery was slow and the peer entry sometimes disappeared. Multiple Linux interfaces (Docker, bridges, and other virtual adapters) may be contributing. |
+| S2 Pairing | Partial | Partial | Linux often stayed at `Starting pairing`; macOS appeared to fail before later showing the fingerprint screen. The session eventually became usable, but the flow was delayed and confusing. |
+| S3 Clipboard text | Pass | Pass | Clipboard synchronization continued to work after restarting the Linux daemon. |
+| S4 Clipboard image | Pending | Pending | Not yet tested. |
+| S5 File transfer | Pending | Pending | Not yet tested. |
+| S6 Interrupt/resume | Pending | Pending | Not yet tested. |
+| S7 Restart persistence | Pending | Pending | Full restart-persistence scenario not yet tested; clipboard recovery after a Linux daemon restart passed. |
+| S8 Remove/block | Pending | Pending | Not yet tested on this pair. |
+
+Versions: qualification branch `d0dba85`
+
+OS versions: Linux version not recorded; macOS 26.6 (25G72)
