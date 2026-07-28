@@ -141,8 +141,8 @@ OS versions: <A>, <B>
 | S5 File transfer | Pass | Pass | Small and ≥100 MB transfers passed with matching hashes; reject and receiver-side cancel passed without committing a partial destination file. |
 | S6 Interrupt/resume | Pass | Pass | Transfers resumed from their prior offsets after a ~10 s network interruption and completed with matching hashes. |
 | S7 Restart persistence | Pass | Pass | Restarting either daemon preserved identity and restored the trusted session automatically. |
-| S8 Remove/block | Pending | Pending | Not yet qualified on the physical pair. |
+| S8 Remove/block | Partial | Partial | Trust removal disconnected both sides, prevented reconnect, and re-pairing restored trust in both directions. Block qualification is unavailable: the UI/daemon returns `Block not implemented in daemon yet`. |
 
-Versions: qualification branch `e59ec6e`; daemon large-file fix `73b8c64`
+Versions: qualification branch `98cdb7f`; daemon large-file fix `73b8c64`
 
 OS versions: Windows version not recorded; macOS 26.6 (25G72)
