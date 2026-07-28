@@ -155,11 +155,11 @@ OS versions: Windows version not recorded; macOS 26.6 (25G72)
 | S2 Pairing | Partial | Partial | Linux often stayed at `Starting pairing`; macOS appeared to fail before later showing the fingerprint screen. The session eventually became usable, but the flow was delayed and confusing. |
 | S3 Clipboard text | Pass | Pass | Clipboard synchronization continued to work after restarting the Linux daemon. |
 | S4 Clipboard image | Pass | Pass | Image content passed in both directions. Tray/background delivery also worked; macOS currently has no visible tray/menu-bar icon, so the macOS window was moved to another Space instead. |
-| S5 File transfer | Pending | Pending | Not yet tested. |
+| S5 File transfer | Partial | Partial | Linux → macOS transfer and hash verification passed. Linux receiving initially failed because `xdg-user-dir` was unavailable; installing `xdg-user-dirs` restored it, and `474acc5` adds a `$HOME/Downloads` fallback. Reject and receiver-side cancel passed. A network interruption exposed false sender success before receiver commit; tracked in #120. |
 | S6 Interrupt/resume | Pending | Pending | Not yet tested. |
 | S7 Restart persistence | Pending | Pending | Full restart-persistence scenario not yet tested; clipboard recovery after a Linux daemon restart passed. |
 | S8 Remove/block | Pending | Pending | Not yet tested on this pair. |
 
-Versions: qualification branch `d0dba85`
+Versions: qualification branch `474acc5`
 
 OS versions: Linux version not recorded; macOS 26.6 (25G72)
