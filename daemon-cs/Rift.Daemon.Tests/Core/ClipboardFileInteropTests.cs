@@ -107,6 +107,13 @@ public sealed class ClipboardFileInteropTests : IDisposable
                 destinationPath,
                 overwrite: false,
                 token);
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListPendingFileCommitsAsync()).Commits
+                    .Any(commit => commit.TransferId == offerResult.TransferId),
+                token);
+            Assert.NotEqual(
+                "Done",
+                _sender.Operations.GetOperation(offerResult.OperationId).State);
             await PublishPendingCommitAsync(
                 _receiver.FileTransfer,
                 offerResult.TransferId,

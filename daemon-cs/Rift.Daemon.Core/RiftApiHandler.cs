@@ -669,6 +669,7 @@ public class RiftApiHandler : IRiftApi
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleChunkReceivedAsync(string deviceId, string transferId, int chunkIndex, long offset, int byteSize, string chunkSha256, string contentBase64, bool isLastChunk, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCompleteReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, int chunkCount, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleCommittedReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCancelReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleResumeReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int nextChunkIndex, long offset, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 

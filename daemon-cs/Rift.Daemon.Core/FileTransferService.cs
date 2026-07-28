@@ -17,6 +17,7 @@ public sealed class FileTransferService : IFileTransferService
     private const int DefaultOfferExpiryMs = 300000;
     private static readonly TimeSpan TrustedReconnectTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DuplicateReconnectRetryDelay = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan CommitAcknowledgementTimeout = TimeSpan.FromMinutes(5);
     private const int DuplicateReconnectRetryAttempts = 3;
 
     private readonly ITransport _transport;
@@ -36,6 +37,7 @@ public sealed class FileTransferService : IFileTransferService
     private readonly ConcurrentDictionary<string, OutgoingTransferState> _pausedOutgoingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IncomingTransferState> _incomingTransfers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Task> _pendingTrustedReconnects = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _peerFileTransferVersions = new(StringComparer.Ordinal);
 
     public event EventHandler<FileTransferLifecycleEventArgs>? TransferUpdated;
 
@@ -401,6 +403,12 @@ public sealed class FileTransferService : IFileTransferService
                 throw new FileTransferFailureException("HashMismatch", -32006, "Committed file did not match the verified incoming transfer.");
             }
 
+            transfer.IsLocallyCommitted = true;
+            if (PeerSupportsFileTransferVersion(transfer.SourceDeviceId, 2))
+            {
+                await SendCommittedAsync(transfer, cancellationToken).ConfigureAwait(false);
+            }
+
             _incomingTransfers.TryRemove(transferId, out _);
             CleanupStagingDirectory(transfer.StagingDirectory);
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
@@ -577,6 +585,7 @@ public sealed class FileTransferService : IFileTransferService
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Accept");
         transfer.AcceptedChunkSize = chunkSize.HasValue ? NormalizeChunkSize(chunkSize.Value) : transfer.ChunkSize;
         transfer.AcceptedChunkCount = ComputeChunkCount(transfer.ByteSize, transfer.AcceptedChunkSize.Value);
+        transfer.RequiresCommitAcknowledgement = PeerSupportsFileTransferVersion(deviceId, 2);
         transfer.SendTask ??= Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
         return Task.CompletedTask;
     }
@@ -710,6 +719,29 @@ public sealed class FileTransferService : IFileTransferService
         transfer.IsReadyToCommit = true;
         _remoteOffers.TryRemove(transferId, out _);
         await NotifyTransferReadyToCommitAsync(transfer, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task HandleCommittedReceivedAsync(
+        string deviceId,
+        string transferId,
+        long byteSize,
+        string sha256,
+        CancellationToken cancellationToken)
+    {
+        if (!_outgoingTransfers.TryGetValue(transferId, out var transfer) &&
+            !_pausedOutgoingTransfers.TryGetValue(transferId, out transfer))
+        {
+            return;
+        }
+        EnsureOutgoingTransferPeerMatches(transfer!, deviceId, "Commit");
+        if (byteSize != transfer!.ByteSize ||
+            !string.Equals(sha256, transfer.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new FileTransferFailureException("HashMismatch", -32006, "Committed file metadata did not match the outgoing transfer.");
+        }
+
+        transfer.CommitAcknowledgement.TrySetResult();
+        await Task.CompletedTask;
     }
 
     public async Task HandleCancelReceivedAsync(
@@ -894,6 +926,12 @@ public sealed class FileTransferService : IFileTransferService
             sendingProtectedMessage = true;
             await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), sendCancellationToken).ConfigureAwait(false);
             sendingProtectedMessage = false;
+            if (transfer.RequiresCommitAcknowledgement)
+            {
+                await transfer.CommitAcknowledgement.Task
+                    .WaitAsync(CommitAcknowledgementTimeout, sendCancellationToken)
+                    .ConfigureAwait(false);
+            }
             _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
             await NotifyTransferCompletedAsync(
                 transfer.TransferId,
@@ -928,7 +966,7 @@ public sealed class FileTransferService : IFileTransferService
                 ex.Message,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or FileTransferFailureException or TimeoutException)
         {
             var failureReason = GetTerminalSendFailureReason(ex);
             _logger.LogWarning(ex, "File transfer {TransferId} failed terminally while sending.", transfer.TransferId);
@@ -958,11 +996,20 @@ public sealed class FileTransferService : IFileTransferService
 
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
-        if (!args.IsOnline || !args.AllowsProtectedTraffic)
+        if (!args.IsOnline)
+        {
+            _peerFileTransferVersions.TryRemove(args.PeerDeviceId, out _);
+            return;
+        }
+        if (!args.AllowsProtectedTraffic)
         {
             return;
         }
 
+        _peerFileTransferVersions[args.PeerDeviceId] =
+            args.SelectedCapabilityVersions.TryGetValue("file.transfer", out var fileTransferVersion)
+                ? fileTransferVersion
+                : 1;
         var resumableTransfers = _incomingTransfers.Values
             .Where(transfer => string.Equals(transfer.SourceDeviceId, args.PeerDeviceId, StringComparison.Ordinal))
             .ToArray();
@@ -977,6 +1024,15 @@ public sealed class FileTransferService : IFileTransferService
             {
                 try
                 {
+                    if (transfer.IsReadyToCommit)
+                    {
+                        if (transfer.IsLocallyCommitted)
+                        {
+                            await SendCommittedAsync(transfer, CancellationToken.None).ConfigureAwait(false);
+                        }
+                        continue;
+                    }
+
                     var envelope = new
                     {
                         rift = "0.1-draft",
@@ -1369,6 +1425,33 @@ public sealed class FileTransferService : IFileTransferService
         return presence is not null && presence.Capabilities.Contains(requiredCapability, StringComparer.Ordinal);
     }
 
+    private bool PeerSupportsFileTransferVersion(string deviceId, int requiredVersion) =>
+        _peerFileTransferVersions.TryGetValue(deviceId, out var version) && version >= requiredVersion;
+
+    private async Task SendCommittedAsync(
+        IncomingTransferState transfer,
+        CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "file.committed",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            payload = new
+            {
+                transferId = transfer.TransferId,
+                byteSize = transfer.ByteSize,
+                sha256 = transfer.ExpectedSha256
+            }
+        };
+
+        await SendProtectedMessageAsync(
+            transfer.SourceDeviceId,
+            EncodeEnvelope(envelope),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private void EnsurePayloadIdentityMatches(string authenticatedDeviceId, string payloadDeviceId, string messageType)
     {
         if (string.Equals(authenticatedDeviceId, payloadDeviceId, StringComparison.Ordinal))
@@ -1659,6 +1742,7 @@ public sealed class FileTransferService : IFileTransferService
         UnauthorizedAccessException or IOException => "PolicyDenied",
         FileTransferFailureException failure => failure.FailureReason,
         InvalidOperationException => "InvalidTransition",
+        TimeoutException => "Timeout",
         _ => "ProtocolError"
     };
 
@@ -1830,6 +1914,8 @@ public sealed class FileTransferService : IFileTransferService
         public DateTimeOffset ExpiresAt { get; init; }
         public CancellationTokenSource SendCancellation { get; init; } = new();
         public Task? SendTask { get; set; }
+        public bool RequiresCommitAcknowledgement { get; set; }
+        public TaskCompletionSource CommitAcknowledgement { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class IncomingTransferState
@@ -1850,6 +1936,7 @@ public sealed class FileTransferService : IFileTransferService
         public string StagingPath { get; init; } = string.Empty;
         public bool Overwrite { get; init; }
         public bool IsReadyToCommit { get; set; }
+        public bool IsLocallyCommitted { get; set; }
         public SemaphoreSlim CommitGate { get; } = new(1, 1);
     }
 }

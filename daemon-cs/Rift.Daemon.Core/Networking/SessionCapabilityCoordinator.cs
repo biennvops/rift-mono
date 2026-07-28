@@ -14,7 +14,7 @@ internal sealed class SessionCapabilityCoordinator
     internal static readonly CapabilityDescriptor[] SupportedCapabilities =
     [
         new("clipboard.offer_fetch", 1),
-        new("file.transfer", 1),
+        new("file.transfer", 2),
         new("media.playback", 1),
         new("notification.sync", 1),
         new("presence.basic", 1),

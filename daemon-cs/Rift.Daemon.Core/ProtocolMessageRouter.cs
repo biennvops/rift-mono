@@ -371,6 +371,23 @@ public sealed class ProtocolMessageRouter(
             return;
         }
 
+        if (string.Equals(messageType, "file.committed", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            if (session.GetCapabilityVersion("file.transfer") < 2)
+            {
+                throw new InvalidOperationException("file.committed requires file.transfer version 2.");
+            }
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleCommittedReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("byteSize").GetInt64(),
+                filePayload.GetProperty("sha256").GetString() ?? string.Empty,
+                cancellationToken);
+            return;
+        }
+
         if (string.Equals(messageType, "file.cancel", StringComparison.Ordinal))
         {
             EnsureProtectedMessageAllowed(session, "file.transfer", messageType);

@@ -202,6 +202,13 @@ public interface IFileTransferService
         int chunkCount,
         CancellationToken cancellationToken);
 
+    Task HandleCommittedReceivedAsync(
+        string deviceId,
+        string transferId,
+        long byteSize,
+        string sha256,
+        CancellationToken cancellationToken);
+
     Task HandleCancelReceivedAsync(
         string deviceId,
         string transferId,
