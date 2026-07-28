@@ -83,7 +83,8 @@ class _FileDropOverlayState extends State<FileDropOverlay>
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
           child: Container(
-            color: Colors.white.withValues(alpha: 0.85),
+            color: theme.colorScheme.surfaceContainerLowest
+                .withValues(alpha: 0.85),
             padding: const EdgeInsets.all(32),
             child: Center(
               child: ConstrainedBox(
@@ -100,7 +101,7 @@ class _FileDropOverlayState extends State<FileDropOverlay>
                             .withValues(alpha: _borderOpacity.value),
                         strokeWidth: 4,
                         gap: 8,
-                        borderRadius: 24,
+                        borderRadius: 8,
                       ),
                       child: child,
                     );
@@ -111,7 +112,7 @@ class _FileDropOverlayState extends State<FileDropOverlay>
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerLow
                           .withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     padding: const EdgeInsets.all(32),
                     child: Column(
@@ -129,13 +130,6 @@ class _FileDropOverlayState extends State<FileDropOverlay>
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 16),
-                        Text(
-                          'Securely sync these files to all active devices connected to your Rift network.',
-                          style: theme.textTheme.bodyLarge?.copyWith(
-                            color: theme.colorScheme.secondary,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
                         const SizedBox(height: 48),
                         if (widget.activeDeviceCount > 0)
                           _buildDeviceStack(theme, widget.activeDeviceCount),
@@ -203,7 +197,11 @@ class _FileDropOverlayState extends State<FileDropOverlay>
           height: 48,
           child: Stack(
             children: List.generate(count.clamp(1, 3), (index) {
-              final icons = [Icons.laptop_mac, Icons.smartphone, Icons.tablet_mac];
+              final icons = [
+                Icons.laptop_mac,
+                Icons.smartphone,
+                Icons.tablet_mac
+              ];
               return Positioned(
                 left: index * 32.0,
                 child: Container(
@@ -221,7 +219,7 @@ class _FileDropOverlayState extends State<FileDropOverlay>
                   child: Icon(
                     icons[index % icons.length],
                     size: 20,
-                    color: theme.colorScheme.secondary,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               );
@@ -231,9 +229,8 @@ class _FileDropOverlayState extends State<FileDropOverlay>
         const SizedBox(width: 16),
         Text(
           'Sending to $count device${count > 1 ? 's' : ''}',
-          style: theme.textTheme.labelLarge?.copyWith(
-            color: theme.colorScheme.secondary,
-            fontWeight: FontWeight.w600,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
       ],

@@ -518,7 +518,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Sync is fully automatic'), findsOneWidget);
     expect(find.text('ITEMS'), findsOneWidget);
     expect(find.text('TOTAL SIZE'), findsOneWidget);
     expect(find.text('All devices'), findsOneWidget);
@@ -804,12 +803,6 @@ void main() {
 
     expect(find.text('demo-1.txt'), findsOneWidget);
     expect(find.text('Add Files'), findsOneWidget);
-    expect(
-      find.textContaining(
-        'No trusted peer currently advertises file.transfer.',
-      ),
-      findsOneWidget,
-    );
   });
 
   testWidgets('Send tab cancels active daemon-backed transfer',

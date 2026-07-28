@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 
+const _kSuccessColor = Color(0xFF047857);
+const _kSuccessBgColor = Color(0x14047857);
+const _kErrorColor = Color(0xFFBA1A1A);
+const _kErrorBgColor = Color(0x14BA1A1A);
+
 class ClipboardHistoryScreen extends StatefulWidget {
   const ClipboardHistoryScreen({super.key});
 
@@ -8,7 +13,7 @@ class ClipboardHistoryScreen extends StatefulWidget {
 }
 
 class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
-  String _activeFilter = 'Tất cả';
+  String _activeFilter = 'All';
 
   Widget _buildFilterChip(String label, ThemeData theme) {
     final isActive = _activeFilter == label;
@@ -20,21 +25,26 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
             _activeFilter = label;
           });
         },
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(4),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: isActive ? theme.colorScheme.primaryContainer : theme.colorScheme.surface,
+            color: isActive ? theme.colorScheme.primaryContainer : Colors.white,
             border: Border.all(
-              color: isActive ? theme.colorScheme.primary : theme.colorScheme.outline,
+              color: isActive
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.outlineVariant,
             ),
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: isActive ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+              color: isActive
+                  ? theme.colorScheme.onPrimary
+                  : theme.colorScheme.onSurfaceVariant,
             ),
           ),
         ),
@@ -44,7 +54,7 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
 
   Widget _buildTransactionItem({
     required ThemeData theme,
-    required String type, // 'received', 'sent', 'error'
+    required String type,
     required String deviceName,
     required String hash,
     required String size,
@@ -56,37 +66,44 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
     Color bgColor;
     Color borderColor;
     Color dotColor;
+    Color nameColor;
+    Color metaColor;
     IconData statusIcon;
     Color statusIconColor;
 
     if (type == 'received') {
       iconData = Icons.download;
-      iconBgColor = theme.colorScheme.secondaryContainer;
-      iconColor = theme.colorScheme.onSecondaryContainer;
-      bgColor = theme.colorScheme.surfaceContainerLowest;
+      iconBgColor = _kSuccessBgColor;
+      iconColor = _kSuccessColor;
+      bgColor = Colors.white;
       borderColor = theme.colorScheme.outlineVariant;
-      dotColor = theme.colorScheme.secondary;
+      dotColor = _kSuccessColor;
+      nameColor = theme.colorScheme.onSurface;
+      metaColor = theme.colorScheme.onSurfaceVariant;
       statusIcon = Icons.verified_user;
-      statusIconColor = theme.colorScheme.outlineVariant;
+      statusIconColor = theme.colorScheme.outline;
     } else if (type == 'sent') {
       iconData = Icons.upload;
-      iconBgColor = theme.colorScheme.surfaceContainerHighest;
+      iconBgColor = theme.colorScheme.surfaceContainerLow;
       iconColor = theme.colorScheme.onSurfaceVariant;
-      bgColor = theme.colorScheme.surfaceContainerLowest;
+      bgColor = Colors.white;
       borderColor = theme.colorScheme.outlineVariant;
-      dotColor = theme.colorScheme.secondary;
+      dotColor = theme.colorScheme.primaryContainer;
+      nameColor = theme.colorScheme.onSurface;
+      metaColor = theme.colorScheme.onSurfaceVariant;
       statusIcon = Icons.verified_user;
-      statusIconColor = theme.colorScheme.outlineVariant;
+      statusIconColor = theme.colorScheme.outline;
     } else {
-      // error
       iconData = Icons.error;
-      iconBgColor = theme.colorScheme.surfaceContainerLowest;
-      iconColor = theme.colorScheme.error;
+      iconBgColor = _kErrorBgColor;
+      iconColor = _kErrorColor;
       bgColor = theme.colorScheme.errorContainer;
-      borderColor = theme.colorScheme.errorContainer; // Match background to hide border
-      dotColor = theme.colorScheme.error;
+      borderColor = theme.colorScheme.errorContainer;
+      dotColor = _kErrorColor;
+      nameColor = theme.colorScheme.onErrorContainer;
+      metaColor = theme.colorScheme.onErrorContainer.withValues(alpha: 0.8);
       statusIcon = Icons.gpp_bad;
-      statusIconColor = theme.colorScheme.error;
+      statusIconColor = _kErrorColor;
     }
 
     return Container(
@@ -119,9 +136,11 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
                     children: [
                       Text(
                         deviceName,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: type == 'error' ? theme.colorScheme.onErrorContainer : theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.bold,
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          height: 24 / 16,
+                          color: nameColor,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -138,9 +157,12 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
                   const SizedBox(height: 4),
                   Text(
                     'Hash: $hash • $size${type == 'error' ? ' • Blocked' : ''}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: type == 'error' ? theme.colorScheme.onErrorContainer.withValues(alpha: 0.8) : theme.colorScheme.onSurfaceVariant,
-                      letterSpacing: 0.5,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      height: 16 / 12,
+                      color: metaColor,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ],
@@ -152,8 +174,11 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
             children: [
               Text(
                 time,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: type == 'error' ? theme.colorScheme.onErrorContainer.withValues(alpha: 0.8) : theme.colorScheme.onSurfaceVariant,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  height: 20 / 14,
+                  color: metaColor,
                 ),
               ),
               const SizedBox(height: 8),
@@ -169,20 +194,43 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Filter items based on active filter
     final allItems = [
-      {'type': 'received', 'device': 'Alpha-Workstation', 'hash': 'a7b9...3f21', 'size': '42 KB', 'time': '10:42 AM'},
-      {'type': 'sent', 'device': 'Mobile-Node-1', 'hash': '9c2f...e11a', 'size': '1.2 MB', 'time': '09:15 AM'},
-      {'type': 'error', 'device': 'Unknown-Device', 'hash': '----', 'size': '0 KB', 'time': 'Yesterday'},
-      {'type': 'received', 'device': 'Beta-Server', 'hash': 'd4e5...88bb', 'size': '15 KB', 'time': 'Yesterday'},
+      {
+        'type': 'received',
+        'device': 'Alpha-Workstation',
+        'hash': 'a7b9...3f21',
+        'size': '42 KB',
+        'time': '10:42 AM'
+      },
+      {
+        'type': 'sent',
+        'device': 'Mobile-Node-1',
+        'hash': '9c2f...e11a',
+        'size': '1.2 MB',
+        'time': '09:15 AM'
+      },
+      {
+        'type': 'error',
+        'device': 'Unknown-Device',
+        'hash': '----',
+        'size': '0 KB',
+        'time': 'Yesterday'
+      },
+      {
+        'type': 'received',
+        'device': 'Beta-Server',
+        'hash': 'd4e5...88bb',
+        'size': '15 KB',
+        'time': 'Yesterday'
+      },
     ];
 
     List<Map<String, String>> filteredItems = allItems;
-    if (_activeFilter == 'Đã gửi') {
+    if (_activeFilter == 'Sent') {
       filteredItems = allItems.where((i) => i['type'] == 'sent').toList();
-    } else if (_activeFilter == 'Đã nhận') {
+    } else if (_activeFilter == 'Received') {
       filteredItems = allItems.where((i) => i['type'] == 'received').toList();
-    } else if (_activeFilter == 'Lỗi') {
+    } else if (_activeFilter == 'Errors') {
       filteredItems = allItems.where((i) => i['type'] == 'error').toList();
     }
 
@@ -197,15 +245,21 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
               const SizedBox(height: 24),
               Text(
                 'Clipboard History',
-                style: theme.textTheme.headlineMedium?.copyWith(
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.01,
+                  height: 32 / 24,
                   color: theme.colorScheme.onSurface,
-                  fontWeight: FontWeight.bold,
                 ),
               ),
               const SizedBox(height: 8),
               Text(
                 'Global transaction log across all trusted connections.',
-                style: theme.textTheme.bodyMedium?.copyWith(
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  height: 24 / 16,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
@@ -214,10 +268,10 @@ class _ClipboardHistoryScreenState extends State<ClipboardHistoryScreen> {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    _buildFilterChip('Tất cả', theme),
-                    _buildFilterChip('Đã gửi', theme),
-                    _buildFilterChip('Đã nhận', theme),
-                    _buildFilterChip('Lỗi', theme),
+                    _buildFilterChip('All', theme),
+                    _buildFilterChip('Sent', theme),
+                    _buildFilterChip('Received', theme),
+                    _buildFilterChip('Errors', theme),
                   ],
                 ),
               ),
