@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Rift.Daemon.Core;
 
@@ -37,7 +38,9 @@ public class Worker(
         {
             discoveryService.StartDiscovery();
         }
-        var peerMessageGates = new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+        var peerMessageQueues = new Dictionary<string, Channel<MessageReceivedEventArgs>>(StringComparer.Ordinal);
+        var peerMessageWorkers = new Dictionary<string, Task>(StringComparer.Ordinal);
+        var peerMessageQueuesGate = new object();
         var trustedReconnectLoops = new Dictionary<string, Task>(StringComparer.Ordinal);
         var trustedReconnectLoopsGate = new object();
         using var trustedReconnectCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -75,6 +78,25 @@ public class Worker(
         {
             transport.MessageReceived -= OnTransportMessageReceived;
             transport.SessionStateChanged -= OnSessionStateChanged;
+            Channel<MessageReceivedEventArgs>[] messageQueues;
+            Task[] messageWorkers;
+            lock (peerMessageQueuesGate)
+            {
+                messageQueues = peerMessageQueues.Values.ToArray();
+                messageWorkers = peerMessageWorkers.Values.ToArray();
+            }
+            foreach (var queue in messageQueues)
+            {
+                queue.Writer.TryComplete();
+            }
+            try
+            {
+                await Task.WhenAll(messageWorkers);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown
+            }
             discoveryService.StopAdvertising();
             discoveryService.StopDiscovery();
             trustedReconnectCts.Cancel();
@@ -107,33 +129,58 @@ public class Worker(
 
         void OnTransportMessageReceived(object? sender, MessageReceivedEventArgs args)
         {
-            var gate = peerMessageGates.GetOrAdd(args.PeerDeviceId, _ => new SemaphoreSlim(1, 1));
-            _ = Task.Run(async () =>
+            Channel<MessageReceivedEventArgs> queue;
+            lock (peerMessageQueuesGate)
             {
-                var lockHeld = false;
-                try
+                if (peerMessageQueues.TryGetValue(args.PeerDeviceId, out var existingQueue))
                 {
-                    await gate.WaitAsync(stoppingToken);
-                    lockHeld = true;
-                    heartbeatManager.ObserveAuthenticatedMessage(args.Session);
-                    await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
+                    queue = existingQueue;
                 }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                else
                 {
-                    // Normal shutdown
+                    queue = Channel.CreateUnbounded<MessageReceivedEventArgs>(
+                        new UnboundedChannelOptions
+                        {
+                            SingleReader = true,
+                            SingleWriter = false,
+                            AllowSynchronousContinuations = false
+                        });
+                    peerMessageQueues.Add(args.PeerDeviceId, queue);
+                    peerMessageWorkers.Add(
+                        args.PeerDeviceId,
+                        Task.Run(() => ProcessPeerMessagesAsync(args.PeerDeviceId, queue), stoppingToken));
                 }
-                catch (Exception ex)
+            }
+            queue.Writer.TryWrite(args);
+        }
+
+        async Task ProcessPeerMessagesAsync(
+            string peerDeviceId,
+            Channel<MessageReceivedEventArgs> queue)
+        {
+            try
+            {
+                await foreach (var args in queue.Reader.ReadAllAsync(stoppingToken))
                 {
-                    logger.LogWarning(ex, "Failed to route message from peer {PeerDeviceId}.", args.PeerDeviceId);
-                }
-                finally
-                {
-                    if (lockHeld)
+                    try
                     {
-                        gate.Release();
+                        heartbeatManager.ObserveAuthenticatedMessage(args.Session);
+                        await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to route message from peer {PeerDeviceId}.", peerDeviceId);
                     }
                 }
-            }, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown
+            }
         }
 
         void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
@@ -172,7 +219,6 @@ public class Worker(
             }
             else
             {
-                peerMessageGates.TryRemove(args.PeerDeviceId, out _);
                 heartbeatManager.OnSessionStateChanged(args);
             }
         }
