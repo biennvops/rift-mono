@@ -572,14 +572,17 @@ Cancels an in-flight file transfer initiated or accepted by the local daemon.
 
 #### `rift.acceptFileOffer`
 
-Accepts an incoming file offer and selects the destination path locally.
+Accepts an incoming file offer and records the publication destination selected
+by the local user-session client. On desktop, the daemon receives into private
+staging and MUST NOT write directly to `destinationPath`. The path is retained
+as intended-publication metadata for a local publication client.
 
 **Params:**
 
 | Field             | Type          | Required | Description                         |
 | ----------------- | ------------- | -------- | ----------------------------------- |
 | `transferId`      | UUIDv4 string | Yes      | The offered transfer                |
-| `destinationPath` | string        | Yes      | Receiver-local output path          |
+| `destinationPath` | string        | Yes      | Intended user-visible publication path |
 | `overwrite`       | boolean       | No       | Whether to replace an existing file |
 
 **Result:**
@@ -588,7 +591,90 @@ Accepts an incoming file offer and selects the destination path locally.
 {
   "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
   "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaabbbb",
-  "destinationPath": "/tmp/example.png"
+  "destinationPath": "/home/user/Downloads/example.png"
+}
+```
+
+#### `rift.listPendingFileCommits`
+
+Returns incoming desktop transfers whose content has been fully received and
+verified but has not yet been published by a local user-session client.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "commits": [
+    {
+      "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+      "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaabbbb",
+      "peerDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "fileName": "example.png",
+      "mediaType": "image/png",
+      "byteSize": 1024,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "stagingPath": "/home/user/.local/share/rift-daemon/incoming/018f2f9a/content.part",
+      "destinationPath": "/home/user/Downloads/example.png",
+      "state": "ready_to_commit"
+    }
+  ]
+}
+```
+
+The staging path is private daemon-owned content made available only to an
+authorized same-user IPC client. Clients MUST treat the staging file as
+read-only and MUST NOT present it as a completed user file.
+
+#### `rift.confirmFileCommit`
+
+Confirms that a local publication client copied and atomically published a
+verified staging file. Before completing the operation, the daemon MUST read
+the final file and independently verify its byte count and SHA-256 against the
+pending commit.
+
+**Params:**
+
+| Field             | Type          | Required | Description                         |
+| ----------------- | ------------- | -------- | ----------------------------------- |
+| `transferId`      | UUIDv4 string | Yes      | Pending incoming transfer           |
+| `destinationPath` | string        | Yes      | Final user-visible committed path   |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "committed": true,
+  "destinationPath": "/home/user/Downloads/example.png"
+}
+```
+
+**Errors:** `-32009` when no pending commit exists, `-32006` when the final
+file does not match the verified staging metadata, and `-32010` when local
+policy denies the destination.
+
+#### `rift.failFileCommit`
+
+Reports that a local publication client could not publish a pending incoming
+file. The daemon fails the local receive operation, cleans private staging, and
+for `file.transfer` version 2 sends `file.cancel` to the peer.
+
+**Params:**
+
+| Field           | Type          | Required | Description                         |
+| --------------- | ------------- | -------- | ----------------------------------- |
+| `transferId`    | UUIDv4 string | Yes      | Pending incoming transfer           |
+| `failureReason` | string        | Yes      | Closed-vocabulary failure reason    |
+| `message`       | string        | No       | Local diagnostic without file data  |
+
+**Result:**
+
+```json
+{
+  "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+  "failed": true
 }
 ```
 
@@ -875,6 +961,7 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onMediaPlaybackActionRequest` | `{ "requestId", "playbackId", "sourceDeviceId", "requestingDeviceId", "action", "positionMs?", "requestedAt?" }` | Local playback action requested by a peer |
 | `rift.onMediaPlaybackActionResult` | `{ "playbackId", "sourceDeviceId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote playback action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
+| `rift.onFileTransferReadyToCommit` | `{ "transferId", "operationId", "peerDeviceId", "fileName", "mediaType", "byteSize", "sha256", "stagingPath", "destinationPath", "state" }` | Verified incoming file awaits user-session publication |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
 | `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |
 | `rift.onPresenceUpdate`      | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }`                              | Peer presence changed                |
@@ -893,4 +980,6 @@ The IPC API enforces the following security invariants:
 
 4. **The client holds no authoritative state.** The daemon's SQLite database is the single source of truth for identity, trust store, capabilities, and event log. The client MAY cache view-model state in memory but MUST NOT persist authoritative protocol state.
 
-5. **Transport security is transport-specific.** Named pipes on Windows inherit OS access control (the pipe ACL restricts access to the current user session). `SendPort`/`ReceivePort` on Android is process-internal. This specification does not define additional IPC-layer encryption because both v0.1-draft transports are local and OS-protected.
+5. **Transport security is transport-specific.** Named pipes on Windows inherit OS access control (the pipe ACL restricts access to the current user session). `SendPort`/`ReceivePort` on Android is process-internal. Desktop Unix sockets are restricted to the current user. This specification does not define additional IPC-layer encryption because all v0.1-draft transports are local and OS-protected.
+
+6. **Desktop file publication crosses the IPC boundary.** The daemon exposes a verified private staging path only to an authorized same-user client. The client treats staging content as read-only, publishes through a temporary destination file plus atomic rename, and reports the final path. The daemon independently verifies the committed file before acknowledging peer success. File content, staging paths, and destination paths MUST NOT be included in security-event details beyond the minimum local diagnostic metadata allowed by policy.

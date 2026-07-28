@@ -81,6 +81,12 @@ family (e.g. unusable link-local IPv6), peer flapping.
 3. Reject an incoming offer; sender shows the typed failure.
 4. Cancel an in-flight large transfer from the receiver; sender stops
    sending and no partial file is committed at the destination.
+5. For receiver-confirmed completion, close and reopen the receiving app after
+   network receipt reaches `ready_to_commit`; the pending commit must be
+   recovered and published without retransmitting the file.
+6. The sender must not report success before the receiver publishes and
+   independently verifies the final destination file. A failed publication
+   must not emit receiver-confirmed completion.
 
 ### S6 — Interruption and resume
 
