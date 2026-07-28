@@ -111,6 +111,30 @@ family (e.g. unusable link-local IPv6), peer flapping.
    the rejected connection.
 4. Unblock and re-pair to leave the pair in a clean trusted state.
 
+### S9 — Media playback state and actions (both directions)
+
+This scenario was omitted from the original desktop-pair procedure. It is
+implemented as the optional `media.playback` capability and must be qualified
+separately from clipboard/file continuity.
+
+1. Start a local MPRIS player on Linux and begin playback.
+2. Query the macOS daemon's `rift.listMediaPlayback` IPC result. The Linux
+   playback record must appear with current metadata and state.
+3. Stop the Linux player and confirm macOS receives the removal/update.
+4. Start a macOS media source and confirm Linux observes its playback state.
+5. Where a desktop control client is available, issue pause/resume/seek or
+   next/previous actions in both directions and verify the originating player.
+6. Restart one daemon and confirm the active playback state is replayed without
+   creating duplicate records.
+
+### S10 — Notification sync (if enabled)
+
+Notification sync is a separate optional capability and is not covered by the
+clipboard/file scenarios. Qualify it only when the platform notification
+listener/extractor is configured, recording platform permission limitations,
+replay behavior after reconnect, and whether updates/removals create duplicate
+native notifications.
+
 ## Evidence table
 
 Copy one table per pair into the results section below (or into
@@ -129,6 +153,8 @@ Copy one table per pair into the results section below (or into
 | S6 Interrupt/resume | | | |
 | S7 Restart persistence | | | |
 | S8 Remove/block | | | |
+| S9 Media playback | | | |
+| S10 Notification sync | | | |
 
 Versions: daemon commit <sha>, app commit <sha>
 OS versions: <A>, <B>
@@ -148,6 +174,8 @@ OS versions: <A>, <B>
 | S6 Interrupt/resume | Pass | Pass | Transfers resumed from their prior offsets after a ~10 s network interruption and completed with matching hashes. |
 | S7 Restart persistence | Pass | Pass | Restarting either daemon preserved identity and restored the trusted session automatically. |
 | S8 Remove/block | Partial | Partial | Trust removal disconnected both sides, prevented reconnect, and re-pairing restored trust in both directions. Block qualification is unavailable: the UI/daemon returns `Block not implemented in daemon yet`. |
+| S9 Media playback | Pending | Pending | Not included in the original P1 qualification. |
+| S10 Notification sync | Pending | Pending | Not included in the original P1 qualification. |
 
 Versions: qualification branch `98cdb7f`; daemon large-file fix `73b8c64`
 
@@ -163,9 +191,11 @@ OS versions: Windows version not recorded; macOS 26.6 (25G72)
 | S4 Clipboard image | Pass | Pass | Image content passed in both directions. Tray/background delivery also worked; macOS currently has no visible tray/menu-bar icon, so the macOS window was moved to another Space instead. |
 | S5 File transfer | Pass | Pass | Small and large transfers, matching hashes, reject, cancel, app-reconnect publication recovery, and receiver-confirmed completion passed. Private daemon staging plus user-session publication resolved the Linux read-only-home boundary. |
 | S6 Interrupt/resume | Pass | Pass | Resume completed with matching hashes and no false sender success. The active session used direct Ethernet even when Wi-Fi was disabled; detection and recovery after loss of the active path took about 20–30 seconds. |
-| S7 Restart persistence | Pending | Pending | Full restart-persistence scenario not yet tested; clipboard recovery after a Linux daemon restart passed. |
+| S7 Restart persistence | Partial | Partial | Linux daemon restart preserved clipboard behavior. After macOS daemon restart, the Flutter app reported local IPC connected but clipboard remained unavailable until the Android app was foregrounded; prior Android notifications then replayed to peers. Requires retest on merged mobile-parity code. |
 | S8 Remove/block | Pending | Pending | Not yet tested on this pair. |
+| S9 Media playback | Pending | Pending | The original qualification omitted this scenario. |
+| S10 Notification sync | Pending | Pending | Not yet tested as a desktop-pair scenario. |
 
-Versions: qualification branch `f51bef2`
+Versions: qualification branch `f01b91e`
 
 OS versions: Linux version not recorded; macOS 26.6 (25G72)
