@@ -10,6 +10,7 @@ import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/platform/linux_notifications.dart';
 import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
+import 'package:app_flutter/src/ui/local_events_notifier.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -45,10 +46,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
@@ -168,7 +171,8 @@ void main() {
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
 
-  Future<void> dispatchPlatformMethodCall(String channel, MethodCall call) async {
+  Future<void> dispatchPlatformMethodCall(
+      String channel, MethodCall call) async {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
     final codec = const StandardMethodCodec();
@@ -189,6 +193,9 @@ void main() {
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (_) => SendQueueController(client, false),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (_) => LocalEventsNotifier(client),
         ),
       ],
       child: const RiftApp(hasCompletedOnboarding: true),
@@ -212,7 +219,8 @@ void main() {
     LinuxNotifications.debugIsLinuxOverride = false;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
-    notificationPostedController = StreamController<Map<String, dynamic>>.broadcast();
+    notificationPostedController =
+        StreamController<Map<String, dynamic>>.broadcast();
     notificationUpdatedController =
         StreamController<Map<String, dynamic>>.broadcast();
     notificationRemovedController =
@@ -402,7 +410,8 @@ void main() {
     expect(result, equals(mockDeviceInfo));
   });
 
-  testWidgets('HomeScreen auto-opens PairingScreen for incoming pairing request',
+  testWidgets(
+      'HomeScreen auto-opens PairingScreen for incoming pairing request',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
 
@@ -494,8 +503,7 @@ void main() {
     expect(consumedPendingShareItems, isTrue);
   });
 
-  testWidgets(
-      'RiftApp reapplies saved notification sync policy on reconnect',
+  testWidgets('RiftApp reapplies saved notification sync policy on reconnect',
       (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues({
       AppPrefs.notificationSyncEnabled: false,

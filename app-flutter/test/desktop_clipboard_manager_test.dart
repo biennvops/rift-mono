@@ -36,6 +36,14 @@ class ClipboardTransport implements IpcTransport {
     }));
   }
 
+  void _sendError(dynamic id, int code, String message) {
+    _daemonToApp?.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'error': {'code': code, 'message': message},
+      'id': id,
+    }));
+  }
+
   @override
   Future<StreamChannel<String>> connect() async {
     connectionAttempts++;
@@ -54,7 +62,9 @@ class ClipboardTransport implements IpcTransport {
           final offerId =
               (decoded['params'] as Map<String, dynamic>)['offerId'] as String;
           final result = fetchResultsByOfferId[offerId] ?? const {};
-          if (result is Future) {
+          if (result is Exception) {
+            _sendError(id, -32009, result.toString());
+          } else if (result is Future) {
             _sendResult(id, await result);
           } else {
             _sendResult(id, result);
@@ -690,6 +700,51 @@ void main() {
           reason: 'Should emit when content changes again');
 
       await sub.cancel();
+    });
+
+    test(
+        'notifies listeners and removes offer when fetch fails with not found error',
+        () async {
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+
+      var listenerCallCount = 0;
+      manager.addListener(() {
+        listenerCallCount++;
+      });
+
+      unawaited(client.connect());
+      await waitForCondition(() => client.isConnected);
+
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'offerId': 'stale-offer-1',
+        'sourceDeviceId': 'device-1',
+        'contentType': 'text/plain',
+        'byteSize': 10,
+        'sha256': 'hash1',
+      });
+
+      await waitForCondition(
+          () => manager.activeOffers.containsKey('stale-offer-1'));
+      expect(listenerCallCount, greaterThan(0));
+
+      transport.fetchResultsByOfferId['stale-offer-1'] =
+          Exception('-32009 Offer not found');
+
+      final success = await manager.fetchAndApplyOffer('stale-offer-1');
+      expect(success, isFalse);
+      expect(manager.activeOffers.containsKey('stale-offer-1'), isFalse);
+
+      await manager.dispose();
     });
   });
 }

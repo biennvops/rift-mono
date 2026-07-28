@@ -38,7 +38,7 @@ class ClipboardContentPayload {
   String get contentBase64 => base64Encode(bytes);
 }
 
-class DesktopClipboardManager {
+class DesktopClipboardManager extends ChangeNotifier {
   DesktopClipboardManager(
     this._client, {
     Stream<Object?>? clipboardChanges,
@@ -207,6 +207,7 @@ class DesktopClipboardManager {
     }
   }
 
+  @override
   Future<void> dispose() async {
     _isDisposed = true;
     await _clipboardChangeSub?.cancel();
@@ -218,6 +219,7 @@ class DesktopClipboardManager {
     _handledOfferIds.clear();
     _suppressedLocalSha256Deadlines.clear();
     await _statusController.close();
+    super.dispose();
   }
 
   Future<void> _setClipboardMonitoringEnabled(bool enabled) async {
@@ -352,11 +354,16 @@ class DesktopClipboardManager {
       return;
     }
     _activeOffers[offerId] = Map<String, dynamic>.from(offer);
+    notifyListeners();
   }
 
   void _removeOfferState(String offerId) {
-    _activeOffers.remove(offerId);
-    _handledOfferIds.remove(offerId);
+    if (_activeOffers.remove(offerId) != null) {
+      _handledOfferIds.remove(offerId);
+      notifyListeners();
+    } else {
+      _handledOfferIds.remove(offerId);
+    }
   }
 
   Future<void> _maybeFetchAndApplyOffer(Map<String, dynamic> offer) async {
@@ -375,55 +382,90 @@ class DesktopClipboardManager {
     }
 
     _handledOfferIds.add(offerId);
+    await fetchAndApplyOffer(offerId);
+  }
+
+  Future<ClipboardContentPayload?> fetchOfferPayload(String offerId) async {
+    final offer = _activeOffers[offerId];
+    if (offer == null) {
+      return null;
+    }
+    final contentType = offer['contentType']?.toString() ?? '';
     try {
-      _emitStatus('Fetching clipboard from peer...');
-      final startedAt = DateTime.now();
       final result =
           await _client.fetchClipboardContent(offerId) as Map<dynamic, dynamic>;
-      if (_isDisposed) {
-        return;
-      }
+      if (_isDisposed) return null;
       final canonical = Map<String, dynamic>.from(result);
       if (canonical['verified'] != true) {
         _log.warning('Clipboard fetch for $offerId was not verified.');
-        _emitStatus('Clipboard fetch failed: unverified');
-        return;
+        return null;
       }
-
       final contentBase64 = canonical['contentBase64']?.toString();
-      final sha256 = canonical['sha256']?.toString();
-      if (contentBase64 == null || sha256 == null) {
+      if (contentBase64 == null) {
         _log.warning(
             'Clipboard fetch for $offerId returned an incomplete payload.');
-        _emitStatus('Clipboard fetch failed: incomplete payload');
-        return;
+        return null;
+      }
+      final bytes = Uint8List.fromList(base64Decode(contentBase64));
+      return ClipboardContentPayload(contentType: contentType, bytes: bytes);
+    } catch (error, stackTrace) {
+      if (error.toString().contains('-32009') ||
+          error.toString().toLowerCase().contains('not found') ||
+          error.toString().toLowerCase().contains('expired')) {
+        _removeOfferState(offerId);
+      }
+      _log.warning(
+          'Failed to fetch offer payload $offerId.', error, stackTrace);
+      return null;
+    }
+  }
+
+  Future<bool> fetchAndApplyOffer(String offerId) async {
+    _emitStatus('Fetching clipboard from peer...');
+    final startedAt = DateTime.now();
+    final payload = await fetchOfferPayload(offerId);
+    if (payload == null || _isDisposed) {
+      _handledOfferIds.remove(offerId);
+      _emitStatus('Clipboard fetch failed');
+      return false;
+    }
+
+    try {
+      if (_supportedContentTypes.contains(payload.contentType)) {
+        await _writeClipboardContent(payload);
+      } else if (payload.contentType == textPlainContentType ||
+          payload.contentType == 'clipboard') {
+        final text = utf8.decode(payload.bytes);
+        await Clipboard.setData(ClipboardData(text: text));
+      } else {
+        _log.warning(
+            'Unsupported content type for clipboard copy: ${payload.contentType}');
+        _emitStatus('Unsupported clipboard format');
+        return false;
       }
 
-      final bytes = Uint8List.fromList(base64Decode(contentBase64));
       if (_isDisposed) {
-        return;
+        return false;
       }
-      await _writeClipboardContent(
-        ClipboardContentPayload(
-          contentType: contentType,
-          bytes: bytes,
-        ),
-      );
-      if (_isDisposed) {
-        return;
-      }
-      _enqueueSuppressedLocalHash(sha256);
+      _enqueueSuppressedLocalHash(payload.sha256Hex);
       final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
       _log.info(
-        'Fetched and applied $contentType clipboard payload '
-        '(${bytes.length} bytes) in ${elapsedMs}ms.',
+        'Fetched and applied ${payload.contentType} clipboard payload '
+        '(${payload.bytes.length} bytes) in ${elapsedMs}ms.',
       );
-      _emitStatus(_receivedStatusForContentType(contentType));
+      _emitStatus(_receivedStatusForContentType(payload.contentType));
+      return true;
     } catch (error, stackTrace) {
       _handledOfferIds.remove(offerId);
+      if (error.toString().contains('-32009') ||
+          error.toString().toLowerCase().contains('not found') ||
+          error.toString().toLowerCase().contains('expired')) {
+        _removeOfferState(offerId);
+      }
       _log.warning(
-          'Failed to fetch/apply clipboard offer $offerId.', error, stackTrace);
+          'Failed to apply clipboard offer $offerId.', error, stackTrace);
       _emitStatus('Clipboard fetch failed');
+      return false;
     }
   }
 
