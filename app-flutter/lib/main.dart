@@ -202,6 +202,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _pairingCompleteSub;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _fileReadyToCommitSub;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
@@ -214,6 +215,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
   final Set<String> _autoAcceptingTransferIds = <String>{};
+  final Set<String> _publishingTransferIds = <String>{};
   final ValueNotifier<String?> _historyRouteNotifier =
       ValueNotifier<String?>(null);
   final ValueNotifier<String?> _sharedClipboardTextNotifier =
@@ -369,6 +371,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         unawaited(_flushPendingNotificationSyncEvents());
         unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
+        unawaited(_recoverPendingFileCommits());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
@@ -1007,6 +1010,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _pairingCompleteSub?.cancel();
     _trustChangedSub?.cancel();
     _fileOfferSub?.cancel();
+    _fileReadyToCommitSub?.cancel();
     _fileCompletedSub?.cancel();
     _fileFailedSub?.cancel();
     _clipboardOfferSub?.cancel();
@@ -1431,9 +1435,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       }
     });
 
+    _fileReadyToCommitSub = client.onFileTransferReadyToCommit.listen((event) {
+      unawaited(_publishPendingFileCommit(event));
+    });
+
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
       unawaited(_handleCompletedFileTransfer(event));
     });
+
+    if (client.isConnected) {
+      unawaited(_recoverPendingFileCommits());
+    }
 
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
       final fileName = event['fileName']?.toString() ?? 'file';
@@ -1444,6 +1456,106 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         route: NotificationRoute.historyTransferActivity,
       );
     });
+  }
+
+  bool get _supportsDesktopFilePublication =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  Future<void> _recoverPendingFileCommits() async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      return;
+    }
+    try {
+      final result = await client.listPendingFileCommits();
+      if (result is! Map) {
+        return;
+      }
+      final commits = result['commits'];
+      if (commits is! List) {
+        return;
+      }
+      for (final commit in commits.whereType<Map>()) {
+        unawaited(
+          _publishPendingFileCommit(Map<String, dynamic>.from(commit)),
+        );
+      }
+    } catch (error) {
+      if (!JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        debugPrint('[File Transfer] Failed to recover pending commits: $error');
+      }
+    }
+  }
+
+  Future<void> _publishPendingFileCommit(Map<String, dynamic> commit) async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final transferId = commit['transferId']?.toString();
+    final stagingPath = commit['stagingPath']?.toString();
+    final destinationPath = commit['destinationPath']?.toString();
+    final expectedSha256 = commit['sha256']?.toString();
+    final byteSize = commit['byteSize'];
+    if (transferId == null ||
+        transferId.isEmpty ||
+        stagingPath == null ||
+        stagingPath.isEmpty ||
+        destinationPath == null ||
+        destinationPath.isEmpty ||
+        expectedSha256 == null ||
+        expectedSha256.isEmpty ||
+        byteSize is! num ||
+        !_publishingTransferIds.add(transferId)) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final publishedPath = await publishVerifiedIncomingFile(
+        transferId: transferId,
+        stagingPath: stagingPath,
+        destinationPath: destinationPath,
+        expectedByteSize: byteSize.toInt(),
+        expectedSha256: expectedSha256,
+      );
+      try {
+        await client.confirmFileCommit(
+          transferId: transferId,
+          destinationPath: publishedPath,
+        );
+      } catch (error) {
+        debugPrint(
+          '[File Transfer] Published $transferId but confirmation is pending: $error',
+        );
+      }
+    } catch (error) {
+      try {
+        await client.failFileCommit(
+          transferId: transferId,
+          failureReason: error.toString().toLowerCase().contains('hash')
+              ? 'HashMismatch'
+              : 'PolicyDenied',
+          message: JsonRpcRiftClient.formatDisplayError(error),
+        );
+      } catch (reportError) {
+        debugPrint(
+          '[File Transfer] Failed to report publication failure for $transferId: $reportError',
+        );
+      }
+      _maybeNotifyWithRoute(
+        title: 'File save failed',
+        body:
+            '${commit['fileName']?.toString() ?? 'File'} could not be published: ${JsonRpcRiftClient.formatDisplayError(error)}',
+        route: NotificationRoute.historyTransferActivity,
+      );
+    } finally {
+      _publishingTransferIds.remove(transferId);
+    }
   }
 
   Future<_IncomingFileDestination?> _prepareIncomingFileDestination(

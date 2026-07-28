@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -156,6 +157,65 @@ Future<String?> buildDefaultIncomingFilePath(String fileName) async {
   }
 
   return candidate.path;
+}
+
+Future<String> publishVerifiedIncomingFile({
+  required String transferId,
+  required String stagingPath,
+  required String destinationPath,
+  required int expectedByteSize,
+  required String expectedSha256,
+}) async {
+  final stagingFile = File(stagingPath);
+  if (!await stagingFile.exists()) {
+    throw FileSystemException(
+        'Verified staging file was not found.', stagingPath);
+  }
+
+  final destinationFile = File(destinationPath);
+  if (await destinationFile.exists()) {
+    await _verifyPublishedFile(
+      destinationFile,
+      expectedByteSize,
+      expectedSha256,
+    );
+    return destinationFile.path;
+  }
+
+  await destinationFile.parent.create(recursive: true);
+  final temporaryFile = File('$destinationPath.rift-$transferId.part');
+  try {
+    if (await temporaryFile.exists()) {
+      await temporaryFile.delete();
+    }
+    await stagingFile.openRead().pipe(temporaryFile.openWrite());
+    await _verifyPublishedFile(
+      temporaryFile,
+      expectedByteSize,
+      expectedSha256,
+    );
+    await temporaryFile.rename(destinationFile.path);
+    return destinationFile.path;
+  } catch (_) {
+    if (await temporaryFile.exists()) {
+      await temporaryFile.delete();
+    }
+    rethrow;
+  }
+}
+
+Future<void> _verifyPublishedFile(
+  File file,
+  int expectedByteSize,
+  String expectedSha256,
+) async {
+  if (await file.length() != expectedByteSize) {
+    throw FileSystemException('Published file size did not match.', file.path);
+  }
+  final digest = await sha256.bind(file.openRead()).first;
+  if (digest.toString().toLowerCase() != expectedSha256.toLowerCase()) {
+    throw FileSystemException('Published file hash did not match.', file.path);
+  }
 }
 
 bool shouldRevealCompletedTransferDestination() {

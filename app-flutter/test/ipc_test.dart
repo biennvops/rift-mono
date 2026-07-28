@@ -674,6 +674,7 @@ void main() {
       await client.connect();
 
       final offerFuture = client.onFileOffer.first;
+      final readyFuture = client.onFileTransferReadyToCommit.first;
       final progressFuture = client.onFileTransferProgress.first;
       final completedFuture = client.onFileTransferCompleted.first;
       final failedFuture = client.onFileTransferFailed.first;
@@ -688,6 +689,18 @@ void main() {
         'ChunkSize': 262144,
         'ChunkCount': 1,
         'ExpiresAt': '2026-06-30T02:10:00Z',
+      });
+      transport.emitNotification('rift.onFileTransferReadyToCommit', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'Sha256': 'abc123',
+        'StagingPath': '/private/rift/incoming/content.part',
+        'DestinationPath': '/home/user/Downloads/demo.txt',
+        'State': 'ready_to_commit',
       });
       transport.emitNotification('rift.onFileTransferProgress', {
         'TransferId': 'transfer-1',
@@ -726,6 +739,18 @@ void main() {
         'chunkSize': 262144,
         'chunkCount': 1,
         'expiresAt': '2026-06-30T02:10:00Z',
+      });
+      expect(await readyFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'sha256': 'abc123',
+        'stagingPath': '/private/rift/incoming/content.part',
+        'destinationPath': '/home/user/Downloads/demo.txt',
+        'state': 'ready_to_commit',
       });
       expect(await progressFuture, {
         'transferId': 'transfer-1',

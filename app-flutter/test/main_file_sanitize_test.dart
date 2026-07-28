@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:app_flutter/src/file_transfer/file_storage.dart' as storage;
+import 'package:crypto/crypto.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -120,6 +123,83 @@ void main() {
           homePath: 'relative/home',
         ),
         isNull,
+      );
+    });
+  });
+
+  group('verified incoming file publication', () {
+    late Directory directory;
+
+    setUp(() async {
+      directory = await Directory.systemTemp.createTemp('rift-publish-test-');
+    });
+
+    tearDown(() async {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    });
+
+    test('copies verified staging content into the destination', () async {
+      final bytes = List<int>.generate(1024, (index) => index % 251);
+      final staging = File('${directory.path}/content.part');
+      final destination = File('${directory.path}/Downloads/report.bin');
+      await staging.writeAsBytes(bytes);
+
+      final published = await storage.publishVerifiedIncomingFile(
+        transferId: 'transfer-1',
+        stagingPath: staging.path,
+        destinationPath: destination.path,
+        expectedByteSize: bytes.length,
+        expectedSha256: sha256.convert(bytes).toString(),
+      );
+
+      expect(published, destination.path);
+      expect(await destination.readAsBytes(), bytes);
+      expect(
+        File('${destination.path}.rift-transfer-1.part').existsSync(),
+        isFalse,
+      );
+    });
+
+    test('accepts an already-published matching destination', () async {
+      final bytes = <int>[1, 2, 3, 4];
+      final staging = File('${directory.path}/content.part');
+      final destination = File('${directory.path}/report.bin');
+      await staging.writeAsBytes(bytes);
+      await destination.writeAsBytes(bytes);
+
+      final published = await storage.publishVerifiedIncomingFile(
+        transferId: 'transfer-2',
+        stagingPath: staging.path,
+        destinationPath: destination.path,
+        expectedByteSize: bytes.length,
+        expectedSha256: sha256.convert(bytes).toString(),
+      );
+
+      expect(published, destination.path);
+    });
+
+    test('removes the temporary file when verification fails', () async {
+      final staging = File('${directory.path}/content.part');
+      final destination = File('${directory.path}/report.bin');
+      await staging.writeAsBytes(<int>[1, 2, 3, 4]);
+
+      await expectLater(
+        storage.publishVerifiedIncomingFile(
+          transferId: 'transfer-3',
+          stagingPath: staging.path,
+          destinationPath: destination.path,
+          expectedByteSize: 4,
+          expectedSha256: sha256.convert(<int>[9, 9, 9, 9]).toString(),
+        ),
+        throwsA(isA<FileSystemException>()),
+      );
+
+      expect(destination.existsSync(), isFalse);
+      expect(
+        File('${destination.path}.rift-transfer-3.part').existsSync(),
+        isFalse,
       );
     });
   });
