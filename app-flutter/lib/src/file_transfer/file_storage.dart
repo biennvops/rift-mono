@@ -31,21 +31,33 @@ String? selectLinuxIncomingDownloadsPath({
   required String? xdgDownloadsPath,
   required String? homePath,
 }) {
-  if (xdgDownloadsPath != null &&
-      xdgDownloadsPath.trim().isNotEmpty &&
-      xdgDownloadsPath.startsWith('/')) {
-    return xdgDownloadsPath;
+  final xdgPath = xdgDownloadsPath?.trim();
+  final home = homePath?.trim();
+  final normalizedHome = home == null || home.length == 1
+      ? home
+      : home.endsWith('/')
+          ? home.substring(0, home.length - 1)
+          : home;
+  final normalizedXdgPath = xdgPath == null || xdgPath.length == 1
+      ? xdgPath
+      : xdgPath.endsWith('/')
+          ? xdgPath.substring(0, xdgPath.length - 1)
+          : xdgPath;
+
+  if (normalizedXdgPath != null &&
+      normalizedXdgPath.isNotEmpty &&
+      normalizedXdgPath.startsWith('/') &&
+      normalizedXdgPath != normalizedHome) {
+    return normalizedXdgPath;
   }
 
-  if (homePath == null ||
-      homePath.trim().isEmpty ||
-      !homePath.startsWith('/')) {
+  if (normalizedHome == null ||
+      normalizedHome.isEmpty ||
+      !normalizedHome.startsWith('/')) {
     return null;
   }
 
-  return homePath.endsWith('/')
-      ? '${homePath}Downloads'
-      : '$homePath/Downloads';
+  return '$normalizedHome/Downloads';
 }
 
 Future<Directory?> resolveIncomingDownloadsDirectory() async {

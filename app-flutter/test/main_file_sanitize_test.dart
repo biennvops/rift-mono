@@ -72,6 +72,23 @@ void main() {
       );
     });
 
+    test('falls back to HOME when XDG points at HOME', () {
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: '/home/user',
+          homePath: '/home/user',
+        ),
+        '/home/user/Downloads',
+      );
+      expect(
+        storage.selectLinuxIncomingDownloadsPath(
+          xdgDownloadsPath: '/home/user/',
+          homePath: '/home/user',
+        ),
+        '/home/user/Downloads',
+      );
+    });
+
     test('falls back to HOME for empty or relative XDG paths', () {
       expect(
         storage.selectLinuxIncomingDownloadsPath(
