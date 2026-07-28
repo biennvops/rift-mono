@@ -6,6 +6,9 @@ import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../widgets/rift_snackbar.dart';
 
+const _kSuccessColor = Color(0xFF047857);
+const _kSuccessBgColor = Color(0x14047857);
+
 class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
@@ -132,7 +135,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         _wasRemoved = false;
       });
     } catch (_) {
-      // Keep the last known snapshot if a transient refresh fails.
     } finally {
       _isRefreshing = false;
     }
@@ -184,11 +186,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     String displayName,
     String fingerprint,
   ) async {
-    final theme = Theme.of(context);
-
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) {
+        final dialogTheme = Theme.of(ctx);
         return Dialog(
           backgroundColor: Colors.transparent,
           insetPadding: const EdgeInsets.all(16),
@@ -196,12 +197,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             width: double.infinity,
             constraints: const BoxConstraints(maxWidth: 400),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
+              color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
+              border: Border.all(color: dialogTheme.colorScheme.outlineVariant),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF00327D).withValues(alpha: 0.1),
+                  color: dialogTheme.colorScheme.primaryContainer
+                      .withValues(alpha: 0.1),
                   blurRadius: 40,
                   offset: const Offset(0, 20),
                 ),
@@ -216,13 +218,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   height: 64,
                   margin: const EdgeInsets.only(bottom: 8),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.errorContainer,
+                    color: dialogTheme.colorScheme.errorContainer,
                     shape: BoxShape.circle,
                   ),
                   child: Center(
                     child: Icon(
                       Icons.warning,
-                      color: theme.colorScheme.onErrorContainer,
+                      color: dialogTheme.colorScheme.onErrorContainer,
                       size: 32,
                     ),
                   ),
@@ -230,28 +232,37 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 Text(
                   'Revoke Trust?',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.onSurface,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.01,
+                    height: 32 / 24,
+                    color: dialogTheme.colorScheme.onSurface,
                   ),
                 ),
                 const SizedBox(height: 16),
                 RichText(
                   textAlign: TextAlign.center,
                   text: TextSpan(
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      height: 24 / 16,
+                      color: dialogTheme.colorScheme.onSurfaceVariant,
                     ),
                     children: [
-                      const TextSpan(text: 'This will stop all communication with '),
+                      const TextSpan(
+                          text: 'This will stop all communication with '),
                       TextSpan(
                         text: displayName,
                         style: TextStyle(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.bold,
+                          color: dialogTheme.colorScheme.onSurface,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const TextSpan(text: '. You will need to re-pair to restore access.'),
+                      const TextSpan(
+                          text:
+                              '. You will need to re-pair to restore access.'),
                     ],
                   ),
                 ),
@@ -266,27 +277,33 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           FilledButton(
                             onPressed: () => Navigator.of(ctx).pop(true),
                             style: FilledButton.styleFrom(
-                              backgroundColor: theme.colorScheme.error,
-                              foregroundColor: theme.colorScheme.onError,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: dialogTheme.colorScheme.error,
+                              foregroundColor: dialogTheme.colorScheme.onError,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
+                                  borderRadius: BorderRadius.circular(4)),
                             ),
-                            child: const Text('Revoke Trust', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            child: const Text('Revoke Trust',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
                           ),
                           const SizedBox(height: 12),
                           OutlinedButton(
                             onPressed: () => Navigator.of(ctx).pop(false),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: theme.colorScheme.primary,
-                              side: BorderSide(color: theme.colorScheme.primary),
-                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              foregroundColor:
+                                  dialogTheme.colorScheme.primaryContainer,
+                              side: BorderSide(
+                                  color:
+                                      dialogTheme.colorScheme.primaryContainer),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
+                                  borderRadius: BorderRadius.circular(4)),
                             ),
-                            child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            child: const Text('Cancel',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
                           ),
                         ],
                       );
@@ -297,14 +314,18 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           child: OutlinedButton(
                             onPressed: () => Navigator.of(ctx).pop(false),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: theme.colorScheme.primary,
-                              side: BorderSide(color: theme.colorScheme.primary),
-                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              foregroundColor:
+                                  dialogTheme.colorScheme.primaryContainer,
+                              side: BorderSide(
+                                  color:
+                                      dialogTheme.colorScheme.primaryContainer),
+                              padding: const EdgeInsets.symmetric(vertical: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
+                                  borderRadius: BorderRadius.circular(4)),
                             ),
-                            child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            child: const Text('Cancel',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -312,19 +333,21 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           child: FilledButton(
                             onPressed: () => Navigator.of(ctx).pop(true),
                             style: FilledButton.styleFrom(
-                              backgroundColor: theme.colorScheme.error,
-                              foregroundColor: theme.colorScheme.onError,
-                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: dialogTheme.colorScheme.error,
+                              foregroundColor: dialogTheme.colorScheme.onError,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
                               shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
+                                  borderRadius: BorderRadius.circular(4)),
                             ),
-                            child: const Text('Revoke Trust', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                            child: const Text('Revoke Trust',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
                           ),
                         ),
                       ],
                     );
-                  }
+                  },
                 ),
               ],
             ),
@@ -336,18 +359,19 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   Future<bool> _showBlockBottomSheet(String displayName) async {
-    final theme = Theme.of(context);
-
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
+        final sheetTheme = Theme.of(ctx);
         return Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHigh,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            color: Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+            border: Border(
+                top: BorderSide(color: sheetTheme.colorScheme.outlineVariant)),
           ),
           padding: EdgeInsets.only(
             left: 24,
@@ -363,7 +387,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 height: 4,
                 margin: const EdgeInsets.only(bottom: 24),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.outlineVariant,
+                  color: sheetTheme.colorScheme.outlineVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -371,12 +395,12 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.errorContainer,
+                  color: sheetTheme.colorScheme.errorContainer,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.block,
-                  color: theme.colorScheme.error,
+                  color: sheetTheme.colorScheme.error,
                   size: 24,
                 ),
               ),
@@ -384,55 +408,59 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               Text(
                 'Block $displayName?',
                 textAlign: TextAlign.center,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: theme.colorScheme.onSurface,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.01,
+                  height: 32 / 24,
+                  color: sheetTheme.colorScheme.onSurface,
                 ),
               ),
               const SizedBox(height: 16),
               Text(
                 'This device will be blocked permanently. All connections from this Ed25519 key will be automatically rejected.',
                 textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  height: 24 / 16,
+                  color: sheetTheme.colorScheme.onSurfaceVariant,
                 ),
               ),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
-                height: 48,
-                child: ElevatedButton(
+                child: FilledButton(
                   onPressed: () => Navigator.of(ctx).pop(true),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: theme.colorScheme.error,
-                    foregroundColor: theme.colorScheme.onError,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: sheetTheme.colorScheme.error,
+                    foregroundColor: sheetTheme.colorScheme.onError,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
-                    ),
+                        borderRadius: BorderRadius.circular(4)),
                   ),
-                  child: const Text(
-                    'Block permanently',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('Block permanently',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
               ),
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
-                height: 48,
                 child: OutlinedButton(
                   onPressed: () => Navigator.of(ctx).pop(false),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.colorScheme.primary,
-                    side: BorderSide(color: theme.colorScheme.outline),
+                    foregroundColor: sheetTheme.colorScheme.primaryContainer,
+                    side: BorderSide(
+                        color: sheetTheme.colorScheme.primaryContainer),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
-                    ),
+                        borderRadius: BorderRadius.circular(4)),
                   ),
-                  child: const Text(
-                    'Cancel',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
+                  child: const Text('Cancel',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
               ),
             ],
@@ -501,331 +529,496 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       builder: (context, constraints) {
         final theme = Theme.of(context);
         final isMobile = constraints.maxWidth < 768;
-    
-    final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
-    final displayName = peer['displayName']?.toString() ?? deviceId;
-    final fingerprint = peer['fingerprint']?.toString() ?? '';
-    final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
-    final platform = peer['platform']?.toString() ?? 'Unknown';
-    final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
-    final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
-    final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
-    final isOnline = this.isOnline;
 
-    if (_wasRemoved) {
-      return Scaffold(
-        backgroundColor: theme.colorScheme.surface,
-        body: _buildRemovedState(theme, displayName),
-      );
-    }
+        final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
+        final displayName = peer['displayName']?.toString() ?? deviceId;
+        final fingerprint = peer['fingerprint']?.toString() ?? '';
+        final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
+        final platform = peer['platform']?.toString() ?? 'Unknown';
+        final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
+        final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
+        final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
+        final isOnline = this.isOnline;
 
-    Widget mainContent = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Trust Status Card
-        Container(
-          margin: const EdgeInsets.only(bottom: 24),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: theme.colorScheme.outlineVariant),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 0, left: 0, right: 0, height: 4,
-                  child: Container(color: const Color(0xFF4caf50)),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        if (_wasRemoved) {
+          return Scaffold(
+            backgroundColor: theme.colorScheme.surface,
+            body: _buildRemovedState(theme, displayName),
+          );
+        }
+
+        Widget mainContent = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(bottom: 24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 4,
+                      child: Container(color: _kSuccessColor),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Trust Status',
+                                      style: TextStyle(
+                                        fontSize: 24,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: -0.01,
+                                        height: 32 / 24,
+                                        color: theme.colorScheme.onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'This device is currently authorized to sync data.',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w400,
+                                        height: 24 / 16,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(Icons.verified_user,
+                                  color: _kSuccessColor, size: 32),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
+                            ),
                             child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text('Trust Status', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                                const SizedBox(height: 4),
-                                Text('This device is currently authorized to sync data.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary)),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Status',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        height: 20 / 14,
+                                        color: theme.colorScheme.onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Text(
+                                        'Trusted Peer',
+                                        textAlign: TextAlign.right,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          height: 24 / 16,
+                                          color: _kSuccessColor,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8.0),
+                                  child: Divider(
+                                      height: 1,
+                                      color: theme.colorScheme.outlineVariant),
+                                ),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      'Trust Established',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        height: 20 / 14,
+                                        color: theme.colorScheme.onSurface,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: Text(
+                                        pairedAt,
+                                        textAlign: TextAlign.right,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w400,
+                                          height: 24 / 16,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
                           ),
-                          const Icon(Icons.verified_user, color: Color(0xFF4caf50), size: 32),
                         ],
                       ),
-                      const SizedBox(height: 16),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.only(bottom: 24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Identity',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.01,
+                      height: 32 / 24,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildIdentityRow(theme, Icons.badge, 'Device ID', deviceId,
+                      isCode: true),
+                  _buildIdentityRow(theme, Icons.fingerprint, 'Fingerprint',
+                      _formatFingerprintWithColons(fingerprint),
+                      isCode: true),
+                  _buildIdentityRow(theme, Icons.desktop_windows, 'Platform',
+                      platform.toUpperCase()),
+                  _buildIdentityRow(theme, Icons.info, 'OS Version', osVersion),
+                  _buildIdentityRow(
+                      theme, Icons.dns, 'Rift Client Version', protocolVersion,
+                      isLast: true),
+                ],
+              ),
+            ),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+              ),
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Capabilities',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.01,
+                      height: 32 / 24,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Manage what data can be synchronized with this device.',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      height: 24 / 16,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildCapabilityToggle(theme, Icons.content_paste,
+                      'Clipboard Sync', 'Allow shared clipboard access', true),
+                  const SizedBox(height: 12),
+                  _buildCapabilityToggle(theme, Icons.chevron_right,
+                      'File Transfer', 'Allow secure file dropping', true),
+                ],
+              ),
+            ),
+          ],
+        );
+
+        Widget sidePanel = Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Actions',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.01,
+                  height: 32 / 24,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Device Name',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w400,
+                  height: 20 / 14,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              TextField(
+                controller: TextEditingController(text: displayName),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
+                  height: 24 / 16,
+                  color: theme.colorScheme.onSurface,
+                ),
+                decoration: InputDecoration(
+                  filled: false,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide:
+                          BorderSide(color: theme.colorScheme.outlineVariant)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: BorderSide(
+                          color: theme.colorScheme.primaryContainer, width: 2)),
+                ),
+                readOnly: true,
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24.0),
+                child:
+                    Divider(height: 1, color: theme.colorScheme.outlineVariant),
+              ),
+              OutlinedButton.icon(
+                onPressed: _forgetPeer,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                  side: BorderSide(color: theme.colorScheme.error),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  minimumSize: const Size(double.infinity, 48),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4)),
+                ),
+                icon: const Icon(Icons.delete_outline, size: 20),
+                label: const Text('Revoke Trust',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: _blockPeer,
+                style: FilledButton.styleFrom(
+                  backgroundColor: theme.colorScheme.error,
+                  foregroundColor: theme.colorScheme.onError,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  minimumSize: const Size(double.infinity, 48),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4)),
+                ),
+                icon: const Icon(Icons.block, size: 20),
+                label: const Text('Block Device',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+            ],
+          ),
+        );
+
+        return Scaffold(
+          backgroundColor: theme.colorScheme.surface,
+          body: SafeArea(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.symmetric(
+                  horizontal: isMobile ? 16 : 32, vertical: 32),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 896),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Container(
-                        padding: const EdgeInsets.all(16),
+                        margin: const EdgeInsets.only(bottom: 32),
+                        padding: const EdgeInsets.only(bottom: 24),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.surface,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: theme.colorScheme.outlineVariant),
+                          border: Border(
+                              bottom: BorderSide(
+                                  color: theme.colorScheme.outlineVariant)),
                         ),
-                        child: Column(
+                        child: Row(
                           children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('Status', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface)),
-                                const SizedBox(width: 16),
-                                Expanded(child: Text('Trusted Peer', textAlign: TextAlign.right, style: theme.textTheme.bodyMedium?.copyWith(color: const Color(0xFF1b5e20), fontWeight: FontWeight.bold))),
-                              ],
+                            IconButton(
+                              icon: widget.onClose != null
+                                  ? const Icon(Icons.close)
+                                  : const Icon(Icons.arrow_back),
+                              color: theme.colorScheme.onSurfaceVariant,
+                              onPressed: () {
+                                if (widget.onClose != null) {
+                                  widget.onClose!();
+                                } else {
+                                  Navigator.of(context).pop();
+                                }
+                              },
                             ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8.0),
-                              child: Divider(height: 1, color: theme.colorScheme.outlineVariant),
+                            const SizedBox(width: 8),
+                            Container(
+                              width: 48,
+                              height: 48,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.surfaceContainerLow,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                    color: theme.colorScheme.outlineVariant),
+                              ),
+                              child: Icon(_platformIcon(platform),
+                                  color: theme.colorScheme.primaryContainer,
+                                  size: 28),
                             ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('Trust Established', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface)),
-                                const SizedBox(width: 16),
-                                Expanded(child: Text(pairedAt, textAlign: TextAlign.right, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary))),
-                              ],
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    displayName,
+                                    style: TextStyle(
+                                      fontSize: isMobile ? 24 : 32,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: isMobile ? -0.01 : -0.02,
+                                      height: isMobile ? 32 / 24 : 40 / 32,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: isOnline
+                                              ? _kSuccessBgColor
+                                              : theme
+                                                  .colorScheme.surfaceContainer,
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Container(
+                                              width: 8,
+                                              height: 8,
+                                              margin: const EdgeInsets.only(
+                                                  right: 6),
+                                              decoration: BoxDecoration(
+                                                color: isOnline
+                                                    ? _kSuccessColor
+                                                    : theme.colorScheme.outline,
+                                                shape: BoxShape.circle,
+                                              ),
+                                            ),
+                                            Text(
+                                              isOnline ? 'Online' : 'Offline',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w500,
+                                                height: 16 / 12,
+                                                color: isOnline
+                                                    ? _kSuccessColor
+                                                    : theme.colorScheme
+                                                        .onSurfaceVariant,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Last seen $lastSeenAt',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w400,
+                                          height: 20 / 14,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         ),
                       ),
+                      if (isMobile)
+                        Column(
+                          children: [
+                            mainContent,
+                            const SizedBox(height: 24),
+                            sidePanel,
+                          ],
+                        )
+                      else
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(flex: 2, child: mainContent),
+                            const SizedBox(width: 24),
+                            Expanded(flex: 1, child: sidePanel),
+                          ],
+                        ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-
-        // Identity Card
-        Container(
-          margin: const EdgeInsets.only(bottom: 24),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: theme.colorScheme.outlineVariant),
-          ),
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Identity', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-              const SizedBox(height: 16),
-              _buildIdentityRow(theme, Icons.badge, 'Device ID', deviceId, isCode: true),
-              _buildIdentityRow(theme, Icons.fingerprint, 'Fingerprint', _formatFingerprintWithColons(fingerprint), isCode: true),
-              _buildIdentityRow(theme, Icons.desktop_windows, 'Platform', platform.toUpperCase()),
-              _buildIdentityRow(theme, Icons.info, 'OS Version', osVersion),
-              _buildIdentityRow(theme, Icons.dns, 'Rift Client Version', protocolVersion, isLast: true),
-            ],
-          ),
-        ),
-
-        // Capabilities Card
-        Container(
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: theme.colorScheme.outlineVariant),
-          ),
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Capabilities', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-              const SizedBox(height: 4),
-              Text('Manage what data can be synchronized with this device.', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary)),
-              const SizedBox(height: 16),
-              _buildCapabilityToggle(theme, Icons.content_paste, 'Clipboard Sync', 'Allow shared clipboard access', true),
-              const SizedBox(height: 12),
-              _buildCapabilityToggle(theme, Icons.chevron_right, 'File Transfer', 'Allow secure file dropping', true),
-            ],
-          ),
-        ),
-      ],
-    );
-
-    Widget sidePanel = Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-      ),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Actions', style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-          const SizedBox(height: 16),
-          Text('Device Name', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary)),
-          const SizedBox(height: 4),
-          TextField(
-            controller: TextEditingController(text: displayName),
-            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurface),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: theme.colorScheme.surface,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: theme.colorScheme.outlineVariant)),
-              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: theme.colorScheme.primary)),
-            ),
-            readOnly: true,
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24.0),
-            child: Divider(height: 1, color: theme.colorScheme.outlineVariant),
-          ),
-          OutlinedButton.icon(
-            onPressed: _forgetPeer,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: theme.colorScheme.error,
-              side: BorderSide(color: theme.colorScheme.error),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              minimumSize: const Size(double.infinity, 48),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            icon: const Icon(Icons.delete_outline, size: 20),
-            label: const Text('Revoke Trust', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: _blockPeer,
-            style: FilledButton.styleFrom(
-              backgroundColor: theme.colorScheme.error,
-              foregroundColor: theme.colorScheme.onError,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              minimumSize: const Size(double.infinity, 48),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            icon: const Icon(Icons.block, size: 20),
-            label: const Text('Block Device', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ),
-        ],
-      ),
-    );
-
-    return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 32),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 896), // max-w-4xl
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 32),
-                    padding: const EdgeInsets.only(bottom: 24),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-                    ),
-                    child: Row(
-                      children: [
-                        IconButton(
-                          icon: widget.onClose != null ? const Icon(Icons.close) : const Icon(Icons.arrow_back),
-                          color: theme.colorScheme.secondary,
-                          onPressed: () {
-                            if (widget.onClose != null) {
-                              widget.onClose!();
-                            } else {
-                              Navigator.of(context).pop();
-                            }
-                          },
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainerHigh,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: theme.colorScheme.outlineVariant),
-                          ),
-                          child: Icon(_platformIcon(platform), color: theme.colorScheme.primary, size: 28),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                displayName,
-                                style: (isMobile ? theme.textTheme.headlineSmall : theme.textTheme.headlineMedium)?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: isOnline ? const Color(0xFFe8f5e9) : theme.colorScheme.surfaceContainer,
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          width: 8,
-                                          height: 8,
-                                          margin: const EdgeInsets.only(right: 6),
-                                          decoration: BoxDecoration(
-                                            color: isOnline ? const Color(0xFF4caf50) : theme.colorScheme.outline,
-                                            shape: BoxShape.circle,
-                                          ),
-                                        ),
-                                        Text(
-                                          isOnline ? 'Online' : 'Offline',
-                                          style: theme.textTheme.labelSmall?.copyWith(color: isOnline ? const Color(0xFF1b5e20) : theme.colorScheme.onSurfaceVariant),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text('Last seen $lastSeenAt', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary)),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Grid Layout
-                  if (isMobile)
-                    Column(
-                      children: [
-                        mainContent,
-                        const SizedBox(height: 24),
-                        sidePanel,
-                      ],
-                    )
-                  else
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(flex: 2, child: mainContent),
-                        const SizedBox(width: 24),
-                        Expanded(flex: 1, child: sidePanel),
-                      ],
-                    ),
-                ],
               ),
             ),
           ),
-        ),
-      ),
-    );
-      }
+        );
+      },
     );
   }
 
@@ -853,8 +1046,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             Text(
               '$displayName is no longer available',
               textAlign: TextAlign.center,
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.01,
+                height: 32 / 24,
                 color: theme.colorScheme.onSurface,
               ),
             ),
@@ -862,7 +1058,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             Text(
               'This trusted device was removed or is no longer in your trusted list. Return to the home screen to continue.',
               textAlign: TextAlign.center,
-              style: theme.textTheme.bodyMedium?.copyWith(
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w400,
+                height: 24 / 16,
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
@@ -877,8 +1076,17 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     'displayName': displayName,
                   });
                 },
+                style: FilledButton.styleFrom(
+                  backgroundColor: theme.colorScheme.primaryContainer,
+                  foregroundColor: theme.colorScheme.onPrimary,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4)),
+                ),
                 icon: const Icon(Icons.arrow_back),
-                label: const Text('Back to home'),
+                label: const Text('Back to home',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ),
             ),
           ],
@@ -887,81 +1095,133 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     );
   }
 
-  Widget _buildIdentityRow(ThemeData theme, IconData icon, String label, String value, {bool isCode = false, bool isLast = false}) {
+  Widget _buildIdentityRow(
+      ThemeData theme, IconData icon, String label, String value,
+      {bool isCode = false, bool isLast = false}) {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        border: isLast ? null : Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+        border: isLast
+            ? null
+            : Border(
+                bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
             children: [
-              Icon(icon, size: 20, color: theme.colorScheme.secondary),
+              Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
               const SizedBox(width: 8),
-              Text(label, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary)),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  height: 20 / 14,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             ],
           ),
           const SizedBox(width: 16),
           Expanded(
             child: isCode
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Flexible(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surface,
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: theme.colorScheme.outlineVariant),
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                                color: theme.colorScheme.outlineVariant),
+                          ),
+                          child: Text(
+                            value,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: 'JetBrains Mono',
+                              fontSize: 14,
+                              fontWeight: FontWeight.w400,
+                              height: 20 / 14,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
                         ),
-                        child: Text(value, overflow: TextOverflow.ellipsis, style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace', color: theme.colorScheme.onSurface)),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    InkWell(
-                      onTap: () {}, // copy action
-                      child: Padding(
-                        padding: const EdgeInsets.all(4.0),
-                        child: Icon(Icons.copy, size: 18, color: theme.colorScheme.primary),
+                      const SizedBox(width: 8),
+                      InkWell(
+                        onTap: () {},
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Icon(Icons.copy,
+                              size: 18,
+                              color: theme.colorScheme.primaryContainer),
+                        ),
                       ),
-                    ),
-                  ],
-                )
-              : Text(value, textAlign: TextAlign.right, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurface)),
+                    ],
+                  )
+                : Text(value,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w400,
+                      height: 24 / 16,
+                      color: theme.colorScheme.onSurface,
+                    )),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildCapabilityToggle(ThemeData theme, IconData icon, String title, String subtitle, bool enabled) {
+  Widget _buildCapabilityToggle(ThemeData theme, IconData icon, String title,
+      String subtitle, bool enabled) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
+        color: Colors.white,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Row(
         children: [
-          Icon(icon, color: theme.colorScheme.primary),
+          Icon(icon, color: theme.colorScheme.primaryContainer),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface)),
-                Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 24 / 16,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
+                    height: 20 / 14,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ],
             ),
           ),
           Switch(
             value: enabled,
             onChanged: (val) {},
-            activeThumbColor: theme.colorScheme.primary,
+            activeThumbColor: theme.colorScheme.onPrimary,
+            activeTrackColor: theme.colorScheme.primaryContainer,
           ),
         ],
       ),

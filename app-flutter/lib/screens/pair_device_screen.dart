@@ -45,16 +45,14 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
         if (mounted) _loadDiscoveredPeers();
       });
       await _loadDiscoveredPeers();
-    } catch (e) {
-      // Handle error
+    } catch (_) {
+      // Discovery startup errors are reflected by the subsequent refresh state.
     }
   }
 
   Future<void> _stopDiscovery() async {
     final client = _client;
-    if (client == null) {
-      return;
-    }
+    if (client == null) return;
     try {
       await client.stopDiscovery();
     } catch (_) {}
@@ -147,310 +145,442 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-
           Center(
-            child: Container(
-              width: 600,
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.9,
-              ),
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final isMobile = constraints.maxWidth < 1024;
+                return Container(
+                  width: isMobile ? double.infinity : 600,
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.9,
                   ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Modal Header
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+                  margin: EdgeInsets.all(isMobile ? 0 : 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(16),
+                      topRight: const Radius.circular(16),
+                      bottomLeft: Radius.circular(isMobile ? 0 : 16),
+                      bottomRight: Radius.circular(isMobile ? 0 : 16),
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
+                    border: isMobile
+                        ? null
+                        : Border.all(color: theme.colorScheme.outlineVariant),
+                    boxShadow: isMobile
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: theme.colorScheme.primaryContainer
+                                  .withValues(alpha: 0.1),
+                              blurRadius: 40,
+                              offset: const Offset(0, 20),
+                            ),
+                          ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          border: Border(
+                              bottom: BorderSide(
+                                  color: theme.colorScheme.outlineVariant)),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(Icons.shield,
+                                          color: theme
+                                              .colorScheme.primaryContainer,
+                                          size: 28),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Trust New Device',
+                                        style: TextStyle(
+                                          fontSize: 24,
+                                          fontWeight: FontWeight.w600,
+                                          letterSpacing: -0.01,
+                                          height: 32 / 24,
+                                          color: theme.colorScheme.onSurface,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Securely pair a new device to your Rift network.',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w400,
+                                      height: 24 / 16,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              color: theme.colorScheme.onSurfaceVariant,
+                              onPressed: () => Navigator.of(context).pop(),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.all(24),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
                                 children: [
-                                  Icon(Icons.shield, color: theme.colorScheme.primary, size: 28),
-                                  const SizedBox(width: 8),
+                                  Icon(Icons.radar,
+                                      size: 16,
+                                      color:
+                                          theme.colorScheme.primaryContainer),
+                                  const SizedBox(width: 4),
                                   Text(
-                                    'Trust New Device',
-                                    style: theme.textTheme.headlineMedium?.copyWith(
-                                      color: theme.colorScheme.onSurface,
-                                      fontWeight: FontWeight.bold,
+                                    'NEARBY DEVICES',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.05,
+                                      height: 16 / 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Securely pair a new device to your Rift network.',
-                                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          color: theme.colorScheme.onSurfaceVariant,
-                          onPressed: () => Navigator.of(context).pop(),
-                        ),
-                      ],
-                    ),
-                  ),
-                  
-                  // Modal Body
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.all(24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          // Nearby Devices Section
-                          Row(
-                            children: [
-                              Icon(Icons.radar, size: 16, color: theme.colorScheme.primary),
-                              const SizedBox(width: 4),
-                              Text(
-                                'NEARBY DEVICES',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.primary,
-                                  letterSpacing: 1.2,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          
-                          if (_discoveredPeers.isEmpty)
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: theme.colorScheme.outlineVariant,
-                                  style: BorderStyle.solid,
-                                ),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Column(
-                                children: [
-                                  SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: theme.colorScheme.outline,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    'Scanning for nearby Rift devices...',
-                                    style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.outline),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else
-                            Column(
-                              children: _discoveredPeers.map((peer) {
-                                final p = peer as Map<String, dynamic>;
-                                final String deviceId = p['deviceId']?.toString() ?? '';
-                                final String rawDisplayName = p['displayName']?.toString() ?? '';
-                                final String titleText = rawDisplayName.isNotEmpty ? rawDisplayName : (deviceId.length > 16 ? deviceId.substring(0, 16) : deviceId);
-                                final String platform = p['platform']?.toString() ?? 'unknown';
-
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  padding: const EdgeInsets.all(16),
+                              const SizedBox(height: 16),
+                              if (_discoveredPeers.isEmpty)
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.all(24),
                                   decoration: BoxDecoration(
-                                    color: theme.colorScheme.surface,
+                                    border: Border.all(
+                                        color:
+                                            theme.colorScheme.outlineVariant),
                                     borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(color: theme.colorScheme.outlineVariant),
                                   ),
-                                  child: Row(
+                                  child: Column(
                                     children: [
-                                      Container(
-                                        width: 40,
-                                        height: 40,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.surfaceContainer,
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Icon(_platformIcon(platform), color: theme.colorScheme.onSurface),
-                                      ),
-                                      const SizedBox(width: 16),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              titleText,
-                                              style: theme.textTheme.labelMedium?.copyWith(
-                                                color: theme.colorScheme.onSurface,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              '$platform • Secure Sync v0.1',
-                                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                                            ),
-                                          ],
+                                      SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: theme.colorScheme.outline,
                                         ),
                                       ),
-                                      FilledButton(
-                                        onPressed: () => _pairWithDevice(deviceId),
-                                        style: FilledButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        'Scanning for nearby Rift devices...',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w400,
+                                          height: 20 / 14,
+                                          color: theme.colorScheme.outline,
                                         ),
-                                        child: const Text('Pair'),
                                       ),
                                     ],
                                   ),
-                                );
-                              }).toList(),
-                            ),
-                            
-                          const SizedBox(height: 32),
-                          
-                          // Divider
-                          Row(
-                            children: [
-                              Expanded(child: Container(height: 1, color: theme.colorScheme.outlineVariant)),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: Text('OR', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                                )
+                              else
+                                Column(
+                                  children: _discoveredPeers.map((peer) {
+                                    final p = peer as Map<String, dynamic>;
+                                    final String deviceId =
+                                        p['deviceId']?.toString() ?? '';
+                                    final String rawDisplayName =
+                                        p['displayName']?.toString() ?? '';
+                                    final String titleText =
+                                        rawDisplayName.isNotEmpty
+                                            ? rawDisplayName
+                                            : (deviceId.length > 16
+                                                ? deviceId.substring(0, 16)
+                                                : deviceId);
+                                    final String platform =
+                                        p['platform']?.toString() ?? 'unknown';
+
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                            color: theme
+                                                .colorScheme.outlineVariant),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme
+                                                  .surfaceContainerLow,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(_platformIcon(platform),
+                                                color: theme.colorScheme
+                                                    .onSurfaceVariant),
+                                          ),
+                                          const SizedBox(width: 16),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  titleText,
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.w600,
+                                                    height: 24 / 16,
+                                                    color: theme
+                                                        .colorScheme.onSurface,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 2),
+                                                Text(
+                                                  '$platform • Secure Sync v0.1',
+                                                  style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w400,
+                                                    height: 20 / 14,
+                                                    color: theme.colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          FilledButton(
+                                            onPressed: () =>
+                                                _pairWithDevice(deviceId),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: theme
+                                                  .colorScheme.primaryContainer,
+                                              foregroundColor:
+                                                  theme.colorScheme.onPrimary,
+                                              elevation: 0,
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 10),
+                                              shape: RoundedRectangleBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(4)),
+                                            ),
+                                            child: const Text('Pair',
+                                                style: TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight:
+                                                        FontWeight.w600)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              const SizedBox(height: 32),
+                              Row(
+                                children: [
+                                  Expanded(
+                                      child: Container(
+                                          height: 1,
+                                          color: theme
+                                              .colorScheme.outlineVariant)),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16),
+                                    child: Text('OR',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          height: 16 / 12,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        )),
+                                  ),
+                                  Expanded(
+                                      child: Container(
+                                          height: 1,
+                                          color: theme
+                                              .colorScheme.outlineVariant)),
+                                ],
                               ),
-                              Expanded(child: Container(height: 1, color: theme.colorScheme.outlineVariant)),
-                            ],
-                          ),
-                          
-                          const SizedBox(height: 32),
-                          
-                          // Add Manually Section
-                          Row(
-                            children: [
-                              Icon(Icons.edit_note, size: 16, color: theme.colorScheme.secondary),
-                              const SizedBox(width: 4),
-                              Text(
-                                'ADD MANUALLY',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.secondary,
-                                  letterSpacing: 1.2,
-                                ),
+                              const SizedBox(height: 32),
+                              Row(
+                                children: [
+                                  Icon(Icons.edit_note,
+                                      size: 16,
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'ADD MANUALLY',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.05,
+                                      height: 16 / 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.surface,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Enter the IP address or hostname of the device you want to pair.',
-                                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                              const SizedBox(height: 16),
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: theme.colorScheme.outlineVariant),
                                 ),
-                                const SizedBox(height: 16),
-                                Text(
-                                  'IP Address / Hostname',
-                                  style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface),
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Expanded(
-                                      child: TextField(
-                                        controller: _manualInputController,
-                                        decoration: InputDecoration(
-                                          hintText: 'e.g., 192.168.1.50 or device.local',
-                                          hintStyle: TextStyle(color: theme.colorScheme.outline),
-                                          filled: true,
-                                          fillColor: theme.colorScheme.surface,
-                                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(8),
-                                            borderSide: BorderSide(color: theme.colorScheme.outlineVariant),
-                                          ),
-                                          enabledBorder: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(8),
-                                            borderSide: BorderSide(color: theme.colorScheme.outlineVariant),
-                                          ),
-                                        ),
+                                    Text(
+                                      'Enter the IP address or hostname of the device you want to pair.',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w400,
+                                        height: 20 / 14,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                                    const SizedBox(width: 16),
-                                    OutlinedButton(
-                                      onPressed: _pairManually,
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor: theme.colorScheme.primary,
-                                        side: BorderSide(color: theme.colorScheme.primary),
-                                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'IP Address / Hostname',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                        height: 16 / 12,
+                                        color: theme.colorScheme.onSurface,
                                       ),
-                                      child: const Text('Connect'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: TextField(
+                                            controller: _manualInputController,
+                                            decoration: InputDecoration(
+                                              hintText:
+                                                  'e.g., 192.168.1.50 or device.local',
+                                              hintStyle: TextStyle(
+                                                  color: theme
+                                                      .colorScheme.outline),
+                                              filled: false,
+                                              contentPadding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 16,
+                                                      vertical: 12),
+                                              border: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                  borderSide: BorderSide(
+                                                      color: theme.colorScheme
+                                                          .outlineVariant)),
+                                              enabledBorder: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                  borderSide: BorderSide(
+                                                      color: theme.colorScheme
+                                                          .outlineVariant
+                                                          .withValues(
+                                                              alpha: 0.6))),
+                                              focusedBorder: OutlineInputBorder(
+                                                  borderRadius:
+                                                      BorderRadius.circular(4),
+                                                  borderSide: BorderSide(
+                                                      color: theme.colorScheme
+                                                          .primaryContainer,
+                                                      width: 2)),
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 16),
+                                        OutlinedButton(
+                                          onPressed: _pairManually,
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: theme
+                                                .colorScheme.primaryContainer,
+                                            side: BorderSide(
+                                                color: theme.colorScheme
+                                                    .primaryContainer),
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 16, vertical: 10),
+                                            shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(4)),
+                                          ),
+                                          child: const Text('Connect',
+                                              style: TextStyle(
+                                                  fontSize: 14,
+                                                  fontWeight: FontWeight.w600)),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  
-                  // Modal Footer
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
-                      border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
-                      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          style: TextButton.styleFrom(
-                            foregroundColor: theme.colorScheme.secondary,
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Cancel'),
                         ),
-                      ],
-                    ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border(
+                              top: BorderSide(
+                                  color: theme.colorScheme.outlineVariant)),
+                          borderRadius: const BorderRadius.vertical(
+                              bottom: Radius.circular(12)),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              style: TextButton.styleFrom(
+                                foregroundColor:
+                                    theme.colorScheme.onSurfaceVariant,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4)),
+                              ),
+                              child: const Text('Cancel',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
           ),
         ],

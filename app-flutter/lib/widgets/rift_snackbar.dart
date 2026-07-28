@@ -8,6 +8,9 @@ enum RiftSnackbarType {
 }
 
 class RiftSnackbar {
+  static const Color _successColor = Color(0xFF059669);
+  static const Color _warningColor = Color(0xFFD97706);
+
   static void show({
     required BuildContext context,
     required String message,
@@ -30,25 +33,27 @@ class RiftSnackbar {
     RiftSnackbarType type = RiftSnackbarType.info,
     Duration duration = const Duration(seconds: 4),
   }) {
+    final theme = Theme.of(messenger.context);
+    final colorScheme = theme.colorScheme;
+
     Color backgroundColor;
-    Color iconColor = Colors.white;
     IconData iconData;
 
     switch (type) {
       case RiftSnackbarType.success:
-        backgroundColor = const Color(0xFF006E06); // Trusted Green
+        backgroundColor = _successColor;
         iconData = Icons.check_circle_outline;
         break;
       case RiftSnackbarType.error:
-        backgroundColor = const Color(0xFFBA1A1A); // Revoked Red
+        backgroundColor = colorScheme.error;
         iconData = Icons.gpp_bad_outlined;
         break;
       case RiftSnackbarType.warning:
-        backgroundColor = Colors.amber.shade800; // Pending Amber
+        backgroundColor = _warningColor;
         iconData = Icons.warning_amber_rounded;
         break;
       case RiftSnackbarType.info:
-        backgroundColor = const Color(0xFF00328A); // Trust Blue
+        backgroundColor = colorScheme.primary;
         iconData = Icons.info_outline;
         break;
     }
@@ -63,16 +68,13 @@ class RiftSnackbar {
           },
           child: Row(
             children: [
-              Icon(iconData, color: iconColor),
-              const SizedBox(width: 12),
+              Icon(iconData, color: colorScheme.onPrimary),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   message,
-                  style: const TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 14,
-                    fontWeight: FontWeight.w400,
-                    color: Colors.white,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onPrimary,
                   ),
                 ),
               ),
@@ -82,9 +84,9 @@ class RiftSnackbar {
         backgroundColor: backgroundColor,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(4),
         ),
-        elevation: 4, // Level 2 elevation
+        elevation: 0,
         margin: const EdgeInsets.all(16),
         duration: duration,
       ),

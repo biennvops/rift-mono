@@ -99,7 +99,6 @@ class _PairingScreenState extends State<PairingScreen> {
           _localFingerprint ??= fingerprint;
         });
       } catch (_) {
-        // Best-effort only. The screen can still function using the peer fingerprint.
       } finally {
         if (mounted) {
           _localFingerprintLoad = null;
@@ -205,20 +204,13 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _handlePairingCompleted() async {
-    if (!mounted || _isClosingAfterCompletion) {
-      return;
-    }
-
+    if (!mounted || _isClosingAfterCompletion) return;
     _isClosingAfterCompletion = true;
     if (_isRecipientFlow) {
       await _showRecipientPairingSuccessNotice();
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
     }
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
     if (widget.onClose != null) {
       widget.onClose!();
     } else {
@@ -254,7 +246,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _remainingSeconds = null;
       return;
     }
-
     _remainingSeconds = (expiresInMs / 1000).ceil();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -280,10 +271,7 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _startPairing(String deviceId) async {
-    if (_busy && _deviceId == deviceId) {
-      return;
-    }
-
+    if (_busy && _deviceId == deviceId) return;
     final client = context.read<JsonRpcRiftClient>();
     setState(() {
       _busy = true;
@@ -293,7 +281,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _hasActivePairingFlow = false;
       _canApproveLocally = false;
     });
-
     try {
       final result = await client.startPairing(deviceId) as Map;
       final resolvedDeviceId = result['deviceId']?.toString() ?? deviceId;
@@ -331,10 +318,7 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _startPairingByEndpoint(String address, int port) async {
-    if (_busy) {
-      return;
-    }
-
+    if (_busy) return;
     final client = context.read<JsonRpcRiftClient>();
     setState(() {
       _busy = true;
@@ -343,16 +327,14 @@ class _PairingScreenState extends State<PairingScreen> {
       _hasActivePairingFlow = false;
       _canApproveLocally = false;
     });
-
     try {
       final result = await client.startPairingByEndpoint(address, port) as Map;
       if (!mounted) return;
       final resolvedDeviceId = result['deviceId']?.toString();
-      final resolvedDisplayName =
-          result['displayName']?.toString() ??
-              resolvedDeviceId ??
-              _displayName ??
-              '$address:$port';
+      final resolvedDisplayName = result['displayName']?.toString() ??
+          resolvedDeviceId ??
+          _displayName ??
+          '$address:$port';
       setState(() {
         _deviceId = resolvedDeviceId;
         _displayName = resolvedDisplayName;
@@ -393,7 +375,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
       _status = 'Approving pairing';
     });
-
     try {
       await client.approvePairing(deviceId, peerFingerprint);
       if (!mounted) return;
@@ -420,7 +401,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _busy = true;
       _error = null;
     });
-
     try {
       await client.rejectPairing(deviceId);
       if (!mounted) return;
@@ -461,55 +441,57 @@ class _PairingScreenState extends State<PairingScreen> {
     return formatted;
   }
 
-  Widget _buildFingerprintText(ThemeData theme, String? fp, {TextStyle? textStyle, Color? dividerColor, double letterSpacing = 4}) {
+  Widget _buildFingerprintText(
+    ThemeData theme,
+    String? fp, {
+    TextStyle? textStyle,
+    Color? dividerColor,
+    double letterSpacing = 4,
+  }) {
+    final defaultStyle = TextStyle(
+      fontSize: 24,
+      fontWeight: FontWeight.w600,
+      letterSpacing: letterSpacing,
+      height: 32 / 24,
+      color: theme.colorScheme.primaryContainer,
+    );
+    final effectiveStyle = textStyle ?? defaultStyle;
+
     if (fp == null) {
-      return Text(
-        'WAITING...',
-        style: textStyle ?? theme.textTheme.headlineMedium?.copyWith(
-          color: theme.colorScheme.primary,
-          fontWeight: FontWeight.bold,
-          letterSpacing: letterSpacing,
-        ),
-      );
+      return Text('WAITING...', style: effectiveStyle);
     }
-    
+
     final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
     if (clean.isEmpty) {
-      return Text(fp, style: textStyle ?? theme.textTheme.headlineMedium?.copyWith(color: theme.colorScheme.primary));
+      return Text(fp, style: effectiveStyle);
     }
-    
+
     final limit = clean.length > 16 ? 16 : clean.length;
     final truncated = clean.substring(0, limit);
-    
+
     final chunks = <String>[];
     for (int i = 0; i < truncated.length; i += 4) {
-      chunks.add(truncated.substring(i, (i + 4) > truncated.length ? truncated.length : i + 4));
+      chunks.add(truncated.substring(
+          i, (i + 4) > truncated.length ? truncated.length : i + 4));
     }
-    
+
     final widgets = <Widget>[];
     for (int i = 0; i < chunks.length; i++) {
-      widgets.add(Text(
-        chunks[i], 
-        style: textStyle ?? theme.textTheme.headlineMedium?.copyWith(
-          fontWeight: FontWeight.bold, 
-          letterSpacing: letterSpacing, 
-          color: theme.colorScheme.primary,
-        ),
-      ));
+      widgets.add(Text(chunks[i], style: effectiveStyle));
       if (i < chunks.length - 1) {
         widgets.add(Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Text(
-            '|', 
-            style: (textStyle ?? theme.textTheme.headlineMedium)?.copyWith(
-              fontWeight: FontWeight.normal, 
+            '|',
+            style: effectiveStyle.copyWith(
+              fontWeight: FontWeight.w400,
               color: dividerColor ?? theme.colorScheme.outlineVariant,
             ),
           ),
         ));
       }
     }
-    
+
     return FittedBox(
       fit: BoxFit.scaleDown,
       child: Row(
@@ -519,28 +501,43 @@ class _PairingScreenState extends State<PairingScreen> {
     );
   }
 
-  Widget _buildRecipientFlow(BuildContext context, ThemeData theme, bool hasExpired, bool canApprove, bool canReject, bool approveEnabled, bool isMobile, String deviceName) {
+  Widget _buildRecipientFlow(
+      BuildContext context,
+      ThemeData theme,
+      bool hasExpired,
+      bool canApprove,
+      bool canReject,
+      bool approveEnabled,
+      bool isMobile,
+      String deviceName) {
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: [
           Center(
             child: Container(
-              width: 512, // max-w-lg
-              constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.95),
+              width: 512,
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.95),
               margin: EdgeInsets.all(isMobile ? 16 : 32),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLowest,
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: theme.colorScheme.outlineVariant),
                 boxShadow: [
-                  BoxShadow(color: theme.colorScheme.primary.withValues(alpha: 0.1), blurRadius: 40, offset: const Offset(0, 20)),
+                  BoxShadow(
+                    color: theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.1),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
                 ],
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(height: 4, color: theme.colorScheme.primary),
+                  Container(
+                      height: 4, color: theme.colorScheme.primaryContainer),
                   Flexible(
                     child: SingleChildScrollView(
                       padding: EdgeInsets.all(isMobile ? 24 : 32),
@@ -548,41 +545,58 @@ class _PairingScreenState extends State<PairingScreen> {
                         children: [
                           const PulseRingIcon(icon: Icons.phonelink_ring),
                           const SizedBox(height: 16),
-                          Text('Pairing Request', style: theme.textTheme.headlineMedium?.copyWith(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
+                          Text('Pairing Request',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: -0.01,
+                                height: 32 / 24,
+                                color: theme.colorScheme.onSurface,
+                              )),
                           const SizedBox(height: 8),
                           Text(
                             'A new device is attempting to establish a secure link with your account.',
-                            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 24),
-                          Text(
-                            'Compare fingerprints',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w400,
+                              height: 24 / 16,
+                              color: theme.colorScheme.onSurfaceVariant,
                             ),
                             textAlign: TextAlign.center,
                           ),
-                          
-                          if (hasExpired)
-                             Padding(
-                               padding: const EdgeInsets.only(top: 16),
-                               child: Text('Expired', style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.bold)),
-                             )
-                          else if (_remainingSeconds != null)
-                             Padding(
-                               padding: const EdgeInsets.only(top: 16),
-                               child: Text('Expires in ${_remainingSeconds!}s', style: TextStyle(color: theme.colorScheme.secondary)),
-                             ),
-                             
                           const SizedBox(height: 24),
-                          
+                          Text('Compare fingerprints',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.05,
+                                height: 16 / 14,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                              textAlign: TextAlign.center),
+                          if (hasExpired)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: Text('Expired',
+                                  style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                      fontWeight: FontWeight.w600)),
+                            )
+                          else if (_remainingSeconds != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: Text('Expires in ${_remainingSeconds!}s',
+                                  style: TextStyle(
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant)),
+                            ),
+                          const SizedBox(height: 24),
                           Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.surfaceContainerLow,
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
+                              color: Colors.white,
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Row(
@@ -591,49 +605,85 @@ class _PairingScreenState extends State<PairingScreen> {
                                   width: 40,
                                   height: 40,
                                   decoration: BoxDecoration(
-                                    color: theme.colorScheme.surface,
-                                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                                    color:
+                                        theme.colorScheme.surfaceContainerLow,
+                                    border: Border.all(
+                                        color:
+                                            theme.colorScheme.outlineVariant),
                                     borderRadius: BorderRadius.circular(8),
                                   ),
-                                  child: Icon(Icons.desktop_windows, color: theme.colorScheme.secondary),
+                                  child: Icon(Icons.desktop_windows,
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
                                 ),
                                 const SizedBox(width: 16),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      Text(deviceName, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
-                                      Text('Secure Sync v0.1', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary)),
+                                      Text(deviceName,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            height: 24 / 16,
+                                            color: theme.colorScheme.onSurface,
+                                          )),
+                                      Text('Secure Sync v0.1',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w400,
+                                            height: 20 / 14,
+                                            color: theme
+                                                .colorScheme.onSurfaceVariant,
+                                          )),
                                     ],
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                          
                           const SizedBox(height: 24),
-                          
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.all(24),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.surface,
-                              border: Border.all(color: theme.colorScheme.outlineVariant),
+                              color: Colors.white,
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
                               borderRadius: BorderRadius.circular(8),
                             ),
                             child: Column(
                               children: [
-                                Text('VERIFY SECURITY FINGERPRINT', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.secondary, letterSpacing: 1.5)),
+                                Text('VERIFY SECURITY FINGERPRINT',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.05,
+                                      height: 16 / 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    )),
                                 const SizedBox(height: 16),
                                 _buildFingerprintText(
-                                  theme, 
-                                  _peerFingerprint ?? _localFingerprint, 
-                                  textStyle: theme.textTheme.headlineSmall?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.bold, letterSpacing: 3),
+                                  theme,
+                                  _peerFingerprint ?? _localFingerprint,
+                                  textStyle: TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 3,
+                                    height: 32 / 24,
+                                    color: theme.colorScheme.primaryContainer,
+                                  ),
                                 ),
                                 const SizedBox(height: 16),
                                 Text(
                                   'Ensure this code matches exactly with the code displayed on the requesting device.',
-                                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
                                   textAlign: TextAlign.center,
                                 ),
                               ],
@@ -643,66 +693,86 @@ class _PairingScreenState extends State<PairingScreen> {
                       ),
                     ),
                   ),
-                  
                   Container(
                     padding: EdgeInsets.all(isMobile ? 24 : 32),
                     decoration: BoxDecoration(
-                      border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+                      border: Border(
+                          top: BorderSide(
+                              color: theme.colorScheme.outlineVariant)),
                     ),
-                    child: Builder(
-                      builder: (context) {
-                        final rejectBtn = OutlinedButton.icon(
-                          onPressed: canReject ? _rejectPairing : null,
-                          icon: const Icon(Icons.close, size: 18),
-                          label: const Text('Reject', style: TextStyle(fontWeight: FontWeight.bold)),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: theme.colorScheme.error,
-                            side: BorderSide(color: theme.colorScheme.error),
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        );
-                        
-                        final approveBtn = _canApproveLocally 
+                    child: Builder(builder: (context) {
+                      final rejectBtn = OutlinedButton.icon(
+                        onPressed: canReject ? _rejectPairing : null,
+                        icon: const Icon(Icons.close, size: 18),
+                        label: const Text('Reject',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: theme.colorScheme.error,
+                          side: BorderSide(color: theme.colorScheme.error),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4)),
+                        ),
+                      );
+                      final approveBtn = _canApproveLocally
                           ? FilledButton.icon(
-                              onPressed: approveEnabled ? _approvePairing : null,
-                              icon: _busy 
-                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                : const Icon(Icons.check_circle, size: 18),
-                              label: const Text('Approve', style: TextStyle(fontWeight: FontWeight.bold)),
+                              onPressed:
+                                  approveEnabled ? _approvePairing : null,
+                              icon: _busy
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.check_circle, size: 18),
+                              label: const Text('Approve',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600)),
                               style: FilledButton.styleFrom(
-                                backgroundColor: theme.colorScheme.primary,
+                                backgroundColor:
+                                    theme.colorScheme.primaryContainer,
                                 foregroundColor: theme.colorScheme.onPrimary,
-                                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4)),
                               ),
                             )
                           : Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                              child: Text('Waiting for peer...', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.outline)),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16.0),
+                              child: Text('Waiting for peer...',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.outline,
+                                  )),
                             );
-                            
-                        if (isMobile) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              approveBtn,
-                              const SizedBox(height: 12),
-                              if (canReject) rejectBtn,
-                            ],
-                          );
-                        }
-                        return Wrap(
-                          alignment: WrapAlignment.end,
-                          spacing: 16,
-                          runSpacing: 12,
+                      if (isMobile) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            if (canReject) rejectBtn,
                             approveBtn,
+                            const SizedBox(height: 12),
+                            if (canReject) rejectBtn,
                           ],
                         );
                       }
-                    ),
+                      return Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 16,
+                        runSpacing: 12,
+                        children: [
+                          if (canReject) rejectBtn,
+                          approveBtn,
+                        ],
+                      );
+                    }),
                   ),
                 ],
               ),
@@ -717,8 +787,9 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    final hasExpired =
-        (_remainingSeconds != null && _remainingSeconds == 0 && !_isClosingAfterCompletion);
+    final hasExpired = (_remainingSeconds != null &&
+        _remainingSeconds == 0 &&
+        !_isClosingAfterCompletion);
     final canApprove = !_busy &&
         !_isClosingAfterCompletion &&
         !hasExpired &&
@@ -726,21 +797,21 @@ class _PairingScreenState extends State<PairingScreen> {
         _canApproveLocally &&
         _deviceId != null &&
         _peerFingerprint != null;
-    final canReject =
-        !_busy && !_isClosingAfterCompletion && _deviceId != null && _hasActivePairingFlow;
-
+    final canReject = !_busy &&
+        !_isClosingAfterCompletion &&
+        _deviceId != null &&
+        _hasActivePairingFlow;
     final approveEnabled = canApprove && _canApproveDelay;
-    
     final deviceName = _displayName ?? _deviceId ?? 'Unknown';
     final isMobile = MediaQuery.of(context).size.width < 600;
 
     if (_isRecipientFlow && _hasActivePairingFlow) {
-      return _buildRecipientFlow(context, theme, hasExpired, canApprove, canReject, approveEnabled, isMobile, deviceName);
+      return _buildRecipientFlow(context, theme, hasExpired, canApprove,
+          canReject, approveEnabled, isMobile, deviceName);
     }
-    
+
     final title = 'Verify Connection';
     final subtitle = 'Pairing request sent to ';
-
 
     return Material(
       type: MaterialType.transparency,
@@ -750,18 +821,19 @@ class _PairingScreenState extends State<PairingScreen> {
             child: Container(
               width: double.infinity,
               constraints: BoxConstraints(
-                maxWidth: 448, // max-w-md
+                maxWidth: 448,
                 maxHeight: MediaQuery.of(context).size.height * 0.95,
               ),
               margin: EdgeInsets.all(isMobile ? 16 : 32),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLowest,
+                color: Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: theme.colorScheme.outlineVariant),
                 boxShadow: [
                   BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                    blurRadius: 48,
+                    color: theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.1),
+                    blurRadius: 40,
                     offset: const Offset(0, 24),
                   ),
                 ],
@@ -769,14 +841,16 @@ class _PairingScreenState extends State<PairingScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Header Section
                   Container(
                     width: double.infinity,
                     padding: EdgeInsets.all(isMobile ? 24 : 32),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
-                      border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                      color: Colors.white,
+                      border: Border(
+                          bottom: BorderSide(
+                              color: theme.colorScheme.outlineVariant)),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(12)),
                     ),
                     child: Column(
                       children: [
@@ -788,13 +862,18 @@ class _PairingScreenState extends State<PairingScreen> {
                             color: theme.colorScheme.primaryContainer,
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(Icons.fingerprint, size: 32, color: theme.colorScheme.onPrimaryContainer),
+                          child: Icon(Icons.fingerprint,
+                              size: 32,
+                              color: theme.colorScheme.onPrimaryContainer),
                         ),
                         Text(
                           title,
-                          style: theme.textTheme.headlineMedium?.copyWith(
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.01,
+                            height: 32 / 24,
                             color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.bold,
                           ),
                           textAlign: TextAlign.center,
                         ),
@@ -802,177 +881,240 @@ class _PairingScreenState extends State<PairingScreen> {
                         RichText(
                           textAlign: TextAlign.center,
                           text: TextSpan(
-                            style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w400,
+                              height: 28 / 18,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                             children: [
                               TextSpan(text: subtitle),
                               TextSpan(
                                 text: deviceName,
-                                style: TextStyle(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               const TextSpan(text: '.'),
                             ],
                           ),
                         ),
                         if (hasExpired)
-                           Padding(
-                             padding: const EdgeInsets.only(top: 8),
-                             child: Text('Expired', style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.bold)),
-                           )
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text('Expired',
+                                style: TextStyle(
+                                    color: theme.colorScheme.error,
+                                    fontWeight: FontWeight.w600)),
+                          )
                         else if (_remainingSeconds != null)
-                           Padding(
-                             padding: const EdgeInsets.only(top: 8),
-                             child: Text('Expires in ${_remainingSeconds!}s', style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
-                           ),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text('Expires in ${_remainingSeconds!}s',
+                                style: TextStyle(
+                                    color: theme.colorScheme.onSurfaceVariant)),
+                          ),
                       ],
                     ),
                   ),
-                  
-                  // Content Section
                   Flexible(
                     child: SingleChildScrollView(
                       padding: EdgeInsets.all(isMobile ? 24 : 32),
                       child: !_hasActivePairingFlow
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (_busy) const CircularProgressIndicator(),
-                              const SizedBox(height: 16),
-                              Text(_status, style: theme.textTheme.bodyLarge),
-                              if (_error != null) ...[
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (_busy) const CircularProgressIndicator(),
+                                const SizedBox(height: 16),
+                                Text(_status,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w400,
+                                      height: 28 / 18,
+                                      color: theme.colorScheme.onSurface,
+                                    )),
+                                if (_error != null) ...[
+                                  const SizedBox(height: 12),
+                                  Text(_error!,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          color: theme.colorScheme.error)),
+                                ]
+                              ],
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Compare fingerprints',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.05,
+                                    height: 16 / 14,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
                                 const SizedBox(height: 12),
-                                Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: theme.colorScheme.error)),
-                              ]
-                            ],
-                          )
-                        : Column(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Text(
-                                'Compare fingerprints',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  fontWeight: FontWeight.w700,
+                                Text(
+                                  'Compare the security fingerprint below with the one displayed on the destination device. They must match exactly.',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w400,
+                                    height: 24 / 16,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  textAlign: TextAlign.center,
                                 ),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Compare the security fingerprint below with the one displayed on the destination device. They must match exactly.',
-                                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 24),
-                              Text(
-                                "This device's fingerprint",
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                  color: theme.colorScheme.secondary,
+                                const SizedBox(height: 24),
+                                Text(
+                                  "This device's fingerprint",
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 12),
-                              ShimmerPulseContainer(
-                                child: _buildFingerprintText(theme, _peerFingerprint ?? _localFingerprint),
-                              ),
-                              const SizedBox(height: 24),
-                              Container(
-                                padding: const EdgeInsets.all(16),
-                                decoration: BoxDecoration(
-                                  color: theme.colorScheme.surfaceContainerLow,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                                const SizedBox(height: 12),
+                                ShimmerPulseContainer(
+                                  child: _buildFingerprintText(theme,
+                                      _peerFingerprint ?? _localFingerprint),
                                 ),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Icon(Icons.info, color: theme.colorScheme.secondary, size: 20),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        'If the codes do not match, reject this request immediately. Your connection may be intercepted.',
-                                        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.secondary),
+                                const SizedBox(height: 24),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color:
+                                            theme.colorScheme.outlineVariant),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(Icons.info,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                          size: 20),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'If the codes do not match, reject this request immediately. Your connection may be intercepted.',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w400,
+                                            height: 20 / 14,
+                                            color: theme
+                                                .colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
                     ),
                   ),
-                  
-                  // Actions Footer
                   if (_hasActivePairingFlow)
                     Container(
                       padding: EdgeInsets.all(isMobile ? 24 : 32),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerLowest,
-                        border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
-                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                        border: Border(
+                            top: BorderSide(
+                                color: theme.colorScheme.outlineVariant)),
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(12)),
                       ),
-                      child: Builder(
-                        builder: (context) {
-                          final rejectBtn = OutlinedButton(
-                            onPressed: canReject ? _rejectPairing : null,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: theme.colorScheme.primary,
-                              side: BorderSide(color: theme.colorScheme.outline),
-                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                            ),
-                            child: const Text('Reject', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                          );
-                          
-                          final approveBtn = _canApproveLocally 
+                      child: Builder(builder: (context) {
+                        final rejectBtn = OutlinedButton(
+                          onPressed: canReject ? _rejectPairing : null,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: theme.colorScheme.primaryContainer,
+                            side: BorderSide(
+                                color: theme.colorScheme.primaryContainer),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(4)),
+                          ),
+                          child: const Text('Reject',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                        );
+                        final approveBtn = _canApproveLocally
                             ? FilledButton.icon(
-                                onPressed: approveEnabled ? _approvePairing : null,
-                                icon: _busy 
-                                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                  : const Icon(Icons.check_circle, size: 20),
-                                label: const Text('Approve', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                onPressed:
+                                    approveEnabled ? _approvePairing : null,
+                                icon: _busy
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white))
+                                    : const Icon(Icons.check_circle, size: 20),
+                                label: const Text('Approve',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600)),
                                 style: FilledButton.styleFrom(
-                                  backgroundColor: theme.colorScheme.primary,
+                                  backgroundColor:
+                                      theme.colorScheme.primaryContainer,
                                   foregroundColor: theme.colorScheme.onPrimary,
-                                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                  elevation: 0,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4)),
                                 ),
                               )
                             : Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 16.0),
-                                child: Text(
-                                  'Waiting for peer...',
-                                  style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.outline),
-                                  textAlign: TextAlign.center,
-                                ),
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 16.0, horizontal: 16.0),
+                                child: Text('Waiting for peer...',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w400,
+                                      height: 20 / 14,
+                                      color: theme.colorScheme.outline,
+                                    )),
                               );
-                              
-                          if (isMobile) {
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                approveBtn,
-                                const SizedBox(height: 12),
-                                if (_isRecipientFlow || canReject) rejectBtn,
-                              ],
-                            );
-                          }
-                          return Wrap(
-                            alignment: WrapAlignment.end,
-                            spacing: 16,
-                            runSpacing: 12,
+                        if (isMobile) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              if (_isRecipientFlow || canReject) rejectBtn,
                               approveBtn,
+                              const SizedBox(height: 12),
+                              if (_isRecipientFlow || canReject) rejectBtn,
                             ],
                           );
                         }
-                      ),
+                        return Wrap(
+                          alignment: WrapAlignment.end,
+                          spacing: 16,
+                          runSpacing: 12,
+                          children: [
+                            if (_isRecipientFlow || canReject) rejectBtn,
+                            approveBtn,
+                          ],
+                        );
+                      }),
                     )
                   else
                     Container(
                       padding: EdgeInsets.all(isMobile ? 24 : 32),
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.surfaceContainerLowest,
-                        border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
-                        borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
+                        border: Border(
+                            top: BorderSide(
+                                color: theme.colorScheme.outlineVariant)),
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(12)),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.end,
@@ -980,12 +1122,18 @@ class _PairingScreenState extends State<PairingScreen> {
                           FilledButton(
                             onPressed: () => Navigator.of(context).pop(),
                             style: FilledButton.styleFrom(
-                              backgroundColor: theme.colorScheme.primary,
+                              backgroundColor:
+                                  theme.colorScheme.primaryContainer,
                               foregroundColor: theme.colorScheme.onPrimary,
-                              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4)),
                             ),
-                            child: const Text('Close', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                            child: const Text('Close',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
                           ),
                         ],
                       ),
@@ -1007,7 +1155,8 @@ class ShimmerPulseContainer extends StatefulWidget {
   State<ShimmerPulseContainer> createState() => _ShimmerPulseContainerState();
 }
 
-class _ShimmerPulseContainerState extends State<ShimmerPulseContainer> with SingleTickerProviderStateMixin {
+class _ShimmerPulseContainerState extends State<ShimmerPulseContainer>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<Color?> _colorAnimation;
   late Animation<Color?> _borderColorAnimation;
@@ -1015,26 +1164,31 @@ class _ShimmerPulseContainerState extends State<ShimmerPulseContainer> with Sing
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat(reverse: true);
+    _controller =
+        AnimationController(vsync: this, duration: const Duration(seconds: 3))
+          ..repeat(reverse: true);
   }
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final theme = Theme.of(context);
     _colorAnimation = ColorTween(
-      begin: theme.colorScheme.surfaceContainer,
-      end: theme.colorScheme.surfaceContainerHigh,
+      begin: Colors.white,
+      end: theme.colorScheme.surfaceContainerLow,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
     _borderColorAnimation = ColorTween(
       begin: theme.colorScheme.outlineVariant,
-      end: const Color(0xFFb1c5ff), // primary-fixed-dim
+      end: const Color(0xFFb1c5ff),
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
   }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -1047,10 +1201,13 @@ class _ShimmerPulseContainerState extends State<ShimmerPulseContainer> with Sing
           decoration: BoxDecoration(
             color: _colorAnimation.value,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _borderColorAnimation.value ?? Colors.transparent, width: 2),
+            border: Border.all(
+                color: _borderColorAnimation.value ?? Colors.transparent,
+                width: 2),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFb1c5ff).withValues(alpha: 0.15 * _controller.value),
+                color: const Color(0xFFb1c5ff)
+                    .withValues(alpha: 0.15 * _controller.value),
                 blurRadius: 20,
                 spreadRadius: 0,
               ),
@@ -1071,19 +1228,24 @@ class PulseRingIcon extends StatefulWidget {
   State<PulseRingIcon> createState() => _PulseRingIconState();
 }
 
-class _PulseRingIconState extends State<PulseRingIcon> with SingleTickerProviderStateMixin {
+class _PulseRingIconState extends State<PulseRingIcon>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  
+
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    _controller =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat();
   }
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -1114,11 +1276,11 @@ class _PulseRingIconState extends State<PulseRingIcon> with SingleTickerProvider
             width: 56,
             height: 56,
             decoration: BoxDecoration(
-              color: theme.colorScheme.primary,
+              color: theme.colorScheme.primaryContainer,
               shape: BoxShape.circle,
-              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
             ),
-            child: Icon(widget.icon, color: theme.colorScheme.onPrimary, size: 28),
+            child:
+                Icon(widget.icon, color: theme.colorScheme.onPrimary, size: 28),
           ),
         ],
       ),

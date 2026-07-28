@@ -168,7 +168,7 @@ void main() {
 
     expect(find.text('Windows Laptop'), findsOneWidget);
     expect(find.text('Local Device'), findsOneWidget);
-    expect(find.textContaining('THIS DEVICE', findRichText: true), findsOneWidget);
+    expect(find.text('This Device'), findsOneWidget);
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
@@ -190,8 +190,6 @@ void main() {
 
     expect(client.startDiscoveryCallCount, 1);
   });
-
-
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
       (WidgetTester tester) async {

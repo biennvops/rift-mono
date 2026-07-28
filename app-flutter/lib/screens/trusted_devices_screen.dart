@@ -1,14 +1,14 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
-import '../main.dart';
+import '../src/ui/app_shell.dart';
 import '../src/platform/notification_route.dart';
+import '../widgets/bubble_background.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -17,7 +17,8 @@ class TrustedDevicesScreen extends StatefulWidget {
   State<TrustedDevicesScreen> createState() => _TrustedDevicesScreenState();
 }
 
-class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with TickerProviderStateMixin {
+class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
+    with TickerProviderStateMixin {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
   static final bool _enableContinuousDiscoveryAnimation =
       !Platform.environment.containsKey('FLUTTER_TEST');
@@ -37,11 +38,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
   StreamSubscription? _pairingCompleteSub;
+  StreamSubscription<bool>? _connectionSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
   Timer? _presenceRefreshTimer;
   late final AnimationController _pulseController;
   late final AnimationController _bubbleController;
+  late final AnimationController _spinController;
 
   bool get _isRouteCurrent {
     final route = ModalRoute.of(context);
@@ -51,8 +54,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   @override
   void initState() {
     super.initState();
-    _pulseController = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
-    _bubbleController = AnimationController(vsync: this, duration: const Duration(seconds: 6));
+    _pulseController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1500));
+    _bubbleController =
+        AnimationController(vsync: this, duration: const Duration(seconds: 6));
+    _spinController =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2));
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
       _setupListeners();
@@ -63,6 +71,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   void dispose() {
     _pulseController.dispose();
     _bubbleController.dispose();
+    _spinController.dispose();
     _reloadDebounce?.cancel();
     _fullReloadThrottle?.cancel();
     _presenceRefreshTimer?.cancel();
@@ -73,8 +82,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     _connectionSub?.cancel();
     super.dispose();
   }
-
-  StreamSubscription<bool>? _connectionSub;
 
   void _setupListeners() {
     final client = context.read<JsonRpcRiftClient>();
@@ -100,7 +107,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
 
   void _scheduleFullReloadThrottled() {
     if (!mounted) return;
-    // Coalesce noisy event bursts into at most 1 full reload per 2 seconds.
     if (_fullReloadThrottle != null) return;
     _fullReloadThrottle = Timer(const Duration(seconds: 2), () {
       _fullReloadThrottle = null;
@@ -117,7 +123,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     if (_isPeerAlreadyManaged(deviceId)) return;
 
     setState(() {
-      // Upsert into discovered list.
       final existing = _discoveredPeers.indexWhere((p) =>
           p is Map &&
           (p['deviceId']?.toString() == deviceId ||
@@ -133,7 +138,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       }
     });
 
-    // Full reload is still needed to pick up trust state/capabilities accurately.
     _scheduleFullReloadThrottled();
   }
 
@@ -144,15 +148,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         (instanceId == null || instanceId.isEmpty)) {
       return;
     }
-    if (!mounted) {
-      return;
-    }
+    if (!mounted) return;
 
     setState(() {
       _discoveredPeers = _discoveredPeers.where((p) {
-        if (p is! Map) {
-          return true;
-        }
+        if (p is! Map) return true;
         final pDeviceId = p['deviceId']?.toString();
         final pInstanceId = p['instanceId']?.toString();
         if (deviceId != null && deviceId.isNotEmpty && pDeviceId == deviceId) {
@@ -181,11 +181,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     }
     if (!mounted) return;
 
-    // We can't fully materialize trusted peer details from the event alone,
-    // so do a throttled full reload. Still, update minimal local state to
-    // prevent the UI from feeling stale.
     setState(() {
-      // Remove from discovered if it is no longer discovered/pairing_pending.
       if (newState == 'trusted' || newState == 'blocked') {
         _discoveredPeers = _discoveredPeers
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
@@ -197,7 +193,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   }
 
   void _handlePairingComplete(Map<String, dynamic> event) {
-    // Spec: includes persistedAt, but listTrustedPeers is the source of truth.
     _scheduleFullReloadThrottled();
   }
 
@@ -211,9 +206,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       return;
     }
 
-    if (_presenceRefreshTimer != null) {
-      return;
-    }
+    if (_presenceRefreshTimer != null) return;
 
     _presenceRefreshTimer = Timer.periodic(_presenceRefreshInterval, (_) {
       if (!mounted) return;
@@ -248,7 +241,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       final client = context.read<JsonRpcRiftClient>();
       _isLoadingData = true;
 
-      // Default empty lists if not connected
       if (!client.isConnected) {
         setState(() {
           _trustedPeers = [];
@@ -275,6 +267,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         ),
       );
       final isDiscovering = discoveredResult['isDiscovering'] == true;
+
       if (mounted) {
         setState(() {
           _localDeviceId = localDeviceId;
@@ -339,9 +332,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       if (peer is! Map) return false;
       final deviceId = peer['deviceId']?.toString();
       if (deviceId == null || deviceId.isEmpty) return false;
-
       if (_isSelfDevice(deviceId)) return false;
-
       if (trustedDeviceIds.contains(deviceId)) return false;
 
       final trustState = peer['trustState']?.toString();
@@ -353,8 +344,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   }
 
   Future<void> _ensureTrustedPeerDiscovery(JsonRpcRiftClient client) async {
-    if (_autoDiscoveryAttempted ||
-        _isDiscovering) {
+    if (_autoDiscoveryAttempted || _isDiscovering) {
       return;
     }
 
@@ -374,24 +364,64 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     }
   }
 
+  Future<void> _toggleDiscovery(bool value) async {
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      if (value) {
+        await client.startDiscovery();
+      } else {
+        await client.stopDiscovery();
+      }
+      if (mounted) {
+        setState(() {
+          _isDiscovering = value;
+          _error = null;
+        });
+        _syncPulseAnimation();
+      }
+      _scheduleReload();
+    } catch (e) {
+      if (mounted) {
+        RiftSnackbar.show(
+          context: context,
+          message: JsonRpcRiftClient.formatDisplayError(e),
+          type: RiftSnackbarType.error,
+        );
+      }
+    }
+  }
+
   Future<bool> _confirmTrustAction({
     required String title,
     required String message,
     required String confirmLabel,
   }) async {
+    final theme = Theme.of(context);
     final result = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: Text(title),
-          content: Text(message),
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          title: Text(title,
+              style: theme.textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+          content: Text(message,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           actions: [
             OutlinedButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
+              style: OutlinedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4))),
               child: const Text('Cancel'),
             ),
             FilledButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4))),
               child: Text(confirmLabel),
             ),
           ],
@@ -409,15 +439,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
 
     final deviceId = localDeviceInfo['deviceId']?.toString() ?? '';
     final displayName = localDeviceInfo['displayName']?.toString();
-    final platform = localDeviceInfo['platform']?.toString() ?? _localPlatform();
+    final platform =
+        localDeviceInfo['platform']?.toString() ?? _localPlatform();
     final titleText = (displayName != null && displayName.isNotEmpty)
         ? displayName
         : (deviceId.isNotEmpty ? deviceId : 'This Device');
 
     return Container(
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface, // surface-container-lowest = white
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Stack(
@@ -430,12 +461,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
             child: Container(
               decoration: BoxDecoration(
                 color: theme.colorScheme.primary,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(8)),
               ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -448,14 +480,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                          color:
+                              theme.colorScheme.primary.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Stack(
                           alignment: Alignment.center,
                           clipBehavior: Clip.none,
                           children: [
-                            Icon(_platformIcon(platform), size: 24, color: theme.colorScheme.primary),
+                            Icon(_platformIcon(platform),
+                                size: 24, color: theme.colorScheme.primary),
                             Positioned(
                               top: -4,
                               right: -4,
@@ -463,9 +497,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                                 width: 10,
                                 height: 10,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981), // Semantic success green
+                                  color: const Color(0xFF10B981),
                                   shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.white, width: 2),
+                                  border:
+                                      Border.all(color: Colors.white, width: 2),
                                 ),
                               ),
                             ),
@@ -490,20 +525,30 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                Icon(Icons.verified, size: 18, color: theme.colorScheme.primary),
+                                Icon(Icons.verified,
+                                    size: 18, color: theme.colorScheme.primary),
                               ],
                             ),
                             const SizedBox(height: 4),
                             Row(
                               children: [
-                                Icon(Icons.fingerprint, size: 14, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)),
+                                Icon(Icons.fingerprint,
+                                    size: 14,
+                                    color: theme.colorScheme.onSurfaceVariant
+                                        .withValues(alpha: 0.7)),
                                 const SizedBox(width: 4),
                                 Expanded(
-                                  child: Text(_localDeviceId != null ? (_localDeviceId!.length > 20 ? '${_localDeviceId!.substring(0, 20)}...' : _localDeviceId!) : 'Loading fingerprint...', 
+                                  child: Text(
+                                    _localDeviceId != null
+                                        ? (_localDeviceId!.length > 20
+                                            ? '${_localDeviceId!.substring(0, 20)}...'
+                                            : _localDeviceId!)
+                                        : 'Loading fingerprint...',
                                     style: theme.textTheme.labelSmall?.copyWith(
-                                      fontFamily: 'monospace', 
-                                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7)
-                                    ),
+                                        fontFamily: 'monospace',
+                                        color: theme
+                                            .colorScheme.onSurfaceVariant
+                                            .withValues(alpha: 0.7)),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -523,29 +568,39 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     );
   }
 
-  Widget _buildPeerCardHtml(Map<String, dynamic> peer, bool isTrusted, ThemeData theme) {
-    if (peer['trustState'] == 'blocked') return const SizedBox.shrink(); // Handled in restricted list
+  Widget _buildPeerCardHtml(
+      Map<String, dynamic> peer, bool isTrusted, ThemeData theme) {
+    if (peer['trustState'] == 'blocked') return const SizedBox.shrink();
 
     final isOnline = peer['presence'] == 'online';
     final trustState = peer['trustState']?.toString() ?? 'trusted';
-    
+
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
     final String rawDisplayName = peer['displayName']?.toString() ?? '';
     final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
-    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty ? rawDisplayName : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final String shortId =
+        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = rawDisplayName.isNotEmpty
+        ? rawDisplayName
+        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
     final String statusText = trustState == 'pairing_pending'
         ? 'PENDING'
         : (isOnline ? 'ONLINE' : 'OFFLINE');
 
+    final bool isPending = trustState == 'pairing_pending';
+
     return InkWell(
-      onTap: () => _handlePeerAction(peer: peer, isTrusted: isTrusted, trustState: trustState, titleText: titleText),
-      borderRadius: BorderRadius.circular(12),
+      onTap: () => _handlePeerAction(
+          peer: peer,
+          isTrusted: isTrusted,
+          trustState: trustState,
+          titleText: titleText),
+      borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(color: theme.colorScheme.outlineVariant),
         ),
         child: Column(
@@ -560,14 +615,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                   width: 48,
                   height: 48,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.08),
+                    color: theme.colorScheme.surfaceContainer,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Stack(
                     alignment: Alignment.center,
                     clipBehavior: Clip.none,
                     children: [
-                      Icon(_platformIcon(peerPlatform), size: 24, color: theme.colorScheme.secondary),
+                      Icon(_platformIcon(peerPlatform),
+                          size: 24, color: theme.colorScheme.onSurfaceVariant),
                       Positioned(
                         top: -4,
                         right: -4,
@@ -575,7 +631,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                           width: 12,
                           height: 12,
                           decoration: BoxDecoration(
-                            color: isOnline ? const Color(0xFF10B981) : const Color(0xFF94a3b8),
+                            color: isOnline
+                                ? const Color(0xFF10B981)
+                                : theme.colorScheme.outlineVariant,
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 2),
                           ),
@@ -585,21 +643,32 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: trustState == 'trusted' ? const Color(0xFFE8F5E9) : const Color(0xFFFFF8E1),
+                    color: isPending
+                        ? theme.colorScheme.tertiaryContainer
+                            .withValues(alpha: 0.1)
+                        : const Color(0xFF10B981).withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(trustState == 'trusted' ? Icons.shield_outlined : Icons.hourglass_empty, 
-                           size: 14, 
-                           color: trustState == 'trusted' ? const Color(0xFF2E7D32) : const Color(0xFFF57F17)),
+                      Icon(
+                          isPending
+                              ? Icons.hourglass_empty
+                              : Icons.shield_outlined,
+                          size: 14,
+                          color: isPending
+                              ? theme.colorScheme.tertiary
+                              : const Color(0xFF10B981)),
                       const SizedBox(width: 4),
-                      Text(trustState == 'trusted' ? 'TRUSTED' : 'PENDING', 
-                           style: theme.textTheme.labelSmall?.copyWith(
-                             color: trustState == 'trusted' ? const Color(0xFF2E7D32) : const Color(0xFFF57F17))),
+                      Text(isPending ? 'PENDING' : 'TRUSTED',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                              color: isPending
+                                  ? theme.colorScheme.tertiary
+                                  : const Color(0xFF10B981))),
                     ],
                   ),
                 ),
@@ -611,7 +680,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
               children: [
                 Text(
                   titleText,
-                  style: theme.textTheme.labelMedium?.copyWith(
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
                     color: theme.colorScheme.onSurface,
                   ),
                   overflow: TextOverflow.ellipsis,
@@ -619,12 +689,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                 const SizedBox(height: 4),
                 Text(
                   statusText,
-                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                if (trustState == 'pairing_pending') ...[
-                  const SizedBox(height: 4),
+                if (isPending) ...[
+                  const SizedBox(height: 8),
                   TextButton(
                     onPressed: () => _handlePeerAction(
                       peer: peer,
@@ -633,10 +704,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                       titleText: titleText,
                     ),
                     style: TextButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 8),
+                      minimumSize: const Size(0, 32),
                       foregroundColor: theme.colorScheme.tertiary,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4)),
                     ),
                     child: const Text('Cancel'),
                   ),
@@ -653,14 +726,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
     final String rawDisplayName = peer['displayName']?.toString() ?? '';
     final String peerPlatform = peer['platform']?.toString() ?? 'unknown';
-    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty ? rawDisplayName : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final String shortId =
+        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = rawDisplayName.isNotEmpty
+        ? rawDisplayName
+        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Row(
@@ -676,28 +752,43 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                     color: theme.colorScheme.surfaceContainer,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(_platformIcon(peerPlatform), size: 20, color: theme.colorScheme.secondary),
+                  child: Icon(_platformIcon(peerPlatform),
+                      size: 20, color: theme.colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(titleText, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.onSurface), overflow: TextOverflow.ellipsis),
-                      Text('Local Network', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                      Text(titleText,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.onSurface),
+                          overflow: TextOverflow.ellipsis),
+                      Text('Local Network',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant)),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          TextButton.icon(
-            onPressed: () => _handlePeerAction(peer: peer, isTrusted: false, trustState: 'discovered', titleText: titleText),
+          FilledButton.icon(
+            onPressed: () => _handlePeerAction(
+              peer: peer,
+              isTrusted: false,
+              trustState: 'discovered',
+              titleText: titleText,
+            ),
             icon: const Icon(Icons.link, size: 18),
             label: const Text('Verify'),
-            style: TextButton.styleFrom(
-              foregroundColor: theme.colorScheme.primary,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            style: FilledButton.styleFrom(
+              backgroundColor: theme.colorScheme.primaryContainer,
+              foregroundColor: theme.colorScheme.onPrimaryContainer,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
           ),
         ],
@@ -708,14 +799,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   Widget _buildRestrictedCardHtml(Map<String, dynamic> peer, ThemeData theme) {
     final String deviceIdStr = peer['deviceId']?.toString() ?? '';
     final String rawDisplayName = peer['displayName']?.toString() ?? '';
-    final String shortId = deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
-    final String titleText = rawDisplayName.isNotEmpty ? rawDisplayName : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final String shortId =
+        deviceIdStr.length > 16 ? deviceIdStr.substring(0, 16) : deviceIdStr;
+    final String titleText = rawDisplayName.isNotEmpty
+        ? rawDisplayName
+        : (shortId.isNotEmpty ? shortId : 'Unknown Device');
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Row(
@@ -731,7 +825,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                     color: theme.colorScheme.errorContainer,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Icon(Icons.block, size: 20, color: theme.colorScheme.error),
+                  child: Icon(Icons.block,
+                      size: 20, color: theme.colorScheme.error),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -739,23 +834,34 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        titleText, 
-                        style: theme.textTheme.labelMedium?.copyWith(
+                        titleText,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
                           color: theme.colorScheme.onSurface,
                           decoration: TextDecoration.lineThrough,
                           decorationColor: theme.colorScheme.outlineVariant,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      Text('Blocked', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error)),
+                      Text('Blocked',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.colorScheme.error)),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          TextButton(
-            onPressed: () => _handlePeerAction(peer: peer, isTrusted: true, trustState: 'blocked', titleText: titleText),
+          OutlinedButton(
+            onPressed: () => _handlePeerAction(
+                peer: peer,
+                isTrusted: true,
+                trustState: 'blocked',
+                titleText: titleText),
+            style: OutlinedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(4)),
+            ),
             child: const Text('Manage'),
           ),
         ],
@@ -797,12 +903,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         if (deviceId == null && (address == null || port == null)) {
           return;
         }
-        if (deviceId != null) {
-          assert(
-            !_isSelfDevice(deviceId),
-            'TrustedDevicesScreen attempted to open PairingScreen for self deviceId=$deviceId',
-          );
-        }
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
         final pairingScreen = PairingScreen(
           initialDeviceId: deviceId,
@@ -810,10 +910,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
           initialEndpointPort: deviceId == null ? port : null,
           initialDisplayName: titleText,
           autoStart: true,
-          onClose: isDesktop ? () {
-            setState(() { _selectedPeerWidget = null; });
-            _loadData();
-          } : null,
+          onClose: isDesktop
+              ? () {
+                  setState(() {
+                    _selectedPeerWidget = null;
+                  });
+                  _loadData();
+                }
+              : null,
         );
 
         if (isDesktop) {
@@ -836,10 +940,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
           await _loadData();
           if (mounted) {
             if (result == 'history') {
-              final appShellState = context.findAncestorStateOfType<AppShellState>();
-              appShellState?.showHistoryRoute(NotificationRoute.historyClipboard);
+              final appShellState =
+                  context.findAncestorStateOfType<AppShellState>();
+              appShellState
+                  ?.showHistoryRoute(NotificationRoute.historyClipboard);
             } else if (result == 'devices') {
-              final appShellState = context.findAncestorStateOfType<AppShellState>();
+              final appShellState =
+                  context.findAncestorStateOfType<AppShellState>();
               appShellState?.showRoute(NotificationRoute.devices);
             }
           }
@@ -862,10 +969,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         final detailScreen = DeviceDetailScreen(
           peer: peer,
           isOnline: isOnline,
-          onClose: isDesktop ? () {
-            setState(() { _selectedPeerWidget = null; });
-            _loadData();
-          } : null,
+          onClose: isDesktop
+              ? () {
+                  setState(() {
+                    _selectedPeerWidget = null;
+                  });
+                  _loadData();
+                }
+              : null,
         );
 
         if (isDesktop) {
@@ -873,7 +984,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
             _selectedPeerWidget = detailScreen;
           });
         } else {
-          final detailResult = await Navigator.of(context).push<Map<String, dynamic>>(
+          final detailResult =
+              await Navigator.of(context).push<Map<String, dynamic>>(
             MaterialPageRoute<Map<String, dynamic>>(
               builder: (_) => detailScreen,
             ),
@@ -885,7 +997,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
 
           if (detailResult['action'] == 'forgotten' && deviceId != null) {
             final forgottenDisplayName =
-              detailResult['displayName']?.toString() ?? titleText;
+                detailResult['displayName']?.toString() ?? titleText;
             RiftSnackbar.show(
               context: context,
               message: '$forgottenDisplayName removed.',
@@ -921,21 +1033,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
   }
 
   String _localPlatform() {
-    if (Platform.isAndroid) {
-      return 'android';
-    }
-    if (Platform.isIOS) {
-      return 'ios';
-    }
-    if (Platform.isWindows) {
-      return 'windows';
-    }
-    if (Platform.isMacOS) {
-      return 'macos';
-    }
-    if (Platform.isLinux) {
-      return 'linux';
-    }
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isMacOS) return 'macos';
+    if (Platform.isLinux) return 'linux';
     return 'unknown';
   }
 
@@ -943,60 +1045,72 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Local Device Section
-        Text('THIS DEVICE', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary)),
-        const SizedBox(height: 8),
+        Text('This Device',
+            style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: 12),
         _buildLocalDeviceCardHtml(theme),
         const SizedBox(height: 32),
-
-        // Pairing Pending Section
-        if (_trustedPeers.any((p) => p is Map && p['trustState'] == 'pairing_pending')) ...[
-          Text('PAIRING PENDING', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.tertiary)),
-          const SizedBox(height: 8),
+        if (_trustedPeers
+            .any((p) => p is Map && p['trustState'] == 'pairing_pending')) ...[
+          Text('Pairing Pending',
+              style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700)),
+          const SizedBox(height: 12),
           Column(
-            children: _trustedPeers.where((p) => p is Map && p['trustState'] == 'pairing_pending').map((p) => Padding(padding: const EdgeInsets.only(bottom: 16), child: _buildPeerCardHtml(p as Map<String, dynamic>, false, theme))).toList(),
+            children: _trustedPeers
+                .where((p) => p is Map && p['trustState'] == 'pairing_pending')
+                .map((p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: _buildPeerCardHtml(
+                        p as Map<String, dynamic>, false, theme)))
+                .toList(),
           ),
           const SizedBox(height: 32),
         ],
-
-        // Trusted Peers Section
-        if (_trustedPeers.any((p) => p is Map && p['trustState'] == 'trusted')) ...[
+        if (_trustedPeers
+            .any((p) => p is Map && p['trustState'] == 'trusted')) ...[
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(child: Text('TRUSTED PEERS', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary), overflow: TextOverflow.ellipsis)),
+              Expanded(
+                  child: Text('Trusted Peers',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w700),
+                      overflow: TextOverflow.ellipsis)),
               const SizedBox(width: 8),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.1),
+                  color: theme.colorScheme.surfaceContainerHigh,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: Text('${_trustedPeers.where((p) => p is Map && p['trustState'] == 'trusted').length} Devices', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurface, fontWeight: FontWeight.bold)),
+                child: Text(
+                    '${_trustedPeers.where((p) => p is Map && p['trustState'] == 'trusted').length} Devices',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontWeight: FontWeight.bold)),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          GridView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 320,
-              mainAxisExtent: 132,
-              mainAxisSpacing: 16,
-              crossAxisSpacing: 16,
-            ),
-            itemCount: _trustedPeers.where((p) => p is Map && p['trustState'] == 'trusted').length,
-            itemBuilder: (context, index) => _buildPeerCardHtml(_trustedPeers.where((p) => p is Map && p['trustState'] == 'trusted').toList()[index] as Map<String, dynamic>, true, theme),
+          const SizedBox(height: 12),
+          Column(
+            children: _trustedPeers
+                .where((p) => p is Map && p['trustState'] == 'trusted')
+                .map((p) => Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: _buildPeerCardHtml(
+                        p as Map<String, dynamic>, true, theme)))
+                .toList(),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
         ],
-
-        // Discovered Section
         _buildDiscoveredSection(theme),
         const SizedBox(height: 32),
-
-        // Blocked Section
         if (_trustedPeers.any((p) => p is Map && p['trustState'] == 'blocked'))
           _buildBlockedSection(theme),
       ],
@@ -1011,10 +1125,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     final header = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Devices Hub', style: theme.textTheme.headlineLarge?.copyWith(color: theme.colorScheme.onSurface)),
-        const SizedBox(height: 4),
-        Text('Monitor and manage access across your synchronized network.',
-            style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        Text(
+          'Devices Hub',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.onSurface,
+            letterSpacing: -0.5,
+          ),
+        ),
       ],
     );
 
@@ -1039,19 +1157,25 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.5)),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color:
+                                theme.colorScheme.error.withValues(alpha: 0.5)),
                       ),
                       child: Row(
                         children: [
-                          Icon(Icons.error_outline, color: theme.colorScheme.error),
+                          Icon(Icons.error_outline,
+                              color: theme.colorScheme.error),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: Text('Daemon Error: $_error', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onErrorContainer)),
+                            child: Text('Daemon Error: $_error',
+                                style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onErrorContainer)),
                           ),
                           TextButton(
                             onPressed: _loadData,
-                            style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                            style: TextButton.styleFrom(
+                                foregroundColor: theme.colorScheme.error),
                             child: const Text('Retry'),
                           ),
                         ],
@@ -1076,7 +1200,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Left Panel (Scrollable)
           Expanded(
             flex: 5,
             child: RefreshIndicator(
@@ -1084,7 +1207,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1097,19 +1221,26 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.errorContainer,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: theme.colorScheme.error.withValues(alpha: 0.5)),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: theme.colorScheme.error
+                                    .withValues(alpha: 0.5)),
                           ),
                           child: Row(
                             children: [
-                              Icon(Icons.error_outline, color: theme.colorScheme.error),
+                              Icon(Icons.error_outline,
+                                  color: theme.colorScheme.error),
                               const SizedBox(width: 16),
                               Expanded(
-                                child: Text('Daemon Error: $_error', style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onErrorContainer)),
+                                child: Text('Daemon Error: $_error',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                        color: theme
+                                            .colorScheme.onErrorContainer)),
                               ),
                               TextButton(
                                 onPressed: _loadData,
-                                style: TextButton.styleFrom(foregroundColor: theme.colorScheme.error),
+                                style: TextButton.styleFrom(
+                                    foregroundColor: theme.colorScheme.error),
                                 child: const Text('Retry'),
                               ),
                             ],
@@ -1122,24 +1253,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
               ),
             ),
           ),
-          
-          // Right Panel (Fixed)
           Container(width: 1, color: theme.colorScheme.outlineVariant),
           Expanded(
             flex: 6,
-            child: _selectedPeerWidget ?? Container(
-              color: theme.colorScheme.surfaceContainerLowest,
-              child: Center(
-                 child: Column(
-                   mainAxisAlignment: MainAxisAlignment.center,
-                   children: [
-                     Icon(Icons.devices_outlined, size: 64, color: theme.colorScheme.outlineVariant),
-                     const SizedBox(height: 16),
-                     Text('Select a device to view details or pair.', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.outline)),
-                   ]
-                 )
-              ),
-            ),
+            child: _selectedPeerWidget ??
+                Container(
+                  color: Colors.white,
+                  child: Center(
+                      child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                        Icon(Icons.devices_outlined,
+                            size: 64, color: theme.colorScheme.outlineVariant),
+                        const SizedBox(height: 16),
+                        Text('Select a device to view details or pair.',
+                            style: theme.textTheme.bodyLarge
+                                ?.copyWith(color: theme.colorScheme.outline)),
+                      ])),
+                ),
           ),
         ],
       ),
@@ -1154,21 +1285,42 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Expanded(child: Text('NEARBY DEVICES', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary), overflow: TextOverflow.ellipsis)),
+            Expanded(
+              child: Text(
+                'Nearby Devices',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             const SizedBox(width: 8),
-            if (_isDiscovering)
-              _buildDiscoveryStatusChip(theme),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isDiscovering) _buildDiscoveryStatusChip(theme),
+                const SizedBox(width: 8),
+                Transform.scale(
+                  scale: 0.8,
+                  child: Switch.adaptive(
+                    value: _isDiscovering,
+                    onChanged: (value) => _toggleDiscovery(value),
+                    activeTrackColor: theme.colorScheme.primary,
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         ClipRRect(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8),
           child: Container(
             width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 80),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surface,
-              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(color: theme.colorScheme.outlineVariant),
             ),
             child: Stack(
@@ -1177,36 +1329,28 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                   child: AnimatedBuilder(
                     animation: _bubbleController,
                     builder: (context, child) {
-                      return CustomPaint(
-                        painter: _BubblePainter(
-                          progress: _bubbleController.value,
-                          color: bubbleColor,
-                        ),
+                      return BubbleBackground(
+                        progress: _bubbleController.value,
+                        color: bubbleColor,
                       );
                     },
                   ),
                 ),
                 if (_discoveredPeers.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                    padding: const EdgeInsets.all(16),
                     child: Row(
                       children: [
-                        Icon(Icons.wifi_find, size: 20, color: theme.colorScheme.outline),
-                        const SizedBox(width: 12),
+                        Icon(Icons.wifi_find,
+                            size: 24, color: theme.colorScheme.outlineVariant),
+                        const SizedBox(width: 16),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                _isDiscovering ? 'Searching for devices on your network…' : 'No devices found nearby.',
-                                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface),
-                              ),
-                              if (_isDiscovering) ...[
-                                const SizedBox(height: 2),
-                                Text('Make sure other devices have Rift running.', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant, fontSize: 12)),
-                              ],
-                            ],
+                          child: Text(
+                            _isDiscovering
+                                ? 'Searching...'
+                                : 'Discovery disabled.',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant),
                           ),
                         ),
                       ],
@@ -1214,9 +1358,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
                   )
                 else
                   Padding(
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
-                      children: _discoveredPeers.map((p) => Padding(padding: const EdgeInsets.only(bottom: 8), child: _buildDiscoveredCardHtml(p as Map<String, dynamic>, theme))).toList(),
+                      children: _discoveredPeers
+                          .map((p) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _buildDiscoveredCardHtml(
+                                  p as Map<String, dynamic>, theme)))
+                          .toList(),
                     ),
                   ),
               ],
@@ -1231,9 +1380,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('BLOCKED', style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.secondary)),
-        const SizedBox(height: 8),
-        ..._trustedPeers.where((p) => p is Map && p['trustState'] == 'blocked').map((p) => Padding(padding: const EdgeInsets.only(bottom: 16), child: _buildRestrictedCardHtml(p as Map<String, dynamic>, theme))),
+        Text('Blocked',
+            style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(height: 12),
+        ..._trustedPeers
+            .where((p) => p is Map && p['trustState'] == 'blocked')
+            .map((p) => Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: _buildRestrictedCardHtml(
+                    p as Map<String, dynamic>, theme))),
       ],
     );
   }
@@ -1246,113 +1403,48 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen> with Ticker
       if (!_bubbleController.isAnimating) {
         _bubbleController.repeat();
       }
+      if (!_spinController.isAnimating) {
+        _spinController.repeat();
+      }
       return;
     }
 
     _pulseController.stop();
     _bubbleController.stop();
+    _spinController.stop();
     _pulseController.value = _isDiscovering ? 1.0 : 0.0;
     _bubbleController.value = _isDiscovering ? 0.35 : 0.0;
   }
 
   Widget _buildDiscoveryStatusChip(ThemeData theme) {
     if (!_isDiscovering) return const SizedBox.shrink();
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0.94, end: 1.0),
-      duration: const Duration(milliseconds: 600),
-      curve: Curves.easeOutCubic,
-      builder: (context, value, child) {
-        return Transform.scale(
-          scale: value,
-          child: Opacity(
-            opacity: value.clamp(0.0, 1.0),
-            child: child,
-          ),
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.primary.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.15)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: theme.colorScheme.primary,
-                boxShadow: [
-                  BoxShadow(
-                    color: theme.colorScheme.primary.withValues(alpha: 0.25),
-                    blurRadius: 10,
-                    spreadRadius: 1,
-                  ),
-                ],
-              ),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.primaryContainer.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          RotationTransition(
+            turns: _spinController,
+            child: Icon(
+              Icons.sync,
+              size: 14,
+              color: theme.colorScheme.primary,
             ),
-            const SizedBox(width: 6),
-            Text('Scanning...', style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.primary, fontWeight: FontWeight.w600)),
-          ],
-        ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Scanning...',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
-}
-
-class _BubblePainter extends CustomPainter {
-  final double progress;
-  final Color color;
-
-  static const int _count = 12;
-  static final List<_Bubble> _bubbles = List.generate(_count, (i) {
-    final rng = math.Random(i * 37 + 7);
-    return _Bubble(
-      x: rng.nextDouble(),
-      radius: 2.0 + rng.nextDouble() * 4.0,
-      speed: 0.6 + rng.nextDouble() * 0.4,
-      phase: rng.nextDouble(),
-      wobble: 0.01 + rng.nextDouble() * 0.02,
-      opacity: 0.06 + rng.nextDouble() * 0.10,
-    );
-  });
-
-  _BubblePainter({required this.progress, required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (final b in _bubbles) {
-      final t = (progress * b.speed + b.phase) % 1.0;
-      final y = size.height * (1.0 - t);
-      final x = size.width * b.x + math.sin(t * math.pi * 4) * size.width * b.wobble;
-      final fade = t < 0.15 ? t / 0.15 : (t > 0.85 ? (1.0 - t) / 0.15 : 1.0);
-      final paint = Paint()..color = color.withValues(alpha: b.opacity * fade);
-      canvas.drawCircle(Offset(x, y), b.radius, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_BubblePainter old) => old.progress != progress;
-}
-
-class _Bubble {
-  final double x;
-  final double radius;
-  final double speed;
-  final double phase;
-  final double wobble;
-  final double opacity;
-
-  const _Bubble({
-    required this.x,
-    required this.radius,
-    required this.speed,
-    required this.phase,
-    required this.wobble,
-    required this.opacity,
-  });
 }

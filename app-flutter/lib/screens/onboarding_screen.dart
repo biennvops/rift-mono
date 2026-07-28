@@ -146,7 +146,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           (data['policy']?.toString() == 'local_network')) {
         RiftSnackbar.show(
           context: context,
-          message: 'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
+          message:
+              'Local network access is denied. Enable it for Rift Daemon in System Settings > Privacy & Security > Local Network.',
           type: RiftSnackbarType.error,
         );
         return;
@@ -186,7 +187,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     if (!granted) {
       RiftSnackbar.show(
         context: context,
-        message: 'Notifications are disabled. You can enable them later in System Settings > Notifications.',
+        message:
+            'Notifications are disabled. You can enable them later in System Settings > Notifications.',
         type: RiftSnackbarType.warning,
       );
       _nextPage();
@@ -199,7 +201,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       if (!opened) {
         RiftSnackbar.show(
           context: context,
-          message: 'Unable to open Android notification access settings. You can enable it later in Settings.',
+          message:
+              'Unable to open Android notification access settings. You can enable it later in Settings.',
           type: RiftSnackbarType.warning,
         );
         _nextPage();
@@ -207,7 +210,8 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       }
       RiftSnackbar.show(
         context: context,
-        message: 'Enable Rift notification access in the Android settings screen, then return to continue.',
+        message:
+            'Enable Rift notification access in the Android settings screen, then return to continue.',
         type: RiftSnackbarType.info,
       );
       return;
@@ -229,12 +233,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       _isProcessing = true;
     });
 
-    // Mock processing delay
     await Future.delayed(const Duration(milliseconds: 500));
 
     if (!mounted) return;
 
-    // Navigate to Background Sync detailed permission screen
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const BackgroundSyncScreen()),
     );
@@ -265,26 +267,30 @@ class _OnboardingScreenState extends State<OnboardingScreen>
       body: SafeArea(
         child: Column(
           children: [
-            // Top App Bar
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 16.0,
+                vertical: 8.0,
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Row(
                     children: [
                       ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.asset('assets/images/rift_logo.png',
-                            width: 44, height: 44),
+                        borderRadius: BorderRadius.circular(4),
+                        child: Image.asset(
+                          'assets/images/rift_logo.png',
+                          width: 44,
+                          height: 44,
+                        ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 16),
                       Text(
                         'RIFT',
                         style: theme.textTheme.headlineLarge?.copyWith(
                           color: theme.colorScheme.primary,
-                          fontWeight: FontWeight.bold,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
@@ -299,12 +305,10 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 ],
               ),
             ),
-            // Main Canvas
             Expanded(
               child: PageView(
                 controller: _pageController,
-                physics:
-                    const NeverScrollableScrollPhysics(), // Disable swipe to force button clicks
+                physics: const NeverScrollableScrollPhysics(),
                 onPageChanged: (index) {
                   setState(() {
                     _currentPage = index;
@@ -316,7 +320,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   });
                 },
                 children: [
-                  // Card 1: Local Network
                   _buildOnboardingCard(
                     theme: theme,
                     icon: Icons.wifi_tethering,
@@ -335,7 +338,6 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                       ),
                     ],
                   ),
-                  // Card 2: Notifications
                   _buildOnboardingCard(
                     theme: theme,
                     icon: Icons.notifications,
@@ -348,16 +350,16 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                         : 'Enable push notifications to receive real-time alerts on unauthorized access attempts and device sync status.',
                     actions: [
                       _buildPrimaryButton(
-                          AndroidShell.isSupported
-                              ? 'Enable Alerts & Sync'
-                              : 'Enable Alerts',
-                          theme,
-                          _requestNotificationsThenNext),
+                        AndroidShell.isSupported
+                            ? 'Enable Alerts & Sync'
+                            : 'Enable Alerts',
+                        theme,
+                        _requestNotificationsThenNext,
+                      ),
                       const SizedBox(height: 8),
                       _buildOutlinedButton('Skip for Now', theme, _nextPage),
                     ],
                   ),
-                  // Card 3: Battery Optimization
                   _buildOnboardingCard(
                     theme: theme,
                     icon: Icons.battery_saver,
@@ -418,7 +420,7 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   title,
                   style: theme.textTheme.headlineMedium?.copyWith(
                     color: theme.colorScheme.onSurface,
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w700,
                   ),
                   textAlign: TextAlign.center,
                 ),
@@ -444,14 +446,17 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.info_outline,
-                            size: 16, color: theme.colorScheme.outline),
+                        Icon(
+                          Icons.info_outline,
+                          size: 16,
+                          color: theme.colorScheme.outline,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           infoTag,
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
-                            letterSpacing: 0.5,
+                            letterSpacing: 0.05,
                           ),
                         ),
                       ],
@@ -468,8 +473,11 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   }
 
   Widget _buildPrimaryButton(
-      String text, ThemeData theme, VoidCallback? onPressed,
-      {bool isProcessing = false}) {
+    String text,
+    ThemeData theme,
+    VoidCallback? onPressed, {
+    bool isProcessing = false,
+  }) {
     return SizedBox(
       width: double.infinity,
       child: FilledButton(
@@ -477,7 +485,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
           backgroundColor: theme.colorScheme.primary,
           foregroundColor: theme.colorScheme.onPrimary,
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(4),
+          ),
         ),
         onPressed: onPressed,
         child: isProcessing
@@ -485,38 +495,58 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   SizedBox(
-                    width: 20,
-                    height: 20,
+                    width: 16,
+                    height: 16,
                     child: CircularProgressIndicator(
-                        color: theme.colorScheme.onPrimary, strokeWidth: 2),
+                      color: theme.colorScheme.onPrimary,
+                      strokeWidth: 2,
+                    ),
                   ),
                   const SizedBox(width: 8),
-                  Text(text,
-                      style: const TextStyle(
-                          fontSize: 16, fontWeight: FontWeight.w600)),
+                  Text(
+                    text,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onPrimary,
+                    ),
+                  ),
                 ],
               )
-            : Text(text,
-                style:
-                    const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            : Text(
+                text,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onPrimary,
+                ),
+              ),
       ),
     );
   }
 
   Widget _buildOutlinedButton(
-      String text, ThemeData theme, VoidCallback onPressed) {
+    String text,
+    ThemeData theme,
+    VoidCallback onPressed,
+  ) {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton(
         style: OutlinedButton.styleFrom(
-          foregroundColor: theme.colorScheme.onSurface,
-          side: BorderSide(color: theme.colorScheme.outline),
+          foregroundColor: theme.colorScheme.primary,
+          side: BorderSide(color: theme.colorScheme.primary),
           padding: const EdgeInsets.symmetric(vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(4),
+          ),
         ),
         onPressed: onPressed,
-        child: Text(text,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        child: Text(
+          text,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.primary,
+          ),
+        ),
       ),
     );
   }

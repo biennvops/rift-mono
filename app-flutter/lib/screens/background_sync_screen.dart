@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../main.dart';
+import '../src/ui/app_shell.dart';
 
 class BackgroundSyncScreen extends StatelessWidget {
   final Future<void> Function(BuildContext context)? onFinish;

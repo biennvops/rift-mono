@@ -68,7 +68,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 }
 
 void main() {
-  testWidgets('EventLogScreen shows queried events', (WidgetTester tester) async {
+  testWidgets('EventLogScreen shows queried events',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
 
     await tester.pumpWidget(
@@ -87,7 +88,8 @@ void main() {
     expect(find.text('AuthenticationFailed'), findsOneWidget);
   });
 
-  testWidgets('EventLogScreen filters by severity', (WidgetTester tester) async {
+  testWidgets('EventLogScreen filters by severity',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
 
     await tester.pumpWidget(
@@ -100,6 +102,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Errors'));
     await tester.tap(find.text('Errors'));
     await tester.pumpAndSettle();
 

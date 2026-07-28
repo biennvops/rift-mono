@@ -18,6 +18,12 @@ import '../src/platform/windows_shell.dart';
 import '../widgets/rift_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
+// ── Design system semantic colors ──────────────────────────────────
+const _kSuccessColor = Color(0xFF047857);
+const _kSuccessBgColor = Color(0x14047857);
+const _kTertiaryContainerColor = Color(0xFF3636C5);
+const _kTertiaryContainerBgColor = Color(0x143636C5);
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key, this.onClose});
 
@@ -28,8 +34,9 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _activeTab = 'general';
-  static const Duration _notificationPolicyDebounce = Duration(milliseconds: 300);
+  String _activeTab = '';
+  static const Duration _notificationPolicyDebounce =
+      Duration(milliseconds: 300);
   static const _androidTestNotificationPackage = 'com.example.app_flutter';
   static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
@@ -144,7 +151,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted || success) return;
     RiftSnackbar.show(
       context: context,
-      message: 'Unable to open notification settings on ${Platform.operatingSystem}.',
+      message:
+          'Unable to open notification settings on ${Platform.operatingSystem}.',
       type: RiftSnackbarType.error,
     );
   }
@@ -163,7 +171,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     RiftSnackbar.show(
       context: context,
-      message: 'Notifications were not enabled. You can allow them in System Settings > Notifications.',
+      message:
+          'Notifications were not enabled. You can allow them in System Settings > Notifications.',
       type: RiftSnackbarType.warning,
     );
   }
@@ -431,7 +440,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildTabRail(ThemeData theme, bool isSmallScreen) {
+  // ── Tab Rail ────────────────────────────────────────────────────
+
+  Widget _buildTabRail(ThemeData theme) {
     final tabs = [
       ('general', 'General', Icons.tune),
       ('identity', 'Identity', Icons.badge_outlined),
@@ -443,7 +454,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ];
 
     return Container(
-      width: isSmallScreen ? 64 : _sidebarWidth,
+      width: _sidebarWidth,
       color: theme.colorScheme.surfaceContainerLow,
       padding: const EdgeInsets.all(8),
       child: ListView(
@@ -453,27 +464,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final icon = tab.$3;
           final isActive = _activeTab == id;
 
+          // body-md: 16px / 400 / 24px line-height
+          final labelStyle = TextStyle(
+            fontSize: 16,
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+            color: isActive
+                ? theme.colorScheme.primaryContainer
+                : theme.colorScheme.onSurfaceVariant,
+            height: 24 / 16,
+          );
+
           final itemContent = Row(
-            mainAxisAlignment: isSmallScreen ? MainAxisAlignment.center : MainAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.start,
             children: [
               Icon(
                 icon,
                 size: 18,
-                color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.85),
+                color: isActive
+                    ? theme.colorScheme.primaryContainer
+                    : theme.colorScheme.onSurfaceVariant
+                        .withValues(alpha: 0.85),
               ),
-              if (!isSmallScreen) ...[
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                      color: isActive ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: labelStyle,
+                  overflow: TextOverflow.ellipsis,
                 ),
-              ],
+              ),
             ],
           );
 
@@ -481,19 +500,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.only(bottom: 2),
             child: Material(
               color: isActive ? theme.colorScheme.surface : Colors.transparent,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(4),
               child: InkWell(
                 onTap: () => setState(() => _activeTab = id),
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(4),
                 child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: isSmallScreen ? 0 : 10, vertical: 10),
-                  decoration: isActive ? BoxDecoration(
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-                  ) : null,
-                  child: isSmallScreen
-                      ? Tooltip(message: label, child: itemContent)
-                      : itemContent,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  decoration: isActive
+                      ? BoxDecoration(
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color: theme.colorScheme.outlineVariant
+                                  .withValues(alpha: 0.5)),
+                        )
+                      : null,
+                  child: itemContent,
                 ),
               ),
             ),
@@ -503,7 +525,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildBadge(ThemeData theme, String text, Color bgColor, Color textColor) {
+  Widget _buildMobileMenu(ThemeData theme) {
+    final tabs = [
+      ('general', 'General', 'Basic identity and pairing', Icons.tune),
+      (
+        'identity',
+        'Identity',
+        'Profiles and trust state',
+        Icons.badge_outlined
+      ),
+      ('permissions', 'Permissions', 'System integrations', Icons.security),
+      (
+        'system',
+        'System Checks',
+        'Connectivity tests',
+        Icons.check_box_outlined
+      ),
+      (
+        'filetransfer',
+        'File Transfer',
+        'Queue and storage',
+        Icons.folder_shared_outlined
+      ),
+      (
+        'trust',
+        'Trust Store',
+        'Trusted devices and revocation',
+        Icons.shield_outlined
+      ),
+      ('about', 'About', 'Version and legal', Icons.info_outline),
+    ];
+
+    return ListView.separated(
+      itemCount: tabs.length,
+      separatorBuilder: (_, __) => Divider(
+          height: 1,
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
+      itemBuilder: (context, index) {
+        final tab = tabs[index];
+        return ListTile(
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          leading: Icon(tab.$4, color: theme.colorScheme.primary),
+          title: Text(
+            tab.$2,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+          subtitle: Text(
+            tab.$3,
+            style: TextStyle(
+                fontSize: 14, color: theme.colorScheme.onSurfaceVariant),
+          ),
+          trailing: const Icon(Icons.chevron_right, size: 20),
+          onTap: () => setState(() => _activeTab = tab.$1),
+        );
+      },
+    );
+  }
+
+  // ── Shared UI primitives ────────────────────────────────────────
+
+  Widget _buildBadge(
+      ThemeData theme, String text, Color bgColor, Color textColor) {
+    // label-sm: 12px / 500 / 16px line-height
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -512,42 +596,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Text(
         text.toUpperCase(),
-        style: TextStyle(
-          fontFamily: 'JetBrains Mono',
-          fontSize: 9.5,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.6,
-          color: textColor,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+          height: 16 / 12,
+          color: Color(0xFF3636C5), // fallback, overridden by textColor param
         ),
       ),
     );
   }
 
-  Widget _buildAndroidBadge(ThemeData theme) => _buildBadge(theme, 'Android', const Color(0xFF6E3FB0).withValues(alpha: 0.10), const Color(0xFF6E3FB0));
-  Widget _buildDesktopBadge(ThemeData theme) => _buildBadge(theme, 'Desktop', const Color(0xFF3636C5).withValues(alpha: 0.10), const Color(0xFF3636C5));
-  Widget _buildLinuxBadge(ThemeData theme) => _buildBadge(theme, 'Linux', const Color(0xFF3636C5).withValues(alpha: 0.10), const Color(0xFF3636C5));
-  Widget _buildGrantedChip(ThemeData theme) => _buildBadge(theme, 'Granted', const Color(0xFF12744F).withValues(alpha: 0.10), const Color(0xFF12744F));
+  Widget _buildAndroidBadge(ThemeData theme) => _buildBadge(
+      theme, 'Android', _kTertiaryContainerBgColor, _kTertiaryContainerColor);
+  Widget _buildDesktopBadge(ThemeData theme) => _buildBadge(
+      theme, 'Desktop', _kTertiaryContainerBgColor, _kTertiaryContainerColor);
+  Widget _buildLinuxBadge(ThemeData theme) => _buildBadge(
+      theme, 'Linux', _kTertiaryContainerBgColor, _kTertiaryContainerColor);
+  Widget _buildGrantedChip(ThemeData theme) =>
+      _buildBadge(theme, 'Granted', _kSuccessBgColor, _kSuccessColor);
 
   Widget _buildSuccessIcon(ThemeData theme) {
     return Container(
       width: 26,
       height: 26,
       decoration: BoxDecoration(
-        color: const Color(0xFF12744F).withValues(alpha: 0.10),
+        color: _kSuccessBgColor,
         shape: BoxShape.circle,
       ),
-      child: const Icon(Icons.check, size: 15, color: Color(0xFF12744F)),
+      child: const Icon(Icons.check, size: 15, color: _kSuccessColor),
     );
   }
 
-  Widget _buildIconButton(ThemeData theme, IconData icon, String tooltip, VoidCallback onPressed) {
+  Widget _buildIconButton(
+      ThemeData theme, IconData icon, String tooltip, VoidCallback onPressed) {
     return IconButton(
       onPressed: onPressed,
       icon: Icon(icon, size: 18),
       tooltip: tooltip,
       style: IconButton.styleFrom(
         foregroundColor: theme.colorScheme.onSurfaceVariant,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
       ),
     );
   }
@@ -561,18 +649,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildPanelHeader(ThemeData theme, String title, String desc, {Widget? badge}) {
+  Widget _buildSecondaryButton({
+    required ThemeData theme,
+    required VoidCallback onPressed,
+    required String label,
+    IconData? icon,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: icon != null ? Icon(icon, size: 16) : const SizedBox.shrink(),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: theme.colorScheme.primaryContainer,
+        side: BorderSide(color: theme.colorScheme.primaryContainer),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      ),
+    );
+  }
+
+  Widget _buildPrimaryButton({
+    required ThemeData theme,
+    required VoidCallback onPressed,
+    required String label,
+  }) {
+    return ElevatedButton(
+      onPressed: onPressed,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: theme.colorScheme.primaryContainer,
+        foregroundColor: theme.colorScheme.onPrimary,
+        elevation: 0,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  // ── Panel structure ─────────────────────────────────────────────
+
+  Widget _buildPanelHeader(ThemeData theme, String title, String desc,
+      {Widget? badge}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(
-              title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: theme.colorScheme.onSurface,
+            Flexible(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.01,
+                  height: 32 / 24,
+                  color: theme.colorScheme.onSurface,
+                ),
               ),
             ),
             if (badge != null) ...[
@@ -582,9 +717,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
         const SizedBox(height: 4),
+        // body-sm: 14px / 400 / 20px line-height
         Text(
           desc,
-          style: theme.textTheme.bodySmall?.copyWith(
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w400,
+            height: 20 / 14,
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
@@ -598,12 +737,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.only(bottom: 8, top: 16),
       child: Row(
         children: [
+          // label-md: 14px / 600 / 0.05em / 16px line-height
           Text(
             label.toUpperCase(),
-            style: theme.textTheme.labelSmall?.copyWith(
-              fontFamily: 'JetBrains Mono',
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1.0,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.05,
+              height: 16 / 14,
               color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
@@ -625,53 +766,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Widget? titleBadge,
     bool isMonoTitle = false,
     bool isMonoSubtitle = false,
+    bool? trailingBelow,
     VoidCallback? onTap,
   }) {
+    final titleWidget = Text(
+      title,
+      style: TextStyle(
+        fontFamily: isMonoTitle ? 'JetBrains Mono' : null,
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        height: 24 / 16,
+        color: theme.colorScheme.onSurface,
+      ),
+    );
+
+    final subtitleWidget = Text(
+      subtitle,
+      style: TextStyle(
+        fontFamily: isMonoSubtitle ? 'JetBrains Mono' : null,
+        fontSize: 14,
+        fontWeight: FontWeight.w400,
+        height: 20 / 14,
+        color: theme.colorScheme.onSurfaceVariant,
+      ),
+    );
+
+    final putBelow = trailingBelow ?? (titleBadge != null);
+
+    final textColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (titleBadge != null)
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
+            children: [titleWidget, titleBadge],
+          )
+        else
+          titleWidget,
+        const SizedBox(height: 2),
+        subtitleWidget,
+        if (putBelow && trailing != null) ...[
+          const SizedBox(height: 8),
+          trailing,
+        ],
+      ],
+    );
+
     final content = Container(
-      padding: const EdgeInsets.symmetric(vertical: 13),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
+        border: Border(
+            bottom: BorderSide(
+                color:
+                    theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           if (leadingIcon != null) ...[
             leadingIcon,
             const SizedBox(width: 16),
           ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        title,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontFamily: isMonoTitle ? 'JetBrains Mono' : null,
-                          fontWeight: FontWeight.w600,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                    ),
-                    if (titleBadge != null) ...[
-                      const SizedBox(width: 8),
-                      titleBadge,
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: isMonoSubtitle ? 'JetBrains Mono' : null,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (trailing != null) ...[
+          Expanded(child: textColumn),
+          if (!putBelow && trailing != null) ...[
             const SizedBox(width: 16),
             trailing,
           ],
@@ -682,30 +841,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (onTap != null) {
       return InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(4),
         child: content,
       );
     }
     return content;
   }
 
+  // ── Panel: General ──────────────────────────────────────────────
+
   Widget _buildGeneralPanel(ThemeData theme, String displayName) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'General', 'Basic identity and pairing preferences for this device.'),
+        _buildPanelHeader(theme, 'General',
+            'Basic identity and pairing preferences for this device.'),
         _buildRow(
           theme: theme,
           title: 'Device name',
           subtitle: displayName,
-          trailing: _buildIconButton(theme, Icons.edit, 'Rename device', () => _showEditDeviceNameDialog(displayName)),
+          trailing: _buildIconButton(theme, Icons.edit, 'Rename device',
+              () => _showEditDeviceNameDialog(displayName)),
           onTap: () => _showEditDeviceNameDialog(displayName),
         ),
         _buildRow(
           theme: theme,
           title: 'Pair by IP',
           subtitle: 'Manually pair with a device using its IP address',
-          trailing: _buildIconButton(theme, Icons.router, 'Pair by IP', _showManualPairDialog),
+          trailing: _buildIconButton(
+              theme, Icons.router, 'Pair by IP', _showManualPairDialog),
           onTap: _showManualPairDialog,
         ),
         _buildRow(
@@ -719,34 +883,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildIdentityPanel(ThemeData theme, String deviceId, String fingerprint) {
+  // ── Panel: Identity ────────────────────────────────────────────
+
+  Widget _buildIdentityPanel(
+      ThemeData theme, String deviceId, String fingerprint) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'Identity', 'Your device\'s unique cryptographic identity, used to verify trust with peers.'),
+        _buildPanelHeader(theme, 'Identity',
+            'Your device\'s unique cryptographic identity, used to verify trust with peers.'),
         _buildRow(
           theme: theme,
           title: 'Device ID',
           subtitle: deviceId,
           isMonoSubtitle: true,
-          trailing: _buildIconButton(theme, Icons.copy, 'Copy Device ID', () => _copyToClipboard(deviceId, 'Device ID copied to clipboard')),
+          trailing: _buildIconButton(
+              theme,
+              Icons.copy,
+              'Copy Device ID',
+              () =>
+                  _copyToClipboard(deviceId, 'Device ID copied to clipboard')),
         ),
         _buildRow(
           theme: theme,
           title: 'Fingerprint',
           subtitle: fingerprint,
           isMonoSubtitle: true,
-          trailing: _buildIconButton(theme, Icons.copy, 'Copy Fingerprint', () => _copyToClipboard(fingerprint, 'Fingerprint copied to clipboard')),
+          trailing: _buildIconButton(
+              theme,
+              Icons.copy,
+              'Copy Fingerprint',
+              () => _copyToClipboard(
+                  fingerprint, 'Fingerprint copied to clipboard')),
         ),
       ],
     );
   }
 
-  Widget _buildPermissionsPanel(ThemeData theme, String localNetworkSubtitle, String backgroundExecSubtitle) {
+  // ── Panel: Permissions ─────────────────────────────────────────
+
+  Widget _buildPermissionsPanel(ThemeData theme, String localNetworkSubtitle,
+      String backgroundExecSubtitle) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'Permissions & System Sync', 'Control what Rift can access on this device and how notifications mirror across your devices.'),
+        _buildPanelHeader(theme, 'Permissions & System Sync',
+            'Control what Rift can access on this device and how notifications mirror across your devices.'),
         _buildGroupLabel(theme, 'SYSTEM ACCESS'),
         _buildRow(
           theme: theme,
@@ -758,18 +940,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           theme: theme,
           title: 'Notifications',
           subtitle: _notificationPermissionSubtitle,
-          leadingIcon: Icon(_notificationPermissionIcon, color: _notificationPermissionColor(theme), size: 20),
+          leadingIcon: Icon(_notificationPermissionIcon,
+              color: _notificationPermissionColor(theme), size: 20),
+          trailingBelow: !_notificationsAuthorized,
           trailing: _notificationsAuthorized
               ? _buildGrantedChip(theme)
               : (_canManageNotificationSettings
-                  ? ElevatedButton(
+                  ? _buildPrimaryButton(
+                      theme: theme,
                       onPressed: _handleNotificationPermissionAction,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: theme.colorScheme.primary,
-                        foregroundColor: theme.colorScheme.onPrimary,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      ),
-                      child: Text(_notificationPermissionActionLabel, style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.bold)),
+                      label: _notificationPermissionActionLabel,
                     )
                   : null),
         ),
@@ -779,17 +959,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             title: 'Notification access',
             subtitle: _notificationAccessSubtitle,
             titleBadge: _buildAndroidBadge(theme),
-            leadingIcon: Icon(_notificationAccessIcon, color: _notificationAccessColor(theme), size: 20),
+            leadingIcon: Icon(_notificationAccessIcon,
+                color: _notificationAccessColor(theme), size: 20),
             trailing: _notificationAccessAuthorized
                 ? _buildGrantedChip(theme)
-                : ElevatedButton(
+                : _buildPrimaryButton(
+                    theme: theme,
                     onPressed: _openNotificationAccessSettings,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.colorScheme.primary,
-                      foregroundColor: theme.colorScheme.onPrimary,
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    ),
-                    child: const Text('OPEN SETTINGS', style: TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12, fontWeight: FontWeight.bold)),
+                    label: 'OPEN SETTINGS',
                   ),
           ),
         _buildRow(
@@ -801,7 +978,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildRow(
           theme: theme,
           title: 'Clipboard received notifications',
-          subtitle: 'Off by default. Shows a system notification when automatic clipboard sync receives content.',
+          subtitle:
+              'Off by default. Shows a system notification when automatic clipboard sync receives content.',
           trailing: Switch(
             value: _clipboardNotificationsEnabled,
             onChanged: _setClipboardNotificationsEnabled,
@@ -814,6 +992,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ? 'Mirror Android notifications to trusted desktop devices only.'
               : 'On by default, but Android notification access must be enabled before sync can work.',
           titleBadge: _buildAndroidBadge(theme),
+          trailingBelow: false,
           trailing: Switch(
             value: _notificationSyncEnabled,
             onChanged: (enabled) async {
@@ -827,26 +1006,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
         Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4))),
+            border: Border(
+                bottom: BorderSide(
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.4))),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Notification blacklist', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600, color: theme.colorScheme.onSurface)),
+              Text('Notification blacklist',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    height: 24 / 16,
+                    color: theme.colorScheme.onSurface,
+                  )),
               const SizedBox(height: 2),
-              Text('One Android package per line. Blacklisted apps stay local.', style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+              Text('One Android package per line. Blacklisted apps stay local.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w400,
+                    height: 20 / 14,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  )),
               const SizedBox(height: 8),
               TextField(
                 controller: _notificationBlacklistController,
                 minLines: 2,
                 maxLines: 4,
-                style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 13),
+                // Giữ mono cho dữ liệu kỹ thuật (package names)
+                style:
+                    const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 14),
                 onChanged: (_) => _scheduleNotificationSyncPolicyPersist(),
                 decoration: InputDecoration(
-                  filled: true,
-                  fillColor: theme.colorScheme.surfaceContainerLow,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: theme.colorScheme.outlineVariant)),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(6), borderSide: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6))),
+                  filled: false,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide:
+                          BorderSide(color: theme.colorScheme.outlineVariant)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: BorderSide(
+                          color: theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.6))),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(4),
+                      borderSide: BorderSide(
+                          color: theme.colorScheme.primaryContainer, width: 2)),
                   contentPadding: const EdgeInsets.all(12),
                 ),
               ),
@@ -860,28 +1066,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             runSpacing: 8,
             children: [
               if (AndroidShell.isSupported)
-                OutlinedButton.icon(
+                _buildSecondaryButton(
+                  theme: theme,
                   onPressed: _showTestNotification,
-                  icon: const Icon(Icons.notifications_active_outlined, size: 16),
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('Test notification '),
-                      _buildAndroidBadge(theme),
-                    ],
-                  ),
+                  label: 'Test notification',
+                  icon: Icons.notifications_active_outlined,
                 ),
               if (_isDesktopPlatform)
-                OutlinedButton.icon(
+                _buildSecondaryButton(
+                  theme: theme,
                   onPressed: _showDesktopTestNotification,
-                  icon: const Icon(Icons.desktop_windows_outlined, size: 16),
-                  label: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('Test desktop sync '),
-                      _buildDesktopBadge(theme),
-                    ],
-                  ),
+                  label: 'Test desktop sync',
+                  icon: Icons.desktop_windows_outlined,
                 ),
             ],
           ),
@@ -889,6 +1085,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ],
     );
   }
+
+  // ── Panel: System Checks ───────────────────────────────────────
 
   Widget _buildSystemPanel(ThemeData theme) {
     return Column(
@@ -898,71 +1096,114 @@ class _SettingsScreenState extends State<SettingsScreen> {
           theme,
           'System Checks',
           'Platform-level dependencies Rift needs to discover and sync with other devices.',
-          badge: Platform.isLinux ? _buildLinuxBadge(theme) : (Platform.isAndroid ? _buildAndroidBadge(theme) : _buildDesktopBadge(theme)),
+          badge: Platform.isLinux
+              ? _buildLinuxBadge(theme)
+              : (Platform.isAndroid
+                  ? _buildAndroidBadge(theme)
+                  : _buildDesktopBadge(theme)),
         ),
         if (Platform.isLinux) ...[
-          _buildRow(theme: theme, title: 'avahi-daemon', subtitle: 'running', leadingIcon: _buildSuccessIcon(theme), isMonoTitle: true, isMonoSubtitle: true),
-          _buildRow(theme: theme, title: 'appindicator', subtitle: 'supported', leadingIcon: _buildSuccessIcon(theme), isMonoTitle: true, isMonoSubtitle: true),
+          _buildRow(
+              theme: theme,
+              title: 'avahi-daemon',
+              subtitle: 'running',
+              leadingIcon: _buildSuccessIcon(theme),
+              isMonoTitle: true,
+              isMonoSubtitle: true),
+          _buildRow(
+              theme: theme,
+              title: 'appindicator',
+              subtitle: 'supported',
+              leadingIcon: _buildSuccessIcon(theme),
+              isMonoTitle: true,
+              isMonoSubtitle: true),
         ] else if (Platform.isAndroid) ...[
-          _buildRow(theme: theme, title: 'Android Clipboard Monitoring', subtitle: 'Rift uses platform clipboard APIs and foreground service flow. Accessibility Service is not required.', leadingIcon: _buildSuccessIcon(theme)),
+          _buildRow(
+              theme: theme,
+              title: 'Android Clipboard Monitoring',
+              subtitle:
+                  'Rift uses platform clipboard APIs and foreground service flow. Accessibility Service is not required.',
+              leadingIcon: _buildSuccessIcon(theme)),
         ] else ...[
-          _buildRow(theme: theme, title: 'Platform check', subtitle: 'No platform-specific checks for ${Platform.operatingSystem} yet.'),
+          _buildRow(
+              theme: theme,
+              title: 'Platform check',
+              subtitle:
+                  'No platform-specific checks for ${Platform.operatingSystem} yet.'),
         ],
         if (Platform.isAndroid) ...[
-          _buildGroupLabel(theme, 'CLIPBOARD', badge: _buildAndroidBadge(theme)),
-          _buildRow(theme: theme, title: 'Background clipboard monitoring', subtitle: 'Uses Rift foreground service when background sync is active'),
+          _buildGroupLabel(theme, 'CLIPBOARD',
+              badge: _buildAndroidBadge(theme)),
+          _buildRow(
+              theme: theme,
+              title: 'Background clipboard monitoring',
+              subtitle:
+                  'Uses Rift foreground service when background sync is active'),
         ],
       ],
     );
   }
 
+  // ── Panel: File Transfer ───────────────────────────────────────
+
   Widget _buildFileTransferPanel(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'File Transfer', 'Where files received from trusted devices are saved.'),
+        _buildPanelHeader(theme, 'File Transfer',
+            'Where files received from trusted devices are saved.'),
         _buildRow(
           theme: theme,
           title: 'Default Download Location',
           subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
           isMonoSubtitle: true,
-          trailing: _buildIconButton(theme, Icons.folder_open, 'Choose folder', _pickDefaultDownloadPath),
+          trailing: _buildIconButton(theme, Icons.folder_open, 'Choose folder',
+              _pickDefaultDownloadPath),
           onTap: _pickDefaultDownloadPath,
         ),
       ],
     );
   }
 
+  // ── Panel: Trust Store ─────────────────────────────────────────
+
   Widget _buildTrustPanel(ThemeData theme) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'Trust Store', 'Manage the cryptographic keys and certificates of every device you\'ve trusted.'),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () {
-              RiftSnackbar.show(context: context, message: 'Trust Store management is under development.', type: RiftSnackbarType.info);
-            },
-            icon: const Icon(Icons.folder_outlined, size: 18),
-            label: const Text('MANAGE TRUST STORE', style: TextStyle(fontFamily: 'JetBrains Mono', fontWeight: FontWeight.bold)),
-            style: OutlinedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-          ),
+        _buildPanelHeader(theme, 'Trust Store',
+            'Manage the cryptographic keys and certificates of every device you\'ve trusted.'),
+        _buildSecondaryButton(
+          theme: theme,
+          onPressed: () {
+            RiftSnackbar.show(
+                context: context,
+                message: 'Trust Store management is under development.',
+                type: RiftSnackbarType.info);
+          },
+          label: 'MANAGE TRUST STORE',
+          icon: Icons.folder_outlined,
         ),
       ],
     );
   }
 
-  Widget _buildAboutPanel(ThemeData theme, String implementationId, String protocolVersion) {
+  // ── Panel: About ───────────────────────────────────────────────
+
+  Widget _buildAboutPanel(
+      ThemeData theme, String implementationId, String protocolVersion) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'About Application', 'Build, protocol, and audit information.'),
-        _buildRow(theme: theme, title: 'Implementation', subtitle: implementationId),
-        _buildRow(theme: theme, title: 'Protocol version', subtitle: protocolVersion, isMonoSubtitle: true),
+        _buildPanelHeader(theme, 'About Application',
+            'Build, protocol, and audit information.'),
+        _buildRow(
+            theme: theme, title: 'Implementation', subtitle: implementationId),
+        _buildRow(
+            theme: theme,
+            title: 'Protocol version',
+            subtitle: protocolVersion,
+            isMonoSubtitle: true),
         _buildRow(
           theme: theme,
           title: 'Event log',
@@ -980,6 +1221,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ── Active panel with white card container ─────────────────────
+
   Widget _buildActivePanel(
     ThemeData theme,
     String displayName,
@@ -996,7 +1239,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         content = _buildIdentityPanel(theme, deviceId, fingerprint);
         break;
       case 'permissions':
-        content = _buildPermissionsPanel(theme, localNetworkSubtitle, backgroundExecSubtitle);
+        content = _buildPermissionsPanel(
+            theme, localNetworkSubtitle, backgroundExecSubtitle);
         break;
       case 'system':
         content = _buildSystemPanel(theme);
@@ -1026,7 +1270,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: theme.colorScheme.errorContainer,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
                 _error!,
@@ -1035,11 +1279,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 16),
           ],
-          content,
+          // White card: bg + 1px border + no shadow, rounded-lg (8px)
+          Container(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLowest,
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            padding:
+                const EdgeInsets.only(left: 24, right: 24, top: 20, bottom: 16),
+            child: content,
+          ),
         ],
       ),
     );
   }
+
+  // ── Main build ─────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -1051,9 +1307,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         appBar: AppBar(
             automaticallyImplyLeading: widget.onClose == null,
             titleSpacing: widget.onClose != null ? 16 : null,
-            title: const Text('Settings',
-                style: TextStyle(
-                    fontFamily: 'Inter', fontSize: 22, fontWeight: FontWeight.w700)),
+            title: Text(
+              'Settings',
+              // headline-md: 24px / 600 / -0.01em
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.01,
+                height: 32 / 24,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
             actions: widget.onClose != null
                 ? [
                     IconButton(
@@ -1084,7 +1348,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ? 'Rift uses a foreground service; some vendors may still restrict background work'
         : 'Handled by the desktop session and local daemon';
 
-    final isSmallScreen = MediaQuery.of(context).size.width < 720;
+    final isMobile = MediaQuery.of(context).size.width < 720;
+
+    if (isMobile) {
+      final showingDetail = _activeTab.isNotEmpty;
+      return Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          backgroundColor: theme.colorScheme.surface,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: showingDetail
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => setState(() => _activeTab = ''),
+                )
+              : widget.onClose != null
+                  ? IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: widget.onClose,
+                    )
+                  : null,
+          automaticallyImplyLeading: !showingDetail && widget.onClose == null,
+          iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+          title: Text(
+            showingDetail ? _activePanelTitle(_activeTab) : 'Settings',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child: Divider(
+                height: 1,
+                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+          ),
+        ),
+        body: showingDetail
+            ? _buildActivePanel(
+                theme,
+                displayName,
+                deviceId,
+                fingerprint,
+                implementationId,
+                protocolVersion,
+                localNetworkSubtitle,
+                backgroundExecSubtitle,
+              )
+            : _buildMobileMenu(theme),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -1097,10 +1412,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         titleSpacing: widget.onClose != null ? 16 : null,
         title: Text(
           'Settings',
-          style: theme.textTheme.titleLarge?.copyWith(
-            fontFamily: 'Inter',
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.01,
+            height: 32 / 24,
             color: theme.colorScheme.onSurface,
           ),
         ),
@@ -1116,41 +1432,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
-          child: Divider(height: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+          child: Divider(
+              height: 1,
+              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
         ),
       ),
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildTabRail(theme, isSmallScreen),
-          if (!isSmallScreen)
-            MouseRegion(
-              cursor: SystemMouseCursors.resizeColumn,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onPanUpdate: (details) {
-                  setState(() {
-                    _sidebarWidth = (_sidebarWidth + details.delta.dx).clamp(160.0, 400.0);
-                  });
-                },
-                child: Container(
-                  width: 8,
-                  color: Colors.transparent,
-                  child: Center(
-                    child: Container(
-                      width: 2,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(1),
-                      ),
+          _buildTabRail(theme),
+          MouseRegion(
+            cursor: SystemMouseCursors.resizeColumn,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onPanUpdate: (details) {
+                setState(() {
+                  _sidebarWidth =
+                      (_sidebarWidth + details.delta.dx).clamp(160.0, 400.0);
+                });
+              },
+              child: Container(
+                width: 8,
+                color: Colors.transparent,
+                child: Center(
+                  child: Container(
+                    width: 2,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.outlineVariant
+                          .withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(1),
                     ),
                   ),
                 ),
               ),
-            )
-          else
-            VerticalDivider(width: 1, thickness: 1, color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
+            ),
+          ),
           Expanded(
             child: _buildActivePanel(
               theme,
@@ -1166,6 +1483,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  // ── Dialogs ────────────────────────────────────────────────────
+
+  String _activePanelTitle(String tab) {
+    switch (tab) {
+      case 'general':
+        return 'General';
+      case 'identity':
+        return 'Identity';
+      case 'permissions':
+        return 'Permissions';
+      case 'system':
+        return 'System Checks';
+      case 'filetransfer':
+        return 'File Transfer';
+      case 'trust':
+        return 'Trust Store';
+      case 'about':
+        return 'About';
+      default:
+        return 'Settings';
+    }
   }
 
   void _showEditDeviceNameDialog(String currentName) {
@@ -1201,12 +1541,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     try {
       await client.setDisplayName(newName);
-      await _fetchDeviceInfo(); // Refresh to get the new name
+      await _fetchDeviceInfo();
     } catch (e) {
       if (!mounted) return;
       RiftSnackbar.show(
         context: context,
-        message: 'Failed to update device name: ${JsonRpcRiftClient.formatDisplayError(e)}',
+        message:
+            'Failed to update device name: ${JsonRpcRiftClient.formatDisplayError(e)}',
         type: RiftSnackbarType.error,
       );
     }
@@ -1255,7 +1596,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onConfirm: () {
             final input = controller.text.trim();
             if (input.isEmpty) return;
-            
+
             final parts = input.split(':');
             if (parts.length != 2) {
               RiftSnackbar.show(
@@ -1265,7 +1606,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
               return;
             }
-            
+
             final address = parts[0];
             final port = int.tryParse(parts[1]);
             if (port == null) {
@@ -1276,12 +1617,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               );
               return;
             }
-            
+
             Navigator.pop(context);
             _performManualPair(address, port);
           },
         );
-
       },
     );
   }
@@ -1291,12 +1631,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final result = await client.startPairingByEndpoint(address, port);
       if (!mounted) return;
-      
+
       final confirm = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
-        builder: (context) {
+        builder: (dialogContext) {
+          final dialogTheme = Theme.of(dialogContext);
           return AlertDialog(
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             title: const Text('Confirm Pairing'),
             content: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1317,11 +1660,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context, false),
+                onPressed: () => Navigator.pop(dialogContext, false),
+                style: TextButton.styleFrom(
+                  foregroundColor: dialogTheme.colorScheme.onSurfaceVariant,
+                ),
                 child: const Text('REJECT'),
               ),
               FilledButton(
-                onPressed: () => Navigator.pop(context, true),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                style: FilledButton.styleFrom(elevation: 0),
                 child: const Text('MATCH'),
               ),
             ],
@@ -1347,7 +1694,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       RiftSnackbar.show(
         context: context,
-        message: 'Manual pairing failed: ${JsonRpcRiftClient.formatDisplayError(e)}',
+        message:
+            'Manual pairing failed: ${JsonRpcRiftClient.formatDisplayError(e)}',
         type: RiftSnackbarType.error,
       );
     }
