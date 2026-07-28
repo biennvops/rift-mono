@@ -17,6 +17,7 @@ import 'package:daemon_dart/src/network/discovery_service_factory.dart'
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
+import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
@@ -353,6 +354,9 @@ Future<bool> allowPeerHandshake({
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
 /// hosted by an Android Foreground Service.
+typedef PeerTransportFactory =
+    Transport Function(IdentityManager identityManager, int port);
+
 class RiftDaemon {
   static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
   static const Duration _defaultMediaPlaybackActionTimeout = Duration(
@@ -380,7 +384,8 @@ class RiftDaemon {
   };
   IdentityManagerImpl? _identityManager;
   DiscoveryService? _discoveryService;
-  TransportImpl? _transport;
+  Transport? _transport;
+  int? _boundTransportPort;
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
@@ -412,6 +417,8 @@ class RiftDaemon {
   final Future<Uint8List> Function()? identityPrivateKeyProvider;
   final int port;
   final bool enableTransport;
+  final Transport? peerTransport;
+  final PeerTransportFactory? peerTransportFactory;
   final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
   final Duration mediaPlaybackActionTimeout;
@@ -421,6 +428,8 @@ class RiftDaemon {
     this.identityPrivateKeyProvider,
     this.port = 11112,
     this.enableTransport = true,
+    this.peerTransport,
+    this.peerTransportFactory,
     this.enableDiscovery = true,
     this.onIpcEvent,
     this.mediaPlaybackActionTimeout = _defaultMediaPlaybackActionTimeout,
@@ -437,15 +446,26 @@ class RiftDaemon {
     await _trustStore!.initialize();
 
     if (enableTransport) {
-      // If the requested port is unavailable (common on dev devices), fall back
-      // to an ephemeral port rather than failing the entire IPC layer.
-      try {
-        _transport = TransportImpl(_identityManager!, port: port);
+      final injectedTransport =
+          peerTransport ?? peerTransportFactory?.call(_identityManager!, port);
+      if (injectedTransport != null) {
+        _transport = injectedTransport;
         await _transport!.startServer();
-      } on SocketException {
-        _transport = TransportImpl(_identityManager!, port: 0);
-        await _transport!.startServer();
+      } else {
+        // If the requested port is unavailable (common on dev devices), fall back
+        // to an ephemeral port rather than failing the entire IPC layer.
+        try {
+          _transport = TransportImpl(_identityManager!, port: port);
+          await _transport!.startServer();
+        } on SocketException {
+          _transport = TransportImpl(_identityManager!, port: 0);
+          await _transport!.startServer();
+        }
       }
+      _boundTransportPort = switch (_transport) {
+        BoundTransport transport => transport.boundPort,
+        _ => port,
+      };
     }
 
     if (_transport != null) {
@@ -628,7 +648,7 @@ class RiftDaemon {
     }
 
     if (enableDiscovery) {
-      final advertisedPort = _transport?.boundPort ?? port;
+      final advertisedPort = _boundTransportPort ?? port;
       _discoveryService = discovery_factory.createDiscoveryService(
         port: advertisedPort,
         deviceIdHint: _identityManager!.deviceId,
@@ -2260,6 +2280,8 @@ class RiftDaemon {
             await _sessionManager!.sendMessage(peer.deviceId, {
               'rift': '0.1-draft',
               'type': 'clipboard.offer',
+              'id': const Uuid().v4(),
+              'messageId': const Uuid().v4(),
               'sourceDeviceId': _identityManager!.deviceId,
               'destinationDeviceId': peer.deviceId,
               'payload': offerPayload,
@@ -3656,7 +3678,10 @@ class RiftDaemon {
   }
 
   /// The static entry point for spawning the Isolate from Flutter
-  static void isolateEntryPoint(Map<String, dynamic> args) async {
+  static void isolateEntryPoint(
+    Map<String, dynamic> args, {
+    PeerTransportFactory? peerTransportFactory,
+  }) async {
     final storagePath = args['storagePath'] as String;
     final sendPort = args.containsKey('sendPort')
         ? args['sendPort'] as SendPort
@@ -3664,12 +3689,19 @@ class RiftDaemon {
     final port = args['port'] as int? ?? 11112;
     final enableDiscovery = args['enableDiscovery'] as bool? ?? true;
     final enableTransport = args['enableTransport'] as bool? ?? true;
+    // Identity seed loaded by the host (e.g. from a platform keystore) before
+    // spawning; the daemon isolate itself cannot use platform channels.
+    final identityKey = args['identityKey'];
 
     final daemon = RiftDaemon(
       storagePath: storagePath,
       port: port,
       enableDiscovery: enableDiscovery,
       enableTransport: enableTransport,
+      peerTransportFactory: peerTransportFactory,
+      identityPrivateKeyProvider: identityKey is Uint8List
+          ? () async => identityKey
+          : null,
       onIpcEvent: (event) => sendPort?.send(event),
     );
 
@@ -3753,7 +3785,7 @@ class RiftDaemon {
             'params': {
               'status': 'running',
               'deviceId': daemon._identityManager!.deviceId,
-              'advertisedPort': daemon._transport?.boundPort ?? daemon.port,
+              'advertisedPort': daemon._boundTransportPort ?? daemon.port,
               'fingerprintPrefix': _fingerprintPrefix(
                 daemon._identityManager!.getDeviceFingerprint(),
               ),

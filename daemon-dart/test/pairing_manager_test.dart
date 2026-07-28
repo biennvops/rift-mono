@@ -263,7 +263,7 @@ void main() {
     );
 
     test(
-      'Process rift.approvePairing sends protocol message and becomes trusted',
+      'Process rift.approvePairing sends approval but waits for peer approval',
       () async {
         await trustStore.upsertPeer(
           PeerRecord(
@@ -283,16 +283,12 @@ void main() {
         });
 
         final peer = await trustStore.getPeer('rift-peer');
-        expect(peer!.state, TrustState.trusted);
+        expect(peer!.state, TrustState.pairingPending);
 
-        expect(sessionManager.sentMessages.length, 2);
+        expect(sessionManager.sentMessages.length, 1);
         expect(sessionManager.sentMessages[0]['type'], 'pairing.approve');
         expect(sessionManager.sentMessages[0]['messageId'], isNotNull);
-        expect(sessionManager.sentMessages[1]['type'], 'pairing.complete');
-        expect(sessionManager.sentMessages[1]['messageId'], isNotNull);
-
-        expect(ipcEvents.length, 1);
-        expect(ipcEvents[0]['method'], 'rift.onPairingComplete');
+        expect(ipcEvents, isEmpty);
       },
     );
 
@@ -531,6 +527,11 @@ void main() {
         });
         await Future.delayed(Duration.zero);
 
+        await pairingManager.handleIpcCommand({
+          'method': 'rift.approvePairing',
+          'params': {'deviceId': 'rift-peer', 'fingerprint': testFingerprint},
+        });
+
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.complete',
           'payload': {
@@ -546,6 +547,44 @@ void main() {
         expect(
           ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'),
           isTrue,
+        );
+      },
+    );
+
+    test(
+      'pairing.complete without local approval does not establish trust',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-peer',
+            certDer: testCertDer,
+            state: TrustState.pairingPending,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {'expiresInMs': 120000},
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.complete',
+          'payload': {
+            'trustedDeviceId': 'rift-peer',
+            'persistedAt': DateTime.now().toUtc().toIso8601String(),
+          },
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          (await trustStore.getPeer('rift-peer'))!.state,
+          TrustState.pairingPending,
+        );
+        expect(
+          ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'),
+          isFalse,
         );
       },
     );

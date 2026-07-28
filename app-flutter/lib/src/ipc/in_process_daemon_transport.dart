@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'ipc_transport.dart';
+import 'android_native_peer_transport.dart';
 
 abstract class InProcessDaemon {
   Future<void> start();
@@ -32,6 +33,8 @@ class RiftInProcessDaemon implements InProcessDaemon {
         storagePath: storagePath,
         identityPrivateKeyProvider: () => _loadIdentityKey(storagePath),
         onIpcEvent: onIpcEvent,
+        peerTransportFactory: (identityManager, port) =>
+            AndroidNativePeerTransport(identityManager, port: port),
       ),
     );
   }

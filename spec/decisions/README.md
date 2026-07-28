@@ -16,7 +16,8 @@ decisions that shape the protocol, IPC boundary, and implementation structure.
 - `0009-mdns-service-identity-disclosure.md` - discovery identity disclosure policy
 - `0010-json-rpc-error-model.md` - transport-agnostic JSON-RPC error model
 - `0011-channel-binding-tiers.md` - channel-binding tier hierarchy
-- `0012-user-session-file-publication.md` - daemon staging and user-session file publication
+- `0012-mobile-native-tls-transport.md` - native mobile TLS transport boundary
+- `0013-user-session-file-publication.md` - daemon staging and user-session file publication
 
 ## Usage
 

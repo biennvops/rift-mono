@@ -16,6 +16,7 @@ README.
 ## Current Contents
 
 - `test/` - lightweight automated interop-oriented tests and harness code
+- `mobile-device-matrix.md` - manual real-device test matrix for mobile pairs
 - `pubspec.*` - Dart package metadata for the harness
 
 The tests in this package run two in-memory **Dart** daemon session stacks
