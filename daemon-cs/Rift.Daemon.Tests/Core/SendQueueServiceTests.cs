@@ -609,6 +609,9 @@ public sealed class SendQueueServiceTests
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw new NotSupportedException();
+        public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() => throw new NotSupportedException();
+        public Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -674,6 +677,9 @@ public sealed class SendQueueServiceTests
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw new NotSupportedException();
+        public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() => throw new NotSupportedException();
+        public Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw new NotSupportedException();

@@ -1035,7 +1035,7 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleChunkAndCompleteReceived_WritesDestinationFile()
+    public async Task HandleChunkAndCompleteReceived_RequiresConfirmedDestinationCommit()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -1085,8 +1085,22 @@ public sealed class FileTransferServiceTests : IDisposable
                 1,
                 CancellationToken.None);
 
-            Assert.True(File.Exists(destination));
+            Assert.False(File.Exists(destination));
+            var pending = Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            Assert.Equal("transfer-store", pending.TransferId);
+            Assert.Equal("ready_to_commit", pending.State);
+            Assert.True(File.Exists(pending.StagingPath));
+            Assert.Contains(_notifications.Notifications, note => note.Method == "rift.onFileTransferReadyToCommit");
+
+            File.Copy(pending.StagingPath, destination);
+            var committed = await _service.ConfirmFileCommitAsync(
+                "transfer-store",
+                destination,
+                CancellationToken.None);
+
+            Assert.True(committed.Committed);
             Assert.Equal("hello", await File.ReadAllTextAsync(destination));
+            Assert.Empty((await _service.ListPendingFileCommitsAsync()).Commits);
             Assert.Contains(_notifications.Notifications, note => note.Method == "rift.onFileTransferCompleted");
         }
         finally
