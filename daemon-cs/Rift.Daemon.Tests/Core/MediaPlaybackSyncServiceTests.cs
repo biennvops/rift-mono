@@ -258,6 +258,33 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal(-32602, error.ErrorCode);
     }
 
+    [Fact]
+    public async Task HandleMediaPlaybackPostedAsync_NormalizesJsonElementArtworkValues()
+    {
+        var service = CreateService();
+        var artwork = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+            """{"dataBase64":"aW1hZ2U=","mediaType":"image/jpeg"}""")!;
+        Assert.IsType<JsonElement>(artwork["dataBase64"]);
+
+        await service.HandleMediaPlaybackPostedAsync(new MediaPlaybackRecord
+        {
+            PlaybackId = "playback-1",
+            SourceDeviceId = "rift-peer",
+            SourcePlatform = "macos",
+            AppId = "com.example.browser",
+            AppName = "Example Browser",
+            Artwork = artwork,
+            PlaybackState = "playing",
+            PositionMs = 1000,
+            CanPause = true,
+            UpdatedAt = "2026-07-16T10:00:00Z"
+        }, CancellationToken.None);
+
+        var playback = Assert.Single((await service.ListMediaPlaybackAsync(CancellationToken.None)).Playbacks);
+        Assert.Equal("aW1hZ2U=", Assert.IsType<string>(playback.Artwork!["dataBase64"]));
+        Assert.Equal("image/jpeg", Assert.IsType<string>(playback.Artwork["mediaType"]));
+    }
+
     [Theory]
     [InlineData("2026-07-16")]
     [InlineData("2026-07-16T10:00:00")]

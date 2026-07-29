@@ -782,7 +782,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Title = playback.Title,
             Artist = playback.Artist,
             Album = playback.Album,
-            Artwork = playback.Artwork is null ? null : new Dictionary<string, object?>(playback.Artwork),
+            Artwork = NormalizeArtwork(playback.Artwork),
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,
@@ -984,6 +984,36 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         return details;
     }
 
+    private static IReadOnlyDictionary<string, object?>? NormalizeArtwork(IReadOnlyDictionary<string, object?>? artwork)
+    {
+        if (artwork is null)
+        {
+            return null;
+        }
+
+        return artwork.ToDictionary(
+            entry => entry.Key,
+            entry => NormalizeArtworkValue(entry.Value),
+            StringComparer.Ordinal);
+    }
+
+    private static object? NormalizeArtworkValue(object? value) => value switch
+    {
+        JsonElement element => element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Null => null,
+            JsonValueKind.Object => element.EnumerateObject().ToDictionary(
+                property => property.Name,
+                property => NormalizeArtworkValue(property.Value),
+                StringComparer.Ordinal),
+            JsonValueKind.Array => element.EnumerateArray().Select(item => NormalizeArtworkValue(item)).ToArray(),
+            _ => element.GetRawText()
+        },
+        JsonDocument document => NormalizeArtworkValue(document.RootElement),
+        _ => value
+    };
+
     private static MediaPlaybackRecord CloneRecord(MediaPlaybackRecord playback)
     {
         return new MediaPlaybackRecord
@@ -996,7 +1026,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Title = playback.Title,
             Artist = playback.Artist,
             Album = playback.Album,
-            Artwork = playback.Artwork is null ? null : new Dictionary<string, object?>(playback.Artwork),
+            Artwork = NormalizeArtwork(playback.Artwork),
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,
