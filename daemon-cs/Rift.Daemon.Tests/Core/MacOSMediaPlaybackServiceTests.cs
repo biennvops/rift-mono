@@ -89,6 +89,12 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
     }
 
     [Fact]
+    public void CreateGetCommand_RequestsAdvancingElapsedTime()
+    {
+        Assert.Equal(["get", "--now"], MacOSMediaPlaybackService.CreateGetCommand());
+    }
+
+    [Fact]
     public void CreatePlaybackId_IsStableForNowPlayingApplication()
     {
         Assert.Equal(

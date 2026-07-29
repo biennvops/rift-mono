@@ -212,7 +212,7 @@ internal sealed class MacOSMediaPlaybackService(
 
     private async Task<MacOSNowPlayingSnapshot?> TryGetSnapshotAsync(CancellationToken cancellationToken)
     {
-        var output = await RunAdapterAsync(["get"], cancellationToken).ConfigureAwait(false);
+        var output = await RunAdapterAsync(CreateGetCommand(), cancellationToken).ConfigureAwait(false);
         if (output.ExitCode != 0)
         {
             if (!output.MissingArtifacts)
@@ -268,6 +268,8 @@ internal sealed class MacOSMediaPlaybackService(
 
     internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
         Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
+
+    internal static string[] CreateGetCommand() => ["get", "--now"];
 
     internal static string CreatePlaybackId(string appId) => $"{appId}:now-playing";
 
