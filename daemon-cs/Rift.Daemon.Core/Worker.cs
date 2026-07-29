@@ -164,8 +164,17 @@ public class Worker(
                 {
                     try
                     {
+                        var messageType = GetMessageType(args.Payload);
+                        logger.LogInformation(
+                            "Routing protocol message {MessageType} from peer {PeerDeviceId}.",
+                            messageType,
+                            peerDeviceId);
                         heartbeatManager.ObserveAuthenticatedMessage(args.Session);
                         await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
+                        logger.LogInformation(
+                            "Routed protocol message {MessageType} from peer {PeerDeviceId}.",
+                            messageType,
+                            peerDeviceId);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -180,6 +189,21 @@ public class Worker(
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 // Normal shutdown
+            }
+        }
+
+        static string GetMessageType(ReadOnlyMemory<byte> payload)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(payload);
+                return document.RootElement.TryGetProperty("type", out var typeElement)
+                    ? typeElement.GetString() ?? "unknown"
+                    : "unknown";
+            }
+            catch (JsonException)
+            {
+                return "malformed";
             }
         }
 
