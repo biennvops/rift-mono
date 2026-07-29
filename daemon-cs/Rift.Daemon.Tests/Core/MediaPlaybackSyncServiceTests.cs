@@ -377,6 +377,9 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         await service.HandleMediaPlaybackPostedAsync(CreatePlayback(peerDeviceId, "playback-1", "Track"), CancellationToken.None);
 
         var first = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
+        var actionRequest = Assert.Single(_transport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "media.playbackActionRequest");
+        Assert.False(actionRequest.GetProperty("payload").TryGetProperty("positionMs", out _));
         var duplicate = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
             service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None));
         Assert.Equal(-32010, duplicate.ErrorCode);

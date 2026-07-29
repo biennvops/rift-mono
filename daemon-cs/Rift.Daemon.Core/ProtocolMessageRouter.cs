@@ -232,7 +232,9 @@ public sealed class ProtocolMessageRouter(
                 SourceDeviceId = payloadSourceDeviceId,
                 RequestingDeviceId = requestingDeviceId,
                 Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
-                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) ? positionElement.GetInt64() : null,
+                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) && positionElement.ValueKind is JsonValueKind.Number
+                    ? positionElement.GetInt64()
+                    : null,
                 RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null
             }, cancellationToken);
             return;

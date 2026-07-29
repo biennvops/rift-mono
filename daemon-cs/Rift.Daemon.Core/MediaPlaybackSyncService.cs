@@ -314,17 +314,21 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 
         try
         {
+            var actionPayload = new Dictionary<string, object?>
+            {
+                ["playbackId"] = playback.PlaybackId,
+                ["sourceDeviceId"] = playback.SourceDeviceId,
+                ["requestingDeviceId"] = _identityManager.GetDeviceId(),
+                ["action"] = normalizedAction,
+                ["requestedAt"] = DateTimeOffset.UtcNow.ToString("O")
+            };
+            if (positionMs.HasValue)
+            {
+                actionPayload["positionMs"] = positionMs.Value;
+            }
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(CreateEnvelope(
                 "media.playbackActionRequest",
-                new
-                {
-                    playbackId = playback.PlaybackId,
-                    sourceDeviceId = playback.SourceDeviceId,
-                    requestingDeviceId = _identityManager.GetDeviceId(),
-                    action = normalizedAction,
-                    positionMs,
-                    requestedAt = DateTimeOffset.UtcNow.ToString("O")
-                })));
+                actionPayload)));
             await _transport.SendAsync(playback.SourceDeviceId, bytes, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
