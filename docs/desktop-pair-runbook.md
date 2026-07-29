@@ -199,3 +199,22 @@ OS versions: Windows version not recorded; macOS 26.6 (25G72)
 Versions: qualification branch `8cd01c2`; qualification notes `476d137`
 
 OS versions: Linux version not recorded; macOS 26.6 (25G72)
+
+### Pair: P3 — Windows ↔ Linux   Date: 2026-07-29
+
+| Scenario | Windows→Linux | Linux→Windows | Notes |
+|---|---|---|---|
+| S1 Discovery | Partial | Partial | Discovery/presence behavior matched the slow and unstable Linux↔macOS experience. |
+| S2 Pairing | Partial | Partial | Pairing completed, but the flow had the same delayed/unstable experience observed with Linux↔macOS. |
+| S3 Clipboard text | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently. Linux logs show the Windows peer repeatedly resetting or closing connections during `session.hello`. |
+| S4 Clipboard image | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently with the same session churn as text. |
+| S5 File transfer | Pending | Pending | Not yet tested on this pair. |
+| S6 Interrupt/resume | Pending | Pending | Not yet tested on this pair. |
+| S7 Restart persistence | Pending | Pending | Not yet tested on this pair. |
+| S8 Remove/block | Pending | Pending | Not yet tested on this pair. Block is unavailable product-wide. |
+| S9 Media playback | Pending | Pending | Not yet tested on this pair. |
+| S10 Notification sync | Pending | Pending | Not yet tested on this pair. |
+
+Versions: Linux qualification build `d69dd07`; Windows build revision not recorded
+
+OS versions: Windows and Linux versions not recorded
