@@ -193,9 +193,9 @@ OS versions: Windows version not recorded; macOS 26.6 (25G72)
 | S6 Interrupt/resume | Pass | Pass | Resume completed with matching hashes and no false sender success. The active session used direct Ethernet even when Wi-Fi was disabled; detection and recovery after loss of the active path took about 20–30 seconds. |
 | S7 Restart persistence | Partial | Partial | Linux daemon restart preserved clipboard behavior. After macOS daemon restart, the Flutter app reported local IPC connected but clipboard remained unavailable until the Android app was foregrounded; prior Android notifications then replayed to peers. Requires retest on merged mobile-parity code. |
 | S8 Remove/block | Pending | Pending | Not yet tested on this pair. |
-| S9 Media playback | Partial | Partial | Bidirectional state/metadata, stable macOS playback identity, stale-record cleanup, and remote artwork string preservation passed. Remote playback actions and restart/replay deduplication remain pending. |
+| S9 Media playback | Partial | Pass | Bidirectional state/metadata, stable IDs, stale-record cleanup, artwork, position advancement, restart replay, and macOS→Linux pause/play/next actions passed. Linux→macOS seek passed; play/pause/transport controls await retest with active macOS playback. |
 | S10 Notification sync | Pending | Pending | Not yet tested as a desktop-pair scenario. |
 
-Versions: qualification branch `093a356`
+Versions: qualification branch `8cd01c2`
 
 OS versions: Linux version not recorded; macOS 26.6 (25G72)
