@@ -479,6 +479,49 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackArtwork_PreservesStringValues()
+    {
+        const string peerDeviceId = "rift-peer-media-artwork";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackPosted", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                appId = "com.example.music",
+                appName = "Example Music",
+                title = "Example Track",
+                artwork = new
+                {
+                    dataBase64 = "aW1hZ2U=",
+                    mediaType = "image/jpeg",
+                    uri = "file:///tmp/artwork.jpg"
+                },
+                playbackState = "playing",
+                positionMs = 1000,
+                durationMs = 2000,
+                canPlay = false,
+                canPause = true,
+                canSkipNext = true,
+                canSkipPrevious = true,
+                canSeek = true,
+                updatedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var playback = await _mediaPlaybackSyncService.GetMediaPlaybackAsync(
+            peerDeviceId,
+            "playback-1",
+            CancellationToken.None);
+
+        Assert.Equal("aW1hZ2U=", playback.Artwork!["dataBase64"]);
+        Assert.Equal("image/jpeg", playback.Artwork["mediaType"]);
+        Assert.Equal("file:///tmp/artwork.jpg", playback.Artwork["uri"]);
+        Assert.All(playback.Artwork.Values, value => Assert.IsType<string>(value));
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_MalformedMediaPlayback_SendsPeerError()
     {
         const string peerDeviceId = "rift-peer-malformed-media";
