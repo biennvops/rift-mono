@@ -206,8 +206,8 @@ OS versions: Linux version not recorded; macOS 26.6 (25G72)
 |---|---|---|---|
 | S1 Discovery | Partial | Partial | Discovery/presence behavior matched the slow and unstable Linux↔macOS experience. |
 | S2 Pairing | Partial | Partial | Pairing completed, but the flow had the same delayed/unstable experience observed with Linux↔macOS. |
-| S3 Clipboard text | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently. The failing Linux logs identify peer `rift-55fcudhhxx2bfut64fcgq6eomon4pbvg`; this has not yet been correlated with the `win10_rift` host identity. |
-| S4 Clipboard image | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently. The same peer-identity correlation remains pending. |
+| S3 Clipboard text | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently; no direct transport cause has yet been captured for the Windows peer. |
+| S4 Clipboard image | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently; no direct transport cause has yet been captured for the Windows peer. |
 | S5 File transfer | Pending | Pending | Not yet tested on this pair. |
 | S6 Interrupt/resume | Pending | Pending | Not yet tested on this pair. |
 | S7 Restart persistence | Pending | Pending | Not yet tested on this pair. |
@@ -217,6 +217,6 @@ OS versions: Linux version not recorded; macOS 26.6 (25G72)
 
 Versions: Linux qualification build `d69dd07`; Windows build revision not recorded
 
-Peer identity note: the `win10_rift` host currently presents `rift-l3kqqi4kw6twni3blqz5f3ihzuu3ulwh`; the handshake failures observed in Linux logs were for `rift-55fcudhhxx2bfut64fcgq6eomon4pbvg`.
+Peer identity note: the `win10_rift` host presents `rift-l3kqqi4kw6twni3blqz5f3ihzuu3ulwh`. Peer `rift-55fcudhhxx2bfut64fcgq6eomon4pbvg` is an Android phone and is unrelated to P3.
 
 OS versions: Windows and Linux versions not recorded
