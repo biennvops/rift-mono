@@ -191,10 +191,10 @@ OS versions: Windows version not recorded; macOS 26.6 (25G72)
 | S4 Clipboard image | Pass | Pass | Image content passed in both directions. Tray/background delivery also worked; macOS currently has no visible tray/menu-bar icon, so the macOS window was moved to another Space instead. |
 | S5 File transfer | Pass | Pass | Small and large transfers, matching hashes, reject, cancel, app-reconnect publication recovery, and receiver-confirmed completion passed. Private daemon staging plus user-session publication resolved the Linux read-only-home boundary. |
 | S6 Interrupt/resume | Pass | Pass | Resume completed with matching hashes and no false sender success. The active session used direct Ethernet even when Wi-Fi was disabled; detection and recovery after loss of the active path took about 20–30 seconds. |
-| S7 Restart persistence | Partial | Partial | Linux daemon restart preserved clipboard behavior. After macOS daemon restart, the Flutter app reported local IPC connected but clipboard remained unavailable until the Android app was foregrounded; prior Android notifications then replayed to peers. Requires retest on merged mobile-parity code. |
-| S8 Remove/block | Pending | Pending | Not yet tested on this pair. |
+| S7 Restart persistence | Partial | Partial | Identity and trusted-session reconnect survived clean Linux/macOS rebuilds and restarts, and the earlier Android-foreground dependency was not reproduced. Clipboard/file continuity still breaks intermittently in either direction, so recovery is not reliable enough to pass. Linux restart can also require interactive KeePassXC Secret Service approval (#123). |
+| S8 Remove/block | Pending | Pending | The recorded remove/re-pair pass was Windows↔macOS; Linux↔macOS remains unverified. Block is unavailable product-wide. |
 | S9 Media playback | Pass | Pass | Bidirectional state/metadata, stable IDs, stale-record cleanup, artwork, position advancement, restart replay, and remote actions passed. Automated physical controls covered pause, play, next, and seek with terminal `Done` operations; MPD does not advertise seek support. |
-| S10 Notification sync | Pending | Pending | Not yet tested as a desktop-pair scenario. |
+| S10 Notification sync | N/A | Pass | macOS notifications appeared on Linux without an observed duplicate. Linux has no local notification observer, so Linux→macOS publication is not implemented. |
 
 Versions: qualification branch `8cd01c2`; qualification notes `476d137`
 
