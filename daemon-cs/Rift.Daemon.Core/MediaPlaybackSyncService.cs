@@ -71,9 +71,6 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         _logger = logger ?? NullLogger<MediaPlaybackSyncService>.Instance;
         _actionTimeout = actionTimeout ?? DefaultActionTimeout;
         _transport.SessionStateChanged += OnSessionStateChanged;
-        _logger.LogInformation(
-            "Media playback local action handler: {HandlerType}.",
-            _localActionHandler?.GetType().FullName ?? "not registered");
     }
 
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
@@ -572,12 +569,6 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 
         if (_localActionHandler is not null)
         {
-            _logger.LogInformation(
-                "Handling media playback action {Action} for {PlaybackId} from {RequestingDeviceId} with {HandlerType}.",
-                action,
-                request.PlaybackId,
-                request.RequestingDeviceId,
-                _localActionHandler.GetType().FullName);
             LocalMediaPlaybackActionResult result;
             try
             {
@@ -594,11 +585,6 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
                 };
             }
 
-            _logger.LogInformation(
-                "Media playback action {Action} for {PlaybackId} completed locally with success={Success}.",
-                action,
-                request.PlaybackId,
-                result.Success);
             var failureReason = NormalizeFailureReason(
                 result.Success,
                 result.FailureReason,
@@ -634,10 +620,6 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             return;
         }
 
-        _logger.LogWarning(
-            "Media playback action {Action} for {PlaybackId} has no native handler; forwarding to IPC.",
-            action,
-            request.PlaybackId);
         await NotifyIpcAsync("rift.onMediaPlaybackActionRequest", new
         {
             requestId,

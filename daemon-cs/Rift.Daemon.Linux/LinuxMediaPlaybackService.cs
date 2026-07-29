@@ -33,10 +33,6 @@ internal sealed class LinuxMediaPlaybackService(
         PendingIncomingMediaPlaybackAction request,
         CancellationToken cancellationToken)
     {
-        logger.LogInformation(
-            "Executing Linux MPRIS action {Action} for {PlaybackId}.",
-            request.Action,
-            request.PlaybackId);
         try
         {
             await mprisClient.ExecuteActionAsync(
@@ -44,19 +40,10 @@ internal sealed class LinuxMediaPlaybackService(
                 request.Action,
                 request.PositionMs,
                 cancellationToken).ConfigureAwait(false);
-            logger.LogInformation(
-                "Linux MPRIS action {Action} for {PlaybackId} completed.",
-                request.Action,
-                request.PlaybackId);
             return new LocalMediaPlaybackActionResult { Success = true };
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning(
-                ex,
-                "Linux MPRIS action {Action} for {PlaybackId} failed.",
-                request.Action,
-                request.PlaybackId);
             return new LocalMediaPlaybackActionResult
             {
                 Success = false,
