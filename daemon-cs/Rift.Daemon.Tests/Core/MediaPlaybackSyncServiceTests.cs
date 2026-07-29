@@ -259,6 +259,23 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeerSessionOffline_RemovesRemotePlaybackRecords()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-peer", "playback-1", "Track"), CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-peer", "playback-2", "Track 2"), CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: false,
+            selectedCapabilities: [],
+            allowsProtectedTraffic: false));
+
+        Assert.Empty((await service.ListMediaPlaybackAsync(CancellationToken.None)).Playbacks);
+        Assert.Equal(2, _ipcNotificationService.Events.Count(evt => evt.Method == "rift.onMediaPlaybackRemoved"));
+    }
+
+    [Fact]
     public async Task HandleMediaPlaybackPostedAsync_NormalizesJsonElementArtworkValues()
     {
         var service = CreateService();
@@ -461,11 +478,10 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             remove { }
         }
 
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+
+        public void RaiseSessionStateChanged(SessionStateChangedEventArgs args) =>
+            SessionStateChanged?.Invoke(this, args);
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
         public List<JsonElement> Payloads { get; } = [];

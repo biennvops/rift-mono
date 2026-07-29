@@ -70,6 +70,47 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         _localActionHandler = localActionHandler;
         _logger = logger ?? NullLogger<MediaPlaybackSyncService>.Instance;
         _actionTimeout = actionTimeout ?? DefaultActionTimeout;
+        _transport.SessionStateChanged += OnSessionStateChanged;
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (args.IsOnline)
+        {
+            return;
+        }
+
+        MediaPlaybackRecord[] removed;
+        lock (_gate)
+        {
+            removed = _playbacks.Values
+                .Where(playback => string.Equals(playback.SourceDeviceId, args.PeerDeviceId, StringComparison.Ordinal))
+                .Select(CloneRecord)
+                .ToArray();
+            foreach (var playback in removed)
+            {
+                _playbacks.Remove(GetPlaybackKey(playback.SourceDeviceId, playback.PlaybackId));
+            }
+        }
+
+        if (removed.Length > 0)
+        {
+            _ = NotifyPeerPlaybackRemovalAsync(args.PeerDeviceId, removed);
+        }
+    }
+
+    private async Task NotifyPeerPlaybackRemovalAsync(string peerDeviceId, IReadOnlyList<MediaPlaybackRecord> removed)
+    {
+        var removedAt = DateTimeOffset.UtcNow.ToString("O");
+        foreach (var playback in removed)
+        {
+            await NotifyIpcAsync("rift.onMediaPlaybackRemoved", new
+            {
+                playbackId = playback.PlaybackId,
+                sourceDeviceId = peerDeviceId,
+                removedAt
+            }).ConfigureAwait(false);
+        }
     }
 
     public async Task PublishLocalPlaybackToPeerAsync(
