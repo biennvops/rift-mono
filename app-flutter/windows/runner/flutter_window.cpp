@@ -39,6 +39,8 @@ constexpr UINT kTrayManagerNotifyMessage = WM_USER + 1;
 constexpr UINT kRiftShellNotifyId = 1;
 // WM_COPYDATA identifier for file handoff from a second app instance.
 constexpr ULONG_PTR kRiftSendFilesCopyDataId = 0x52465446;  // 'RFTF'
+constexpr int kClipboardOpenAttempts = 10;
+constexpr DWORD kClipboardOpenRetryDelayMs = 25;
 
 std::wstring Utf16FromUtf8(const std::string& utf8_string);
 
@@ -47,6 +49,18 @@ void LogClipboardMessage(const std::string& message) {
   if (!wide_message.empty()) {
     OutputDebugStringW((L"Rift clipboard bridge: " + wide_message + L"\n").c_str());
   }
+}
+
+bool OpenClipboardForWriteWithRetry(HWND owner) {
+  for (int attempt = 0; attempt < kClipboardOpenAttempts; ++attempt) {
+    if (OpenClipboard(owner)) {
+      return true;
+    }
+    if (attempt + 1 < kClipboardOpenAttempts) {
+      Sleep(kClipboardOpenRetryDelayMs);
+    }
+  }
+  return false;
 }
 
 std::wstring Utf16FromUtf8(const std::string& utf8_string) {
@@ -630,8 +644,8 @@ void FlutterWindow::RegisterClipboardMethodChannel() {
             return;
           }
 
-          if (!OpenClipboard(GetHandle())) {
-            LogClipboardMessage("OpenClipboard failed for write.");
+          if (!OpenClipboardForWriteWithRetry(GetHandle())) {
+            LogClipboardMessage("OpenClipboard failed for write after retries.");
             GlobalFree(memory);
             GlobalFree(dib_memory);
             result->Success(flutter::EncodableValue(false));
