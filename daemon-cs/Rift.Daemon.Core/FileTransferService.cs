@@ -404,23 +404,13 @@ public sealed class FileTransferService : IFileTransferService
             }
 
             transfer.IsLocallyCommitted = true;
+            transfer.CommittedDestinationPath = fullDestinationPath;
             if (PeerSupportsFileTransferVersion(transfer.SourceDeviceId, 2))
             {
                 await SendCommittedAsync(transfer, cancellationToken).ConfigureAwait(false);
             }
 
-            _incomingTransfers.TryRemove(transferId, out _);
-            CleanupStagingDirectory(transfer.StagingDirectory);
-            _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
-            await NotifyTransferCompletedAsync(
-                transfer.TransferId,
-                transfer.OperationId,
-                "incoming",
-                transfer.SourceDeviceId,
-                transfer.FileName,
-                transfer.ByteSize,
-                fullDestinationPath,
-                cancellationToken).ConfigureAwait(false);
+            await FinalizeIncomingCommitAsync(transfer, fullDestinationPath, cancellationToken).ConfigureAwait(false);
 
             return new ConfirmFileCommitResult
             {
@@ -791,7 +781,7 @@ public sealed class FileTransferService : IFileTransferService
         }
     }
 
-    public Task HandleResumeReceivedAsync(
+    public async Task HandleResumeReceivedAsync(
         string deviceId,
         string transferId,
         string receivingDeviceId,
@@ -804,29 +794,24 @@ public sealed class FileTransferService : IFileTransferService
 
         if (!_pausedOutgoingTransfers.TryGetValue(transferId, out var transfer))
         {
-            if (_outgoingTransfers.ContainsKey(transferId))
+            if (_outgoingTransfers.TryGetValue(transferId, out var activeTransfer))
             {
-                throw new FileTransferFailureException("ProtocolError", -32001, $"Outgoing transfer '{transferId}' is not paused.");
+                EnsureOutgoingTransferPeerMatches(activeTransfer, deviceId, "Resume");
+                if (!activeTransfer.RequiresCommitAcknowledgement || offset != activeTransfer.ByteSize)
+                {
+                    throw new FileTransferFailureException("ProtocolError", -32001, $"Outgoing transfer '{transferId}' is not paused.");
+                }
+
+                ValidateResumePosition(activeTransfer, nextChunkIndex, offset);
+                await SendCompleteAsync(activeTransfer, cancellationToken).ConfigureAwait(false);
+                return;
             }
 
             throw new FileTransferFailureException("NotFound", -32009, $"Outgoing transfer '{transferId}' was not found.");
         }
 
         EnsureOutgoingTransferPeerMatches(transfer, deviceId, "Resume");
-        if (offset < 0 || offset > transfer.ByteSize)
-        {
-            throw new FileTransferFailureException("ProtocolError", -32001, "Resume offset was out of bounds.");
-        }
-
-        var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
-        var isFinalOffset = offset == transfer.ByteSize;
-        var hasValidChunkIndex = transfer.ByteSize == 0
-            ? nextChunkIndex is 0 or 1
-            : nextChunkIndex == GetChunkIndexForOffset(offset, chunkSize);
-        if ((!isFinalOffset && offset % chunkSize != 0) || !hasValidChunkIndex)
-        {
-            throw new FileTransferFailureException("ProtocolError", -32001, "Resume chunk index did not match offset.");
-        }
+        ValidateResumePosition(transfer, nextChunkIndex, offset);
 
         transfer.BytesTransferred = offset;
         transfer.NextChunkIndex = nextChunkIndex;
@@ -837,7 +822,6 @@ public sealed class FileTransferService : IFileTransferService
 
         _outgoingTransfers[transferId] = transfer;
         transfer.SendTask = Task.Run(() => SendFileChunksAsync(transfer, cancellationToken), cancellationToken);
-        return Task.CompletedTask;
     }
 
     private async Task SendFileChunksAsync(OutgoingTransferState transfer, CancellationToken cancellationToken)
@@ -908,23 +892,8 @@ public sealed class FileTransferService : IFileTransferService
                 await NotifyTransferProgressAsync(transfer, null, sendCancellationToken).ConfigureAwait(false);
             }
 
-            var completeEnvelope = new
-            {
-                rift = "0.1-draft",
-                type = "file.complete",
-                messageId = Guid.NewGuid().ToString("D"),
-                sourceDeviceId = _identityManager.GetDeviceId(),
-                payload = new
-                {
-                    transferId = transfer.TransferId,
-                    byteSize = transfer.ByteSize,
-                    sha256 = transfer.Sha256,
-                    chunkCount = transfer.AcceptedChunkCount
-                }
-            };
-
             sendingProtectedMessage = true;
-            await SendProtectedMessageAsync(transfer.TargetDeviceId, EncodeEnvelope(completeEnvelope), sendCancellationToken).ConfigureAwait(false);
+            await SendCompleteAsync(transfer, sendCancellationToken).ConfigureAwait(false);
             sendingProtectedMessage = false;
             if (transfer.RequiresCommitAcknowledgement)
             {
@@ -1028,7 +997,25 @@ public sealed class FileTransferService : IFileTransferService
                     {
                         if (transfer.IsLocallyCommitted)
                         {
-                            await SendCommittedAsync(transfer, CancellationToken.None).ConfigureAwait(false);
+                            await transfer.CommitGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                            try
+                            {
+                                if (_incomingTransfers.TryGetValue(transfer.TransferId, out var currentTransfer) &&
+                                    ReferenceEquals(currentTransfer, transfer) &&
+                                    transfer.IsReadyToCommit &&
+                                    transfer.IsLocallyCommitted)
+                                {
+                                    await SendCommittedAsync(transfer, CancellationToken.None).ConfigureAwait(false);
+                                    await FinalizeIncomingCommitAsync(
+                                        transfer,
+                                        transfer.CommittedDestinationPath ?? transfer.DestinationPath,
+                                        CancellationToken.None).ConfigureAwait(false);
+                                }
+                            }
+                            finally
+                            {
+                                transfer.CommitGate.Release();
+                            }
                         }
                         continue;
                     }
@@ -1428,6 +1415,52 @@ public sealed class FileTransferService : IFileTransferService
     private bool PeerSupportsFileTransferVersion(string deviceId, int requiredVersion) =>
         _peerFileTransferVersions.TryGetValue(deviceId, out var version) && version >= requiredVersion;
 
+    private static void ValidateResumePosition(
+        OutgoingTransferState transfer,
+        int nextChunkIndex,
+        long offset)
+    {
+        if (offset < 0 || offset > transfer.ByteSize)
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume offset was out of bounds.");
+        }
+
+        var chunkSize = transfer.AcceptedChunkSize ?? transfer.ChunkSize;
+        var isFinalOffset = offset == transfer.ByteSize;
+        var hasValidChunkIndex = transfer.ByteSize == 0
+            ? nextChunkIndex is 0 or 1
+            : nextChunkIndex == GetChunkIndexForOffset(offset, chunkSize);
+        if ((!isFinalOffset && offset % chunkSize != 0) || !hasValidChunkIndex)
+        {
+            throw new FileTransferFailureException("ProtocolError", -32001, "Resume chunk index did not match offset.");
+        }
+    }
+
+    private async Task SendCompleteAsync(
+        OutgoingTransferState transfer,
+        CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "file.complete",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            payload = new
+            {
+                transferId = transfer.TransferId,
+                byteSize = transfer.ByteSize,
+                sha256 = transfer.Sha256,
+                chunkCount = transfer.AcceptedChunkCount
+            }
+        };
+
+        await SendProtectedMessageAsync(
+            transfer.TargetDeviceId,
+            EncodeEnvelope(envelope),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task SendCommittedAsync(
         IncomingTransferState transfer,
         CancellationToken cancellationToken)
@@ -1449,6 +1482,29 @@ public sealed class FileTransferService : IFileTransferService
         await SendProtectedMessageAsync(
             transfer.SourceDeviceId,
             EncodeEnvelope(envelope),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task FinalizeIncomingCommitAsync(
+        IncomingTransferState transfer,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        if (!_incomingTransfers.TryRemove(transfer.TransferId, out _))
+        {
+            return;
+        }
+
+        CleanupStagingDirectory(transfer.StagingDirectory);
+        _operationService.TransitionOperation(transfer.OperationId, OperationState.Done);
+        await NotifyTransferCompletedAsync(
+            transfer.TransferId,
+            transfer.OperationId,
+            "incoming",
+            transfer.SourceDeviceId,
+            transfer.FileName,
+            transfer.ByteSize,
+            destinationPath,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -1937,6 +1993,7 @@ public sealed class FileTransferService : IFileTransferService
         public bool Overwrite { get; init; }
         public bool IsReadyToCommit { get; set; }
         public bool IsLocallyCommitted { get; set; }
+        public string? CommittedDestinationPath { get; set; }
         public SemaphoreSlim CommitGate { get; } = new(1, 1);
     }
 }
