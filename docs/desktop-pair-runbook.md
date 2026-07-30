@@ -211,9 +211,9 @@ OS versions: Linux version not recorded; macOS 26.6 (25G72)
 | S5 File transfer | Pass | Pass | Small Windows→Linux and 128 MiB Linux→Windows transfers completed with matching SHA-256 hashes. Reject surfaced `PolicyDenied`; receiver-side cancel surfaced `Cancelled` and committed no partial destination. Windows app-exit/reopen recovered a pending 256 MiB commit without retransmission, published it with a matching hash, and produced receiver-confirmed completion. |
 | S6 Interrupt/resume | Pending | Fail | With Rift daemon traffic blocked only on Windows Ethernet, Windows and Linux retained Wi-Fi connectivity but did not establish an alternate Wi-Fi peer session. A Linux→Windows transfer remained `waiting` instead of resuming. Reverse direction remains untested. |
 | S7 Restart persistence | Deferred | Deferred | Identity persistence and reconnect behavior have been observed, but post-restart continuity is not stable under the current connection strategy. Further qualification is deferred until the routing/reconnect work tracked in #102. |
-| S8 Remove/block | Pending | Pending | Not yet tested on this pair. Block is unavailable product-wide. |
-| S9 Media playback | Pending | Pending | Not yet tested on this pair. |
-| S10 Notification sync | Pending | Pending | Not yet tested on this pair. |
+| S8 Remove/block | Deferred | Deferred | Remove/re-pair behavior is covered on another desktop pair; P3 repetition is deferred until connection stability improves under #102. Block is unavailable product-wide under #34. |
+| S9 Media playback | Deferred | Deferred | Windows local playback publication and remote playback display/control are not present on the current branch; follow-up work is tracked in #125. |
+| S10 Notification sync | N/A | N/A | Neither Windows nor Linux currently has a configured local notification observer for this pair. |
 
 Versions: Linux qualification build `d69dd07`; Windows build revision not recorded
 
