@@ -208,7 +208,7 @@ OS versions: Linux version not recorded; macOS 26.6 (25G72)
 | S2 Pairing | Partial | Partial | Pairing completed, but the flow had the same delayed/unstable experience observed with Linux↔macOS. |
 | S3 Clipboard text | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently even though the Windows daemon recorded successful `clipboard.fetched` events and continued receiving Linux media updates, pointing to the Windows user-session clipboard publication path rather than transport loss. |
 | S4 Clipboard image | Pass | Partial | Windows→Linux was reliable. Linux→Windows worked intermittently with the same daemon-success/user-session-publication boundary as text. |
-| S5 File transfer | Pending | Pending | Not yet tested on this pair. |
+| S5 File transfer | Pass | Pass | Small Windows→Linux and 128 MiB Linux→Windows transfers completed with matching SHA-256 hashes. Reject surfaced `PolicyDenied`; receiver-side cancel surfaced `Cancelled` and committed no partial destination. Windows app-exit/reopen recovered a pending 256 MiB commit without retransmission, published it with a matching hash, and produced receiver-confirmed completion. |
 | S6 Interrupt/resume | Pending | Pending | Not yet tested on this pair. |
 | S7 Restart persistence | Pending | Pending | Not yet tested on this pair. |
 | S8 Remove/block | Pending | Pending | Not yet tested on this pair. Block is unavailable product-wide. |
