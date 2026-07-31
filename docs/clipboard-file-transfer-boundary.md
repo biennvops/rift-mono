@@ -64,6 +64,25 @@ File transfer is a separate authenticated capability:
 Files should continue to use the dedicated file transfer engines rather than be
 encoded as clipboard payloads.
 
+Desktop receipt separates secure transport from user-visible publication:
+
+| Responsibility | Daemon | User-session client |
+|---|---:|---:|
+| Peer authentication and authorization | Yes | No |
+| Offer, chunk, resume, and completion protocol | Yes | No |
+| Private staging | Yes | No |
+| Chunk and whole-file integrity verification | Yes | No |
+| User destination selection | No | Yes |
+| Publication into user-visible storage | No | Yes |
+| Independent verification of the final path | Yes | Initiates |
+| Peer completion acknowledgement | Yes | No |
+
+The daemon may run without a publication client, but an incoming desktop file
+cannot reach user-visible completion until an authorized local client publishes
+it. Flutter is the default client, not a protocol requirement. Pending commits
+must be recoverable across client reconnect while the daemon remains running.
+The initial implementation does not guarantee recovery across daemon restart.
+
 ### 2.3 Folder Transfer
 
 Folder transfer is not currently implemented as a first-class feature.

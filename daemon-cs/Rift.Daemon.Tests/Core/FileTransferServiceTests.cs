@@ -262,7 +262,7 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleOfferReceivedAsync_RejectsOversizedIncomingOffer()
+    public async Task HandleOfferReceivedAsync_AcceptsFileLargerThanFrameLimit()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -273,25 +273,24 @@ public sealed class FileTransferServiceTests : IDisposable
         });
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
 
-        var ex = await Assert.ThrowsAsync<FileTransferFailureException>(() =>
-            _service.HandleOfferReceivedAsync(new ReceivedFileOffer
-            {
-                DeviceId = "rift-peer",
-                PayloadSourceDeviceId = "rift-peer",
-                TransferId = "transfer-oversized",
-                FileName = "huge.bin",
-                MediaType = "application/octet-stream",
-                ByteSize = (32L * 1024 * 1024) + 1,
-                Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
-                ChunkSize = 262144,
-                ChunkCount = 1,
-                ExpiresInMs = 120000,
-                RequiredCapability = "file.transfer"
-            }, CancellationToken.None));
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = "transfer-large",
+            FileName = "large.bin",
+            MediaType = "application/octet-stream",
+            ByteSize = (32L * 1024 * 1024) + 1,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ChunkSize = 262144,
+            ChunkCount = 129,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
 
-        Assert.Equal("PayloadTooLarge", ex.FailureReason);
-        var offers = await _service.ListIncomingFileOffersAsync();
-        Assert.DoesNotContain(offers.Offers, offer => offer.TransferId == "transfer-oversized");
+        var offer = Assert.Single((await _service.ListIncomingFileOffersAsync()).Offers);
+        Assert.Equal("transfer-large", offer.TransferId);
+        Assert.Equal((32L * 1024 * 1024) + 1, offer.ByteSize);
     }
 
     [Theory]
@@ -887,6 +886,61 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleResumeReceived_FinalOffsetWhileAwaitingCommitResendsCompletion()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["file.transfer"],
+            allowsProtectedTraffic: true,
+            selectedCapabilityVersions: new Dictionary<string, int> { ["file.transfer"] = 2 }));
+
+        var path = CreateTempFile("hello");
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello")));
+        try
+        {
+            var offer = await _service.OfferFileAsync("rift-peer", path, "demo.txt", "text/plain", CancellationToken.None);
+            await _service.HandleAcceptReceivedAsync("rift-peer", offer.TransferId, "rift-peer", 262144, CancellationToken.None);
+            await WaitForConditionAsync(
+                () => _transport.SentMessages.Count(sent => sent.Type == "file.complete") == 1,
+                TimeSpan.FromSeconds(1));
+
+            await _service.HandleResumeReceivedAsync(
+                "rift-peer",
+                offer.TransferId,
+                "rift-peer",
+                nextChunkIndex: 1,
+                offset: 5,
+                CancellationToken.None);
+
+            Assert.Equal(2, _transport.SentMessages.Count(sent => sent.Type == "file.complete"));
+            Assert.Single(_transport.SentMessages, sent => sent.Type == "file.chunk");
+
+            await _service.HandleCommittedReceivedAsync(
+                "rift-peer",
+                offer.TransferId,
+                byteSize: 5,
+                sha,
+                CancellationToken.None);
+            await WaitForConditionAsync(
+                () => _operationService.GetOperation(offer.OperationId).State == "Done",
+                TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            await TestFiles.DeleteWithRetryAsync(path);
+        }
+    }
+
+    [Fact]
     public async Task HandleCancelReceivedAsync_CancelsPausedOutgoingTransfer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -1036,7 +1090,7 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleChunkAndCompleteReceived_WritesDestinationFile()
+    public async Task HandleChunkAndCompleteReceived_RequiresConfirmedDestinationCommit()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -1086,9 +1140,174 @@ public sealed class FileTransferServiceTests : IDisposable
                 1,
                 CancellationToken.None);
 
-            Assert.True(File.Exists(destination));
+            Assert.False(File.Exists(destination));
+            var pending = Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            Assert.Equal("transfer-store", pending.TransferId);
+            Assert.Equal("ready_to_commit", pending.State);
+            Assert.True(File.Exists(pending.StagingPath));
+            Assert.Contains(_notifications.Notifications, note => note.Method == "rift.onFileTransferReadyToCommit");
+
+            File.Copy(pending.StagingPath, destination);
+            var committed = await _service.ConfirmFileCommitAsync(
+                "transfer-store",
+                destination,
+                CancellationToken.None);
+
+            Assert.True(committed.Committed);
             Assert.Equal("hello", await File.ReadAllTextAsync(destination));
+            Assert.Empty((await _service.ListPendingFileCommitsAsync()).Commits);
             Assert.Contains(_notifications.Notifications, note => note.Method == "rift.onFileTransferCompleted");
+        }
+        finally
+        {
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task OfflineV2Commit_FinalizesAfterAcknowledgementReplay()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        var v2Session = new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["file.transfer"],
+            allowsProtectedTraffic: true,
+            selectedCapabilityVersions: new Dictionary<string, int> { ["file.transfer"] = 2 });
+        _transport.RaiseSessionStateChanged(v2Session);
+
+        var bytes = Encoding.UTF8.GetBytes("hello");
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        const string transferId = "transfer-commit-replay";
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = transferId,
+            FileName = "saved.txt",
+            MediaType = "text/plain",
+            ByteSize = bytes.Length,
+            Sha256 = sha,
+            ChunkSize = 262144,
+            ChunkCount = 1,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
+
+        var destination = Path.Combine(Path.GetTempPath(), $"rift-saved-{Guid.NewGuid():N}.txt");
+        try
+        {
+            var accepted = await _service.AcceptFileOfferAsync(transferId, destination, overwrite: false, CancellationToken.None);
+            await _service.HandleChunkReceivedAsync(
+                "rift-peer", transferId, 0, 0, bytes.Length, sha, Convert.ToBase64String(bytes), true, CancellationToken.None);
+            await _service.HandleCompleteReceivedAsync(
+                "rift-peer", transferId, bytes.Length, sha, 1, CancellationToken.None);
+            var pending = Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            File.Copy(pending.StagingPath, destination);
+            _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+                "rift-peer",
+                isOnline: false,
+                selectedCapabilities: [],
+                allowsProtectedTraffic: false));
+            _transport.FailCommittedSendsRemaining = 1;
+
+            await Assert.ThrowsAsync<IOException>(() =>
+                _service.ConfirmFileCommitAsync(transferId, destination, CancellationToken.None));
+
+            Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            Assert.True(File.Exists(pending.StagingPath));
+            Assert.Single(_transport.SentMessages, sent => sent.Type == "file.committed");
+
+            _transport.RaiseSessionStateChanged(v2Session);
+            await WaitForConditionAsync(
+                () => _operationService.GetOperation(accepted.OperationId).State == "Done",
+                TimeSpan.FromSeconds(1));
+
+            Assert.Empty((await _service.ListPendingFileCommitsAsync()).Commits);
+            Assert.False(File.Exists(pending.StagingPath));
+            Assert.Equal("Done", _operationService.GetOperation(accepted.OperationId).State);
+            Assert.Single(_notifications.Notifications, note => note.Method == "rift.onFileTransferCompleted");
+            Assert.Equal(2, _transport.SentMessages.Count(sent => sent.Type == "file.committed"));
+        }
+        finally
+        {
+            if (File.Exists(destination))
+            {
+                File.Delete(destination);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task LocallyCommittedIncomingTransfer_RemainsPendingWhenAcknowledgementReplayFails()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+        var v2Session = new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["file.transfer"],
+            allowsProtectedTraffic: true,
+            selectedCapabilityVersions: new Dictionary<string, int> { ["file.transfer"] = 2 });
+        _transport.RaiseSessionStateChanged(v2Session);
+
+        var bytes = Encoding.UTF8.GetBytes("hello");
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        const string transferId = "transfer-commit-replay-fails";
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = transferId,
+            FileName = "saved.txt",
+            MediaType = "text/plain",
+            ByteSize = bytes.Length,
+            Sha256 = sha,
+            ChunkSize = 262144,
+            ChunkCount = 1,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
+
+        var destination = Path.Combine(Path.GetTempPath(), $"rift-saved-{Guid.NewGuid():N}.txt");
+        try
+        {
+            var accepted = await _service.AcceptFileOfferAsync(transferId, destination, overwrite: false, CancellationToken.None);
+            await _service.HandleChunkReceivedAsync(
+                "rift-peer", transferId, 0, 0, bytes.Length, sha, Convert.ToBase64String(bytes), true, CancellationToken.None);
+            await _service.HandleCompleteReceivedAsync(
+                "rift-peer", transferId, bytes.Length, sha, 1, CancellationToken.None);
+            var pending = Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            File.Copy(pending.StagingPath, destination);
+            _transport.FailCommittedSendsRemaining = 2;
+
+            await Assert.ThrowsAsync<IOException>(() =>
+                _service.ConfirmFileCommitAsync(transferId, destination, CancellationToken.None));
+            _transport.RaiseSessionStateChanged(v2Session);
+            await WaitForConditionAsync(
+                () => _transport.SentMessages.Count(sent => sent.Type == "file.committed") == 2,
+                TimeSpan.FromSeconds(1));
+
+            Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
+            Assert.True(File.Exists(pending.StagingPath));
+            Assert.NotEqual("Done", _operationService.GetOperation(accepted.OperationId).State);
+            Assert.DoesNotContain(_notifications.Notifications, note => note.Method == "rift.onFileTransferCompleted");
         }
         finally
         {
@@ -1447,6 +1666,7 @@ public sealed class FileTransferServiceTests : IDisposable
         public bool FailChunkSendOnce { get; set; }
         public bool FailSecondChunkSendOnce { get; set; }
         public bool FailCompleteSendOnce { get; set; }
+        public int FailCommittedSendsRemaining { get; set; }
         public int BlockedChunkSendCount { get; private set; }
         public int ChunkSendCount { get; private set; }
         public bool HasActiveSessionValue { get; set; } = true;
@@ -1502,6 +1722,11 @@ public sealed class FileTransferServiceTests : IDisposable
             {
                 FailCompleteSendOnce = false;
                 throw new IOException("simulated completion send failure");
+            }
+            if (FailCommittedSendsRemaining > 0 && string.Equals(type, "file.committed", StringComparison.Ordinal))
+            {
+                FailCommittedSendsRemaining--;
+                throw new IOException("simulated committed acknowledgement failure");
             }
 
             return Task.CompletedTask;

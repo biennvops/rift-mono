@@ -333,7 +333,11 @@ public sealed class TlsTransport : ITransport, IDisposable
         session.PeerContext = new SessionPeerContext(
             session.DeviceId,
             session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
-            session.AllowsProtectedTraffic);
+            session.AllowsProtectedTraffic,
+            session.SelectedCapabilities.ToDictionary(
+                capability => capability.Name,
+                capability => capability.Version,
+                StringComparer.Ordinal));
         session.IsAuthenticated = true;
     }
 
@@ -387,6 +391,10 @@ public sealed class TlsTransport : ITransport, IDisposable
         CancellationToken cancellationToken)
     {
         var capabilityNames = selectedCapabilities.Select(capability => capability.Name).ToArray();
+        var capabilityVersions = selectedCapabilities.ToDictionary(
+            capability => capability.Name,
+            capability => capability.Version,
+            StringComparer.Ordinal);
 
         try
         {
@@ -394,7 +402,8 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: true,
                 capabilityNames,
-                allowsProtectedTraffic));
+                allowsProtectedTraffic,
+                capabilityVersions));
             await sessionLoop(cancellationToken);
         }
         finally
@@ -405,7 +414,8 @@ public sealed class TlsTransport : ITransport, IDisposable
                     deviceId,
                     isOnline: false,
                     capabilityNames,
-                    allowsProtectedTraffic));
+                    allowsProtectedTraffic,
+                    capabilityVersions));
             }
         }
     }

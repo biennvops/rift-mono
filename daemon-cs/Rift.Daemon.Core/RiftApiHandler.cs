@@ -266,6 +266,36 @@ public class RiftApiHandler : IRiftApi
     public Task<ListFileTransfersResult> ListFileTransfersAsync() =>
         _fileTransferService.ListFileTransfersAsync();
 
+    [JsonRpcMethod("rift.listPendingFileCommits")]
+    public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() =>
+        _fileTransferService.ListPendingFileCommitsAsync();
+
+    [JsonRpcMethod("rift.confirmFileCommit")]
+    public async Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath)
+    {
+        try
+        {
+            return await _fileTransferService.ConfirmFileCommitAsync(transferId, destinationPath, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.failFileCommit")]
+    public async Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message = null)
+    {
+        try
+        {
+            return await _fileTransferService.FailFileCommitAsync(transferId, failureReason, message, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.startPairing")]
     public Task<StartPairingResult> StartPairingAsync(string deviceId) =>
         ExecutePairingAsync(() => _pairingService.StartPairingAsync(deviceId));
@@ -630,12 +660,16 @@ public class RiftApiHandler : IRiftApi
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw CreateNotConfiguredException();
+        public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() => throw CreateNotConfiguredException();
+        public Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleChunkReceivedAsync(string deviceId, string transferId, int chunkIndex, long offset, int byteSize, string chunkSha256, string contentBase64, bool isLastChunk, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCompleteReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, int chunkCount, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleCommittedReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCancelReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleResumeReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int nextChunkIndex, long offset, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 

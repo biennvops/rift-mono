@@ -92,6 +92,11 @@ endif()
 # them to the application.
 include(flutter/generated_plugins.cmake)
 
+# tray_manager still uses the deprecated AppIndicator API on Linux. Keep
+# deprecations fatal for Rift code without failing the third-party plugin build.
+if(TARGET tray_manager_plugin)
+  target_compile_options(tray_manager_plugin PRIVATE -Wno-deprecated-declarations)
+endif()
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build

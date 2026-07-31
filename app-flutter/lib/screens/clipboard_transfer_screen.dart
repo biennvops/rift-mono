@@ -1452,6 +1452,34 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     }
   }
 
+  Future<void> _cancelIncomingTransfer(Map<String, dynamic> transfer) async {
+    final transferId = transfer['transferId']?.toString();
+    if (transferId == null || transferId.isEmpty) {
+      return;
+    }
+
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await context.read<JsonRpcRiftClient>().cancelFileTransfer(transferId);
+      await _refreshTransfers();
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Cancelled ${transfer['fileName']?.toString() ?? 'file transfer'}.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text(JsonRpcRiftClient.formatDisplayError(error))),
+        );
+      }
+    }
+  }
+
   Future<void> _clearFinishedStagedFiles() async {
     final sentItems = _sendQueue.items
         .where((file) => file.status == SendQueueStatus.sent)
@@ -2596,6 +2624,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                     ? null
                     : (transferred / byteSize).clamp(0, 1).toDouble();
                 final stateColor = _transferStateColor(theme, state);
+                final canCancel = direction == 'incoming' &&
+                    transfer['transferId']?.toString().isNotEmpty == true &&
+                    !_isTerminalTransfer(transfer);
                 final canOpenDestination = direction == 'incoming' &&
                     destinationPath.trim().isNotEmpty &&
                     state.toLowerCase() == 'done';
@@ -2680,6 +2711,14 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.error,
                           ),
+                        ),
+                      ],
+                      if (canCancel) ...[
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          onPressed: () => _cancelIncomingTransfer(transfer),
+                          icon: const Icon(Icons.stop_circle_outlined),
+                          label: const Text('Cancel'),
                         ),
                       ],
                       if (canOpenDestination) ...[

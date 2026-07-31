@@ -112,6 +112,11 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileTransferProgress =>
       _fileTransferProgressController.stream;
 
+  late final _fileTransferReadyToCommitController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onFileTransferReadyToCommit =>
+      _fileTransferReadyToCommitController.stream;
+
   late final _fileTransferCompletedController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onFileTransferCompleted =>
@@ -245,6 +250,10 @@ class JsonRpcRiftClient {
     'Direction': 'direction',
     'BytesTransferred': 'bytesTransferred',
     'Transfers': 'transfers',
+    'Commits': 'commits',
+    'StagingPath': 'stagingPath',
+    'Committed': 'committed',
+    'Failed': 'failed',
     'Items': 'items',
     'QueueItemId': 'queueItemId',
     'TargetDeviceId': 'targetDeviceId',
@@ -744,6 +753,24 @@ class JsonRpcRiftClient {
           ],
         );
       });
+      _client!.registerMethod('rift.onFileTransferReadyToCommit',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onFileTransferReadyToCommit',
+          _asMap(params),
+          _fileTransferReadyToCommitController,
+          requiredStringKeys: const [
+            'transferId',
+            'operationId',
+            'peerDeviceId',
+            'fileName',
+            'sha256',
+            'stagingPath',
+            'destinationPath',
+            'state',
+          ],
+        );
+      });
       _client!.registerMethod('rift.onFileTransferCompleted',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -913,6 +940,7 @@ class JsonRpcRiftClient {
     await _mediaPlaybackActionRequestController.close();
     await _fileOfferController.close();
     await _fileTransferProgressController.close();
+    await _fileTransferReadyToCommitController.close();
     await _fileTransferCompletedController.close();
     await _fileTransferFailedController.close();
     await _connectionChangedController.close();
@@ -1292,6 +1320,35 @@ class JsonRpcRiftClient {
 
   Future<dynamic> listFileTransfers() async {
     return _sendRequest('rift.listFileTransfers');
+  }
+
+  Future<dynamic> listPendingFileCommits() async {
+    return _sendRequest('rift.listPendingFileCommits');
+  }
+
+  Future<dynamic> confirmFileCommit({
+    required String transferId,
+    required String destinationPath,
+  }) async {
+    return _sendRequest('rift.confirmFileCommit', {
+      'transferId': transferId,
+      'destinationPath': destinationPath,
+    });
+  }
+
+  Future<dynamic> failFileCommit({
+    required String transferId,
+    required String failureReason,
+    String? message,
+  }) async {
+    final params = <String, dynamic>{
+      'transferId': transferId,
+      'failureReason': failureReason,
+    };
+    if (message != null && message.isNotEmpty) {
+      params['message'] = message;
+    }
+    return _sendRequest('rift.failFileCommit', params);
   }
 
   Future<dynamic> getOperation(String operationId) async {

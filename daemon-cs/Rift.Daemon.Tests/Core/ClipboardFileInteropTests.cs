@@ -107,6 +107,18 @@ public sealed class ClipboardFileInteropTests : IDisposable
                 destinationPath,
                 overwrite: false,
                 token);
+            await WaitForConditionAsync(
+                async () => (await _receiver.FileTransfer.ListPendingFileCommitsAsync()).Commits
+                    .Any(commit => commit.TransferId == offerResult.TransferId),
+                token);
+            Assert.NotEqual(
+                "Done",
+                _sender.Operations.GetOperation(offerResult.OperationId).State);
+            await PublishPendingCommitAsync(
+                _receiver.FileTransfer,
+                offerResult.TransferId,
+                destinationPath,
+                token);
             await completed.Task.WaitAsync(token);
 
             var received = await File.ReadAllBytesAsync(destinationPath, token);
@@ -329,6 +341,11 @@ public sealed class ClipboardFileInteropTests : IDisposable
             await _sender.Transport.ConnectToPeerWithIdentityAsync("127.0.0.1", port, token);
             await reconnected.WaitAsync(token);
 
+            await PublishPendingCommitAsync(
+                _receiver.FileTransfer,
+                offerResult.TransferId,
+                destinationPath,
+                token);
             await completed.Task.WaitAsync(token);
 
             var received = await File.ReadAllBytesAsync(destinationPath, token);
@@ -394,6 +411,25 @@ public sealed class ClipboardFileInteropTests : IDisposable
         Assert.True(fetched.Verified);
         Assert.Equal(sha256, fetched.Sha256);
         Assert.Equal(payload, Convert.FromBase64String(fetched.ContentBase64));
+    }
+
+    private static async Task PublishPendingCommitAsync(
+        IFileTransferService fileTransfer,
+        string transferId,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        await WaitForConditionAsync(
+            async () => (await fileTransfer.ListPendingFileCommitsAsync()).Commits
+                .Any(commit => commit.TransferId == transferId),
+            cancellationToken);
+        var pending = (await fileTransfer.ListPendingFileCommitsAsync()).Commits
+            .Single(commit => commit.TransferId == transferId);
+        File.Copy(pending.StagingPath, destinationPath);
+        await fileTransfer.ConfirmFileCommitAsync(
+            transferId,
+            destinationPath,
+            cancellationToken);
     }
 
     private static string Sha256Hex(byte[] payload) =>

@@ -149,6 +149,7 @@ void main() {
   late StreamController<Map<String, dynamic>> notificationPostedController;
   late StreamController<Map<String, dynamic>> notificationUpdatedController;
   late StreamController<Map<String, dynamic>> notificationRemovedController;
+  late StreamController<Map<String, dynamic>> fileReadyToCommitController;
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
 
@@ -208,6 +209,8 @@ void main() {
         StreamController<Map<String, dynamic>>.broadcast();
     notificationRemovedController =
         StreamController<Map<String, dynamic>>.broadcast();
+    fileReadyToCommitController =
+        StreamController<Map<String, dynamic>>.broadcast();
     isConnected = true;
     macOsCalls.clear();
 
@@ -249,6 +252,8 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferReadyToCommit)
+        .thenAnswer((_) => fileReadyToCommitController.stream);
     when(() => mockClient.onFileTransferCompleted)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferFailed)
@@ -270,6 +275,17 @@ void main() {
     when(() => mockClient.supportsSendQueue()).thenAnswer((_) async => false);
     when(() => mockClient.listSendQueue())
         .thenAnswer((_) async => {'items': []});
+    when(() => mockClient.listPendingFileCommits())
+        .thenAnswer((_) async => {'commits': []});
+    when(() => mockClient.confirmFileCommit(
+          transferId: any(named: 'transferId'),
+          destinationPath: any(named: 'destinationPath'),
+        )).thenAnswer((_) async => {'committed': true});
+    when(() => mockClient.failFileCommit(
+          transferId: any(named: 'transferId'),
+          failureReason: any(named: 'failureReason'),
+          message: any(named: 'message'),
+        )).thenAnswer((_) async => {'failed': true});
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
     when(() => mockClient.listTrustedPeers()).thenAnswer(
@@ -343,6 +359,7 @@ void main() {
     notificationPostedController.close();
     notificationUpdatedController.close();
     notificationRemovedController.close();
+    fileReadyToCommitController.close();
     setMacOSNotificationBridgeOverride(null);
     IOSNotifications.debugIsIOSOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
@@ -373,6 +390,53 @@ void main() {
     expect(find.text('Ops'), findsOneWidget);
     expect(find.byTooltip('Settings'), findsOneWidget);
     expect(find.text('RIFT'), findsOneWidget);
+  });
+
+  testWidgets('tray right-click opens the configured context menu',
+      (WidgetTester tester) async {
+    const trayChannel = MethodChannel('tray_manager');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(trayChannel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(trayChannel, null);
+    });
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    final dynamic appState = tester.state(find.byType(RiftApp));
+    appState.onTrayIconRightMouseDown();
+    await tester.pump();
+
+    expect(calls.map((call) => call.method), contains('popUpContextMenu'));
+  });
+
+  testWidgets('AppShell applies a history route queued before mount',
+      (WidgetTester tester) async {
+    final routeNotifier = ValueNotifier<String?>(NotificationRoute.historySend);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          Provider<JsonRpcRiftClient>.value(value: mockClient),
+          ChangeNotifierProvider<SendQueueController>(
+            create: (_) => SendQueueController(mockClient, false),
+          ),
+        ],
+        child: MaterialApp(
+          home: AppShell(historyRouteNotifier: routeNotifier),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        1);
+    expect(routeNotifier.value, isNull);
   });
 
   test('MockClient getDeviceInfo test', () async {

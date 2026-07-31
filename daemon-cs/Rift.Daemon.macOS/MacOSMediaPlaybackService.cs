@@ -146,6 +146,7 @@ internal sealed class MacOSMediaPlaybackService(
         SnapshotState? previous;
         SnapshotState? next;
         string? eventType = null;
+        var replacesPrevious = false;
 
         lock (_gate)
         {
@@ -167,6 +168,7 @@ internal sealed class MacOSMediaPlaybackService(
                 {
                     _current = next;
                     eventType = "posted";
+                    replacesPrevious = previous is not null;
                 }
                 else if (!string.Equals(previous.Fingerprint, next.Fingerprint, StringComparison.Ordinal))
                 {
@@ -191,7 +193,17 @@ internal sealed class MacOSMediaPlaybackService(
             return;
         }
 
-        await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>().HandleLocalPlaybackEventAsync(
+        var mediaPlaybackSyncService = serviceProvider.GetRequiredService<IMediaPlaybackSyncService>();
+        if (replacesPrevious)
+        {
+            await mediaPlaybackSyncService.HandleLocalPlaybackEventAsync(
+                "removed",
+                new MediaPlaybackRecord { PlaybackId = previous!.Snapshot.PlaybackId },
+                DateTimeOffset.UtcNow.ToString("O"),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await mediaPlaybackSyncService.HandleLocalPlaybackEventAsync(
             eventType,
             next!.Snapshot.ToRecord(),
             removedAt: null,
@@ -200,7 +212,7 @@ internal sealed class MacOSMediaPlaybackService(
 
     private async Task<MacOSNowPlayingSnapshot?> TryGetSnapshotAsync(CancellationToken cancellationToken)
     {
-        var output = await RunAdapterAsync(["get"], cancellationToken).ConfigureAwait(false);
+        var output = await RunAdapterAsync(CreateGetCommand(), cancellationToken).ConfigureAwait(false);
         if (output.ExitCode != 0)
         {
             if (!output.MissingArtifacts)
@@ -230,8 +242,7 @@ internal sealed class MacOSMediaPlaybackService(
             ? payload.BundleIdentifier
             : "Now Playing";
         var playbackState = payload.Playing == true ? "playing" : ((payload.ElapsedTime ?? 0) > 0 ? "paused" : "stopped");
-        var playbackKey = payload.ContentItemIdentifier ?? payload.Title;
-        var playbackId = string.Join(":", appId, playbackKey, payload.Artist ?? string.Empty);
+        var playbackId = CreatePlaybackId(appId);
         var durationMs = payload.Duration.HasValue ? Math.Max(0L, (long)Math.Round(payload.Duration.Value * 1000d)) : (long?)null;
         var positionMs = GetPositionMs(payload.ElapsedTimeNow, payload.ElapsedTime);
         var canSkip = payload.ProhibitsSkip != true;
@@ -257,6 +268,10 @@ internal sealed class MacOSMediaPlaybackService(
 
     internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
         Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
+
+    internal static string[] CreateGetCommand() => ["get", "--now"];
+
+    internal static string CreatePlaybackId(string appId) => $"{appId}:now-playing";
 
     private static string CreateFingerprint(MacOSNowPlayingSnapshot snapshot)
     {

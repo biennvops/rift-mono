@@ -37,6 +37,7 @@ import 'src/platform/linux_notifications.dart';
 import 'src/platform/linux_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
+import 'src/platform/windows_send_files.dart';
 import 'src/platform/windows_shell.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
@@ -202,6 +203,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _pairingCompleteSub;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _fileReadyToCommitSub;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
   StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
   StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
@@ -214,6 +216,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
   final Set<String> _autoAcceptingTransferIds = <String>{};
+  final Set<String> _publishingTransferIds = <String>{};
   final ValueNotifier<String?> _historyRouteNotifier =
       ValueNotifier<String?>(null);
   final ValueNotifier<String?> _sharedClipboardTextNotifier =
@@ -330,6 +333,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (Platform.isMacOS) {
       MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
     }
+    if (Platform.isWindows) {
+      WindowsSendFiles.setMethodCallHandler(_handleWindowsSendFilesMethodCall);
+      unawaited(_consumePendingWindowsSendItems());
+    }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
 
     if (IOSNotifications.isSupported) {
@@ -366,6 +373,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         unawaited(_flushPendingNotificationSyncEvents());
         unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
+        unawaited(_recoverPendingFileCommits());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
@@ -430,7 +438,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return;
     }
     await _enqueueSharedSendItems(pendingItems);
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
   }
 
   Future<dynamic> _handleLinuxSendFilesMethodCall(MethodCall call) async {
@@ -444,7 +452,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     unawaited(_enqueueSharedSendItems(items));
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
     return null;
   }
 
@@ -459,8 +467,47 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     unawaited(_enqueueSharedSendItems(items));
-    _appShellKey.currentState?.showHistoryRoute(NotificationRoute.historySend);
+    _showHistoryRoute(NotificationRoute.historySend);
     return null;
+  }
+
+  Future<void> _consumePendingWindowsSendItems() async {
+    final pendingItems = await WindowsSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleWindowsSendFilesMethodCall(MethodCall call) async {
+    if (call.method != WindowsSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = WindowsSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  void _showHistoryRoute(String route) {
+    final shell = _appShellKey.currentState;
+    if (shell == null) {
+      _historyRouteNotifier.value = route;
+    } else {
+      shell.showHistoryRoute(route);
+    }
+
+    if (_enableDesktopShellIntegration) {
+      unawaited(_clipboardManager?.setWindowVisible(true));
+      unawaited(windowManager.show());
+      unawaited(windowManager.focus());
+    }
   }
 
   Future<bool?> _confirmIncomingFileOffer({
@@ -750,18 +797,18 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           unawaited(_enqueueSharedSendItems(items));
         }
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
       case NotificationRoute.historyNotifications:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:
         _openIncomingPairingRequest(payload);
         return;
       case NotificationRoute.historyIncomingOffers:
       case NotificationRoute.historyTransferActivity:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
     }
   }
@@ -932,11 +979,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     try {
       await trayManager.setIcon(
         Platform.isWindows
-            ? 'app_icon.ico'
+            ? 'windows/runner/resources/app_icon.ico'
             : Platform.isLinux
                 ? 'assets/dev.rift.Rift.png'
                 : 'app_icon.png',
       );
+      await trayManager.setToolTip(AppStrings.appTitle);
     } catch (e) {
       debugPrint('Failed to load tray icon: $e');
     }
@@ -966,6 +1014,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _pairingCompleteSub?.cancel();
     _trustChangedSub?.cancel();
     _fileOfferSub?.cancel();
+    _fileReadyToCommitSub?.cancel();
     _fileCompletedSub?.cancel();
     _fileFailedSub?.cancel();
     _clipboardOfferSub?.cancel();
@@ -996,6 +1045,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_clipboardManager?.setWindowVisible(true));
     windowManager.show();
     windowManager.focus();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    unawaited(trayManager.popUpContextMenu());
   }
 
   @override
@@ -1386,9 +1440,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       }
     });
 
+    _fileReadyToCommitSub = client.onFileTransferReadyToCommit.listen((event) {
+      unawaited(_publishPendingFileCommit(event));
+    });
+
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
       unawaited(_handleCompletedFileTransfer(event));
     });
+
+    if (client.isConnected) {
+      unawaited(_recoverPendingFileCommits());
+    }
 
     _fileFailedSub = client.onFileTransferFailed.listen((event) {
       final fileName = event['fileName']?.toString() ?? 'file';
@@ -1399,6 +1461,106 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         route: NotificationRoute.historyTransferActivity,
       );
     });
+  }
+
+  bool get _supportsDesktopFilePublication =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  Future<void> _recoverPendingFileCommits() async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      return;
+    }
+    try {
+      final result = await client.listPendingFileCommits();
+      if (result is! Map) {
+        return;
+      }
+      final commits = result['commits'];
+      if (commits is! List) {
+        return;
+      }
+      for (final commit in commits.whereType<Map>()) {
+        unawaited(
+          _publishPendingFileCommit(Map<String, dynamic>.from(commit)),
+        );
+      }
+    } catch (error) {
+      if (!JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        debugPrint('[File Transfer] Failed to recover pending commits: $error');
+      }
+    }
+  }
+
+  Future<void> _publishPendingFileCommit(Map<String, dynamic> commit) async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final transferId = commit['transferId']?.toString();
+    final stagingPath = commit['stagingPath']?.toString();
+    final destinationPath = commit['destinationPath']?.toString();
+    final expectedSha256 = commit['sha256']?.toString();
+    final byteSize = commit['byteSize'];
+    if (transferId == null ||
+        transferId.isEmpty ||
+        stagingPath == null ||
+        stagingPath.isEmpty ||
+        destinationPath == null ||
+        destinationPath.isEmpty ||
+        expectedSha256 == null ||
+        expectedSha256.isEmpty ||
+        byteSize is! num ||
+        !_publishingTransferIds.add(transferId)) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final publishedPath = await publishVerifiedIncomingFile(
+        transferId: transferId,
+        stagingPath: stagingPath,
+        destinationPath: destinationPath,
+        expectedByteSize: byteSize.toInt(),
+        expectedSha256: expectedSha256,
+      );
+      try {
+        await client.confirmFileCommit(
+          transferId: transferId,
+          destinationPath: publishedPath,
+        );
+      } catch (error) {
+        debugPrint(
+          '[File Transfer] Published $transferId but confirmation is pending: $error',
+        );
+      }
+    } catch (error) {
+      try {
+        await client.failFileCommit(
+          transferId: transferId,
+          failureReason: error.toString().toLowerCase().contains('hash')
+              ? 'HashMismatch'
+              : 'PolicyDenied',
+          message: JsonRpcRiftClient.formatDisplayError(error),
+        );
+      } catch (reportError) {
+        debugPrint(
+          '[File Transfer] Failed to report publication failure for $transferId: $reportError',
+        );
+      }
+      _maybeNotifyWithRoute(
+        title: 'File save failed',
+        body:
+            '${commit['fileName']?.toString() ?? 'File'} could not be published: ${JsonRpcRiftClient.formatDisplayError(error)}',
+        route: NotificationRoute.historyTransferActivity,
+      );
+    } finally {
+      _publishingTransferIds.remove(transferId);
+    }
   }
 
   Future<_IncomingFileDestination?> _prepareIncomingFileDestination(
@@ -1683,7 +1845,13 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  int _currentIndex = 0;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.historyRouteNotifier?.value == null ? 0 : 1;
+  }
 
   late final List<Widget> _screens = [
     const TrustedDevicesScreen(),

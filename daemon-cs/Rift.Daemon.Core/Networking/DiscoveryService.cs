@@ -35,6 +35,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private DateTimeOffset _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
     private int _networkRefreshQueued;
     private Timer? _networkRefreshDebounceTimer;
+    private readonly bool _subscribedToNetworkChanges;
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -45,8 +46,12 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         _serviceDiscovery = new ServiceDiscovery(_mdns);
 
         _serviceDiscovery.ServiceInstanceDiscovered += OnServiceInstanceDiscovered;
-        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
-        NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+        _subscribedToNetworkChanges = ShouldSubscribeToNetworkChanges(OperatingSystem.IsMacOS());
+        if (_subscribedToNetworkChanges)
+        {
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+        }
     }
 
     public void StartAdvertising(string deviceId, string minVersion, string maxVersion)
@@ -561,8 +566,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _serviceDiscovery.Dispose();
             _mdns.Dispose();
             _shutdownCts.Dispose();
-            NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
-            NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            if (_subscribedToNetworkChanges)
+            {
+                NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+                NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            }
         }
     }
 
@@ -589,6 +597,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.UtcNow;
         }
     }
+
+    internal static bool ShouldSubscribeToNetworkChanges(bool isMacOS) => !isMacOS;
 
     private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
     {

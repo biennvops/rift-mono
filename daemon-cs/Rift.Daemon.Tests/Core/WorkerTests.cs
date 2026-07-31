@@ -231,6 +231,102 @@ public sealed class WorkerTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ReconnectsTrustedPeerAtStartup()
+    {
+        const string peerDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        var ipcListener = new FakeIpcListener();
+        var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
+        trustStore.Peers.Add(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "192.168.2.68",
+                    Port = 9140,
+                    Source = "pairing-session",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        var transport = new FakeTransport { ConnectedDeviceId = peerDeviceId };
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            new IdentityManager(),
+            trustStore,
+            discoveryService,
+            transport,
+            new FakeProtocolMessageRouter(),
+            new PresenceService());
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => transport.ConnectAttempts.Count > 0);
+
+        Assert.Contains(transport.ConnectAttempts, attempt =>
+            attempt.Host == "192.168.2.68" && attempt.Port == 9140);
+        Assert.True(transport.HasActiveSession(peerDeviceId));
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SessionOffline_ReconnectsTrustedPeerWithoutDaemonRestart()
+    {
+        const string peerDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        var ipcListener = new FakeIpcListener();
+        var discoveryService = new FakeDiscoveryService();
+        var trustStore = new FakeTrustStore();
+        trustStore.Peers.Add(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "192.168.2.68",
+                    Port = 9140,
+                    Source = "pairing-session",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                }
+            ]
+        });
+        var transport = new FakeTransport { ConnectedDeviceId = peerDeviceId };
+        transport.SetActiveSession(peerDeviceId, true);
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            ipcListener,
+            new IdentityManager(),
+            trustStore,
+            discoveryService,
+            transport,
+            new FakeProtocolMessageRouter(),
+            new PresenceService());
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
+        transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: false,
+            ["presence.basic"],
+            allowsProtectedTraffic: true);
+
+        await WaitUntilAsync(() => transport.ConnectAttempts.Count > 0);
+
+        Assert.True(transport.HasActiveSession(peerDeviceId));
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_DoesNotAutoStartDiscovery_WhenKnownManagedPeersExist()
     {
         var ipcListener = new FakeIpcListener();
@@ -261,6 +357,7 @@ public sealed class WorkerTests
         await WaitUntilAsync(() => discoveryService.StartAdvertisingCalled);
 
         Assert.False(discoveryService.StartDiscoveryCalled);
+        Assert.Empty(transport.ConnectAttempts);
 
         await worker.StopAsync(CancellationToken.None);
     }
@@ -362,14 +459,25 @@ public sealed class WorkerTests
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
         public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
+        private readonly ConcurrentDictionary<string, bool> _activeSessions = new(StringComparer.Ordinal);
+
         public ConcurrentBag<SentMessage> SentMessages { get; } = [];
+        public ConcurrentBag<(string Host, int Port)> ConnectAttempts { get; } = [];
+        public string ConnectedDeviceId { get; set; } = "rift-test-peer";
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.Delay(Timeout.Infinite, cancellationToken);
 
-        public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
+        public async Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            await ConnectToPeerWithIdentityAsync(host, port, cancellationToken);
+        }
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
-            Task.FromResult("rift-test-peer");
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
+        {
+            ConnectAttempts.Add((host, port));
+            _activeSessions[ConnectedDeviceId] = true;
+            return Task.FromResult(ConnectedDeviceId);
+        }
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
@@ -385,14 +493,32 @@ public sealed class WorkerTests
             return Task.CompletedTask;
         }
 
-        public bool HasActiveSession(string peerDeviceId) => false;
-        public bool HasProtectedSession(string peerDeviceId) => false;
+        public bool HasActiveSession(string peerDeviceId) =>
+            _activeSessions.TryGetValue(peerDeviceId, out var active) && active;
+        public bool HasProtectedSession(string peerDeviceId) => HasActiveSession(peerDeviceId);
         public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
-        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+        {
+            _activeSessions.TryRemove(peerDeviceId, out _);
+            return Task.CompletedTask;
+        }
+
+        public void SetActiveSession(string peerDeviceId, bool active)
+        {
+            if (active)
+            {
+                _activeSessions[peerDeviceId] = true;
+            }
+            else
+            {
+                _activeSessions.TryRemove(peerDeviceId, out _);
+            }
+        }
 
         public void EmitSessionStateChanged(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic = true)
         {
+            SetActiveSession(peerDeviceId, isOnline);
             SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(peerDeviceId, isOnline, selectedCapabilities, allowsProtectedTraffic));
         }
 
@@ -483,7 +609,8 @@ public sealed class WorkerTests
 
         public void SavePeer(PeerIdentity peer) => throw new NotImplementedException();
 
-        public PeerIdentity? GetPeer(string deviceId) => throw new NotImplementedException();
+        public PeerIdentity? GetPeer(string deviceId) =>
+            Peers.FirstOrDefault(peer => string.Equals(peer.DeviceId, deviceId, StringComparison.Ordinal));
 
         public IEnumerable<PeerIdentity> GetAllPeers() => Peers;
 

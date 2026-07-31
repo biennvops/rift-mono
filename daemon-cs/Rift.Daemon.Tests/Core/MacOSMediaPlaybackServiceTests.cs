@@ -88,6 +88,20 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
         Assert.Equal(expectedPositionMs, MacOSMediaPlaybackService.GetPositionMs(elapsedTimeNow, elapsedTime));
     }
 
+    [Fact]
+    public void CreateGetCommand_RequestsAdvancingElapsedTime()
+    {
+        Assert.Equal(["get", "--now"], MacOSMediaPlaybackService.CreateGetCommand());
+    }
+
+    [Fact]
+    public void CreatePlaybackId_IsStableForNowPlayingApplication()
+    {
+        Assert.Equal(
+            "com.example.browser:now-playing",
+            MacOSMediaPlaybackService.CreatePlaybackId("com.example.browser"));
+    }
+
     private async Task<string> CreateSuccessfulAdapterScriptAsync()
     {
         var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");

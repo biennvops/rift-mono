@@ -258,6 +258,50 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         Assert.Equal(-32602, error.ErrorCode);
     }
 
+    [Fact]
+    public async Task PeerSessionOffline_RemovesRemotePlaybackRecords()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-peer", "playback-1", "Track"), CancellationToken.None);
+        await service.HandleMediaPlaybackPostedAsync(CreatePlayback("rift-peer", "playback-2", "Track 2"), CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: false,
+            selectedCapabilities: [],
+            allowsProtectedTraffic: false));
+
+        Assert.Empty((await service.ListMediaPlaybackAsync(CancellationToken.None)).Playbacks);
+        Assert.Equal(2, _ipcNotificationService.Events.Count(evt => evt.Method == "rift.onMediaPlaybackRemoved"));
+    }
+
+    [Fact]
+    public async Task HandleMediaPlaybackPostedAsync_NormalizesJsonElementArtworkValues()
+    {
+        var service = CreateService();
+        var artwork = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+            """{"dataBase64":"aW1hZ2U=","mediaType":"image/jpeg"}""")!;
+        Assert.IsType<JsonElement>(artwork["dataBase64"]);
+
+        await service.HandleMediaPlaybackPostedAsync(new MediaPlaybackRecord
+        {
+            PlaybackId = "playback-1",
+            SourceDeviceId = "rift-peer",
+            SourcePlatform = "macos",
+            AppId = "com.example.browser",
+            AppName = "Example Browser",
+            Artwork = artwork,
+            PlaybackState = "playing",
+            PositionMs = 1000,
+            CanPause = true,
+            UpdatedAt = "2026-07-16T10:00:00Z"
+        }, CancellationToken.None);
+
+        var playback = Assert.Single((await service.ListMediaPlaybackAsync(CancellationToken.None)).Playbacks);
+        Assert.Equal("aW1hZ2U=", Assert.IsType<string>(playback.Artwork!["dataBase64"]));
+        Assert.Equal("image/jpeg", Assert.IsType<string>(playback.Artwork["mediaType"]));
+    }
+
     [Theory]
     [InlineData("2026-07-16")]
     [InlineData("2026-07-16T10:00:00")]
@@ -333,6 +377,9 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         await service.HandleMediaPlaybackPostedAsync(CreatePlayback(peerDeviceId, "playback-1", "Track"), CancellationToken.None);
 
         var first = await service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None);
+        var actionRequest = Assert.Single(_transport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "media.playbackActionRequest");
+        Assert.False(actionRequest.GetProperty("payload").TryGetProperty("positionMs", out _));
         var duplicate = await Assert.ThrowsAsync<MediaPlaybackSyncFailureException>(() =>
             service.PerformMediaPlaybackActionAsync(peerDeviceId, "playback-1", "pause", null, CancellationToken.None));
         Assert.Equal(-32010, duplicate.ErrorCode);
@@ -434,11 +481,10 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
             remove { }
         }
 
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+
+        public void RaiseSessionStateChanged(SessionStateChangedEventArgs args) =>
+            SessionStateChanged?.Invoke(this, args);
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
         public List<JsonElement> Payloads { get; } = [];

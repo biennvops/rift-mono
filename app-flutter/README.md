@@ -22,6 +22,29 @@ Normative behavior lives in:
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
 - Android 10 (API 29) or later: isolate transport to `daemon-dart`
 
+Windows notes:
+
+- file arguments from Explorer are routed into the durable send queue; when
+  Rift is already open, a short-lived second process forwards the selection to
+  the running window
+- after `flutter build windows`, register the current release executable as a
+  per-user **Send with Rift** Explorer action (no administrator access needed):
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File windows\tools\register_send_with_rift.ps1
+  ```
+
+  Remove the action with:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File windows\tools\unregister_send_with_rift.ps1
+  ```
+
+  Pass `-ExecutablePath C:\path\to\app_flutter.exe` to the registration script
+  when registering an installed build instead of the default local release
+  build. On Windows 11, the action may appear under **Show more options** in
+  Explorer's context menu.
+
 macOS notes:
 
 - send-file picking uses the shared Flutter `file_picker` flow with

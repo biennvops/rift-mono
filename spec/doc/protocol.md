@@ -282,7 +282,7 @@ The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUS
 
 ### 7.2 Capability Messages
 
-Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`.
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional file-transfer capability is `file.transfer`, with version `1` for legacy completion semantics and version `2` for receiver-confirmed publication. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`.
 
 `capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
 
@@ -421,7 +421,21 @@ string.
 hash, `contentBase64` string, `isLastChunk` boolean.
 
 `file.complete` payload fields: `transferId`, `byteSize` non-negative integer,
-`sha256` file hash, `chunkCount` positive integer.
+`sha256` file hash, `chunkCount` positive integer. In `file.transfer` version 1,
+this message is the sender's terminal completion signal after all content has
+been written to the authenticated session. In version 2, it means only that the
+sender finished transmitting the declared content; the sender MUST remain
+non-terminal until it receives `file.committed`.
+
+`file.committed` is available in `file.transfer` version 2. The receiver MUST
+send it only after validating chunk order, total byte count, whole-file
+SHA-256, and successful publication into the receiver's final destination.
+Its payload fields are `transferId`, `byteSize` non-negative integer, and
+`sha256` file hash. The sender MUST validate that the fields match the
+outstanding transfer and MUST treat a mismatch as `HashMismatch`.
+Duplicate matching `file.committed` messages MUST be harmless. A receiver MUST
+NOT send `file.committed` merely because it received `file.complete`; local
+publication is part of completion.
 
 `file.cancel` payload fields: `transferId`, `failureReason`, optional `message`
 string.
@@ -431,6 +445,15 @@ string.
 receiver with a partial transfer sends `file.resume` after re-establishing an
 authenticated session. The sender MUST continue the original transfer from the
 requested chunk boundary rather than creating a new offer.
+
+For `file.transfer` version 2, loss of the authenticated session while the
+sender awaits `file.committed` MUST leave the transfer resumable rather than
+marking it done. After reconnect, a receiver that has not finished network
+receipt sends `file.resume`; a receiver that has already published the verified
+file resends the matching `file.committed`. A publication failure MUST produce
+a typed local failure and a peer-visible `file.cancel` using the existing
+closed failure vocabulary. A sender timeout while awaiting confirmation MUST
+fail with `Timeout`, never success.
 
 File transfer content MUST remain on the authenticated peer session. Receivers
 MUST verify chunk bounds and integrity before accepting a chunk, and MUST
@@ -512,7 +535,7 @@ The following capabilities are REQUIRED for a conformant v0.1-draft session:
 | Name                    | Version | Minimum | Description                                              |
 | ----------------------- | ------- | ------- | -------------------------------------------------------- |
 | `clipboard.offer_fetch` | 1       | 1       | Clipboard metadata offer and authenticated content fetch |
-| `file.transfer`         | 1       | 1       | Optional authenticated file offer and chunk transfer     |
+| `file.transfer`         | 2       | 1       | Optional authenticated file offer, chunk transfer, and receiver-confirmed publication |
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
 | `security.event_log`    | 1       | 1       | Security event logging for audit                         |
