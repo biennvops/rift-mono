@@ -1168,7 +1168,7 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task LocallyCommittedIncomingTransfer_FinalizesAfterAcknowledgementReplay()
+    public async Task OfflineV2Commit_FinalizesAfterAcknowledgementReplay()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -1214,6 +1214,11 @@ public sealed class FileTransferServiceTests : IDisposable
                 "rift-peer", transferId, bytes.Length, sha, 1, CancellationToken.None);
             var pending = Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
             File.Copy(pending.StagingPath, destination);
+            _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+                "rift-peer",
+                isOnline: false,
+                selectedCapabilities: [],
+                allowsProtectedTraffic: false));
             _transport.FailCommittedSendsRemaining = 1;
 
             await Assert.ThrowsAsync<IOException>(() =>
@@ -1221,6 +1226,7 @@ public sealed class FileTransferServiceTests : IDisposable
 
             Assert.Single((await _service.ListPendingFileCommitsAsync()).Commits);
             Assert.True(File.Exists(pending.StagingPath));
+            Assert.Single(_transport.SentMessages, sent => sent.Type == "file.committed");
 
             _transport.RaiseSessionStateChanged(v2Session);
             await WaitForConditionAsync(

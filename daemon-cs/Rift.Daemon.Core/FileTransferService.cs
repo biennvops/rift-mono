@@ -271,7 +271,8 @@ public sealed class FileTransferService : IFileTransferService
             DestinationPath = fullDestinationPath,
             StagingDirectory = stagingDirectory,
             StagingPath = stagingPath,
-            Overwrite = overwrite
+            Overwrite = overwrite,
+            NegotiatedVersion = offer.NegotiatedVersion
         };
         _incomingTransfers[transferId] = transfer;
 
@@ -405,7 +406,7 @@ public sealed class FileTransferService : IFileTransferService
 
             transfer.IsLocallyCommitted = true;
             transfer.CommittedDestinationPath = fullDestinationPath;
-            if (PeerSupportsFileTransferVersion(transfer.SourceDeviceId, 2))
+            if (transfer.NegotiatedVersion >= 2)
             {
                 await SendCommittedAsync(transfer, cancellationToken).ConfigureAwait(false);
             }
@@ -556,7 +557,8 @@ public sealed class FileTransferService : IFileTransferService
             Sha256 = offer.Sha256,
             ChunkSize = NormalizeChunkSize(offer.ChunkSize),
             ChunkCount = offer.ChunkCount,
-            ExpiresAt = _timeProvider.GetUtcNow().AddMilliseconds(offer.ExpiresInMs)
+            ExpiresAt = _timeProvider.GetUtcNow().AddMilliseconds(offer.ExpiresInMs),
+            NegotiatedVersion = GetPeerFileTransferVersion(offer.DeviceId)
         };
 
         await NotifyFileOfferAsync(_remoteOffers[offer.TransferId], cancellationToken).ConfigureAwait(false);
@@ -1412,8 +1414,11 @@ public sealed class FileTransferService : IFileTransferService
         return presence is not null && presence.Capabilities.Contains(requiredCapability, StringComparer.Ordinal);
     }
 
+    private int GetPeerFileTransferVersion(string deviceId) =>
+        _peerFileTransferVersions.TryGetValue(deviceId, out var version) ? version : 1;
+
     private bool PeerSupportsFileTransferVersion(string deviceId, int requiredVersion) =>
-        _peerFileTransferVersions.TryGetValue(deviceId, out var version) && version >= requiredVersion;
+        GetPeerFileTransferVersion(deviceId) >= requiredVersion;
 
     private static void ValidateResumePosition(
         OutgoingTransferState transfer,
@@ -1949,6 +1954,7 @@ public sealed class FileTransferService : IFileTransferService
         public int ChunkSize { get; init; }
         public int ChunkCount { get; init; }
         public DateTimeOffset ExpiresAt { get; init; }
+        public int NegotiatedVersion { get; init; } = 1;
     }
 
     private sealed class OutgoingTransferState
@@ -1991,6 +1997,7 @@ public sealed class FileTransferService : IFileTransferService
         public string StagingDirectory { get; init; } = string.Empty;
         public string StagingPath { get; init; } = string.Empty;
         public bool Overwrite { get; init; }
+        public int NegotiatedVersion { get; init; } = 1;
         public bool IsReadyToCommit { get; set; }
         public bool IsLocallyCommitted { get; set; }
         public string? CommittedDestinationPath { get; set; }
