@@ -13,9 +13,6 @@ enum LocalEventKind {
   clipboardExpired,
   fileReceived,
   fileFailed,
-  notificationFromPeer,
-  mediaPlayingOnPeer,
-  mediaStoppedOnPeer,
 }
 
 class LocalEvent {
@@ -49,10 +46,8 @@ class LocalEventsNotifier extends ChangeNotifier {
       _client.onClipboardExpired.listen(_onClipboardExpired),
       _client.onFileTransferCompleted.listen(_onFileCompleted),
       _client.onFileTransferFailed.listen(_onFileFailed),
-      _client.onNotificationPosted.listen(_onNotificationPosted),
-      _client.onMediaPlaybackPosted.listen(_onMediaPosted),
-      _client.onMediaPlaybackRemoved.listen(_onMediaRemoved),
     ]);
+    unawaited(_loadHistory());
   }
 
   List<LocalEvent> get events => List.unmodifiable(_events);
@@ -64,11 +59,101 @@ class LocalEventsNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _add(LocalEvent event) {
+  void _add(LocalEvent event, {bool unread = true}) {
     _events.insert(0, event);
     if (_events.length > _maxEvents) _events.removeLast();
-    _unreadCount++;
+    if (unread) _unreadCount++;
     notifyListeners();
+  }
+
+  Future<void> _loadHistory() async {
+    if (!_client.isConnected) return;
+    try {
+      final result = await _client.queryEventLog(
+        eventTypes: const [
+          'connection.established',
+          'connection.lost',
+          'trust.transitioned',
+          'pairing.attempted',
+          'clipboard.offered',
+          'clipboard.expired',
+          'file_transfer.rejected',
+        ],
+        limit: _maxEvents,
+      );
+      final records = List<Map<String, dynamic>>.from(
+        (result['events'] as List? ?? const <dynamic>[])
+            .map((event) => Map<String, dynamic>.from(event as Map)),
+      );
+      for (final record in records.reversed) {
+        final event = _fromSecurityEvent(record);
+        if (event != null) _add(event, unread: false);
+      }
+    } catch (_) {
+      // The live feed remains available when event history is unsupported.
+    }
+  }
+
+  LocalEvent? _fromSecurityEvent(Map<String, dynamic> record) {
+    final type = record['eventType']?.toString() ?? '';
+    final peerDeviceId = record['peerDeviceId']?.toString();
+    final peer = _shortId(peerDeviceId ?? '');
+    final time =
+        DateTime.tryParse(record['timestamp']?.toString() ?? '')?.toLocal() ??
+            DateTime.now();
+
+    return switch (type) {
+      'connection.established' => LocalEvent(
+          kind: LocalEventKind.deviceConnected,
+          title: 'Device connected',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'connection.lost' => LocalEvent(
+          kind: LocalEventKind.deviceDisconnected,
+          title: 'Device disconnected',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'trust.transitioned' => LocalEvent(
+          kind: LocalEventKind.deviceTrusted,
+          title: 'Trust updated',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'pairing.attempted' => LocalEvent(
+          kind: LocalEventKind.devicePairingRequest,
+          title: 'Pairing activity',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'clipboard.offered' => LocalEvent(
+          kind: LocalEventKind.clipboardReceived,
+          title: 'Clipboard received',
+          subtitle: peer.isEmpty ? 'Incoming clipboard offer' : 'From $peer',
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'clipboard.expired' => LocalEvent(
+          kind: LocalEventKind.clipboardExpired,
+          title: 'Clipboard offer expired',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      'file_transfer.rejected' => LocalEvent(
+          kind: LocalEventKind.fileFailed,
+          title: 'File transfer rejected',
+          subtitle: peer,
+          time: time,
+          peerDeviceId: peerDeviceId,
+        ),
+      _ => null,
+    };
   }
 
   void _onTrustChanged(Map<String, dynamic> e) {
@@ -157,43 +242,6 @@ class LocalEventsNotifier extends ChangeNotifier {
       title: 'File transfer failed',
       subtitle: fileName,
       time: DateTime.now(),
-    ));
-  }
-
-  void _onNotificationPosted(Map<String, dynamic> e) {
-    final deviceId = e['sourceDeviceId']?.toString() ?? '';
-    final appName = e['appName']?.toString() ?? 'App';
-    _add(LocalEvent(
-      kind: LocalEventKind.notificationFromPeer,
-      title: '${_shortId(deviceId)}: $appName',
-      subtitle: e['title']?.toString() ??
-          e['bodyPreview']?.toString() ??
-          'New notification',
-      time: DateTime.now(),
-      peerDeviceId: deviceId,
-    ));
-  }
-
-  void _onMediaPosted(Map<String, dynamic> e) {
-    final deviceId = e['sourceDeviceId']?.toString() ?? '';
-    final title = e['title']?.toString() ?? 'media';
-    _add(LocalEvent(
-      kind: LocalEventKind.mediaPlayingOnPeer,
-      title: 'Playing on ${_shortId(deviceId)}',
-      subtitle: title,
-      time: DateTime.now(),
-      peerDeviceId: deviceId,
-    ));
-  }
-
-  void _onMediaRemoved(Map<String, dynamic> e) {
-    final deviceId = e['sourceDeviceId']?.toString() ?? '';
-    _add(LocalEvent(
-      kind: LocalEventKind.mediaStoppedOnPeer,
-      title: 'Media stopped on ${_shortId(deviceId)}',
-      subtitle: '',
-      time: DateTime.now(),
-      peerDeviceId: deviceId,
     ));
   }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -23,6 +25,9 @@ class ClipboardTransferScreen extends StatefulWidget {
 
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
   final bool? revealCompletedTransfersInFolderOverride;
+  final Future<String?> Function(String fileName)?
+      buildIncomingDestinationPathOverride;
+  final ValueChanged<int>? onBoundarySwipe;
 
   const ClipboardTransferScreen({
     super.key,
@@ -32,6 +37,8 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.sharedClipboardTextNotifier,
     this.pickSendFilesOverride,
     this.revealCompletedTransfersInFolderOverride,
+    this.buildIncomingDestinationPathOverride,
+    this.onBoundarySwipe,
   });
 
   @override
@@ -43,6 +50,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   HistorySection _activeSection = HistorySection.clipboard;
   int _incomingOfferCount = 0;
   int _transferActivityCount = 0;
+  final List<StreamSubscription<dynamic>> _activitySubscriptions = [];
+  double _horizontalDragDistance = 0;
 
   String get _screenTitle {
     if (widget.displayName != null && widget.displayName!.isNotEmpty) {
@@ -59,11 +68,25 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       _handleExternalRoute();
       _refreshSectionCounts();
     });
+    final client = context.read<JsonRpcRiftClient>();
+    _activitySubscriptions
+      ..add(client.onFileOffer.listen((_) => _refreshSectionCounts()))
+      ..add(
+          client.onFileTransferProgress.listen((_) => _refreshSectionCounts()))
+      ..add(
+          client.onFileTransferCompleted.listen((_) => _refreshSectionCounts()))
+      ..add(client.onFileTransferFailed.listen((_) => _refreshSectionCounts()))
+      ..add(client.onConnectionChanged.listen((connected) {
+        if (connected) _refreshSectionCounts();
+      }));
   }
 
   @override
   void dispose() {
     widget.routeNotifier?.removeListener(_handleExternalRoute);
+    for (final subscription in _activitySubscriptions) {
+      unawaited(subscription.cancel());
+    }
     super.dispose();
   }
 
@@ -114,24 +137,59 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      body: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildHeader(theme),
-          _buildSectionTabBar(theme),
-          Expanded(
-            child: _buildActiveSection(theme),
-          ),
-        ],
+    return GestureDetector(
+      key: const ValueKey('activity-section-swipe-area'),
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: _handleHorizontalDragEnd,
+      child: Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildHeader(theme),
+            _buildSectionTabBar(theme),
+            Expanded(
+              child: KeyedSubtree(
+                key: ValueKey(
+                  'history-section-content-${_activeSection.name}',
+                ),
+                child: _buildActiveSection(theme),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (_horizontalDragDistance.abs() < 48 && velocity.abs() < 350) {
+      return;
+    }
+
+    final direction = velocity.abs() >= 350
+        ? (velocity < 0 ? 1 : -1)
+        : (_horizontalDragDistance < 0 ? 1 : -1);
+    final sections = HistorySection.values;
+    final currentIndex = sections.indexOf(_activeSection);
+    final nextIndex = currentIndex + direction;
+    if (nextIndex >= 0 && nextIndex < sections.length) {
+      setState(() => _activeSection = sections[nextIndex]);
+      unawaited(_refreshSectionCounts());
+      return;
+    }
+
+    widget.onBoundarySwipe?.call(direction);
+  }
+
   Widget _buildHeader(ThemeData theme) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -159,20 +217,20 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         child: Row(
           children: [
             _buildSectionChip(theme, HistorySection.clipboard, 'Clipboard'),
-            const SizedBox(width: 24),
+            const SizedBox(width: 16),
             _buildSectionChip(theme, HistorySection.send, 'Send File'),
-            const SizedBox(width: 24),
+            const SizedBox(width: 16),
             _buildSectionChip(
               theme,
               HistorySection.incomingOffers,
               'Incoming Offers',
               badgeCount: _incomingOfferCount,
             ),
-            const SizedBox(width: 24),
+            const SizedBox(width: 16),
             _buildSectionChip(
               theme,
               HistorySection.transferActivity,
@@ -202,9 +260,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           setState(() {
             _activeSection = section;
           });
+          unawaited(_refreshSectionCounts());
         },
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -221,7 +280,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
                 style: TextStyle(
                   color: isSelected ? primaryColor : onSurfaceVariant,
                   fontWeight: FontWeight.w600,
-                  fontSize: 14,
+                  fontSize: 13,
                 ),
               ),
               if (badgeCount != null && badgeCount > 0) ...[
@@ -268,7 +327,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           },
         );
       case HistorySection.incomingOffers:
-        return const IncomingOffersView();
+        return IncomingOffersView(
+          buildDestinationPathOverride:
+              widget.buildIncomingDestinationPathOverride,
+          onOffersChanged: _refreshSectionCounts,
+        );
       case HistorySection.transferActivity:
         return TransferActivityView(
           revealCompletedTransfersInFolderOverride:
