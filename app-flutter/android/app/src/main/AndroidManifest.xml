@@ -73,8 +73,8 @@
             
         <service
             android:name=".RiftTileService"
-            android:label="Gửi tới Rift"
-            android:icon="@mipmap/ic_launcher"
+            android:label="Send clipboard"
+            android:icon="@drawable/rift_nav_logo"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
             <intent-filter>

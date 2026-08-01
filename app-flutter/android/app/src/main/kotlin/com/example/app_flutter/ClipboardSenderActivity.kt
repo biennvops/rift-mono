@@ -72,9 +72,9 @@ class ClipboardSenderActivity : Activity() {
             }
 
             val message = when (payload["contentType"]) {
-                "image/png" -> "Image sent to Rift"
-                "text/plain" -> "Text sent to Rift"
-                else -> "Sent to Rift"
+                "image/png" -> "Clipboard image sent"
+                "text/plain" -> "Clipboard text sent"
+                else -> "Clipboard sent"
             }
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         } else {
