@@ -30,6 +30,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly SessionBootstrap _sessionBootstrap;
     private readonly SessionCapabilityCoordinator _sessionCapabilityCoordinator = new();
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly int _listenPort;
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
@@ -42,23 +43,27 @@ public sealed class TlsTransport : ITransport, IDisposable
         ILogger<TlsTransport> logger,
         IIdentityManager identityManager,
         ITrustStore? trustStore = null,
-        ISecurityEventLog? securityEventLog = null)
+        ISecurityEventLog? securityEventLog = null,
+        int listenPort = RiftNetworkDefaults.DefaultPort)
     {
         _logger = logger;
         _identityManager = identityManager;
         _trustStore = trustStore;
         _securityEventLog = securityEventLog;
+        _listenPort = listenPort;
         _sessionBootstrap = new SessionBootstrap(NullLogger<SessionBootstrap>.Instance, identityManager);
     }
+
+    internal int? ListeningPort => (_listener?.LocalEndpoint as IPEndPoint)?.Port;
 
     public async Task StartListeningAsync(CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
 
-        _listener = new TcpListener(IPAddress.Any, RiftNetworkDefaults.DefaultPort);
+        _listener = new TcpListener(IPAddress.Any, _listenPort);
         _listener.Start();
-        _logger.LogInformation("TlsTransport listening on port {Port}.", RiftNetworkDefaults.DefaultPort);
+        _logger.LogInformation("TlsTransport listening on port {Port}.", ListeningPort);
 
         try
         {
@@ -206,11 +211,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 () => RegisterOrReuseSession(deviceId, session),
                 token),
             _ => RunSessionLifetimeAsync(session, cancellationToken),
-            () =>
-            {
-                _sessions.TryRemove(deviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(deviceId, session),
             cancellationToken);
     }
 
@@ -246,14 +247,23 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Replacing existing authenticated session for peer {DeviceId} with a fresh connection (likely a stale reconnect).", deviceId);
-            existingSession.Dispose();
-            _sessions[deviceId] = session;
-            return SessionRegistrationResult.RegisteredNew;
+            _logger.LogInformation("Keeping existing authenticated session for peer {DeviceId} and dropping duplicate fresh connection.", deviceId);
+            session.Dispose();
+            return SessionRegistrationResult.ReusedExisting;
         }
 
         session.Dispose();
         return SessionRegistrationResult.Conflict;
+    }
+
+    private bool RemoveSessionIfCurrent(string deviceId, ActiveSession session)
+    {
+        var removed = _sessions.TryGetValue(deviceId, out var current) &&
+            ReferenceEquals(current, session) &&
+            _sessions.TryRemove(new KeyValuePair<string, ActiveSession>(deviceId, session));
+
+        session.Dispose();
+        return removed;
     }
 
     internal bool ShouldAllowProtectedTraffic(string deviceId)
@@ -323,7 +333,11 @@ public sealed class TlsTransport : ITransport, IDisposable
         session.PeerContext = new SessionPeerContext(
             session.DeviceId,
             session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
-            session.AllowsProtectedTraffic);
+            session.AllowsProtectedTraffic,
+            session.SelectedCapabilities.ToDictionary(
+                capability => capability.Name,
+                capability => capability.Version,
+                StringComparer.Ordinal));
         session.IsAuthenticated = true;
     }
 
@@ -364,11 +378,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.SelectedCapabilities,
             session.AllowsProtectedTraffic,
             token => RunRegisteredSessionLoopAsync(session, token),
-            () =>
-            {
-                _sessions.TryRemove(session.DeviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(session.DeviceId, session),
             cancellationToken);
     }
 
@@ -377,10 +387,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         IReadOnlyList<CapabilityDescriptor> selectedCapabilities,
         bool allowsProtectedTraffic,
         Func<CancellationToken, Task> sessionLoop,
-        Action cleanup,
+        Func<bool> cleanup,
         CancellationToken cancellationToken)
     {
         var capabilityNames = selectedCapabilities.Select(capability => capability.Name).ToArray();
+        var capabilityVersions = selectedCapabilities.ToDictionary(
+            capability => capability.Name,
+            capability => capability.Version,
+            StringComparer.Ordinal);
 
         try
         {
@@ -388,17 +402,21 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: true,
                 capabilityNames,
-                allowsProtectedTraffic));
+                allowsProtectedTraffic,
+                capabilityVersions));
             await sessionLoop(cancellationToken);
         }
         finally
         {
-            cleanup();
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: false,
-                capabilityNames,
-                allowsProtectedTraffic));
+            if (cleanup())
+            {
+                SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                    deviceId,
+                    isOnline: false,
+                    capabilityNames,
+                    allowsProtectedTraffic,
+                    capabilityVersions));
+            }
         }
     }
 

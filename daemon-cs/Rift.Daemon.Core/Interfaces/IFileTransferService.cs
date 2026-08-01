@@ -71,6 +71,38 @@ public sealed class ListFileTransfersResult
     public IReadOnlyList<FileTransferInfo> Transfers { get; init; } = [];
 }
 
+public sealed class PendingFileCommitInfo
+{
+    public string TransferId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
+    public string PeerDeviceId { get; init; } = string.Empty;
+    public string FileName { get; init; } = string.Empty;
+    public string MediaType { get; init; } = string.Empty;
+    public long ByteSize { get; init; }
+    public string Sha256 { get; init; } = string.Empty;
+    public string StagingPath { get; init; } = string.Empty;
+    public string DestinationPath { get; init; } = string.Empty;
+    public string State { get; init; } = "ready_to_commit";
+}
+
+public sealed class ListPendingFileCommitsResult
+{
+    public IReadOnlyList<PendingFileCommitInfo> Commits { get; init; } = [];
+}
+
+public sealed class ConfirmFileCommitResult
+{
+    public string TransferId { get; init; } = string.Empty;
+    public bool Committed { get; init; }
+    public string DestinationPath { get; init; } = string.Empty;
+}
+
+public sealed class FailFileCommitResult
+{
+    public string TransferId { get; init; } = string.Empty;
+    public bool Failed { get; init; }
+}
+
 public sealed class ReceivedFileOffer
 {
     public string DeviceId { get; init; } = string.Empty;
@@ -128,6 +160,19 @@ public interface IFileTransferService
 
     Task<ListFileTransfersResult> ListFileTransfersAsync();
 
+    Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync();
+
+    Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(
+        string transferId,
+        string destinationPath,
+        CancellationToken cancellationToken);
+
+    Task<FailFileCommitResult> FailFileCommitAsync(
+        string transferId,
+        string failureReason,
+        string? message,
+        CancellationToken cancellationToken);
+
     Task<FileTransferInfo> CancelTransferAsync(
         string transferId,
         CancellationToken cancellationToken);
@@ -157,10 +202,25 @@ public interface IFileTransferService
         int chunkCount,
         CancellationToken cancellationToken);
 
+    Task HandleCommittedReceivedAsync(
+        string deviceId,
+        string transferId,
+        long byteSize,
+        string sha256,
+        CancellationToken cancellationToken);
+
     Task HandleCancelReceivedAsync(
         string deviceId,
         string transferId,
         string failureReason,
         string? message,
+        CancellationToken cancellationToken);
+
+    Task HandleResumeReceivedAsync(
+        string deviceId,
+        string transferId,
+        string receivingDeviceId,
+        int nextChunkIndex,
+        long offset,
         CancellationToken cancellationToken);
 }

@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
 
@@ -655,6 +654,56 @@ void main() {
 
       await manager.dispose();
     });
+    test('Linux native clipboard events are forwarded without polling',
+        () async {
+      final nativeChanges = StreamController<Object?>.broadcast();
+      var readCount = 0;
+      Future<ClipboardContentPayload?> reader() async {
+        readCount++;
+        return ClipboardContentPayload.text('clipboard');
+      }
+
+      final events = <Object?>[];
+      final subscription = DesktopClipboardManager
+          .nativeClipboardChangesWithPollingFallbackForTesting(
+        nativeChanges.stream,
+        reader,
+      ).listen(events.add);
+
+      nativeChanges.add(null);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(events, <Object?>[null]);
+      expect(readCount, 0);
+
+      await subscription.cancel();
+      await nativeChanges.close();
+    });
+
+    test('Linux clipboard events fall back to polling on native error',
+        () async {
+      final nativeChanges = StreamController<Object?>.broadcast();
+      var readCount = 0;
+      Future<ClipboardContentPayload?> reader() async {
+        readCount++;
+        return ClipboardContentPayload.text('clipboard');
+      }
+
+      final subscription = DesktopClipboardManager
+          .nativeClipboardChangesWithPollingFallbackForTesting(
+        nativeChanges.stream,
+        reader,
+      ).listen((_) {});
+
+      nativeChanges.addError(MissingPluginException());
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(readCount, 1);
+
+      await subscription.cancel();
+      await nativeChanges.close();
+    });
+
     test(
         'polling fallback correctly tracks binary clipboard changes and ignores initial state',
         () async {

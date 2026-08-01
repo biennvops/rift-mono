@@ -20,7 +20,30 @@ Normative behavior lives in:
 
 - Windows: named-pipe transport to `daemon-cs`
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
-- Android: isolate transport to `daemon-dart`
+- Android 10 (API 29) or later: isolate transport to `daemon-dart`
+
+Windows notes:
+
+- file arguments from Explorer are routed into the durable send queue; when
+  Rift is already open, a short-lived second process forwards the selection to
+  the running window
+- after `flutter build windows`, register the current release executable as a
+  per-user **Send with Rift** Explorer action (no administrator access needed):
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File windows\tools\register_send_with_rift.ps1
+  ```
+
+  Remove the action with:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File windows\tools\unregister_send_with_rift.ps1
+  ```
+
+  Pass `-ExecutablePath C:\path\to\app_flutter.exe` to the registration script
+  when registering an installed build instead of the default local release
+  build. On Windows 11, the action may appear under **Show more options** in
+  Explorer's context menu.
 
 macOS notes:
 
@@ -53,6 +76,26 @@ flutter run -d macos
 flutter run -d linux
 flutter run -d <android-device>
 ```
+
+Build and install the Linux release bundle, desktop entry, and login autostart
+for the current user:
+
+```bash
+linux/tools/build_linux_app.sh
+linux/tools/install_user_app.sh
+```
+
+The Linux build pins the SQLite amalgamation to an official mirror with a
+checksum because the upstream plugin download can intermittently return
+truncated archives. Validate the published daemon and app installers together
+with:
+
+```bash
+linux/tools/smoke_test_installed_stack.sh
+```
+
+The Linux desktop entry forwards supported files opened with Rift to the
+existing process and adds them to the durable send queue.
 
 Desktop targets expect a compatible daemon endpoint to be available. Android
 starts the Dart daemon through the isolate bridge.

@@ -259,7 +259,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
         finally
         {
-            File.Delete(path);
+            await TestFiles.DeleteWithRetryAsync(path);
         }
     }
 
@@ -309,7 +309,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         {
             if (File.Exists(tempFile))
             {
-                File.Delete(tempFile);
+                await TestFiles.DeleteWithRetryAsync(tempFile);
             }
         }
     }
@@ -757,6 +757,12 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
+        public Task PublishLocalPlaybackToPeerAsync(string peerDeviceId, MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(new ListMediaPlaybackResult
@@ -782,7 +788,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
-        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken) =>
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId, CancellationToken cancellationToken) =>
             Task.FromResult(new MediaPlaybackRecord
             {
                 PlaybackId = playbackId,
@@ -799,7 +805,7 @@ public sealed class RiftApiHandlerTests : IDisposable
                 UpdatedAt = "2026-07-16T10:00:00Z"
             });
 
-        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs, CancellationToken cancellationToken)
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs, CancellationToken cancellationToken)
         {
             return Task.FromResult(new PerformMediaPlaybackActionResult
             {

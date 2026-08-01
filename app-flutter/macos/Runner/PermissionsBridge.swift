@@ -308,15 +308,9 @@ final class DesktopClipboardBridge {
         return
       }
 
-      let item = NSPasteboardItem()
-      guard item.setString(text, forType: .string) else {
-        NSLog("Rift clipboard bridge: failed to stage text/plain payload")
-        result(false)
-        return
-      }
-
       let pasteboard = NSPasteboard.general
-      let applied = pasteboard.writeObjects([item])
+      pasteboard.clearContents()
+      let applied = pasteboard.setString(text, forType: .string)
       NSLog(
         "Rift clipboard bridge: wrote text/plain payload (%lu bytes) success=%@",
         typedData.data.count,
@@ -324,15 +318,9 @@ final class DesktopClipboardBridge {
       )
       result(applied)
     case "image/png":
-      let item = NSPasteboardItem()
-      guard item.setData(typedData.data, forType: .png) else {
-        NSLog("Rift clipboard bridge: failed to stage image/png payload")
-        result(false)
-        return
-      }
-
       let pasteboard = NSPasteboard.general
-      let applied = pasteboard.writeObjects([item])
+      pasteboard.clearContents()
+      let applied = pasteboard.setData(typedData.data, forType: .png)
       NSLog(
         "Rift clipboard bridge: wrote image/png payload (%lu bytes) success=%@",
         typedData.data.count,

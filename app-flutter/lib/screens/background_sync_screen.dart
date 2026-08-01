@@ -3,7 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../src/ui/app_shell.dart';
+import '../main.dart';
+import '../src/platform/ios_notifications.dart';
 
 class BackgroundSyncScreen extends StatelessWidget {
   final Future<void> Function(BuildContext context)? onFinish;
@@ -57,6 +58,32 @@ class BackgroundSyncScreen extends StatelessWidget {
       ];
     }
 
+    if (IOSNotifications.isSupported) {
+      return [
+        (
+          icon: Icons.info,
+          roleColor: theme.colorScheme.primary,
+          title: 'iOS decides how long Rift runs in the background',
+          body:
+              'Normal iOS builds do not provide a continuously running daemon. Keep Rift open for the most reliable discovery and transfers.',
+        ),
+        (
+          icon: Icons.location_on,
+          roleColor: theme.colorScheme.tertiary,
+          title: 'Development builds can improve background continuity',
+          body:
+              'A sideload build may opt into location-backed keepalive. It requires location permission and shows the normal iOS location indicator.',
+        ),
+        (
+          icon: Icons.content_paste,
+          roleColor: theme.colorScheme.secondary,
+          title: 'Clipboard changes remain explicit',
+          body:
+              'Open Rift and use Send Clipboard, Copy, or Copy Image. iOS does not allow Rift to silently replace the clipboard while suspended.',
+        ),
+      ];
+    }
+
     return [
       (
         icon: Icons.check_circle,
@@ -83,7 +110,7 @@ class BackgroundSyncScreen extends StatelessWidget {
   }
 
   String _headline() {
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || IOSNotifications.isSupported) {
       return 'Background Sync Review';
     }
     return 'Setup Review';
@@ -92,6 +119,9 @@ class BackgroundSyncScreen extends StatelessWidget {
   String _intro() {
     if (Platform.isAndroid) {
       return 'Rift is ready to run with its daemon and foreground-service flow. This screen is just a final check so the user knows what is and is not being requested.';
+    }
+    if (IOSNotifications.isSupported) {
+      return 'Rift is ready to finish setup on iOS. This review explains the platform limits and the optional development keepalive behavior.';
     }
     return 'Rift is ready to finish setup on this desktop target. This last step summarizes what will keep running after onboarding ends.';
   }

@@ -1,4 +1,5 @@
 using System.Net;
+using Microsoft.Data.Sqlite;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
@@ -106,6 +107,35 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public void ListDiscoveredPeers_PrioritizesReachablePacketSourceOverVirtualAddresses()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-interface-peer",
+            instanceName: "inst-interface-peer",
+            host: "10.0.3.2",
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-interface-peer" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("192.168.2.27"), 5353),
+            observedAddresses: ["10.0.3.2", "192.168.2.27"]));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal("192.168.2.27", peer.Address);
+        Assert.Equal(
+            ["192.168.2.27", "10.0.3.2"],
+            peer.ObservedEndpoints.Select(endpoint => endpoint.Address));
+    }
+
+    [Fact]
     public void ListDiscoveredPeers_PreservesMultipleObservedEndpointsForOnePeer()
     {
         var coordinator = new DiscoveryCoordinator(_discoveryService, _trustStore, new FakeIdentityManager(), timeProvider: _timeProvider);
@@ -165,6 +195,32 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         Assert.Equal(2, peer.ObservedEndpoints.Count);
         Assert.Contains(peer.ObservedEndpoints, endpoint => endpoint.Address == "10.252.166.1");
         Assert.Contains(peer.ObservedEndpoints, endpoint => endpoint.Address == "192.168.1.77");
+    }
+
+    [Fact]
+    public void ListDiscoveredPeers_UsesScopedRemoteAddressForLinkLocalIpv6()
+    {
+        var coordinator = new DiscoveryCoordinator(
+            _discoveryService,
+            _trustStore,
+            new FakeIdentityManager(),
+            timeProvider: _timeProvider);
+
+        coordinator.StartDiscovery();
+        _discoveryService.EmitPeerDiscovered(new PeerDiscoveredEventArgs(
+            deviceIdHint: "rift-link-local",
+            instanceName: "inst-link-local",
+            host: "fe80::18f1:f727:12a8:1b08",
+            port: 11112,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string> { ["did"] = "rift-link-local" },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse("fe80::18f1:f727:12a8:1b08%7"), 5353),
+            observedAddresses: ["fe80::18f1:f727:12a8:1b08"]));
+
+        var peer = Assert.Single(coordinator.ListDiscoveredPeers().Peers);
+
+        Assert.Equal("fe80::18f1:f727:12a8:1b08%7", peer.Address);
     }
 
     [Fact]
@@ -249,6 +305,7 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
 
     public void Dispose()
     {
+        SqliteConnection.ClearAllPools();
         if (File.Exists(_databasePath))
         {
             File.Delete(_databasePath);

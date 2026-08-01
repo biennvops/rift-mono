@@ -9,7 +9,8 @@ public sealed class DaemonInfoService(
     ITrustStore trustStore,
     IDiscoveryCoordinator discoveryCoordinator,
     IPresenceService presenceService,
-    ITransport transport) : IDaemonInfoService
+    ITransport transport,
+    IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider = null) : IDaemonInfoService
 {
     private static readonly CapabilityInfo[] Capabilities =
     [
@@ -33,6 +34,7 @@ public sealed class DaemonInfoService(
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",
+            IdentityProtectionBackend = GetIdentityProtectionBackend(identityProtectionKeyProvider),
             Capabilities = Capabilities
         };
     }
@@ -159,6 +161,24 @@ public sealed class DaemonInfoService(
             Peers = activeDiscoveries.Peers.Concat(discoveredFromTrustStore).ToArray(),
             IsDiscovering = activeDiscoveries.IsDiscovering
         };
+    }
+
+    private static string GetIdentityProtectionBackend(
+        IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return "dpapi";
+        }
+        if (OperatingSystem.IsMacOS())
+        {
+            return "keychain";
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            return identityProtectionKeyProvider?.BackendName ?? "file";
+        }
+        return "unknown";
     }
 
     private static string GetLocalPlatform()

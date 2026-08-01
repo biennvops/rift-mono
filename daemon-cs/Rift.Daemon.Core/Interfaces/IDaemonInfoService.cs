@@ -14,6 +14,7 @@ public sealed class DeviceInfoResult
     public string Fingerprint { get; init; } = string.Empty;
     public string ImplementationId { get; init; } = string.Empty;
     public string ProtocolVersion { get; init; } = string.Empty;
+    public string? IdentityProtectionBackend { get; init; }
     public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
 }
 
@@ -25,7 +26,7 @@ public sealed class SetDisplayNameResult
 public static class DaemonCapabilities
 {
     public static readonly CapabilityInfo ClipboardOfferFetch = new() { Name = "clipboard.offer_fetch", Version = 1 };
-    public static readonly CapabilityInfo FileTransfer = new() { Name = "file.transfer", Version = 1 };
+    public static readonly CapabilityInfo FileTransfer = new() { Name = "file.transfer", Version = 2 };
     public static readonly CapabilityInfo MediaPlayback = new() { Name = "media.playback", Version = 1 };
     public static readonly CapabilityInfo NotificationSync = new() { Name = "notification.sync", Version = 1 };
     public static readonly CapabilityInfo PresenceBasic = new() { Name = "presence.basic", Version = 1 };

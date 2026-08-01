@@ -11,6 +11,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
   final JsonRpcRiftClient _client;
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  String? _localDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _postedSub;
   StreamSubscription<Map<String, dynamic>>? _updatedSub;
@@ -51,15 +52,22 @@ class AndroidRemoteMediaPlaybackCoordinator {
     }
 
     final payload = Map<String, dynamic>.from(args);
+    final sourceDeviceId = payload['sourceDeviceId']?.toString();
     final playbackId = payload['playbackId']?.toString();
     final action = payload['action']?.toString();
     final positionMs = (payload['positionMs'] as num?)?.toInt();
-    if (playbackId == null || playbackId.isEmpty || action == null || action.isEmpty) {
+    if (sourceDeviceId == null ||
+        sourceDeviceId.isEmpty ||
+        playbackId == null ||
+        playbackId.isEmpty ||
+        action == null ||
+        action.isEmpty) {
       return null;
     }
 
     try {
       await _client.performMediaPlaybackAction(
+        sourceDeviceId: sourceDeviceId,
         playbackId: playbackId,
         action: action,
         positionMs: positionMs,
@@ -77,6 +85,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
     }
 
     try {
+      await _ensureLocalDeviceId();
       final result = await _client.listMediaPlayback();
       final playbacks = List<Map<String, dynamic>>.from(
         (result['playbacks'] as List? ?? const <dynamic>[]).map(
@@ -85,14 +94,40 @@ class AndroidRemoteMediaPlaybackCoordinator {
       );
       _playbacksByKey
         ..clear()
-        ..addEntries(playbacks.map((playback) => MapEntry(_keyFor(playback), playback)));
+        ..addEntries(playbacks
+            .where(_isRemotePlayback)
+            .map((playback) => MapEntry(_keyFor(playback), playback)));
       await _syncNativeState();
     } catch (error) {
-      debugPrint('[Media Playback] Failed to refresh mirrored playbacks: $error');
+      debugPrint(
+          '[Media Playback] Failed to refresh mirrored playbacks: $error');
     }
   }
 
+  Future<void> _ensureLocalDeviceId() async {
+    if (_localDeviceId != null) return;
+    final info = await _client.getDeviceInfo();
+    if (info is Map) {
+      final deviceId = info['deviceId']?.toString();
+      if (deviceId != null && deviceId.isNotEmpty) {
+        _localDeviceId = deviceId;
+      }
+    }
+  }
+
+  /// The daemon stores this device's own published sessions too, but
+  /// mirroring them locally would show a duplicate player for media that is
+  /// already playing on this device.
+  bool _isRemotePlayback(Map<String, dynamic> playback) {
+    final localDeviceId = _localDeviceId;
+    if (localDeviceId == null) return true;
+    return playback['sourceDeviceId']?.toString() != localDeviceId;
+  }
+
   void _upsertPlayback(Map<String, dynamic> playback) {
+    if (!_isRemotePlayback(playback)) {
+      return;
+    }
     _playbacksByKey[_keyFor(playback)] = Map<String, dynamic>.from(playback);
     unawaited(_syncNativeState());
   }
@@ -140,8 +175,10 @@ class AndroidRemoteMediaPlaybackCoordinator {
 
     final candidates = _playbacksByKey.values.toList(growable: false)
       ..sort((a, b) {
-        final left = DateTime.tryParse(a['updatedAt']?.toString() ?? '')?.toUtc();
-        final right = DateTime.tryParse(b['updatedAt']?.toString() ?? '')?.toUtc();
+        final left =
+            DateTime.tryParse(a['updatedAt']?.toString() ?? '')?.toUtc();
+        final right =
+            DateTime.tryParse(b['updatedAt']?.toString() ?? '')?.toUtc();
         if (left == null && right == null) {
           return 0;
         }
@@ -159,7 +196,8 @@ class AndroidRemoteMediaPlaybackCoordinator {
         return candidate;
       }
     }
-    return candidates.isEmpty ? null : candidates.first;
+    // Only stopped playbacks remain; show nothing rather than a dead player.
+    return null;
   }
 
   String _keyFor(Map<String, dynamic> playback) =>

@@ -39,12 +39,21 @@ public sealed class SessionPeerContext
 
     public IReadOnlyList<string> SelectedCapabilities { get; }
 
+    public IReadOnlyDictionary<string, int> SelectedCapabilityVersions { get; }
+
     public bool AllowsProtectedTraffic { get; }
 
-    public SessionPeerContext(string peerDeviceId, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
+    public SessionPeerContext(
+        string peerDeviceId,
+        IReadOnlyList<string> selectedCapabilities,
+        bool allowsProtectedTraffic,
+        IReadOnlyDictionary<string, int>? selectedCapabilityVersions = null)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        SelectedCapabilityVersions = selectedCapabilityVersions ?? selectedCapabilities
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(capability => capability, _ => 1, StringComparer.Ordinal);
         AllowsProtectedTraffic = allowsProtectedTraffic;
     }
 
@@ -52,6 +61,12 @@ public sealed class SessionPeerContext
     {
         ArgumentNullException.ThrowIfNull(capabilityName);
         return SelectedCapabilities.Contains(capabilityName, StringComparer.Ordinal);
+    }
+
+    public int GetCapabilityVersion(string capabilityName)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityName);
+        return SelectedCapabilityVersions.TryGetValue(capabilityName, out var version) ? version : 0;
     }
 }
 
@@ -63,13 +78,23 @@ public sealed class SessionStateChangedEventArgs : EventArgs
 
     public IReadOnlyList<string> SelectedCapabilities { get; }
 
+    public IReadOnlyDictionary<string, int> SelectedCapabilityVersions { get; }
+
     public bool AllowsProtectedTraffic { get; }
 
-    public SessionStateChangedEventArgs(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
+    public SessionStateChangedEventArgs(
+        string peerDeviceId,
+        bool isOnline,
+        IReadOnlyList<string> selectedCapabilities,
+        bool allowsProtectedTraffic,
+        IReadOnlyDictionary<string, int>? selectedCapabilityVersions = null)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         IsOnline = isOnline;
         SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        SelectedCapabilityVersions = selectedCapabilityVersions ?? selectedCapabilities
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(capability => capability, _ => 1, StringComparer.Ordinal);
         AllowsProtectedTraffic = allowsProtectedTraffic;
     }
 }

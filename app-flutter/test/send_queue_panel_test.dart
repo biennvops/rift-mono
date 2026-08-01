@@ -92,6 +92,7 @@ void main() {
             fileName: 'recoverable.txt',
             mediaType: 'text/plain',
             byteSize: 64,
+            bytesTransferred: 32,
             status: SendQueueStatus.queued,
             errorMessage:
                 'Connection lost. Waiting to retry when peer is available again.',
@@ -101,9 +102,10 @@ void main() {
       ),
     );
 
-    expect(find.text('WAITING'), findsOneWidget);
+    expect(find.text('RESUMING'), findsOneWidget);
     expect(find.text('QUEUED'), findsNothing);
     expect(find.textContaining('Waiting to retry'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
   });
 
   testWidgets('SendQueuePanel exposes Choose Device for unavailable target',

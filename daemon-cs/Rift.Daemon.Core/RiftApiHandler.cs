@@ -272,6 +272,36 @@ public class RiftApiHandler : IRiftApi
     public Task<ListFileTransfersResult> ListFileTransfersAsync() =>
         _fileTransferService.ListFileTransfersAsync();
 
+    [JsonRpcMethod("rift.listPendingFileCommits")]
+    public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() =>
+        _fileTransferService.ListPendingFileCommitsAsync();
+
+    [JsonRpcMethod("rift.confirmFileCommit")]
+    public async Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath)
+    {
+        try
+        {
+            return await _fileTransferService.ConfirmFileCommitAsync(transferId, destinationPath, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
+    [JsonRpcMethod("rift.failFileCommit")]
+    public async Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message = null)
+    {
+        try
+        {
+            return await _fileTransferService.FailFileCommitAsync(transferId, failureReason, message, CancellationToken.None);
+        }
+        catch (FileTransferFailureException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+    }
+
     [JsonRpcMethod("rift.startPairing")]
     public Task<StartPairingResult> StartPairingAsync(string deviceId) =>
         ExecutePairingAsync(() => _pairingService.StartPairingAsync(deviceId));
@@ -364,11 +394,11 @@ public class RiftApiHandler : IRiftApi
         _mediaPlaybackSyncService.ListMediaPlaybackAsync(CancellationToken.None);
 
     [JsonRpcMethod("rift.getMediaPlayback")]
-    public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId)
+    public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId)
     {
         try
         {
-            return await _mediaPlaybackSyncService.GetMediaPlaybackAsync(playbackId, CancellationToken.None);
+            return await _mediaPlaybackSyncService.GetMediaPlaybackAsync(sourceDeviceId, playbackId, CancellationToken.None);
         }
         catch (MediaPlaybackSyncFailureException ex)
         {
@@ -431,11 +461,11 @@ public class RiftApiHandler : IRiftApi
     }
 
     [JsonRpcMethod("rift.performMediaPlaybackAction")]
-    public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs = null)
+    public async Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs = null)
     {
         try
         {
-            return await _mediaPlaybackSyncService.PerformMediaPlaybackActionAsync(playbackId, action, positionMs, CancellationToken.None);
+            return await _mediaPlaybackSyncService.PerformMediaPlaybackActionAsync(sourceDeviceId, playbackId, action, positionMs, CancellationToken.None);
         }
         catch (MediaPlaybackSyncFailureException ex)
         {
@@ -637,13 +667,18 @@ public class RiftApiHandler : IRiftApi
         public Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListFileTransfersResult> ListFileTransfersAsync() => throw CreateNotConfiguredException();
+        public Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync() => throw CreateNotConfiguredException();
+        public Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<FileTransferInfo> CancelTransferAsync(string transferId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleOfferReceivedAsync(ReceivedFileOffer offer, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleAcceptReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int? chunkSize, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleRejectReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleChunkReceivedAsync(string deviceId, string transferId, int chunkIndex, long offset, int byteSize, string chunkSha256, string contentBase64, bool isLastChunk, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCompleteReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, int chunkCount, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleCommittedReceivedAsync(string deviceId, string transferId, long byteSize, string sha256, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleCancelReceivedAsync(string deviceId, string transferId, string failureReason, string? message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandleResumeReceivedAsync(string deviceId, string transferId, string receivingDeviceId, int nextChunkIndex, long offset, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()
         {
@@ -746,9 +781,11 @@ public class RiftApiHandler : IRiftApi
     private sealed class UnsupportedMediaPlaybackSyncService : IMediaPlaybackSyncService
     {
         public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(string eventType, MediaPlaybackRecord playback, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task PublishLocalPlaybackToPeerAsync(string peerDeviceId, MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken) => throw CreateNotConfiguredException();
-        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string playbackId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
-        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string playbackId, string action, long? positionMs, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => throw CreateNotConfiguredException();

@@ -71,10 +71,60 @@ class DesktopClipboardManager extends ChangeNotifier {
     if (Platform.isWindows) {
       return const EventChannel(_clipboardEventsChannelName)
           .receiveBroadcastStream();
-    } else if (Platform.isMacOS || Platform.isLinux) {
+    } else if (Platform.isLinux) {
+      return nativeClipboardChangesWithPollingFallbackForTesting(
+        const EventChannel(_clipboardEventsChannelName)
+            .receiveBroadcastStream(),
+        reader,
+      );
+    } else if (Platform.isMacOS) {
       return _pollClipboard(reader);
     }
     return const Stream.empty();
+  }
+
+  @visibleForTesting
+  static Stream<Object?> nativeClipboardChangesWithPollingFallbackForTesting(
+    Stream<Object?> nativeChanges,
+    ClipboardContentReader reader,
+  ) {
+    late StreamController<Object?> controller;
+    StreamSubscription<Object?>? nativeSubscription;
+    StreamSubscription<Object?>? pollingSubscription;
+    var fallbackStarted = false;
+
+    void startPollingFallback() {
+      if (fallbackStarted) {
+        return;
+      }
+      fallbackStarted = true;
+      pollingSubscription = _pollClipboard(reader).listen(
+        controller.add,
+        onError: controller.addError,
+      );
+    }
+
+    controller = StreamController<Object?>.broadcast(
+      onListen: () {
+        nativeSubscription = nativeChanges.listen(
+          controller.add,
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint(
+              'Native Linux clipboard events unavailable; using polling: $error',
+            );
+            unawaited(nativeSubscription?.cancel());
+            startPollingFallback();
+          },
+          onDone: startPollingFallback,
+        );
+      },
+      onCancel: () async {
+        await nativeSubscription?.cancel();
+        await pollingSubscription?.cancel();
+      },
+    );
+
+    return controller.stream;
   }
 
   static Stream<Object?> _pollClipboard(ClipboardContentReader reader) {

@@ -1,11 +1,13 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../constants.dart';
 
 const MethodChannel _androidShellChannel = MethodChannel('rift/android/shell');
+const MethodChannel _iosDocumentsChannel = MethodChannel('rift/ios/documents');
 
 String sanitizeIncomingFileName(String fileName) {
   final segments = fileName
@@ -28,7 +30,45 @@ String joinPlatformPath(String a, String b) {
   return '$a${Platform.pathSeparator}$b';
 }
 
+String? selectLinuxIncomingDownloadsPath({
+  required String? xdgDownloadsPath,
+  required String? homePath,
+}) {
+  final xdgPath = xdgDownloadsPath?.trim();
+  final home = homePath?.trim();
+  final normalizedHome = home == null || home.length == 1
+      ? home
+      : home.endsWith('/')
+          ? home.substring(0, home.length - 1)
+          : home;
+  final normalizedXdgPath = xdgPath == null || xdgPath.length == 1
+      ? xdgPath
+      : xdgPath.endsWith('/')
+          ? xdgPath.substring(0, xdgPath.length - 1)
+          : xdgPath;
+
+  if (normalizedXdgPath != null &&
+      normalizedXdgPath.isNotEmpty &&
+      normalizedXdgPath.startsWith('/') &&
+      normalizedXdgPath != normalizedHome) {
+    return normalizedXdgPath;
+  }
+
+  if (normalizedHome == null ||
+      normalizedHome.isEmpty ||
+      !normalizedHome.startsWith('/')) {
+    return null;
+  }
+
+  return '$normalizedHome/Downloads';
+}
+
 Future<Directory?> resolveIncomingDownloadsDirectory() async {
+  if (Platform.isIOS) {
+    final documents = await getApplicationDocumentsDirectory();
+    return Directory(joinPlatformPath(documents.path, 'Downloads'));
+  }
+
   try {
     final prefs = await SharedPreferences.getInstance();
     final customPath = prefs.getString(AppPrefs.defaultDownloadPath);
@@ -50,11 +90,24 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
     }
 
     final downloads = await getDownloadsDirectory();
+    if (Platform.isLinux) {
+      final path = selectLinuxIncomingDownloadsPath(
+        xdgDownloadsPath: downloads?.path,
+        homePath: Platform.environment['HOME'],
+      );
+      return path == null ? null : Directory(path);
+    }
     if (downloads != null) {
-      return Directory(joinPlatformPath(downloads.path, 'Rift'));
+      return downloads;
     }
   } catch (_) {
-    // Fall through to platform-specific defaults.
+    if (Platform.isLinux) {
+      final path = selectLinuxIncomingDownloadsPath(
+        xdgDownloadsPath: null,
+        homePath: Platform.environment['HOME'],
+      );
+      return path == null ? null : Directory(path);
+    }
   }
 
   try {
@@ -63,9 +116,8 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
       if (external != null) {
         return Directory(
           joinPlatformPath(
-            joinPlatformPath(
-                external.parent.parent.parent.parent.path, 'Download'),
-            'Rift',
+            external.parent.parent.parent.parent.path,
+            'Download',
           ),
         );
       }
@@ -74,13 +126,13 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
     // Fall through to final fallback.
   }
 
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid || Platform.isLinux) {
     return null;
   }
 
   try {
     final docs = await getApplicationDocumentsDirectory();
-    return Directory(joinPlatformPath(docs.path, 'Downloads/Rift'));
+    return Directory(joinPlatformPath(docs.path, 'Downloads'));
   } catch (_) {
     return null;
   }
@@ -120,6 +172,65 @@ Future<String?> buildDefaultIncomingFilePath(
   return candidate.path;
 }
 
+Future<String> publishVerifiedIncomingFile({
+  required String transferId,
+  required String stagingPath,
+  required String destinationPath,
+  required int expectedByteSize,
+  required String expectedSha256,
+}) async {
+  final stagingFile = File(stagingPath);
+  if (!await stagingFile.exists()) {
+    throw FileSystemException(
+        'Verified staging file was not found.', stagingPath);
+  }
+
+  final destinationFile = File(destinationPath);
+  if (await destinationFile.exists()) {
+    await _verifyPublishedFile(
+      destinationFile,
+      expectedByteSize,
+      expectedSha256,
+    );
+    return destinationFile.path;
+  }
+
+  await destinationFile.parent.create(recursive: true);
+  final temporaryFile = File('$destinationPath.rift-$transferId.part');
+  try {
+    if (await temporaryFile.exists()) {
+      await temporaryFile.delete();
+    }
+    await stagingFile.openRead().pipe(temporaryFile.openWrite());
+    await _verifyPublishedFile(
+      temporaryFile,
+      expectedByteSize,
+      expectedSha256,
+    );
+    await temporaryFile.rename(destinationFile.path);
+    return destinationFile.path;
+  } catch (_) {
+    if (await temporaryFile.exists()) {
+      await temporaryFile.delete();
+    }
+    rethrow;
+  }
+}
+
+Future<void> _verifyPublishedFile(
+  File file,
+  int expectedByteSize,
+  String expectedSha256,
+) async {
+  if (await file.length() != expectedByteSize) {
+    throw FileSystemException('Published file size did not match.', file.path);
+  }
+  final digest = await sha256.bind(file.openRead()).first;
+  if (digest.toString().toLowerCase() != expectedSha256.toLowerCase()) {
+    throw FileSystemException('Published file hash did not match.', file.path);
+  }
+}
+
 bool shouldRevealCompletedTransferDestination() {
   if (Platform.isAndroid) {
     return false;
@@ -144,6 +255,17 @@ Future<void> openFilePath(String path) async {
     return;
   }
 
+  if (Platform.isIOS) {
+    final opened = await _iosDocumentsChannel.invokeMethod<bool>(
+      'previewFile',
+      <String, Object?>{'path': path},
+    );
+    if (opened != true) {
+      throw FileSystemException('iOS could not preview file.', path);
+    }
+    return;
+  }
+
   if (Platform.isWindows) {
     await Process.run('cmd', <String>['/c', 'start', '', path],
         runInShell: true);
@@ -161,6 +283,23 @@ Future<void> openFilePath(String path) async {
   }
 
   throw UnsupportedError('Open file is not supported on this platform.');
+}
+
+Future<void> exportFilePath(String path) async {
+  if (path.trim().isEmpty) {
+    throw const FileSystemException('Path is empty.');
+  }
+  if (!Platform.isIOS) {
+    throw UnsupportedError('Export file is not supported on this platform.');
+  }
+
+  final exported = await _iosDocumentsChannel.invokeMethod<bool>(
+    'exportFile',
+    <String, Object?>{'path': path},
+  );
+  if (exported != true) {
+    throw FileSystemException('iOS could not export file.', path);
+  }
 }
 
 Future<void> showFileInFolder(String path) async {

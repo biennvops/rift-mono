@@ -1,5 +1,5 @@
 name: app_flutter
-description: Rift Flutter app shell for Android and Windows
+description: Rift Flutter app shell for mobile and desktop platforms
 publish_to: none
 version: 0.1.0+1
 
@@ -44,3 +44,5 @@ flutter:
   assets:
     - assets/images/rift_logo.png
     - assets/images/rift_nav_logo.png
+    - assets/dev.rift.Rift.png
+    - windows/runner/resources/app_icon.ico

@@ -26,7 +26,51 @@ internal sealed class MacOSMediaPlaybackService(
 
         logger.LogInformation("Starting macOS media playback observer.");
         _stoppingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var transport = serviceProvider.GetRequiredService<ITransport>();
+        transport.SessionStateChanged += OnSessionStateChanged;
+        _stoppingCts.Token.Register(() => transport.SessionStateChanged -= OnSessionStateChanged);
         _runTask = Task.Run(() => RunAsync(_stoppingCts.Token), CancellationToken.None);
+    }
+
+    private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
+    {
+        if (!args.IsOnline ||
+            !args.AllowsProtectedTraffic ||
+            !args.SelectedCapabilities.Contains("media.playback", StringComparer.Ordinal))
+        {
+            return;
+        }
+
+        _ = RepublishCurrentPlaybackAsync(args.PeerDeviceId, _stoppingCts!.Token);
+    }
+
+    private async Task RepublishCurrentPlaybackAsync(string peerDeviceId, CancellationToken cancellationToken)
+    {
+        MediaPlaybackRecord? playback;
+        lock (_gate)
+        {
+            playback = _current?.Snapshot.ToRecord();
+        }
+
+        if (playback is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>().PublishLocalPlaybackToPeerAsync(
+                peerDeviceId,
+                playback,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to republish media playback after session establishment with {PeerDeviceId}.", peerDeviceId);
+        }
     }
 
     private async Task RunAsync(CancellationToken stoppingToken)
@@ -69,7 +113,7 @@ internal sealed class MacOSMediaPlaybackService(
             "togglePlayPause" => ["send", "2"],
             "next" => ["send", "4"],
             "previous" => ["send", "5"],
-            "seek" when request.PositionMs.HasValue => ["seek", request.PositionMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            "seek" when request.PositionMs.HasValue => ["seek", checked((request.PositionMs.Value * 1000L)).ToString(System.Globalization.CultureInfo.InvariantCulture)],
             _ => null
         };
 
@@ -102,6 +146,7 @@ internal sealed class MacOSMediaPlaybackService(
         SnapshotState? previous;
         SnapshotState? next;
         string? eventType = null;
+        var replacesPrevious = false;
 
         lock (_gate)
         {
@@ -123,6 +168,7 @@ internal sealed class MacOSMediaPlaybackService(
                 {
                     _current = next;
                     eventType = "posted";
+                    replacesPrevious = previous is not null;
                 }
                 else if (!string.Equals(previous.Fingerprint, next.Fingerprint, StringComparison.Ordinal))
                 {
@@ -147,7 +193,17 @@ internal sealed class MacOSMediaPlaybackService(
             return;
         }
 
-        await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>().HandleLocalPlaybackEventAsync(
+        var mediaPlaybackSyncService = serviceProvider.GetRequiredService<IMediaPlaybackSyncService>();
+        if (replacesPrevious)
+        {
+            await mediaPlaybackSyncService.HandleLocalPlaybackEventAsync(
+                "removed",
+                new MediaPlaybackRecord { PlaybackId = previous!.Snapshot.PlaybackId },
+                DateTimeOffset.UtcNow.ToString("O"),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await mediaPlaybackSyncService.HandleLocalPlaybackEventAsync(
             eventType,
             next!.Snapshot.ToRecord(),
             removedAt: null,
@@ -156,7 +212,7 @@ internal sealed class MacOSMediaPlaybackService(
 
     private async Task<MacOSNowPlayingSnapshot?> TryGetSnapshotAsync(CancellationToken cancellationToken)
     {
-        var output = await RunAdapterAsync(["get"], cancellationToken).ConfigureAwait(false);
+        var output = await RunAdapterAsync(CreateGetCommand(), cancellationToken).ConfigureAwait(false);
         if (output.ExitCode != 0)
         {
             if (!output.MissingArtifacts)
@@ -186,10 +242,9 @@ internal sealed class MacOSMediaPlaybackService(
             ? payload.BundleIdentifier
             : "Now Playing";
         var playbackState = payload.Playing == true ? "playing" : ((payload.ElapsedTime ?? 0) > 0 ? "paused" : "stopped");
-        var playbackKey = payload.ContentItemIdentifier ?? payload.Title;
-        var playbackId = string.Join(":", appId, playbackKey, payload.Artist ?? string.Empty);
+        var playbackId = CreatePlaybackId(appId);
         var durationMs = payload.Duration.HasValue ? Math.Max(0L, (long)Math.Round(payload.Duration.Value * 1000d)) : (long?)null;
-        var positionMs = Math.Max(0L, (long)Math.Round((payload.ElapsedTime ?? 0d) * 1000d));
+        var positionMs = GetPositionMs(payload.ElapsedTimeNow, payload.ElapsedTime);
         var canSkip = payload.ProhibitsSkip != true;
 
         return new MacOSNowPlayingSnapshot(
@@ -210,6 +265,13 @@ internal sealed class MacOSMediaPlaybackService(
             CanSeek: durationMs is > 0,
             UpdatedAt: DateTimeOffset.UtcNow.ToString("O"));
     }
+
+    internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
+        Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
+
+    internal static string[] CreateGetCommand() => ["get", "--now"];
+
+    internal static string CreatePlaybackId(string appId) => $"{appId}:now-playing";
 
     private static string CreateFingerprint(MacOSNowPlayingSnapshot snapshot)
     {
@@ -350,6 +412,7 @@ internal sealed class MacOSMediaPlaybackService(
         public string? ArtworkMimeType { get; init; }
         public double? Duration { get; init; }
         public double? ElapsedTime { get; init; }
+        public double? ElapsedTimeNow { get; init; }
         public bool? ProhibitsSkip { get; init; }
         public string? ContentItemIdentifier { get; init; }
         public int? ProcessIdentifier { get; init; }

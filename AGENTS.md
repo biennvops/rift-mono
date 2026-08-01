@@ -24,6 +24,7 @@
 - If the task is exploratory or prototyping, prefer speed and don't over-clarify; if the task is production code, follow the simplicity and surgical-change rules strictly.
 - Commit small. One logical change per commit. Follow the project's commit format if one exists; otherwise use conventional commits (feat:, fix:, refactor:, etc.).
 - When adding native Android changes, prefer `flutter build apk` over raw Gradle.
+- When creating PRs via shell, avoid unescaped backticks in CLI body text.
 - When you finish, summarize what changed in plain text - do not cat or re-print files.
 - At the end of non-trivial sessions, suggest 1-3 additions to the project AGENTS.md based on mistakes or rediscoveries from this session.
 

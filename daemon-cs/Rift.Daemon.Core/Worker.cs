@@ -2,9 +2,11 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Rift.Daemon.Core.Interfaces;
 using Rift.Daemon.Core.Networking;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 
 namespace Rift.Daemon.Core;
 
@@ -18,6 +20,11 @@ public class Worker(
     IProtocolMessageRouter protocolMessageRouter,
     IPresenceService presenceService) : BackgroundService
 {
+    private static readonly TimeSpan TrustedReconnectPollInterval = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan TrustedReconnectPassiveDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan TrustedReconnectRetryDelay = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan TrustedReconnectEndpointTimeout = TimeSpan.FromSeconds(3);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("Rift Daemon starting...");
@@ -31,6 +38,13 @@ public class Worker(
         {
             discoveryService.StartDiscovery();
         }
+        var peerMessageQueues = new Dictionary<string, Channel<MessageReceivedEventArgs>>(StringComparer.Ordinal);
+        var peerMessageWorkers = new Dictionary<string, Task>(StringComparer.Ordinal);
+        var peerMessageQueuesGate = new object();
+        var trustedReconnectLoops = new Dictionary<string, Task>(StringComparer.Ordinal);
+        var trustedReconnectLoopsGate = new object();
+        using var trustedReconnectCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var trustedReconnectToken = trustedReconnectCts.Token;
         transport.MessageReceived += OnTransportMessageReceived;
         transport.SessionStateChanged += OnSessionStateChanged;
 
@@ -38,6 +52,11 @@ public class Worker(
         var transportTask = transport.StartListeningAsync(stoppingToken);
         ObserveFault(ipcTask, "IPC listener");
         ObserveFault(transportTask, "transport listener");
+
+        foreach (var peer in trustStore.GetAllPeers().Where(peer => peer.State == TrustState.Trusted))
+        {
+            EnsureTrustedReconnectLoop(peer.DeviceId);
+        }
 
         try
         {
@@ -59,8 +78,41 @@ public class Worker(
         {
             transport.MessageReceived -= OnTransportMessageReceived;
             transport.SessionStateChanged -= OnSessionStateChanged;
+            Channel<MessageReceivedEventArgs>[] messageQueues;
+            Task[] messageWorkers;
+            lock (peerMessageQueuesGate)
+            {
+                messageQueues = peerMessageQueues.Values.ToArray();
+                messageWorkers = peerMessageWorkers.Values.ToArray();
+            }
+            foreach (var queue in messageQueues)
+            {
+                queue.Writer.TryComplete();
+            }
+            try
+            {
+                await Task.WhenAll(messageWorkers);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown
+            }
             discoveryService.StopAdvertising();
             discoveryService.StopDiscovery();
+            trustedReconnectCts.Cancel();
+            Task[] reconnectLoopTasks;
+            lock (trustedReconnectLoopsGate)
+            {
+                reconnectLoopTasks = trustedReconnectLoops.Values.ToArray();
+            }
+            try
+            {
+                await Task.WhenAll(reconnectLoopTasks);
+            }
+            catch (OperationCanceledException) when (trustedReconnectToken.IsCancellationRequested)
+            {
+                // Normal shutdown
+            }
         }
 
         void ObserveFault(Task task, string component)
@@ -77,26 +129,63 @@ public class Worker(
 
         void OnTransportMessageReceived(object? sender, MessageReceivedEventArgs args)
         {
-            _ = Task.Run(async () =>
+            Channel<MessageReceivedEventArgs> queue;
+            lock (peerMessageQueuesGate)
             {
-                try
+                if (peerMessageQueues.TryGetValue(args.PeerDeviceId, out var existingQueue))
                 {
-                    heartbeatManager.ObserveAuthenticatedMessage(args.Session);
-                    await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
+                    queue = existingQueue;
                 }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                else
                 {
-                    // Normal shutdown
+                    queue = Channel.CreateUnbounded<MessageReceivedEventArgs>(
+                        new UnboundedChannelOptions
+                        {
+                            SingleReader = true,
+                            SingleWriter = false,
+                            AllowSynchronousContinuations = false
+                        });
+                    peerMessageQueues.Add(args.PeerDeviceId, queue);
+                    peerMessageWorkers.Add(
+                        args.PeerDeviceId,
+                        Task.Run(() => ProcessPeerMessagesAsync(args.PeerDeviceId, queue), stoppingToken));
                 }
-                catch (Exception ex)
+            }
+            queue.Writer.TryWrite(args);
+        }
+
+        async Task ProcessPeerMessagesAsync(
+            string peerDeviceId,
+            Channel<MessageReceivedEventArgs> queue)
+        {
+            try
+            {
+                await foreach (var args in queue.Reader.ReadAllAsync(stoppingToken))
                 {
-                    logger.LogWarning(ex, "Failed to route message from peer {PeerDeviceId}.", args.PeerDeviceId);
+                    try
+                    {
+                        heartbeatManager.ObserveAuthenticatedMessage(args.Session);
+                        await protocolMessageRouter.HandleMessageAsync(args.Session, args.Payload, stoppingToken);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to route message from peer {PeerDeviceId}.", peerDeviceId);
+                    }
                 }
-            }, stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown
+            }
         }
 
         void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
         {
+            EnsureTrustedReconnectLoop(args.PeerDeviceId);
             if (args.IsOnline)
             {
                 presenceService.UpdatePeerPresence(
@@ -131,6 +220,115 @@ public class Worker(
             else
             {
                 heartbeatManager.OnSessionStateChanged(args);
+            }
+        }
+
+        void EnsureTrustedReconnectLoop(string peerDeviceId)
+        {
+            var peer = trustStore.GetAllPeers().FirstOrDefault(candidate =>
+                string.Equals(candidate.DeviceId, peerDeviceId, StringComparison.Ordinal));
+            if (peer?.State != TrustState.Trusted)
+            {
+                return;
+            }
+
+            lock (trustedReconnectLoopsGate)
+            {
+                if (trustedReconnectLoops.TryGetValue(peerDeviceId, out var existingLoop) &&
+                    !existingLoop.IsCompleted)
+                {
+                    return;
+                }
+
+                trustedReconnectLoops[peerDeviceId] =
+                    Task.Run(() => RunTrustedReconnectLoopAsync(peerDeviceId), CancellationToken.None);
+            }
+        }
+
+        async Task RunTrustedReconnectLoopAsync(string peerDeviceId)
+        {
+            var passiveDelayApplied = false;
+            var preferredInitiator = string.CompareOrdinal(deviceId, peerDeviceId) < 0;
+
+            while (!trustedReconnectToken.IsCancellationRequested)
+            {
+                var peer = trustStore.GetAllPeers().FirstOrDefault(candidate =>
+                    string.Equals(candidate.DeviceId, peerDeviceId, StringComparison.Ordinal));
+                if (peer?.State != TrustState.Trusted)
+                {
+                    return;
+                }
+
+                if (transport.HasActiveSession(peerDeviceId))
+                {
+                    passiveDelayApplied = false;
+                    await Task.Delay(TrustedReconnectPollInterval, trustedReconnectToken);
+                    continue;
+                }
+
+                if (!preferredInitiator && !passiveDelayApplied)
+                {
+                    passiveDelayApplied = true;
+                    await Task.Delay(TrustedReconnectPassiveDelay, trustedReconnectToken);
+                    if (transport.HasActiveSession(peerDeviceId))
+                    {
+                        continue;
+                    }
+                }
+
+                foreach (var endpoint in peer.TrustedEndpoints.OrderByDescending(endpoint => endpoint.LastSuccessAt))
+                {
+                    if (transport.HasActiveSession(peerDeviceId))
+                    {
+                        break;
+                    }
+
+                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(trustedReconnectToken);
+                    timeoutCts.CancelAfter(TrustedReconnectEndpointTimeout);
+                    try
+                    {
+                        var connectedDeviceId = await transport.ConnectToPeerWithIdentityAsync(
+                            endpoint.Address,
+                            endpoint.Port,
+                            timeoutCts.Token);
+                        if (!string.Equals(connectedDeviceId, peerDeviceId, StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "Trusted reconnect endpoint {Address}:{Port} authenticated unexpected peer {ConnectedDeviceId} instead of {ExpectedDeviceId}.",
+                                endpoint.Address,
+                                endpoint.Port,
+                                connectedDeviceId,
+                                peerDeviceId);
+                            await transport.DisconnectPeerAsync(connectedDeviceId, trustedReconnectToken);
+                            continue;
+                        }
+
+                        logger.LogInformation(
+                            "Reconnected trusted peer {DeviceId} using persisted endpoint {Address}:{Port}.",
+                            peerDeviceId,
+                            endpoint.Address,
+                            endpoint.Port);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (trustedReconnectToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(
+                            ex,
+                            "Trusted reconnect attempt failed for {DeviceId} via {Address}:{Port}.",
+                            peerDeviceId,
+                            endpoint.Address,
+                            endpoint.Port);
+                    }
+                }
+
+                if (!transport.HasActiveSession(peerDeviceId))
+                {
+                    await Task.Delay(TrustedReconnectRetryDelay, trustedReconnectToken);
+                }
             }
         }
 

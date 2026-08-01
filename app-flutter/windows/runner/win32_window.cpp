@@ -16,7 +16,9 @@ namespace {
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
 
-constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
+// Unique per-app class name so a second Rift instance can reliably find the
+// running instance's top-level window for single-instance file handoff.
+constexpr const wchar_t kWindowClassName[] = L"RIFT_FLUTTER_RUNNER_WIN32_WINDOW";
 
 /// Registry key for app theme preference.
 ///

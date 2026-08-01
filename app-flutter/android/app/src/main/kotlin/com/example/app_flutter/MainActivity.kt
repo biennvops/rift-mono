@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.ComponentName
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -17,6 +18,7 @@ import android.os.Bundle
 import android.os.Build
 import android.os.Environment
 import android.content.pm.PackageManager
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.webkit.MimeTypeMap
@@ -29,8 +31,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.UUID
 
 class MainActivity: FlutterActivity() {
     companion object {
@@ -49,9 +53,16 @@ class MainActivity: FlutterActivity() {
 
     private val clipboardChannelName = "com.biennvops.rift/clipboard"
     private val shellChannelName = "rift/android/shell"
+    private val tlsChannelName = "rift/android/tls"
+    private val identityChannelName = "rift/android/identity"
+    private val mediaObserverChannelName = "rift/android/media_playback"
+    private val mediaObserverEventChannelName = "rift/android/media_playback_events"
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
+    private var tlsChannel: MethodChannel? = null
+    private val tlsBridge = AndroidTlsBridge()
+    private var mediaSessionObserver: AndroidMediaSessionObserver? = null
     private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
@@ -121,11 +132,13 @@ class MainActivity: FlutterActivity() {
         clipboardChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "startService" -> {
-                    Log.i(tag, "startService requested from Flutter (stubbed)")
+                    Log.i(tag, "startService requested from Flutter")
+                    RiftDaemonService.start(this)
                     result.success(true)
                 }
                 "stopService" -> {
-                    Log.i(tag, "stopService requested from Flutter (stubbed)")
+                    Log.i(tag, "stopService requested from Flutter")
+                    RiftDaemonService.stop(this)
                     result.success(true)
                 }
                 "setClipboardContent" -> {
@@ -155,6 +168,78 @@ class MainActivity: FlutterActivity() {
             }
         }
 
+        tlsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, tlsChannelName)
+        tlsChannel?.setMethodCallHandler { call, result ->
+            tlsBridge.handle(call, result)
+        }
+
+        val mediaObserver = AndroidMediaSessionObserver(this)
+        mediaSessionObserver = mediaObserver
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverEventChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    mediaObserver.setEventSink(events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    mediaObserver.setEventSink(null)
+                }
+            })
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startObservation" -> result.success(mediaObserver.startObservation())
+                    "stopObservation" -> {
+                        mediaObserver.stopObservation()
+                        result.success(true)
+                    }
+                    "performAction" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val playbackId = args?.get("playbackId") as? String
+                        val action = args?.get("action") as? String
+                        if (playbackId == null || action == null) {
+                            result.error(
+                                "invalid_args",
+                                "playbackId and action are required",
+                                null,
+                            )
+                        } else {
+                            result.success(
+                                mediaObserver.performAction(
+                                    playbackId,
+                                    action,
+                                    (args["positionMs"] as? Number)?.toLong(),
+                                ),
+                            )
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, identityChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "loadOrCreate" -> {
+                        try {
+                            val legacyPath =
+                                (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
+                            result.success(
+                                AndroidIdentityKeystore.loadOrCreate(this, legacyPath),
+                            )
+                        } catch (error: Exception) {
+                            Log.e(tag, "Identity keystore failure", error)
+                            result.error(
+                                "identity_keystore_error",
+                                error.message,
+                                null,
+                            )
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         shellChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, shellChannelName)
         shellChannel?.setMethodCallHandler { call, result ->
@@ -166,6 +251,46 @@ class MainActivity: FlutterActivity() {
                     }
                     "getPublicDownloadsDirectory" -> {
                         result.success(getPublicDownloadsDirectory())
+                    }
+                    "prepareIncomingDownload" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val fileName = args?.get("fileName") as? String
+                        if (fileName.isNullOrBlank()) {
+                            result.error("invalid_args", "fileName is required", null)
+                        } else {
+                            try {
+                                result.success(prepareIncomingDownload(fileName))
+                            } catch (e: Exception) {
+                                Log.e(tag, "Failed to prepare incoming download", e)
+                                result.error("download_prepare_failed", e.message, null)
+                            }
+                        }
+                    }
+                    "publishIncomingDownload" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val stagingPath = args?.get("stagingPath") as? String
+                        val fileName = args?.get("fileName") as? String
+                        val mediaType = args?.get("mediaType") as? String
+                        if (stagingPath.isNullOrBlank() || fileName.isNullOrBlank()) {
+                            result.error(
+                                "invalid_args",
+                                "stagingPath and fileName are required",
+                                null,
+                            )
+                        } else {
+                            try {
+                                result.success(
+                                    publishIncomingDownload(
+                                        stagingPath,
+                                        fileName,
+                                        mediaType ?: "application/octet-stream",
+                                    ),
+                                )
+                            } catch (e: Exception) {
+                                Log.e(tag, "Failed to publish incoming download", e)
+                                result.error("download_publish_failed", e.message, null)
+                            }
+                        }
                     }
                     "getNotificationPermissionStatus" -> {
                         result.success(getNotificationPermissionStatus())
@@ -311,6 +436,9 @@ class MainActivity: FlutterActivity() {
             notificationSyncReceiverRegistered = false
         }
         remoteMediaPlaybackManager.stop()
+        mediaSessionObserver?.stopObservation()
+        mediaSessionObserver = null
+        tlsBridge.dispose()
         super.onDestroy()
     }
 
@@ -725,24 +853,27 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun openFile(path: String): Boolean {
-        val file = File(path)
-        if (!file.exists() || !file.isFile) {
+        val contentUri = if (path.startsWith("content://")) Uri.parse(path) else null
+        val file = if (contentUri == null) File(path) else null
+        if (file != null && (!file.exists() || !file.isFile)) {
             Log.w(tag, "Requested file does not exist: $path")
             return false
         }
 
-        val uri = try {
+        val uri = contentUri ?: try {
             FileProvider.getUriForFile(
                 this,
                 "${applicationContext.packageName}.clipboard.fileprovider",
-                file,
+                file!!,
             )
         } catch (e: IllegalArgumentException) {
             Log.e(tag, "Failed to create content Uri for $path", e)
             return false
         }
 
-        val mimeType = resolveMimeType(file, uri)
+        val mimeType = contentResolver.getType(uri)
+            ?: file?.let { resolveMimeType(it, uri) }
+            ?: "*/*"
         val intent =
             Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, mimeType)
@@ -751,7 +882,7 @@ class MainActivity: FlutterActivity() {
             }
 
         return try {
-            startActivity(Intent.createChooser(intent, file.name))
+            startActivity(Intent.createChooser(intent, file?.name ?: "Open download"))
             true
         } catch (e: ActivityNotFoundException) {
             Log.w(tag, "No activity could open file mimeType=$mimeType path=$path", e)
@@ -762,18 +893,101 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    private fun prepareIncomingDownload(fileName: String): Map<String, String> {
+        val safeName = sanitizeDownloadFileName(fileName)
+        val displayName = resolveAvailableDownloadName(safeName)
+        val stagingDirectory = File(filesDir, "incoming-downloads").apply { mkdirs() }
+        val stagingFile = File(stagingDirectory, "${UUID.randomUUID()}.part")
+        return mapOf(
+            "stagingPath" to stagingFile.absolutePath,
+            "displayName" to displayName,
+            "displayPath" to "Downloads/$displayName",
+        )
+    }
+
+    private fun publishIncomingDownload(
+        stagingPath: String,
+        fileName: String,
+        mediaType: String,
+    ): Map<String, String> {
+        val stagingDirectory = File(filesDir, "incoming-downloads").canonicalFile
+        val stagingFile = File(stagingPath).canonicalFile
+        if (!stagingFile.path.startsWith("${stagingDirectory.path}${File.separator}") ||
+            !stagingFile.isFile) {
+            throw IllegalArgumentException("Invalid incoming download staging path")
+        }
+
+        val displayName = resolveAvailableDownloadName(sanitizeDownloadFileName(fileName))
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.MIME_TYPE, mediaType)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            values,
+        ) ?: throw IllegalStateException("Could not create Downloads entry")
+
+        try {
+            contentResolver.openOutputStream(uri, "w")?.use { output ->
+                stagingFile.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("Could not open Downloads entry")
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            stagingFile.delete()
+            return mapOf(
+                "contentUri" to uri.toString(),
+                "displayName" to displayName,
+                "displayPath" to "Downloads/$displayName",
+            )
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
+    private fun resolveAvailableDownloadName(fileName: String): String {
+        if (!downloadNameExists(fileName)) {
+            return fileName
+        }
+        val dotIndex = fileName.lastIndexOf('.')
+        val hasExtension = dotIndex > 0 && dotIndex < fileName.length - 1
+        val stem = if (hasExtension) fileName.substring(0, dotIndex) else fileName
+        val extension = if (hasExtension) fileName.substring(dotIndex) else ""
+        for (index in 1..999) {
+            val candidate = "$stem ($index)$extension"
+            if (!downloadNameExists(candidate)) {
+                return candidate
+            }
+        }
+        return "$stem (${System.currentTimeMillis()})$extension"
+    }
+
+    private fun downloadNameExists(fileName: String): Boolean {
+        contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Downloads._ID),
+            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND ${MediaStore.Downloads.RELATIVE_PATH} = ?",
+            arrayOf(fileName, "${Environment.DIRECTORY_DOWNLOADS}/"),
+            null,
+        )?.use { cursor -> return cursor.moveToFirst() }
+        return false
+    }
+
+    private fun sanitizeDownloadFileName(fileName: String): String {
+        val basename = fileName.split('/', '\\').lastOrNull { it.isNotBlank() } ?: fileName
+        val cleaned = basename.replace(Regex("[<>:\"/\\\\|?*]"), "_").trim()
+        return if (cleaned.isBlank() || cleaned.all { it == '.' }) "incoming.bin" else cleaned
+    }
+
     private fun getPublicDownloadsDirectory(): String? {
         return try {
-            val downloadsDir =
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val riftDir = File(downloadsDir, "Rift")
-            if (!riftDir.exists() && !riftDir.mkdirs()) {
-                Log.w(tag, "Failed to create public Downloads/Rift directory at ${riftDir.absolutePath}")
-                return null
-            }
-            riftDir.absolutePath
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                .absolutePath
         } catch (e: Exception) {
-            Log.e(tag, "Failed to resolve public Downloads/Rift directory", e)
+            Log.e(tag, "Failed to resolve public Downloads directory", e)
             null
         }
     }

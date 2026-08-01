@@ -150,7 +150,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Windows Laptop', findRichText: true), findsOneWidget);
+    expect(find.textContaining('Windows Laptop', findRichText: true),
+        findsOneWidget);
     expect(find.text('Compare fingerprints'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
     expect(find.text('WAITING...'), findsNothing);
@@ -201,10 +202,12 @@ void main() {
 
     expect(client.startPairingByEndpointAddress, '10.53.38.174');
     expect(client.startPairingByEndpointPort, 9140);
-    expect(find.textContaining('rift-manual-peer', findRichText: true), findsOneWidget);
+    expect(find.textContaining('rift-manual-peer', findRichText: true),
+        findsOneWidget);
   });
 
-  testWidgets('PairingScreen refreshes title when endpoint pairing resolves peer name',
+  testWidgets(
+      'PairingScreen refreshes title when endpoint pairing resolves peer name',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient()
       ..startPairingByEndpointResultOverride = {
@@ -231,8 +234,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('Windows Laptop', findRichText: true), findsOneWidget);
-    expect(find.textContaining('10.53.38.174:9140', findRichText: true), findsNothing);
+    expect(find.textContaining('Windows Laptop', findRichText: true),
+        findsOneWidget);
+    expect(find.textContaining('10.53.38.174:9140', findRichText: true),
+        findsNothing);
   });
 
   testWidgets(
@@ -288,8 +293,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
-    final approveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Approve'),
+    final approveButton = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNull);
   });

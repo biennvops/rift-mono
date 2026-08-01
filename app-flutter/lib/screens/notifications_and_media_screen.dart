@@ -377,6 +377,7 @@ class _MediaCardState extends State<_MediaCard> {
     try {
       await context.read<JsonRpcRiftClient>().performMediaPlaybackAction(
             playbackId: widget.playback['playbackId']?.toString() ?? '',
+            sourceDeviceId: widget.playback['sourceDeviceId']?.toString() ?? '',
             action: action,
             positionMs: positionMs,
           );

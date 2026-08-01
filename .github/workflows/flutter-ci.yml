@@ -55,11 +55,11 @@ jobs:
           channel: stable
           cache: true
       - name: Install dependencies
-        run: dart pub get
+        run: flutter pub get
         working-directory: tests-interop
       - name: Analyze
-        run: dart analyze
+        run: flutter analyze
         working-directory: tests-interop
       - name: Run tests
-        run: dart test
+        run: flutter test
         working-directory: tests-interop

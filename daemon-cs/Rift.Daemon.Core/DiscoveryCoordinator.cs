@@ -94,11 +94,12 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
         var observedAt = _timeProvider.GetUtcNow();
         var trustState = _trustStore.GetPeer(peerKey)?.State.ToString().ToLowerInvariant() ?? "discovered";
-        var candidateEndpoints = e.ObservedAddresses
-            .Select(address => SelectPreferredAddress(address, e.RemoteEndPoint?.Address))
+        var remoteAddress = e.RemoteEndPoint?.Address;
+        var candidateEndpoints = new[] { remoteAddress?.ToString() }
+            .Concat(e.ObservedAddresses.Select(address => SelectPreferredAddress(address, remoteAddress)))
             .Where(address => !string.IsNullOrWhiteSpace(address))
             .Distinct(StringComparer.Ordinal)
-            .Select(address => new ObservedEndpoint(address, e.Port, observedAt))
+            .Select(address => new ObservedEndpoint(address!, e.Port, observedAt))
             .ToArray();
 
         if (candidateEndpoints.Length == 0)
@@ -227,6 +228,16 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
 
     private static string PreferAddress(string current, string candidate)
     {
+        if (IPAddress.TryParse(current, out var currentIp) &&
+            IPAddress.TryParse(candidate, out var candidateIp) &&
+            currentIp.IsIPv6LinkLocal &&
+            currentIp.ScopeId == 0 &&
+            candidateIp.IsIPv6LinkLocal &&
+            candidateIp.ScopeId != 0)
+        {
+            return candidate;
+        }
+
         return GetEndpointScore(candidate) > GetEndpointScore(current) ? candidate : current;
     }
 

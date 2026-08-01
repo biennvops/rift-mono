@@ -111,7 +111,7 @@ class _SendQueueTile extends StatelessWidget {
     final theme = Theme.of(context);
     final statusColor = _statusColor(theme, item.status);
     final statusLabel =
-        item.isWaitingForReconnect ? 'WAITING' : item.status.label;
+        item.isWaitingForReconnect ? 'RESUMING' : item.status.label;
     final progress = item.byteSize <= 0
         ? 0.0
         : (item.bytesTransferred / item.byteSize).clamp(0.0, 1.0);
@@ -160,7 +160,9 @@ class _SendQueueTile extends StatelessWidget {
                     ),
                   ),
                 ],
-                if (item.status == SendQueueStatus.sending) ...[
+                if (item.status == SendQueueStatus.sending ||
+                    (item.isWaitingForReconnect &&
+                        item.bytesTransferred > 0)) ...[
                   const SizedBox(height: 8),
                   LinearProgressIndicator(value: progress),
                 ],
@@ -170,7 +172,9 @@ class _SendQueueTile extends StatelessWidget {
                   Text(
                     item.errorMessage!,
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.error,
+                      color: item.isWaitingForReconnect
+                          ? theme.colorScheme.onSurfaceVariant
+                          : theme.colorScheme.error,
                     ),
                   ),
                 ],

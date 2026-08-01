@@ -26,6 +26,9 @@ public interface IRiftApi
     Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite = false);
     Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message = null);
     Task<ListFileTransfersResult> ListFileTransfersAsync();
+    Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync();
+    Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath);
+    Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message = null);
     Task<StartPairingResult> StartPairingAsync(string deviceId);
     Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port);
     Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);

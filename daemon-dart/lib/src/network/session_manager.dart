@@ -103,6 +103,7 @@ class SessionManager {
   final TrustStore _trustStore;
   final Map<String, SessionContext> _sessions = {};
   final Map<String, Completer<void>> _establishmentWaiters = {};
+  final Map<String, Future<void>> _inboundMessageTails = {};
 
   // Channel binding Tier 3 (spec §5.3.1 / ADR-0011): dart:io SecureSocket does
   // not expose tls-exporter (RFC 9266) or tls-unique (RFC 5929), so the Dart
@@ -221,21 +222,32 @@ class SessionManager {
     this._trustStore, {
     this.peerAllowanceResolver,
   }) {
-    _transport.onMessageReceived.listen(
-      (msg) => _handleMessage(msg).catchError((Object e, StackTrace st) {
-        RiftLog.error(
-          '[Session] Unhandled exception in _handleMessage',
-          error: e,
-          stackTrace: st,
-        );
-        _transport.disconnect(msg.peerDeviceId);
-      }),
-    );
+    _transport.onMessageReceived.listen((msg) {
+      final previous = _inboundMessageTails[msg.peerDeviceId];
+      late final Future<void> next;
+      next = (previous?.catchError((_) {}) ?? Future<void>.value())
+          .then((_) => _handleMessage(msg))
+          .catchError((Object e, StackTrace st) {
+            RiftLog.error(
+              '[Session] Unhandled exception in _handleMessage',
+              error: e,
+              stackTrace: st,
+            );
+            _transport.disconnect(msg.peerDeviceId);
+          })
+          .whenComplete(() {
+            if (identical(_inboundMessageTails[msg.peerDeviceId], next)) {
+              _inboundMessageTails.remove(msg.peerDeviceId);
+            }
+          });
+      _inboundMessageTails[msg.peerDeviceId] = next;
+    });
     _transport.onPeerDisconnected.listen((deviceId) {
       final waiter = _establishmentWaiters.remove(deviceId);
       if (waiter != null && !waiter.isCompleted) {
         waiter.complete();
       }
+      _inboundMessageTails.remove(deviceId);
       final ctx = _sessions.remove(deviceId);
       if (ctx != null) {
         ctx.dispose();
@@ -274,6 +286,7 @@ class SessionManager {
       ctx.dispose();
     }
     _sessions.clear();
+    _inboundMessageTails.clear();
     await _trustedSessionReadyController.close();
     await _presenceUpdateController.close();
     await _messageController.close();
@@ -284,7 +297,7 @@ class SessionManager {
     Map<String, dynamic> payload,
   ) async {
     final ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] sendMessage type=${payload['type']} peerDeviceId=$peerDeviceId '
       '${_describeContext(ctx)}',
     );
@@ -299,10 +312,28 @@ class SessionManager {
       peerDeviceId,
       Uint8List.fromList(utf8.encode(json.encode(payload))),
     );
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] sendMessage completed type=${payload['type']} peerDeviceId=$peerDeviceId',
     );
   }
+
+  Future<void> sendPeerError(
+    String peerDeviceId, {
+    required String failureReason,
+    String? refMessageId,
+    required String message,
+  }) => sendMessage(peerDeviceId, {
+    'rift': '0.1-draft',
+    'messageId': const Uuid().v4(),
+    'type': 'error',
+    'sourceDeviceId': _identityManager.deviceId,
+    'destinationDeviceId': peerDeviceId,
+    'payload': {
+      'failureReason': failureReason,
+      'refMessageId': ?refMessageId,
+      'message': message,
+    },
+  });
 
   void disconnectPeer(String peerDeviceId) {
     final waiter = _establishmentWaiters.remove(peerDeviceId);
@@ -409,7 +440,9 @@ class SessionManager {
     Duration timeout = const Duration(seconds: 10),
   }) async {
     final ctx = _sessions[peerDeviceId];
-    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+    if (ctx != null &&
+        ctx.handshakeState == HandshakeState.established &&
+        ctx.capabilityNegotiated) {
       return;
     }
 
@@ -597,15 +630,21 @@ class SessionManager {
       'rift': '0.1-draft',
       'type': 'session.reject',
       'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': peerDeviceId,
       'payload': {'failureReason': failureReason, 'message': message},
     };
-    await _transport.sendMessage(
-      peerDeviceId,
-      Uint8List.fromList(utf8.encode(json.encode(payload))),
-    );
-    _transport.disconnect(peerDeviceId);
+    try {
+      await _transport.sendMessage(
+        peerDeviceId,
+        Uint8List.fromList(utf8.encode(json.encode(payload))),
+      );
+    } on StateError {
+      // The peer socket may already be gone; rejection is best-effort.
+    } finally {
+      _transport.disconnect(peerDeviceId);
+    }
   }
 
   Future<void> _handleSessionHello(
@@ -614,7 +653,7 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     var ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] _handleSessionHello entered for $peerDeviceId ${_describeContext(ctx)}',
     );
     if (ctx == null) {
@@ -641,29 +680,21 @@ class SessionManager {
         '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
       );
     } else if (ctx.handshakeState == HandshakeState.established) {
-      final localDeviceId = _identityManager.deviceId;
-      if (localDeviceId.compareTo(peerDeviceId) > 0) {
-        RiftLog.info(
-          '[Session] Tie-break (we win): Rejecting inbound duplicate session.hello from $peerDeviceId.',
-        );
-        await _rejectSession(
-          peerDeviceId,
-          'ProtocolError',
-          'Duplicate session.hello rejected by tie-breaker',
-        );
-        throw SessionException(
-          'ProtocolError: Duplicate connection rejected by tie-breaker for $peerDeviceId',
-        );
-      } else {
-        RiftLog.info(
-          '[Session] Tie-break (peer wins): Dropping existing outbound connection and accepting inbound from $peerDeviceId.',
-        );
-        _transport.disconnect(peerDeviceId);
-        ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
-        final record = await _trustStore.getPeer(peerDeviceId);
-        ctx.trustState = record?.state ?? TrustState.discovered;
-        _sessions[peerDeviceId] = ctx;
-      }
+      // The peer would not send a fresh session.hello if it still considered
+      // the session alive; mobile apps get killed/suspended without a clean
+      // TCP close, leaving us with a zombie established context. Treat the
+      // hello as a peer restart and rebuild the session on the connection it
+      // arrived over. Do not touch the transport: the hello came in on the
+      // transport's current (live) connection for this peer.
+      RiftLog.info(
+        '[Session] Peer $peerDeviceId sent session.hello over an established '
+        'session; assuming peer restart and rebuilding session.',
+      );
+      ctx.dispose();
+      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
+      final record = await _trustStore.getPeer(peerDeviceId);
+      ctx.trustState = record?.state ?? TrustState.discovered;
+      _sessions[peerDeviceId] = ctx;
     } else {
       await _rejectSession(
         peerDeviceId,
@@ -675,7 +706,7 @@ class SessionManager {
       );
     }
     ctx.remoteHelloReceived = true;
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] Marked remoteHelloReceived for $peerDeviceId ${_describeContext(ctx)}',
     );
 
@@ -895,7 +926,7 @@ class SessionManager {
   ) async {
     final peerDeviceId = msg.peerDeviceId;
     final ctx = _sessions[peerDeviceId];
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] _handleSessionAccept entered for $peerDeviceId ${_describeContext(ctx)}',
     );
 
@@ -1055,7 +1086,7 @@ class SessionManager {
       '[Session] Verified session.accept from $peerDeviceId; marking established and starting capability negotiation.',
     );
     ctx.handshakeState = HandshakeState.established;
-    RiftLog.info(
+    RiftLog.debug(
       '[Session] Marked established after session.accept for $peerDeviceId ${_describeContext(ctx)}',
     );
     _transport.setPeerAuthenticated(peerDeviceId);
@@ -1085,10 +1116,17 @@ class SessionManager {
     ctx.capabilityNegotiationTimer?.cancel();
     ctx.capabilityNegotiationTimer = Timer(const Duration(seconds: 5), () {
       if (ctx.negotiatedCapabilities.isEmpty) {
-        _rejectSession(
-          ctx.peerDeviceId,
-          'Timeout',
-          'Capability negotiation timed out',
+        unawaited(
+          _rejectSession(
+            ctx.peerDeviceId,
+            'Timeout',
+            'Capability negotiation timed out',
+          ).catchError((Object error) {
+            RiftLog.warn(
+              '[Session] Best-effort negotiation-timeout reject failed for '
+              '${ctx.peerDeviceId}: $error',
+            );
+          }),
         );
       }
     });

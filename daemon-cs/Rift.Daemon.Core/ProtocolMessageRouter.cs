@@ -16,6 +16,43 @@ public sealed class ProtocolMessageRouter(
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
+        string? messageType = null;
+        string? messageId = null;
+        try
+        {
+            using (var document = JsonDocument.Parse(payload))
+            {
+                var root = document.RootElement;
+                messageType = root.TryGetProperty("type", out var typeElement) && typeElement.ValueKind == JsonValueKind.String
+                    ? typeElement.GetString()
+                    : null;
+                messageId = root.TryGetProperty("messageId", out var idElement) && idElement.ValueKind == JsonValueKind.String
+                    ? idElement.GetString()
+                    : null;
+            }
+
+            await HandleValidatedMessageAsync(session, payload, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (messageType?.StartsWith("media.playback", StringComparison.Ordinal) == true && IsMediaMessageError(ex))
+        {
+            var failureReason = ex switch
+            {
+                UnauthorizedAccessException when ex.Message.Contains("requires negotiated capability", StringComparison.Ordinal) => "CapabilityUnavailable",
+                UnauthorizedAccessException => "Unauthorized",
+                MediaPlaybackSyncFailureException { ErrorCode: -32010 } => "ProtocolError",
+                _ => "MalformedMessage"
+            };
+            await mediaPlaybackSyncService.SendPeerErrorAsync(
+                session.PeerDeviceId,
+                failureReason,
+                messageId,
+                ex.Message,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleValidatedMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+    {
         var peerDeviceId = session.PeerDeviceId;
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
@@ -217,14 +254,17 @@ public sealed class ProtocolMessageRouter(
             EnsureProtectedMessageAllowed(session, "media.playback", messageType);
             var mediaPayload = root.GetProperty("payload");
             var payloadSourceDeviceId = mediaPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
-            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            var requestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, requestingDeviceId, messageType);
             await mediaPlaybackSyncService.HandleMediaPlaybackActionRequestAsync(new MediaPlaybackActionRequestRecord
             {
                 PlaybackId = mediaPayload.GetProperty("playbackId").GetString() ?? string.Empty,
                 SourceDeviceId = payloadSourceDeviceId,
-                RequestingDeviceId = mediaPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,
+                RequestingDeviceId = requestingDeviceId,
                 Action = mediaPayload.GetProperty("action").GetString() ?? string.Empty,
-                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) ? positionElement.GetInt64() : null,
+                PositionMs = mediaPayload.TryGetProperty("positionMs", out var positionElement) && positionElement.ValueKind is JsonValueKind.Number
+                    ? positionElement.GetInt64()
+                    : null,
                 RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null
             }, cancellationToken);
             return;
@@ -363,6 +403,23 @@ public sealed class ProtocolMessageRouter(
             return;
         }
 
+        if (string.Equals(messageType, "file.committed", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            if (session.GetCapabilityVersion("file.transfer") < 2)
+            {
+                throw new InvalidOperationException("file.committed requires file.transfer version 2.");
+            }
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleCommittedReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("byteSize").GetInt64(),
+                filePayload.GetProperty("sha256").GetString() ?? string.Empty,
+                cancellationToken);
+            return;
+        }
+
         if (string.Equals(messageType, "file.cancel", StringComparison.Ordinal))
         {
             EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
@@ -372,6 +429,20 @@ public sealed class ProtocolMessageRouter(
                 filePayload.GetProperty("transferId").GetString() ?? string.Empty,
                 filePayload.GetProperty("failureReason").GetString() ?? string.Empty,
                 filePayload.TryGetProperty("message", out var cancelMessageElement) ? cancelMessageElement.GetString() : null,
+                cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "file.resume", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "file.transfer", messageType);
+            var filePayload = root.GetProperty("payload");
+            await fileTransferService.HandleResumeReceivedAsync(
+                peerDeviceId,
+                filePayload.GetProperty("transferId").GetString() ?? string.Empty,
+                filePayload.GetProperty("receivingDeviceId").GetString() ?? string.Empty,
+                filePayload.GetProperty("nextChunkIndex").GetInt32(),
+                filePayload.GetProperty("offset").GetInt64(),
                 cancellationToken);
             return;
         }
@@ -441,6 +512,9 @@ public sealed class ProtocolMessageRouter(
         };
     }
 
+    private static bool IsMediaMessageError(Exception exception) =>
+        exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or MediaPlaybackSyncFailureException or UnauthorizedAccessException;
+
     private static MediaPlaybackRecord ParseMediaPlaybackRecord(JsonElement mediaPayload)
     {
         return new MediaPlaybackRecord
@@ -453,9 +527,7 @@ public sealed class ProtocolMessageRouter(
             Title = mediaPayload.TryGetProperty("title", out var titleElement) ? titleElement.GetString() : null,
             Artist = mediaPayload.TryGetProperty("artist", out var artistElement) ? artistElement.GetString() : null,
             Album = mediaPayload.TryGetProperty("album", out var albumElement) ? albumElement.GetString() : null,
-            Artwork = mediaPayload.TryGetProperty("artwork", out var artworkElement) && artworkElement.ValueKind is JsonValueKind.Object
-                ? JsonSerializer.Deserialize<Dictionary<string, object?>>(artworkElement.GetRawText())
-                : null,
+            Artwork = ParseArtwork(mediaPayload),
             PlaybackState = mediaPayload.GetProperty("playbackState").GetString() ?? string.Empty,
             PositionMs = mediaPayload.GetProperty("positionMs").GetInt64(),
             DurationMs = mediaPayload.TryGetProperty("durationMs", out var durationElement) ? durationElement.GetInt64() : null,
@@ -466,5 +538,31 @@ public sealed class ProtocolMessageRouter(
             CanSeek = mediaPayload.GetProperty("canSeek").GetBoolean(),
             UpdatedAt = mediaPayload.GetProperty("updatedAt").GetString() ?? string.Empty
         };
+    }
+
+    private static IReadOnlyDictionary<string, object?>? ParseArtwork(JsonElement mediaPayload)
+    {
+        if (!mediaPayload.TryGetProperty("artwork", out var artworkElement) || artworkElement.ValueKind is not JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var artwork = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var fieldName in new[] { "dataBase64", "mediaType", "uri" })
+        {
+            if (!artworkElement.TryGetProperty(fieldName, out var field))
+            {
+                continue;
+            }
+
+            if (field.ValueKind is not JsonValueKind.String)
+            {
+                throw new JsonException($"Media artwork field '{fieldName}' must be a string.");
+            }
+
+            artwork[fieldName] = field.GetString();
+        }
+
+        return artwork;
     }
 }

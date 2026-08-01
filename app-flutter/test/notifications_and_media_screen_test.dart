@@ -103,6 +103,7 @@ class SyncUiClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> performMediaPlaybackAction({
     required String playbackId,
+    required String sourceDeviceId,
     required String action,
     int? positionMs,
   }) async {

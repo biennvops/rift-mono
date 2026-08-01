@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/android_shell.dart';
+import '../src/platform/ios_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 import '../src/ui/app_shell.dart';
 import '../widgets/rift_snackbar.dart';
@@ -58,7 +59,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
     final localNetworkGranted = await _checkLocalNetwork();
     final notificationStatus = AndroidShell.isSupported
         ? await AndroidShell.getNotificationPermissionStatus()
-        : await MacOSNotifications.getStatus();
+        : IOSNotifications.isSupported
+            ? await IOSNotifications.getPermissionStatus()
+            : await MacOSNotifications.getStatus();
     final notificationAccessStatus = AndroidShell.isSupported
         ? await AndroidShell.getNotificationListenerAccessStatus()
         : 'authorized';
@@ -96,7 +99,9 @@ class _OnboardingScreenState extends State<OnboardingScreen>
   Future<void> _requestNotificationPermission() async {
     final granted = AndroidShell.isSupported
         ? await AndroidShell.requestNotificationPermission()
-        : await MacOSNotifications.request();
+        : IOSNotifications.isSupported
+            ? await IOSNotifications.requestPermission()
+            : await MacOSNotifications.request();
     if (!mounted) return;
     setState(() => _notificationPermissionGranted = granted);
   }

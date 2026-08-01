@@ -30,6 +30,38 @@ class AndroidShell {
     return result ?? false;
   }
 
+  static Future<Map<dynamic, dynamic>?> prepareIncomingDownload(
+    String fileName,
+  ) async {
+    if (!isSupported) {
+      return null;
+    }
+    final result = await _channel.invokeMethod<dynamic>(
+      'prepareIncomingDownload',
+      {'fileName': fileName},
+    );
+    return result is Map ? result : null;
+  }
+
+  static Future<Map<dynamic, dynamic>?> publishIncomingDownload({
+    required String stagingPath,
+    required String fileName,
+    required String mediaType,
+  }) async {
+    if (!isSupported) {
+      return null;
+    }
+    final result = await _channel.invokeMethod<dynamic>(
+      'publishIncomingDownload',
+      {
+        'stagingPath': stagingPath,
+        'fileName': fileName,
+        'mediaType': mediaType,
+      },
+    );
+    return result is Map ? result : null;
+  }
+
   static Future<Map<dynamic, dynamic>?> consumeLaunchAction() async {
     if (!isSupported) {
       return null;

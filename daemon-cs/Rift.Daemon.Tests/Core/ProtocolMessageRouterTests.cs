@@ -371,19 +371,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             await WaitForConditionAsync(
                 () => _clipboardTransport.SentMessages.Any(sent =>
                     sent.PeerDeviceId == "rift-peer-file-accept" &&
-                    sent.Type == "file.chunk"),
-                TimeSpan.FromSeconds(1));
+                    sent.Type == "file.complete"),
+                TimeSpan.FromSeconds(5));
 
             Assert.Contains(_clipboardTransport.SentMessages, sent =>
                 sent.PeerDeviceId == "rift-peer-file-accept" &&
-                sent.Type == "file.complete");
+                sent.Type == "file.chunk");
         }
         finally
         {
-            if (File.Exists(tempFile))
-            {
-                File.Delete(tempFile);
-            }
+            await TestFiles.DeleteWithRetryAsync(tempFile);
         }
     }
 
@@ -447,6 +444,204 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 capabilities = new[] { "presence.basic" }
             }),
             CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionRequest_ValidatesRequesterIdentity()
+    {
+        const string peerDeviceId = "rift-peer-media-action";
+        await _mediaPlaybackSyncService.HandleMediaPlaybackPostedAsync(new MediaPlaybackRecord
+        {
+            PlaybackId = "playback-1",
+            SourceDeviceId = _identityManager.GetDeviceId(),
+            AppId = "com.example.music",
+            AppName = "Example Music",
+            PlaybackState = "playing",
+            CanPause = true,
+            UpdatedAt = "2026-07-20T10:00:00Z"
+        }, CancellationToken.None);
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "pause",
+                positionMs = (long?)null,
+                requestedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Contains(
+            _clipboardTransport.SentMessages,
+            sent => sent.PeerDeviceId == peerDeviceId && sent.Type == "media.playbackActionResult");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackArtwork_PreservesStringValues()
+    {
+        const string peerDeviceId = "rift-peer-media-artwork";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackPosted", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                appId = "com.example.music",
+                appName = "Example Music",
+                title = "Example Track",
+                artwork = new
+                {
+                    dataBase64 = "aW1hZ2U=",
+                    mediaType = "image/jpeg",
+                    uri = "file:///tmp/artwork.jpg"
+                },
+                playbackState = "playing",
+                positionMs = 1000,
+                durationMs = 2000,
+                canPlay = false,
+                canPause = true,
+                canSkipNext = true,
+                canSkipPrevious = true,
+                canSeek = true,
+                updatedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var playback = await _mediaPlaybackSyncService.GetMediaPlaybackAsync(
+            peerDeviceId,
+            "playback-1",
+            CancellationToken.None);
+
+        Assert.Equal("aW1hZ2U=", playback.Artwork!["dataBase64"]);
+        Assert.Equal("image/jpeg", playback.Artwork["mediaType"]);
+        Assert.Equal("file:///tmp/artwork.jpg", playback.Artwork["uri"]);
+        Assert.All(playback.Artwork.Values, value => Assert.IsType<string>(value));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MalformedMediaPlayback_SendsPeerError()
+    {
+        const string peerDeviceId = "rift-peer-malformed-media";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackPosted", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                appId = "com.example.music",
+                appName = "Example Music",
+                playbackState = "playing",
+                positionMs = -1,
+                canPlay = true,
+                canPause = true,
+                canSkipNext = true,
+                canSkipPrevious = true,
+                canSeek = true,
+                updatedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("MalformedMessage", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MalformedOptionalMediaTimestamps_SendPeerErrors()
+    {
+        const string peerDeviceId = "rift-peer-media-timestamps";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "pause",
+                requestedAt = "2026-07-20"
+            }),
+            CancellationToken.None);
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackRemoved", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                removedAt = "2026-07-20T10:00:00+01:00"
+            }),
+            CancellationToken.None);
+
+        Assert.Equal(2, _clipboardTransport.Payloads.Count(payload =>
+            payload.GetProperty("type").GetString() == "error" &&
+            payload.GetProperty("payload").GetProperty("failureReason").GetString() == "MalformedMessage"));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionRequest_RejectsSpoofedRequester()
+    {
+        const string peerDeviceId = "rift-peer-media-action";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionRequest", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = "rift-spoofed-requester",
+                action = "pause"
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackActionResult_RejectsSpoofedRequester()
+    {
+        const string peerDeviceId = "rift-peer-media-result";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["media.playback"]),
+            CreateEnvelope(peerDeviceId, "media.playbackActionResult", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId,
+                requestingDeviceId = "rift-spoofed-requester",
+                action = "pause",
+                success = true
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_MediaPlaybackWithoutCapability_SendsCapabilityUnavailable()
+    {
+        const string peerDeviceId = "rift-peer-media-capability";
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, []),
+            CreateEnvelope(peerDeviceId, "media.playbackRemoved", new
+            {
+                playbackId = "playback-1",
+                sourceDeviceId = peerDeviceId
+            }),
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "error");
+        Assert.Equal("CapabilityUnavailable", error.GetProperty("payload").GetProperty("failureReason").GetString());
     }
 
     [Fact]
@@ -533,6 +728,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         }
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public List<JsonElement> Payloads { get; } = [];
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -545,6 +741,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         {
             using var document = JsonDocument.Parse(frameBody);
             SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
+            Payloads.Add(document.RootElement.Clone());
             return Task.CompletedTask;
         }
 

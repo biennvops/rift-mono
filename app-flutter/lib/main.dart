@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
@@ -7,13 +9,16 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'package:flutter/services.dart';
+
 import 'constants.dart';
-import 'src/pairing/device_pairing_coordinator.dart';
-import 'src/clipboard/clipboard_sync_coordinator.dart';
-import 'src/notification/notification_sync_coordinator.dart';
-import 'src/file_transfer/file_transfer_coordinator.dart';
-import 'src/ui/app_shell.dart';
+import 'src/ui/app_shell.dart' as rift_ui;
 import 'src/ui/theme.dart';
+import 'package:app_flutter/screens/security_dashboard_screen.dart';
+import 'package:app_flutter/screens/operations_screen.dart';
+import 'screens/pairing_screen.dart';
+import 'screens/trusted_devices_screen.dart';
+import 'screens/clipboard_transfer_screen.dart';
+import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -21,17 +26,30 @@ import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
+import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
+import 'src/media_playback/android_media_playback_publisher.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'src/platform/macos_send_files.dart';
+import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
+import 'src/platform/linux_send_files.dart';
 import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
+import 'src/platform/windows_send_files.dart';
 import 'src/platform/windows_shell.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
 String? _lastDesktopClipboardReadFingerprint;
+
+@visibleForTesting
+void setMacOSNotificationBridgeOverride(bool? value) {
+  // ignore: invalid_use_of_visible_for_testing_member
+  MacOSNotifications.debugIsMacOSOverride = value;
+}
 
 String _desktopClipboardFingerprint(String contentType, Uint8List bytes) {
   final byteDigest = base64Encode(bytes);
@@ -95,6 +113,10 @@ Future<void> _writeDesktopClipboardContent(
   );
 }
 
+@visibleForTesting
+bool shouldStartDesktopHidden(List<String> arguments) =>
+    arguments.contains('--background');
+
 DesktopClipboardManager _createDesktopClipboardManager(
     JsonRpcRiftClient client) {
   if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
@@ -109,10 +131,12 @@ DesktopClipboardManager _createDesktopClipboardManager(
   return DesktopClipboardManager(client);
 }
 
-void main() async {
+void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+  final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  final startDesktopHidden = isDesktop && shouldStartDesktopHidden(arguments);
+  if (isDesktop) {
     await windowManager.ensureInitialized();
     WindowOptions windowOptions = const WindowOptions(
       size: Size(800, 600),
@@ -121,10 +145,13 @@ void main() async {
       titleBarStyle: TitleBarStyle.normal,
     );
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
-      await windowManager.show();
-      await windowManager.focus();
-      // override close button
       await windowManager.setPreventClose(true);
+      if (startDesktopHidden) {
+        await windowManager.hide();
+      } else {
+        await windowManager.show();
+        await windowManager.focus();
+      }
     });
   }
 
@@ -145,8 +172,7 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
-        ChangeNotifierProvider<DesktopClipboardManager?>.value(
-            value: clipboardManager),
+        Provider<DesktopClipboardManager?>.value(value: clipboardManager),
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (context) => SendQueueController(
@@ -172,21 +198,49 @@ class RiftApp extends StatefulWidget {
 }
 
 class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
+  static const Duration _externalClipboardDuplicateWindow =
+      Duration(seconds: 2);
+
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  final GlobalKey<AppShellState> _appShellKey = GlobalKey<AppShellState>();
+  final GlobalKey<_AppShellState> _appShellKey = GlobalKey<_AppShellState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
+  StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
+  StreamSubscription<Map<String, dynamic>>? _pairingCompleteSub;
+  StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
+  StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _fileReadyToCommitSub;
+  StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
+  StreamSubscription<Map<String, dynamic>>? _fileFailedSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardOfferSub;
+  StreamSubscription<Map<String, dynamic>>? _clipboardExpiredSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
   StreamSubscription<bool>? _connectionChangedSub;
-  DevicePairingCoordinator? _devicePairingCoordinator;
-  ClipboardSyncCoordinator? _clipboardSyncCoordinator;
-  NotificationSyncCoordinator? _notificationSyncCoordinator;
-  FileTransferCoordinator? _fileTransferCoordinator;
+  String? _activePairingDeviceId;
+  bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
+  final Set<String> _autoAcceptingTransferIds = <String>{};
+  final Set<String> _publishingTransferIds = <String>{};
   final ValueNotifier<String?> _historyRouteNotifier =
       ValueNotifier<String?>(null);
   final ValueNotifier<String?> _sharedClipboardTextNotifier =
       ValueNotifier<String?>(null);
+  final List<Map<String, dynamic>> _pendingExternalClipboardPayloads =
+      <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> _pendingNotificationSyncEvents =
+      <Map<String, dynamic>>[];
+  bool _isFlushingNotificationSyncEvents = false;
+  final List<Map<String, String>> _pendingDesktopNotificationActions =
+      <Map<String, String>>[];
+  final List<Map<String, String>> _pendingSharedSendItems =
+      <Map<String, String>>[];
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
+  AndroidMediaPlaybackPublisher? _androidMediaPlaybackPublisher;
+  IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
+  String? _lastExternalClipboardFingerprint;
+  DateTime? _lastExternalClipboardAt;
 
   bool get _enableDesktopShellIntegration =>
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
@@ -201,35 +255,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _initSystemTray();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final client = context.read<JsonRpcRiftClient>();
-      _devicePairingCoordinator = DevicePairingCoordinator(
-        client: client,
-        navigatorKey: _navigatorKey,
-        appShellKey: _appShellKey,
-        onNotify: _maybeNotify,
-        onNotifyWithRoute: _maybeNotifyWithRoute,
-      )..init();
-      _clipboardSyncCoordinator = ClipboardSyncCoordinator(
-        client: client,
-        onNotifyWithRoute: _maybeNotifyWithRoute,
-      )
-        ..init()
-        ..bindIpcEvents();
-      _notificationSyncCoordinator = NotificationSyncCoordinator(
-        client: client,
-      )..init();
-      _fileTransferCoordinator = FileTransferCoordinator(
-        client: client,
-        navigatorKey: _navigatorKey,
-        appShellKey: _appShellKey,
-        scaffoldMessengerKey: _scaffoldMessengerKey,
-        onNotify: _maybeNotify,
-        onNotifyWithRoute: _maybeNotifyWithRoute,
-      )..init();
       unawaited(context.read<SendQueueController>().ensureRestored());
       _bindPlatformNotificationActions();
       _bindMediaPlayback();
+      _bindPairingRequests();
       _bindNotifications();
+      _bindClipboardChannel();
       _bindConnectionRecovery();
     });
   }
@@ -240,6 +271,56 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _clipboardManager ??= context.read<DesktopClipboardManager?>();
   }
 
+  static const _clipboardChannel =
+      MethodChannel('com.biennvops.rift/clipboard');
+
+  Future<void> _applyAndroidClipboardPayload({
+    required String contentType,
+    required String contentBase64,
+  }) async {
+    final applied = await _clipboardChannel.invokeMethod<bool>(
+      'setClipboardContent',
+      {
+        'contentType': contentType,
+        'contentBase64': contentBase64,
+      },
+    );
+    if (applied != true) {
+      throw StateError('Android clipboard payload was not applied');
+    }
+  }
+
+  Future<void> _bindClipboardChannel() async {
+    // The native clipboard channel only exists on Android.
+    if (!Platform.isAndroid) return;
+
+    _clipboardChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onClipboardChanged') {
+        final args = Map<Object?, Object?>.from(
+          call.arguments as Map<Object?, Object?>? ??
+              const <Object?, Object?>{},
+        );
+        await _submitExternalClipboardPayload(
+          args.map(
+            (key, value) => MapEntry(
+              key?.toString() ?? '',
+              value,
+            ),
+          ),
+        );
+      }
+    });
+    try {
+      final started = await _clipboardChannel.invokeMethod('startService');
+      _clipboardServiceStarted = true;
+      if (started != true) {
+        debugPrint('[Android Clipboard] startService returned $started');
+      }
+    } catch (e) {
+      debugPrint('[Android Clipboard] Failed to start clipboard service: $e');
+    }
+  }
+
   Future<void> _bindPlatformNotificationActions() async {
     WindowsShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
     LinuxNotifications.setMethodCallHandler(
@@ -248,7 +329,28 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     MacOSNotifications.setMethodCallHandler(
       _handlePlatformNotificationMethodCall,
     );
+    IOSNotifications.setMethodCallHandler(
+      _handlePlatformNotificationMethodCall,
+    );
+    if (Platform.isLinux) {
+      LinuxSendFiles.setMethodCallHandler(_handleLinuxSendFilesMethodCall);
+      unawaited(_consumePendingLinuxSendItems());
+    }
+    if (Platform.isMacOS) {
+      MacOSSendFiles.setMethodCallHandler(_handleMacOSSendFilesMethodCall);
+    }
+    if (Platform.isWindows) {
+      WindowsSendFiles.setMethodCallHandler(_handleWindowsSendFilesMethodCall);
+      unawaited(_consumePendingWindowsSendItems());
+    }
     AndroidShell.setMethodCallHandler(_handlePlatformNotificationMethodCall);
+
+    if (IOSNotifications.isSupported) {
+      final pendingAction = await IOSNotifications.consumeLaunchAction();
+      if (pendingAction != null) {
+        _handleNotificationActionPayload(pendingAction);
+      }
+    }
 
     if (Platform.isAndroid) {
       final pendingAction = await AndroidShell.consumeLaunchAction();
@@ -273,13 +375,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub?.cancel();
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
-        unawaited(
-            _clipboardSyncCoordinator?.flushPendingExternalClipboardPayloads());
-        unawaited(
-            _notificationSyncCoordinator?.flushPendingNotificationSyncEvents());
-        unawaited(_notificationSyncCoordinator
-            ?.flushPendingDesktopNotificationActions());
-        unawaited(_fileTransferCoordinator?.flushPendingSharedSendItems());
+        unawaited(_flushPendingExternalClipboardPayloads());
+        unawaited(_flushPendingNotificationSyncEvents());
+        unawaited(_flushPendingDesktopNotificationActions());
+        unawaited(_flushPendingSharedSendItems());
+        unawaited(_recoverPendingFileCommits());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
@@ -316,7 +416,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (call.method == 'notificationSyncEvent') {
       final arguments = call.arguments;
       if (arguments is Map) {
-        await _notificationSyncCoordinator?.submitNativeNotificationSyncEvent(
+        await _submitNativeNotificationSyncEvent(
           Map<String, dynamic>.from(arguments),
         );
       }
@@ -330,6 +430,342 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _androidRemoteMediaPlayback =
           AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
+      _androidMediaPlaybackPublisher = AndroidMediaPlaybackPublisher(client);
+      unawaited(_androidMediaPlaybackPublisher!.start());
+    } else if (Platform.isIOS) {
+      _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
+      unawaited(_iosRemoteMediaPlayback!.start());
+    }
+  }
+
+  Future<void> _consumePendingLinuxSendItems() async {
+    final pendingItems = await LinuxSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleLinuxSendFilesMethodCall(MethodCall call) async {
+    if (call.method != LinuxSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = LinuxSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  Future<dynamic> _handleMacOSSendFilesMethodCall(MethodCall call) async {
+    if (call.method != MacOSSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = MacOSSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  Future<void> _consumePendingWindowsSendItems() async {
+    final pendingItems = await WindowsSendFiles.consumePendingItems();
+    if (pendingItems.isEmpty) {
+      return;
+    }
+    await _enqueueSharedSendItems(pendingItems);
+    _showHistoryRoute(NotificationRoute.historySend);
+  }
+
+  Future<dynamic> _handleWindowsSendFilesMethodCall(MethodCall call) async {
+    if (call.method != WindowsSendFiles.callbackMethod) {
+      return null;
+    }
+
+    final items = WindowsSendFiles.parseCallbackArguments(call.arguments);
+    if (items.isEmpty) {
+      return null;
+    }
+
+    unawaited(_enqueueSharedSendItems(items));
+    _showHistoryRoute(NotificationRoute.historySend);
+    return null;
+  }
+
+  void _showHistoryRoute(String route) {
+    final shell = _appShellKey.currentState;
+    if (shell == null) {
+      _historyRouteNotifier.value = route;
+    } else {
+      shell.showHistoryRoute(route);
+    }
+
+    if (_enableDesktopShellIntegration) {
+      unawaited(_clipboardManager?.setWindowVisible(true));
+      unawaited(windowManager.show());
+      unawaited(windowManager.focus());
+    }
+  }
+
+  Future<bool?> _confirmIncomingFileOffer({
+    required String fileName,
+    required String sourceDeviceId,
+    required String destinationPath,
+  }) async {
+    final context = _navigatorKey.currentContext;
+    if (context == null || !mounted) {
+      return true;
+    }
+
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Accept file transfer?'),
+        content: Text(
+          'Receive $fileName from $sourceDeviceId?\n\n'
+          'Destination:\n$destinationPath',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Decline'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Accept'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String? _externalClipboardFingerprint(Map<String, dynamic> payload) {
+    final contentType = payload['contentType']?.toString();
+    final contentBase64 = payload['contentBase64']?.toString();
+    if (contentType != null &&
+        contentType.isNotEmpty &&
+        contentBase64 != null &&
+        contentBase64.isNotEmpty) {
+      return sha256
+          .convert(utf8.encode('$contentType:$contentBase64'))
+          .toString();
+    }
+
+    final text = payload['text']?.toString();
+    if (text != null && text.isNotEmpty) {
+      return sha256.convert(utf8.encode('text/plain:$text')).toString();
+    }
+
+    return null;
+  }
+
+  bool _shouldSuppressExternalClipboardPayload(Map<String, dynamic> payload) {
+    final fingerprint = _externalClipboardFingerprint(payload);
+    if (fingerprint == null) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    if (_lastExternalClipboardFingerprint == fingerprint &&
+        _lastExternalClipboardAt != null &&
+        now.difference(_lastExternalClipboardAt!) <=
+            _externalClipboardDuplicateWindow) {
+      debugPrint(
+        '[Android Clipboard] Suppressed duplicate external clipboard payload.',
+      );
+      return true;
+    }
+
+    _lastExternalClipboardFingerprint = fingerprint;
+    _lastExternalClipboardAt = now;
+    return false;
+  }
+
+  void _queuePendingExternalClipboardPayload(Map<String, dynamic> payload) {
+    final fingerprint = _externalClipboardFingerprint(payload);
+    if (fingerprint != null) {
+      final alreadyQueued = _pendingExternalClipboardPayloads.any(
+        (candidate) => _externalClipboardFingerprint(candidate) == fingerprint,
+      );
+      if (alreadyQueued) {
+        return;
+      }
+    }
+    _pendingExternalClipboardPayloads.add(Map<String, dynamic>.from(payload));
+  }
+
+  // A stable signature for a native notification-sync event so we never queue
+  // the same event twice (e.g. re-queued by a failed direct send *and* handed
+  // to the flush path on reconnect). posted/updated carry postedAt; removed
+  // carries removedAt — either disambiguates repeats for the same id.
+  String? _notificationSyncEventSignature(Map<String, dynamic> event) {
+    final eventType = event['eventType']?.toString();
+    final notificationId = event['notificationId']?.toString();
+    if (eventType == null ||
+        eventType.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      return null;
+    }
+    final timestamp =
+        (event['postedAt'] ?? event['removedAt'])?.toString() ?? '';
+    return '$eventType\n$notificationId\n$timestamp';
+  }
+
+  void _enqueueNotificationSyncEvent(Map<String, dynamic> event) {
+    final signature = _notificationSyncEventSignature(event);
+    if (signature != null) {
+      final alreadyQueued = _pendingNotificationSyncEvents.any(
+        (queued) => _notificationSyncEventSignature(queued) == signature,
+      );
+      if (alreadyQueued) {
+        return;
+      }
+    }
+    _pendingNotificationSyncEvents.add(Map<String, dynamic>.from(event));
+  }
+
+  Future<void> _submitExternalClipboardPayload(
+    Map<String, dynamic> payload,
+  ) async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _queuePendingExternalClipboardPayload(payload);
+      client.connect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[Android Clipboard] Failed to reconnect for clipboard send: $error',
+        );
+      });
+      return;
+    }
+
+    if (_shouldSuppressExternalClipboardPayload(payload)) {
+      return;
+    }
+
+    final contentType = payload['contentType']?.toString();
+    final contentBase64 = payload['contentBase64']?.toString();
+    final text = payload['text']?.toString();
+
+    try {
+      if (contentType != null &&
+          contentType.isNotEmpty &&
+          contentBase64 != null &&
+          contentBase64.isNotEmpty) {
+        final bytes = base64.decode(contentBase64);
+        final result = await client.notifyClipboardChange(
+          contentType: contentType,
+          byteSize: bytes.length,
+          sha256: sha256.convert(bytes).toString(),
+          contentBase64: contentBase64,
+        );
+        debugPrint(
+          '[Android Clipboard] Forwarded $contentType to peers: '
+          '${(result['broadcastTo'] as List?)?.join(', ') ?? '(none)'}',
+        );
+        return;
+      }
+
+      if (text != null && text.isNotEmpty) {
+        final bytes = utf8.encode(text);
+        final result = await client.notifyClipboardChange(
+          contentType: 'text/plain',
+          byteSize: bytes.length,
+          sha256: sha256.convert(bytes).toString(),
+          contentBase64: base64Encode(bytes),
+        );
+        debugPrint(
+          '[Android Clipboard] Forwarded text/plain to peers: '
+          '${(result['broadcastTo'] as List?)?.join(', ') ?? '(none)'}',
+        );
+      }
+    } catch (error) {
+      debugPrint(
+          '[Android Clipboard] Failed to submit external payload: $error');
+    }
+  }
+
+  Future<void> _submitNativeNotificationSyncEvent(
+    Map<String, dynamic> event,
+  ) async {
+    final eventType = event['eventType']?.toString();
+    final notificationId = event['notificationId']?.toString();
+    if (eventType == null ||
+        eventType.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      return;
+    }
+
+    // Always append to the FIFO queue and drain in order, even when connected.
+    // Sending inline here while the flush path drains the backlog could let a
+    // newer event (e.g. "removed") overtake an older queued one (its "posted"),
+    // leaving a stale mirrored record on the daemon.
+    _enqueueNotificationSyncEvent(event);
+    await _flushPendingNotificationSyncEvents();
+  }
+
+  Future<void> _flushPendingNotificationSyncEvents() async {
+    if (_isFlushingNotificationSyncEvents) {
+      return;
+    }
+    final client = context.read<JsonRpcRiftClient>();
+    _isFlushingNotificationSyncEvents = true;
+    try {
+      while (_pendingNotificationSyncEvents.isNotEmpty) {
+        if (!client.isConnected) {
+          client.connect().catchError((Object error, StackTrace stackTrace) {
+            debugPrint(
+              '[Notification Sync] Failed to reconnect for native event send: $error',
+            );
+          });
+          // Leave the backlog intact; the reconnect will re-trigger the flush
+          // via onConnectionChanged.
+          return;
+        }
+
+        // Peek without removing so a mid-flight failure keeps the event queued
+        // in its original position, preserving ordering.
+        final event = _pendingNotificationSyncEvents.first;
+        final eventType = event['eventType']?.toString() ?? '';
+        try {
+          await client.notifyLocalNotificationEvent(
+            eventType: eventType,
+            payload: Map<String, Object?>.from(event),
+          );
+          _pendingNotificationSyncEvents.removeAt(0);
+        } catch (error) {
+          debugPrint(
+            '[Notification Sync] Failed to submit native notification event: $error',
+          );
+          return;
+        }
+      }
+    } finally {
+      _isFlushingNotificationSyncEvents = false;
+    }
+  }
+
+  Future<void> _flushPendingExternalClipboardPayloads() async {
+    if (_pendingExternalClipboardPayloads.isEmpty) {
+      return;
+    }
+
+    final queued = List<Map<String, dynamic>>.from(
+      _pendingExternalClipboardPayloads,
+    );
+    _pendingExternalClipboardPayloads.clear();
+    for (final payload in queued) {
+      await _submitExternalClipboardPayload(payload);
     }
   }
 
@@ -341,7 +777,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         notificationId != null &&
         notificationId.isNotEmpty) {
       unawaited(
-        _notificationSyncCoordinator?.submitDesktopNotificationAction(
+        _submitDesktopNotificationAction(
           notificationId: notificationId,
           action: notificationAction,
         ),
@@ -356,36 +792,205 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _appShellKey.currentState?.showRoute(route);
         return;
       case NotificationRoute.clipboardSend:
-        unawaited(
-            _clipboardSyncCoordinator?.submitExternalClipboardPayload(payload));
+        unawaited(_submitExternalClipboardPayload(payload));
         return;
       case NotificationRoute.historySend:
         if (payload['items'] is List) {
-          unawaited(_fileTransferCoordinator?.flushPendingSharedSendItems());
+          final items = List<Map<String, String>>.from(
+            (payload['items'] as List).map(
+              (item) => Map<String, String>.from(item as Map),
+            ),
+          );
+          unawaited(_enqueueSharedSendItems(items));
         }
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.historyClipboard:
-        _appShellKey.currentState?.showHistoryRoute(route);
-        return;
       case NotificationRoute.historyNotifications:
-        _appShellKey.currentState?.showNotificationsRoute();
+        _showHistoryRoute(route);
         return;
       case NotificationRoute.pairing:
-        _devicePairingCoordinator?.openIncomingPairingRequest(payload);
+        _openIncomingPairingRequest(payload);
         return;
       case NotificationRoute.historyIncomingOffers:
       case NotificationRoute.historyTransferActivity:
-        _appShellKey.currentState?.showHistoryRoute(route);
+        _showHistoryRoute(route);
         return;
     }
+  }
+
+  Future<void> _enqueueSharedSendItems(
+    List<Map<String, String>> items,
+  ) async {
+    if (items.isEmpty) {
+      return;
+    }
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      _pendingSharedSendItems.addAll(items);
+      debugPrint(
+        '[Send Queue] Buffered ${items.length} shared item(s); daemon not connected yet.',
+      );
+      return;
+    }
+    final result = await context.read<SendQueueController>().enqueueRequests(
+          items,
+        );
+    debugPrint(
+      '[Send Queue] Enqueued shared items: added=${result.added} skipped=${result.skipped}',
+    );
+  }
+
+  Future<void> _flushPendingSharedSendItems() async {
+    if (_pendingSharedSendItems.isEmpty) {
+      return;
+    }
+    final pending = List<Map<String, String>>.from(_pendingSharedSendItems);
+    _pendingSharedSendItems.clear();
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      // Put them back; we'll try again on the next reconnect.
+      _pendingSharedSendItems.insertAll(0, pending);
+      return;
+    }
+    final result = await context.read<SendQueueController>().enqueueRequests(
+          pending,
+        );
+    debugPrint(
+      '[Send Queue] Drained buffered shared items: added=${result.added} skipped=${result.skipped}',
+    );
+    // If anything still couldn't be enqueued (e.g., file disappeared), re-buffer
+    // so we don't lose the user's intent — they'll see it once the daemon
+    // recovers and can act on it.
+    if (result.skipped > 0 &&
+        !_pendingSharedSendItems.contains(pending.first)) {
+      debugPrint(
+        '[Send Queue] ${result.skipped} shared item(s) still could not be enqueued after reconnect.',
+      );
+    }
+  }
+
+  void _queuePendingDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+  }) {
+    final alreadyQueued = _pendingDesktopNotificationActions.any(
+      (candidate) =>
+          candidate['notificationId'] == notificationId &&
+          candidate['action'] == action,
+    );
+    if (alreadyQueued) {
+      return;
+    }
+    _pendingDesktopNotificationActions.add(<String, String>{
+      'notificationId': notificationId,
+      'action': action,
+    });
+  }
+
+  Future<bool> _submitDesktopNotificationAction({
+    required String notificationId,
+    required String action,
+    bool queueIfUnavailable = true,
+  }) async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
+      client.connect().catchError((Object error, StackTrace stackTrace) {
+        debugPrint(
+          '[Notification Sync] Failed to reconnect for notification action: $error',
+        );
+      });
+      return false;
+    }
+
+    try {
+      await client.performNotificationAction(
+        notificationId: notificationId,
+        action: action,
+      );
+      return true;
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to perform mirrored notification action: $error',
+      );
+      if (queueIfUnavailable) {
+        _queuePendingDesktopNotificationAction(
+          notificationId: notificationId,
+          action: action,
+        );
+      }
+      return false;
+    }
+  }
+
+  Future<void> _flushPendingDesktopNotificationActions() async {
+    while (_pendingDesktopNotificationActions.isNotEmpty) {
+      final action = Map<String, String>.from(
+        _pendingDesktopNotificationActions.first,
+      );
+      final submitted = await _submitDesktopNotificationAction(
+        notificationId: action['notificationId'] ?? '',
+        action: action['action'] ?? '',
+        queueIfUnavailable: false,
+      );
+      if (!submitted) {
+        break;
+      }
+      _pendingDesktopNotificationActions.removeAt(0);
+    }
+  }
+
+  void _openIncomingPairingRequest(Map<String, dynamic> payload) {
+    final navigator = _navigatorKey.currentState;
+    if (navigator == null) {
+      return;
+    }
+
+    final deviceId = payload['deviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty) {
+      return;
+    }
+    if (_activePairingDeviceId == deviceId) {
+      return;
+    }
+
+    _activePairingDeviceId = deviceId;
+    navigator
+        .push(
+      MaterialPageRoute<void>(
+        builder: (_) => PairingScreen(
+          initialDeviceId: deviceId,
+          initialDisplayName: payload['displayName']?.toString(),
+          initialPeerFingerprint: payload['fingerprint']?.toString(),
+          initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
+          initialCanApproveLocally: true,
+          initialStatus: 'Incoming pairing request',
+        ),
+      ),
+    )
+        .whenComplete(() {
+      if (mounted && _activePairingDeviceId == deviceId) {
+        _activePairingDeviceId = null;
+      }
+    });
   }
 
   Future<void> _initSystemTray() async {
     try {
       await trayManager.setIcon(
-        Platform.isWindows ? 'app_icon.ico' : 'app_icon.png',
+        Platform.isWindows
+            ? 'windows/runner/resources/app_icon.ico'
+            : Platform.isLinux
+                ? 'assets/dev.rift.Rift.png'
+                : 'app_icon.png',
       );
+      await trayManager.setToolTip(AppStrings.appTitle);
     } catch (e) {
       debugPrint('Failed to load tray icon: $e');
     }
@@ -411,13 +1016,32 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       trayManager.removeListener(this);
       windowManager.removeListener(this);
     }
-    _devicePairingCoordinator?.dispose();
-    _clipboardSyncCoordinator?.dispose();
-    _notificationSyncCoordinator?.dispose();
-    _fileTransferCoordinator?.dispose();
+    _pairingRequestSub?.cancel();
+    _pairingCompleteSub?.cancel();
+    _trustChangedSub?.cancel();
+    _fileOfferSub?.cancel();
+    _fileReadyToCommitSub?.cancel();
+    _fileCompletedSub?.cancel();
+    _fileFailedSub?.cancel();
+    _clipboardOfferSub?.cancel();
+    _clipboardExpiredSub?.cancel();
+    _notificationPostedSub?.cancel();
+    _notificationUpdatedSub?.cancel();
+    _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
+    unawaited(_androidMediaPlaybackPublisher?.dispose());
+    unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
+    if (Platform.isAndroid && _clipboardServiceStarted) {
+      unawaited(
+        _clipboardChannel
+            .invokeMethod('stopService')
+            .catchError((Object error) {
+          debugPrint('Failed to stop clipboard service: $error');
+        }),
+      );
+    }
     super.dispose();
   }
 
@@ -427,6 +1051,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_clipboardManager?.setWindowVisible(true));
     windowManager.show();
     windowManager.focus();
+  }
+
+  @override
+  void onTrayIconRightMouseDown() {
+    unawaited(trayManager.popUpContextMenu());
   }
 
   @override
@@ -445,6 +1074,52 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _maybeNotifyWithRoute(title: title, body: body);
   }
 
+  Future<bool> _clipboardNotificationsEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
+  }
+
+  void _maybeNotifyCompletedTransfer({
+    required String title,
+    required String body,
+    String? destinationPath,
+  }) {
+    unawaited(() async {
+      try {
+        if (Platform.isWindows &&
+            destinationPath != null &&
+            destinationPath.trim().isNotEmpty) {
+          await WindowsShell.showTransferNotification(
+            title: title,
+            body: body,
+            destinationPath: destinationPath,
+          );
+          return;
+        }
+        if (Platform.isAndroid &&
+            destinationPath != null &&
+            destinationPath.trim().isNotEmpty) {
+          await AndroidShell.showNotification(
+            title: title,
+            body: body,
+            route: NotificationRoute.historyTransferActivity,
+            destinationPath: destinationPath,
+            payload: const <String, Object?>{'openDestination': true},
+          );
+          return;
+        }
+        _maybeNotifyWithRoute(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyTransferActivity,
+          destinationPath: destinationPath,
+        );
+      } catch (_) {
+        // Best-effort.
+      }
+    }());
+  }
+
   void _maybeNotifyWithRoute({
     required String title,
     required String body,
@@ -454,6 +1129,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }) {
     unawaited(() async {
       try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            destinationPath: destinationPath,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isAndroid && route != null) {
           await AndroidShell.showNotification(
             title: title,
@@ -474,6 +1159,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           );
           return;
         }
+        if (MacOSNotifications.supportsPendingShareHandoff) {
+          await MacOSNotifications.show(
+            title: title,
+            body: body,
+            route: route,
+            payload: payload,
+          );
+          return;
+        }
         if (Platform.isLinux && route != null) {
           await LinuxNotifications.show(
             title: title,
@@ -482,14 +1176,109 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
             destinationPath: destinationPath,
             payload: payload,
           );
+        }
+      } catch (_) {
+        // Best-effort: depends on user permission and runner support.
+      }
+    }());
+  }
+
+  List<DesktopNotificationAction> _buildMirroredNotificationActions(
+    Map<String, dynamic> event,
+  ) {
+    final actions = <DesktopNotificationAction>[];
+    if (event['isOpenable'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'open', title: 'Open'),
+      );
+    }
+    if (event['isDismissible'] == true) {
+      actions.add(
+        const DesktopNotificationAction(id: 'dismiss', title: 'Dismiss'),
+      );
+    }
+    return actions;
+  }
+
+  void _showMirroredNotificationPreview(Map<String, dynamic> event) {
+    final notificationId = event['notificationId']?.toString();
+    if (notificationId == null || notificationId.isEmpty) {
+      return;
+    }
+    final title = event['title']?.toString().trim();
+    final body = event['bodyPreview']?.toString().trim();
+    final appName = event['appName']?.toString().trim();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    final mirroredPayload = <String, Object?>{
+      'route': NotificationRoute.historyNotifications,
+      'notificationId': notificationId,
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty)
+        'sourceDeviceId': sourceDeviceId,
+      if (appName != null && appName.isNotEmpty) 'appName': appName,
+      'isOpenable': event['isOpenable'] == true,
+      'isDismissible': event['isDismissible'] == true,
+    };
+    final mirroredActions = _buildMirroredNotificationActions(event);
+    final notificationTitle = (title != null && title.isNotEmpty)
+        ? title
+        : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
+    final notificationBody = [
+      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
+      if (body != null && body.isNotEmpty) body,
+    ].join(' • ');
+
+    unawaited(() async {
+      try {
+        if (IOSNotifications.isSupported) {
+          await IOSNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
           return;
         }
-        if (Platform.isMacOS) {
+        if (Platform.isAndroid) {
+          final sourcePlatform = event['sourcePlatform']?.toString();
+          if (sourcePlatform != 'windows' &&
+              sourcePlatform != 'macos' &&
+              sourcePlatform != 'linux') {
+            return;
+          }
+          await AndroidShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
+        if (Platform.isWindows) {
+          await WindowsShell.showNotification(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+          );
+          return;
+        }
+        if (MacOSNotifications.supportsPendingShareHandoff) {
           await MacOSNotifications.show(
-            title: title,
-            body: body,
-            route: route,
-            payload: payload,
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
+          );
+          return;
+        }
+        if (Platform.isLinux) {
+          await LinuxNotifications.show(
+            title: notificationTitle,
+            body: notificationBody,
+            route: NotificationRoute.historyNotifications,
+            payload: mirroredPayload,
+            actions: mirroredActions,
           );
         }
       } catch (_) {
@@ -508,7 +1297,439 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
   }
 
-  void _bindNotifications() {}
+  void _bindPairingRequests() {
+    final client = context.read<JsonRpcRiftClient>();
+    _pairingRequestSub = client.onPairingRequest.listen((event) {
+      if (!mounted) return;
+
+      final deviceId = event['deviceId']?.toString();
+      if (deviceId == null || deviceId.isEmpty) return;
+
+      final displayName = event['displayName']?.toString();
+      _maybeNotifyWithRoute(
+        title: 'Pairing request',
+        body: displayName == null || displayName.isEmpty
+            ? 'Incoming pairing request.'
+            : 'Incoming pairing request from $displayName.',
+        route: NotificationRoute.pairing,
+        payload: <String, Object?>{
+          'deviceId': deviceId,
+          if (displayName != null && displayName.isNotEmpty)
+            'displayName': displayName,
+          if (event['fingerprint'] != null)
+            'fingerprint': event['fingerprint'].toString(),
+          if (event['expiresInMs'] != null)
+            'expiresInMs': event['expiresInMs'] as Object,
+        },
+      );
+      _openIncomingPairingRequest({
+        'deviceId': deviceId,
+        'displayName': displayName,
+        'fingerprint': event['fingerprint']?.toString(),
+        'expiresInMs': event['expiresInMs'],
+      });
+    });
+  }
+
+  void _bindNotifications() {
+    final client = context.read<JsonRpcRiftClient>();
+
+    _trustChangedSub = client.onTrustChanged.listen((event) {
+      final deviceId = event['deviceId']?.toString() ?? 'unknown device';
+      final newState = event['newState']?.toString();
+      if (newState == null || newState.isEmpty) return;
+      _maybeNotify('Trust updated', '$deviceId is now $newState.');
+    });
+
+    _pairingCompleteSub = client.onPairingComplete.listen((event) {
+      final deviceId = event['deviceId']?.toString() ?? 'trusted device';
+      final displayName = event['displayName']?.toString();
+      final label = (displayName != null && displayName.isNotEmpty)
+          ? displayName
+          : deviceId;
+      _maybeNotifyWithRoute(
+        title: 'Pairing completed',
+        body: 'Connected to $label.',
+        route: NotificationRoute.devices,
+      );
+    });
+
+    _clipboardOfferSub = client.onClipboardOffer.listen((event) {
+      final contentType = event['contentType']?.toString() ?? '';
+      final offerId = event['offerId']?.toString();
+      final sourceDeviceId =
+          event['sourceDeviceId']?.toString() ?? 'trusted device';
+      final isImage = contentType.startsWith('image/');
+      final clipboardTitle = isImage ? 'Image received' : 'Text received';
+      final clipboardBody = isImage
+          ? 'Image clipboard synced from $sourceDeviceId.'
+          : 'Text clipboard synced from $sourceDeviceId.';
+
+      if (offerId == null) return;
+
+      if ((contentType == 'text/plain' ||
+              contentType == 'clipboard' ||
+              contentType == 'image/png') &&
+          Platform.isAndroid) {
+        // Clipboard auto-fetch for Android-supported clipboard payloads.
+        unawaited(() async {
+          try {
+            final result = await client.fetchClipboardContent(offerId);
+            final contentBase64 = result['contentBase64'] as String?;
+            if (contentBase64 == null) {
+              return;
+            }
+
+            if (contentType == 'text/plain' || contentType == 'clipboard') {
+              final bytes = base64.decode(contentBase64);
+              final text = utf8.decode(bytes);
+              await Clipboard.setData(ClipboardData(text: text));
+            } else {
+              await _applyAndroidClipboardPayload(
+                contentType: contentType,
+                contentBase64: contentBase64,
+              );
+            }
+            if (await _clipboardNotificationsEnabled()) {
+              _maybeNotifyWithRoute(
+                title: clipboardTitle,
+                body: clipboardBody,
+                route: NotificationRoute.historyClipboard,
+              );
+            }
+          } catch (e) {
+            debugPrint('Auto-fetch clipboard failed: $e');
+          }
+        }());
+      } else {
+        unawaited(() async {
+          if (await _clipboardNotificationsEnabled()) {
+            _maybeNotifyWithRoute(
+              title: clipboardTitle,
+              body: clipboardBody,
+              route: NotificationRoute.historyClipboard,
+            );
+          }
+        }());
+      }
+    });
+
+    _clipboardExpiredSub = client.onClipboardExpired.listen((event) {
+      // Intentionally left empty to avoid noisy notifications
+    });
+
+    _notificationPostedSub = client.onNotificationPosted.listen((event) {
+      _showMirroredNotificationPreview(event);
+    });
+
+    _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
+      // History UI refreshes from its own stream binding; updates do not raise a
+      // second native popup to avoid noisy duplicates.
+    });
+
+    _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
+      // Native notifications are best-effort previews; removal only updates the
+      // in-app history state.
+    });
+
+    _fileOfferSub = client.onFileOffer.listen((event) {
+      final fileName = event['fileName']?.toString() ?? 'file';
+      final sourceDeviceId =
+          event['sourceDeviceId']?.toString() ?? 'trusted device';
+      _maybeNotifyWithRoute(
+        title: 'Incoming file',
+        body: '$fileName from $sourceDeviceId.',
+        route: NotificationRoute.historyIncomingOffers,
+      );
+      if (!Platform.isIOS) {
+        unawaited(_handleIncomingFileOffer(event));
+      }
+    });
+
+    _fileReadyToCommitSub = client.onFileTransferReadyToCommit.listen((event) {
+      unawaited(_publishPendingFileCommit(event));
+    });
+
+    _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
+      unawaited(_handleCompletedFileTransfer(event));
+    });
+
+    if (client.isConnected) {
+      unawaited(_recoverPendingFileCommits());
+    }
+
+    _fileFailedSub = client.onFileTransferFailed.listen((event) {
+      final fileName = event['fileName']?.toString() ?? 'file';
+      final reason = event['failureReason']?.toString() ?? 'failed';
+      _maybeNotifyWithRoute(
+        title: 'File transfer failed',
+        body: '$fileName failed: $reason.',
+        route: NotificationRoute.historyTransferActivity,
+      );
+    });
+  }
+
+  bool get _supportsDesktopFilePublication =>
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+  Future<void> _recoverPendingFileCommits() async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      return;
+    }
+    try {
+      final result = await client.listPendingFileCommits();
+      if (result is! Map) {
+        return;
+      }
+      final commits = result['commits'];
+      if (commits is! List) {
+        return;
+      }
+      for (final commit in commits.whereType<Map>()) {
+        unawaited(
+          _publishPendingFileCommit(Map<String, dynamic>.from(commit)),
+        );
+      }
+    } catch (error) {
+      if (!JsonRpcRiftClient.isMethodNotFoundError(error)) {
+        debugPrint('[File Transfer] Failed to recover pending commits: $error');
+      }
+    }
+  }
+
+  Future<void> _publishPendingFileCommit(Map<String, dynamic> commit) async {
+    if (!_supportsDesktopFilePublication) {
+      return;
+    }
+
+    final transferId = commit['transferId']?.toString();
+    final stagingPath = commit['stagingPath']?.toString();
+    final destinationPath = commit['destinationPath']?.toString();
+    final expectedSha256 = commit['sha256']?.toString();
+    final byteSize = commit['byteSize'];
+    if (transferId == null ||
+        transferId.isEmpty ||
+        stagingPath == null ||
+        stagingPath.isEmpty ||
+        destinationPath == null ||
+        destinationPath.isEmpty ||
+        expectedSha256 == null ||
+        expectedSha256.isEmpty ||
+        byteSize is! num ||
+        !_publishingTransferIds.add(transferId)) {
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final publishedPath = await publishVerifiedIncomingFile(
+        transferId: transferId,
+        stagingPath: stagingPath,
+        destinationPath: destinationPath,
+        expectedByteSize: byteSize.toInt(),
+        expectedSha256: expectedSha256,
+      );
+      try {
+        await client.confirmFileCommit(
+          transferId: transferId,
+          destinationPath: publishedPath,
+        );
+      } catch (error) {
+        debugPrint(
+          '[File Transfer] Published $transferId but confirmation is pending: $error',
+        );
+      }
+    } catch (error) {
+      try {
+        await client.failFileCommit(
+          transferId: transferId,
+          failureReason: error.toString().toLowerCase().contains('hash')
+              ? 'HashMismatch'
+              : 'PolicyDenied',
+          message: JsonRpcRiftClient.formatDisplayError(error),
+        );
+      } catch (reportError) {
+        debugPrint(
+          '[File Transfer] Failed to report publication failure for $transferId: $reportError',
+        );
+      }
+      _maybeNotifyWithRoute(
+        title: 'File save failed',
+        body:
+            '${commit['fileName']?.toString() ?? 'File'} could not be published: ${JsonRpcRiftClient.formatDisplayError(error)}',
+        route: NotificationRoute.historyTransferActivity,
+      );
+    } finally {
+      _publishingTransferIds.remove(transferId);
+    }
+  }
+
+  Future<_IncomingFileDestination?> _prepareIncomingFileDestination(
+    String fileName,
+  ) async {
+    if (Platform.isAndroid) {
+      final prepared = await AndroidShell.prepareIncomingDownload(fileName);
+      final stagingPath = prepared?['stagingPath']?.toString();
+      final displayPath = prepared?['displayPath']?.toString();
+      if (stagingPath == null ||
+          stagingPath.isEmpty ||
+          displayPath == null ||
+          displayPath.isEmpty) {
+        return null;
+      }
+      return _IncomingFileDestination(
+        transferPath: stagingPath,
+        displayPath: displayPath,
+      );
+    }
+
+    final destinationPath = await buildDefaultIncomingFilePath(fileName);
+    if (destinationPath == null || destinationPath.isEmpty) {
+      return null;
+    }
+    return _IncomingFileDestination(
+      transferPath: destinationPath,
+      displayPath: destinationPath,
+    );
+  }
+
+  Future<void> _handleCompletedFileTransfer(
+    Map<String, dynamic> event,
+  ) async {
+    final fileName = event['fileName']?.toString() ?? 'file';
+    final mediaType =
+        event['mediaType']?.toString() ?? 'application/octet-stream';
+    final peer = event['peerDeviceId']?.toString() ?? 'trusted device';
+    final daemonDestinationPath = event['destinationPath']?.toString();
+    final isIncoming = daemonDestinationPath != null &&
+        daemonDestinationPath.trim().isNotEmpty;
+    var displayDestinationPath = daemonDestinationPath;
+    var openDestinationPath = daemonDestinationPath;
+
+    if (Platform.isAndroid && isIncoming) {
+      try {
+        final published = await AndroidShell.publishIncomingDownload(
+          stagingPath: daemonDestinationPath,
+          fileName: fileName,
+          mediaType: mediaType,
+        );
+        displayDestinationPath = published?['displayPath']?.toString();
+        openDestinationPath = published?['contentUri']?.toString();
+        if (displayDestinationPath == null ||
+            displayDestinationPath.isEmpty ||
+            openDestinationPath == null ||
+            openDestinationPath.isEmpty) {
+          throw const FileSystemException(
+            'Android did not return the published download location.',
+          );
+        }
+      } catch (error) {
+        _maybeNotifyWithRoute(
+          title: 'File save failed',
+          body:
+              '$fileName was received but could not be added to Downloads: $error',
+          route: NotificationRoute.historyTransferActivity,
+        );
+        return;
+      }
+    }
+
+    final body =
+        displayDestinationPath == null || displayDestinationPath.trim().isEmpty
+            ? '$fileName ${isIncoming ? 'received from' : 'sent to'} $peer.'
+            : '$fileName saved to $displayDestinationPath.';
+    if (!Platform.isIOS) {
+      _maybeNotify(isIncoming ? 'File received' : 'File sent', body);
+    }
+    _maybeNotifyCompletedTransfer(
+      title: isIncoming ? 'File received' : 'File sent',
+      body: body,
+      destinationPath: openDestinationPath,
+    );
+  }
+
+  Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
+    final transferId = event['transferId']?.toString();
+    final fileName = event['fileName']?.toString();
+    final sourceDeviceId =
+        event['sourceDeviceId']?.toString() ?? 'trusted device';
+    if (transferId == null ||
+        transferId.isEmpty ||
+        fileName == null ||
+        fileName.isEmpty) {
+      return;
+    }
+    if (_autoAcceptingTransferIds.contains(transferId)) {
+      return;
+    }
+
+    _autoAcceptingTransferIds.add(transferId);
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final destination = await _prepareIncomingFileDestination(fileName);
+      if (destination == null) {
+        throw const FileSystemException(
+          'Could not prepare the Downloads save location.',
+        );
+      }
+
+      final shouldAccept = await _confirmIncomingFileOffer(
+        fileName: fileName,
+        sourceDeviceId: sourceDeviceId,
+        destinationPath: destination.displayPath,
+      );
+      if (shouldAccept != true) {
+        await client.rejectFileOffer(
+          transferId: transferId,
+          failureReason: 'PolicyDenied',
+          message: 'User declined incoming file transfer.',
+        );
+        _scaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(content: Text('Declined $fileName from $sourceDeviceId')),
+        );
+        return;
+      }
+
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Receiving $fileName from $sourceDeviceId...\n'
+            'Saved to: ${destination.displayPath}',
+          ),
+        ),
+      );
+      _maybeNotify(
+          'Incoming file', 'Receiving $fileName from $sourceDeviceId.');
+
+      await client.acceptFileOffer(
+        transferId: transferId,
+        destinationPath: destination.transferPath,
+        overwrite: false,
+      );
+    } catch (error) {
+      try {
+        await client.rejectFileOffer(
+          transferId: transferId,
+          failureReason: 'PolicyDenied',
+          message: 'Incoming file transfer could not be confirmed.',
+        );
+      } catch (_) {
+        // Best-effort reject if incoming transfer setup fails.
+      }
+      _maybeNotifyWithRoute(
+        title: 'Incoming file failed',
+        body: 'Could not auto-save $fileName: $error',
+        route: NotificationRoute.historyTransferActivity,
+      );
+    } finally {
+      _autoAcceptingTransferIds.remove(transferId);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -519,12 +1740,138 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       title: AppStrings.appTitle,
       theme: buildRiftTheme(),
       home: widget.hasCompletedOnboarding
-          ? AppShell(
+          ? rift_ui.AppShell(
               key: _appShellKey,
               historyRouteNotifier: _historyRouteNotifier,
               sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
             )
           : const OnboardingScreen(),
+    );
+  }
+}
+
+class _IncomingFileDestination {
+  const _IncomingFileDestination({
+    required this.transferPath,
+    required this.displayPath,
+  });
+
+  final String transferPath;
+  final String displayPath;
+}
+
+class AppShell extends StatefulWidget {
+  final ValueNotifier<String?>? historyRouteNotifier;
+  final ValueNotifier<String?>? sharedClipboardTextNotifier;
+
+  const AppShell({
+    super.key,
+    this.historyRouteNotifier,
+    this.sharedClipboardTextNotifier,
+  });
+
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.historyRouteNotifier?.value == null ? 0 : 1;
+  }
+
+  late final List<Widget> _screens = [
+    const TrustedDevicesScreen(),
+    ClipboardTransferScreen(
+      routeNotifier: widget.historyRouteNotifier,
+      sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
+    ),
+    const SecurityDashboardScreen(),
+    const OperationsScreen(),
+  ];
+
+  void showHistoryRoute(String route) {
+    setState(() {
+      _currentIndex = 1;
+    });
+    widget.historyRouteNotifier?.value = route;
+  }
+
+  void showRoute(String route) {
+    if (route == NotificationRoute.devices) {
+      setState(() {
+        _currentIndex = 0;
+      });
+      return;
+    }
+    showHistoryRoute(route);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Icon(Icons.shield, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Text('RIFT',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary)),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _screens,
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentIndex,
+        onDestinationSelected: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.devices),
+            selectedIcon: Icon(Icons.devices),
+            label: 'Devices',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.history),
+            selectedIcon: Icon(Icons.history),
+            label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.security),
+            selectedIcon: Icon(Icons.security),
+            label: 'Events',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.terminal_outlined),
+            selectedIcon: Icon(Icons.terminal),
+            label: 'Ops',
+          ),
+        ],
+      ),
     );
   }
 }

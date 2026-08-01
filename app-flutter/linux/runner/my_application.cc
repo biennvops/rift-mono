@@ -1,8 +1,10 @@
 #include "my_application.h"
 
 #include <string>
+#include <unistd.h>
 
 #include <flutter_linux/flutter_linux.h>
+#include <glib/gstdio.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -13,12 +15,23 @@
 namespace {
 
 constexpr char kDesktopClipboardChannel[] = "rift/desktop/clipboard";
+constexpr char kDesktopClipboardEventsChannel[] =
+    "rift/desktop/clipboard_events";
 constexpr char kLinuxNotificationsChannel[] = "rift/linux/notifications";
+constexpr char kLinuxSendFilesChannel[] = "rift/linux/send_files";
+constexpr char kLinuxSendFilesCallback[] = "sendFilesSelected";
 constexpr char kLinuxNotificationActionName[] = "notificationActivated";
 constexpr char kLinuxNotificationActionOpenName[] = "notificationActionOpen";
 constexpr char kLinuxNotificationActionDismissName[] =
     "notificationActionDismiss";
 std::string g_last_logged_clipboard_fingerprint;
+FlEventChannel* g_clipboard_events_channel = nullptr;
+gboolean g_emit_clipboard_events = FALSE;
+GtkClipboard* g_monitored_clipboard = nullptr;
+gulong g_clipboard_owner_change_handler = 0;
+FlMethodChannel* g_linux_send_files_channel = nullptr;
+FlValue* g_pending_send_files = nullptr;
+gboolean g_linux_send_files_ready = FALSE;
 
 std::string fingerprint_clipboard_payload(const char* content_type,
                                           const uint8_t* bytes,
@@ -262,6 +275,136 @@ void register_desktop_clipboard_channel(FlView* view) {
       g_object_unref);
 }
 
+void clipboard_owner_changed_cb(GtkClipboard* clipboard,
+                                GdkEventOwnerChange* event,
+                                gpointer user_data) {
+  if (!g_emit_clipboard_events || g_clipboard_events_channel == nullptr) {
+    return;
+  }
+
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(FlValue) value = fl_value_new_null();
+  if (!fl_event_channel_send(
+          g_clipboard_events_channel, value, nullptr, &error)) {
+    g_warning("Rift clipboard bridge: failed to send change event: %s",
+              error->message);
+  }
+}
+
+FlMethodErrorResponse* clipboard_events_listen_cb(FlEventChannel* channel,
+                                                  FlValue* args,
+                                                  gpointer user_data) {
+  g_emit_clipboard_events = TRUE;
+  return nullptr;
+}
+
+FlMethodErrorResponse* clipboard_events_cancel_cb(FlEventChannel* channel,
+                                                  FlValue* args,
+                                                  gpointer user_data) {
+  g_emit_clipboard_events = FALSE;
+  return nullptr;
+}
+
+void register_desktop_clipboard_events_channel(FlView* view) {
+  FlEngine* engine = fl_view_get_engine(view);
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_clipboard_events_channel = fl_event_channel_new(
+      messenger, kDesktopClipboardEventsChannel, FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(
+      g_clipboard_events_channel,
+      clipboard_events_listen_cb,
+      clipboard_events_cancel_cb,
+      nullptr,
+      nullptr);
+
+  g_monitored_clipboard = gtk_clipboard_get_default(gdk_display_get_default());
+  if (g_monitored_clipboard != nullptr) {
+    g_clipboard_owner_change_handler = g_signal_connect(
+        g_monitored_clipboard,
+        "owner-change",
+        G_CALLBACK(clipboard_owner_changed_cb),
+        nullptr);
+  }
+}
+
+FlValue* build_linux_send_file_items(GFile** files, gint file_count) {
+  g_autoptr(FlValue) items = fl_value_new_list();
+  for (gint i = 0; i < file_count; ++i) {
+    g_autofree gchar* path = g_file_get_path(files[i]);
+    if (path == nullptr ||
+        !g_file_test(path, G_FILE_TEST_IS_REGULAR) ||
+        g_access(path, R_OK) != 0) {
+      continue;
+    }
+
+    g_autofree gchar* file_name = g_path_get_basename(path);
+    g_autoptr(FlValue) item = fl_value_new_map();
+    fl_value_set_string_take(
+        item, "localPath", fl_value_new_string(path));
+    fl_value_set_string_take(
+        item, "fileName", fl_value_new_string(file_name));
+    fl_value_append(items, item);
+  }
+  return fl_value_ref(items);
+}
+
+void dispatch_linux_send_file_items(FlValue* items) {
+  if (fl_value_get_length(items) == 0) {
+    return;
+  }
+
+  if (!g_linux_send_files_ready || g_linux_send_files_channel == nullptr) {
+    if (g_pending_send_files == nullptr) {
+      g_pending_send_files = fl_value_new_list();
+    }
+    for (size_t i = 0; i < fl_value_get_length(items); ++i) {
+      fl_value_append(
+          g_pending_send_files, fl_value_get_list_value(items, i));
+    }
+    return;
+  }
+
+  fl_method_channel_invoke_method(
+      g_linux_send_files_channel,
+      kLinuxSendFilesCallback,
+      items,
+      nullptr,
+      nullptr,
+      nullptr);
+}
+
+void linux_send_files_method_call_cb(FlMethodChannel* channel,
+                                     FlMethodCall* method_call,
+                                     gpointer user_data) {
+  const gchar* method = fl_method_call_get_name(method_call);
+  g_autoptr(FlMethodResponse) response = nullptr;
+  if (strcmp(method, "consumePendingItems") == 0) {
+    g_linux_send_files_ready = TRUE;
+    g_autoptr(FlValue) pending = g_pending_send_files == nullptr
+                                     ? fl_value_new_list()
+                                     : fl_value_ref(g_pending_send_files);
+    g_clear_pointer(&g_pending_send_files, fl_value_unref);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(pending));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+  fl_method_call_respond(method_call, response, nullptr);
+}
+
+void register_linux_send_files_channel(FlView* view) {
+  FlEngine* engine = fl_view_get_engine(view);
+  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(engine);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_linux_send_files_channel = fl_method_channel_new(
+      messenger, kLinuxSendFilesChannel, FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      g_linux_send_files_channel,
+      linux_send_files_method_call_cb,
+      nullptr,
+      nullptr);
+}
+
 std::string encode_notification_payload(const gchar* route,
                                         const gchar* destination_path,
                                         FlValue* payload) {
@@ -358,13 +501,16 @@ struct _MyApplication {
   char** dart_entrypoint_arguments;
   FlMethodChannel* linux_notifications_channel;
   gchar* pending_notification_payload;
+  gboolean start_hidden;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  if (!self->start_hidden) {
+    gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  }
 }
 
 static void dispatch_linux_notification_payload(MyApplication* self,
@@ -542,6 +688,13 @@ static void register_linux_notifications_channel(MyApplication* self,
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  GtkWindow* existing_window =
+      gtk_application_get_active_window(GTK_APPLICATION(application));
+  if (existing_window != nullptr) {
+    gtk_window_present(existing_window);
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -572,15 +725,6 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "Rift");
   }
 
-  {
-    GdkPixbuf* icon = gdk_pixbuf_new_from_file(
-        "data/flutter_assets/assets/images/rift_logo.png", nullptr);
-    if (icon != nullptr) {
-      gtk_window_set_icon(window, icon);
-      g_object_unref(icon);
-    }
-  }
-
   gtk_window_set_default_size(window, 1280, 720);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
@@ -604,9 +748,23 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
   register_desktop_clipboard_channel(view);
+  register_desktop_clipboard_events_channel(view);
+  register_linux_send_files_channel(view);
   register_linux_notifications_channel(self, view);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
+}
+
+static void my_application_open(GApplication* application,
+                                GFile** files,
+                                gint file_count,
+                                const gchar* hint) {
+  MyApplication* self = MY_APPLICATION(application);
+  self->start_hidden = FALSE;
+  g_application_activate(application);
+
+  g_autoptr(FlValue) items = build_linux_send_file_items(files, file_count);
+  dispatch_linux_send_file_items(items);
 }
 
 // Implements GApplication::local_command_line.
@@ -616,6 +774,18 @@ static gboolean my_application_local_command_line(GApplication* application,
   MyApplication* self = MY_APPLICATION(application);
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
+  self->start_hidden = FALSE;
+  g_autoptr(GPtrArray) files =
+      g_ptr_array_new_with_free_func(g_object_unref);
+  for (gint i = 1; (*arguments)[i] != nullptr; ++i) {
+    if (g_strcmp0((*arguments)[i], "--background") == 0) {
+      self->start_hidden = TRUE;
+      continue;
+    }
+    if ((*arguments)[i][0] != '-') {
+      g_ptr_array_add(files, g_file_new_for_commandline_arg((*arguments)[i]));
+    }
+  }
 
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {
@@ -624,7 +794,16 @@ static gboolean my_application_local_command_line(GApplication* application,
     return TRUE;
   }
 
-  g_application_activate(application);
+  if (files->len > 0) {
+    self->start_hidden = FALSE;
+    g_application_open(
+        application,
+        reinterpret_cast<GFile**>(files->pdata),
+        static_cast<gint>(files->len),
+        "");
+  } else {
+    g_application_activate(application);
+  }
   *exit_status = 0;
 
   return TRUE;
@@ -676,6 +855,18 @@ static void my_application_shutdown(GApplication* application) {
 // Implements GObject::dispose.
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
+  if (g_monitored_clipboard != nullptr &&
+      g_clipboard_owner_change_handler != 0) {
+    g_signal_handler_disconnect(
+        g_monitored_clipboard, g_clipboard_owner_change_handler);
+    g_clipboard_owner_change_handler = 0;
+  }
+  g_monitored_clipboard = nullptr;
+  g_emit_clipboard_events = FALSE;
+  g_clear_object(&g_clipboard_events_channel);
+  g_linux_send_files_ready = FALSE;
+  g_clear_object(&g_linux_send_files_channel);
+  g_clear_pointer(&g_pending_send_files, fl_value_unref);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
   g_clear_object(&self->linux_notifications_channel);
   g_clear_pointer(&self->pending_notification_payload, g_free);
@@ -684,6 +875,7 @@ static void my_application_dispose(GObject* object) {
 
 static void my_application_class_init(MyApplicationClass* klass) {
   G_APPLICATION_CLASS(klass)->activate = my_application_activate;
+  G_APPLICATION_CLASS(klass)->open = my_application_open;
   G_APPLICATION_CLASS(klass)->local_command_line =
       my_application_local_command_line;
   G_APPLICATION_CLASS(klass)->startup = my_application_startup;
@@ -694,6 +886,7 @@ static void my_application_class_init(MyApplicationClass* klass) {
 static void my_application_init(MyApplication* self) {
   self->linux_notifications_channel = nullptr;
   self->pending_notification_payload = nullptr;
+  self->start_hidden = FALSE;
 }
 
 MyApplication* my_application_new() {
@@ -705,5 +898,8 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     static_cast<GApplicationFlags>(
+                                         G_APPLICATION_DEFAULT_FLAGS |
+                                         G_APPLICATION_HANDLES_OPEN),
+                                     nullptr));
 }

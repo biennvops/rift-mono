@@ -5,6 +5,11 @@ import 'package:stream_channel/stream_channel.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/ios_media_playback.dart';
+import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
   StreamController<String>? _daemonToApp;
@@ -268,6 +273,7 @@ class MockTransport implements IpcTransport {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'IdentityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]
@@ -368,6 +374,8 @@ class MockTransport implements IpcTransport {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('JsonRpcRiftClient', () {
     late MockTransport transport;
     late JsonRpcRiftClient client;
@@ -398,6 +406,7 @@ void main() {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'identityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]
@@ -665,6 +674,7 @@ void main() {
       await client.connect();
 
       final offerFuture = client.onFileOffer.first;
+      final readyFuture = client.onFileTransferReadyToCommit.first;
       final progressFuture = client.onFileTransferProgress.first;
       final completedFuture = client.onFileTransferCompleted.first;
       final failedFuture = client.onFileTransferFailed.first;
@@ -679,6 +689,18 @@ void main() {
         'ChunkSize': 262144,
         'ChunkCount': 1,
         'ExpiresAt': '2026-06-30T02:10:00Z',
+      });
+      transport.emitNotification('rift.onFileTransferReadyToCommit', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'Sha256': 'abc123',
+        'StagingPath': '/private/rift/incoming/content.part',
+        'DestinationPath': '/home/user/Downloads/demo.txt',
+        'State': 'ready_to_commit',
       });
       transport.emitNotification('rift.onFileTransferProgress', {
         'TransferId': 'transfer-1',
@@ -717,6 +739,18 @@ void main() {
         'chunkSize': 262144,
         'chunkCount': 1,
         'expiresAt': '2026-06-30T02:10:00Z',
+      });
+      expect(await readyFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'sha256': 'abc123',
+        'stagingPath': '/private/rift/incoming/content.part',
+        'destinationPath': '/home/user/Downloads/demo.txt',
+        'state': 'ready_to_commit',
       });
       expect(await progressFuture, {
         'transferId': 'transfer-1',
@@ -1102,8 +1136,12 @@ void main() {
       };
 
       final listed = await client.listMediaPlayback();
-      final detailed = await client.getMediaPlayback('playback-1');
+      final detailed = await client.getMediaPlayback(
+        sourceDeviceId: 'rift-peer',
+        playbackId: 'playback-1',
+      );
       final actionResult = await client.performMediaPlaybackAction(
+        sourceDeviceId: 'rift-peer',
         playbackId: 'playback-1',
         action: 'pause',
       );
@@ -1124,10 +1162,166 @@ void main() {
             )
             .single['params'],
         {
+          'sourceDeviceId': 'rift-peer',
           'playbackId': 'playback-1',
           'action': 'pause',
         },
       );
+    });
+
+    test('Android playback actions include the source device identity',
+        () async {
+      const shellChannel = MethodChannel('rift/android/shell');
+      AndroidShell.debugIsAndroidOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shellChannel, (call) async => true);
+      await client.connect();
+      final coordinator = AndroidRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          }),
+        );
+
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          },
+        );
+      } finally {
+        await coordinator.dispose();
+        AndroidShell.debugIsAndroidOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(shellChannel, null);
+      }
+    });
+
+    test('iOS mirrors playback state and routes native seek actions', () async {
+      const mediaPlaybackChannel = MethodChannel('rift/ios/media_playback');
+      final nativeCalls = <MethodCall>[];
+      IOSMediaPlayback.debugIsIOSOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-ios-1',
+            'sourceDeviceId': 'rift-mac',
+            'sourcePlatform': 'macos',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Test Song',
+            'artist': 'Test Artist',
+            'album': 'Test Album',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          }
+        ],
+      };
+      await client.connect();
+      final coordinator = IOSRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'show',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-mac');
+        expect(playback['playbackId'], 'playback-ios-1');
+        expect(playback['title'], 'Test Song');
+        expect(playback['positionMs'], 1500);
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+
+        transport.listMediaPlaybackResult = {
+          'playbacks': [
+            {
+              ...Map<String, dynamic>.from(
+                (transport.listMediaPlaybackResult['playbacks'] as List).single
+                    as Map,
+              ),
+              'playbackState': 'paused',
+              'positionMs': 42000,
+              'canPlay': true,
+              'canPause': false,
+              'updatedAt': '2026-07-19T17:30:01Z',
+            }
+          ],
+        };
+        transport.emitNotification('rift.onMediaPlaybackActionResult', {
+          'playbackId': 'playback-ios-1',
+          'sourceDeviceId': 'rift-mac',
+          'action': 'seek',
+          'operationId': 'operation-media-1',
+          'state': 'Done',
+          'success': true,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final confirmedPlayback = Map<String, dynamic>.from(
+          (nativeCalls.lastWhere((call) => call.method == 'show').arguments
+              as Map)['playback'] as Map,
+        );
+        expect(confirmedPlayback['playbackState'], 'paused');
+        expect(confirmedPlayback['positionMs'], 42000);
+      } finally {
+        await coordinator.dispose();
+        IOSMediaPlayback.debugIsIOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(nativeCalls.map((call) => call.method), contains('clear'));
     });
 
     test('should surface getOperation not found JSON-RPC errors', () async {

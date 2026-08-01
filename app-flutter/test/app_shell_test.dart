@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,11 +7,10 @@ import 'package:provider/provider.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/platform/linux_notifications.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
+import 'package:app_flutter/src/platform/ios_notifications.dart';
+import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/src/ui/local_events_notifier.dart';
-import 'package:app_flutter/src/ui/app_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -65,18 +63,6 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
-      const Stream.empty();
-
-  @override
-  Stream<Map<String, dynamic>> get onMediaPlaybackUpdated =>
-      const Stream.empty();
-
-  @override
-  Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
-      const Stream.empty();
-
-  @override
   Stream<Map<String, dynamic>> get onSendQueueChanged =>
       const Stream<Map<String, dynamic>>.empty();
 
@@ -118,12 +104,6 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> listClipboardOffers() async => {'offers': []};
-
-  @override
-  Future<dynamic> listMediaPlayback() async => {'playback': []};
-
-  @override
-  Future<dynamic> listNotifications() async => {'notifications': []};
 
   @override
   Future<bool> supportsSendQueue() async => false;
@@ -170,6 +150,7 @@ void main() {
   late StreamController<Map<String, dynamic>> notificationPostedController;
   late StreamController<Map<String, dynamic>> notificationUpdatedController;
   late StreamController<Map<String, dynamic>> notificationRemovedController;
+  late StreamController<Map<String, dynamic>> fileReadyToCommitController;
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
 
@@ -204,6 +185,11 @@ void main() {
     );
   }
 
+  test('desktop background startup is enabled only by its launch flag', () {
+    expect(shouldStartDesktopHidden(const <String>[]), isFalse);
+    expect(shouldStartDesktopHidden(const <String>['--background']), isTrue);
+  });
+
   final mockDeviceInfo = {
     'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
     'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
@@ -216,9 +202,9 @@ void main() {
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
-    MacOSNotifications.debugIsMacOSOverride = true;
-    WindowsShell.debugIsWindowsOverride = false;
-    LinuxNotifications.debugIsLinuxOverride = false;
+    setMacOSNotificationBridgeOverride(true);
+    IOSNotifications.debugIsIOSOverride = false;
+    WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
     notificationPostedController =
@@ -226,6 +212,8 @@ void main() {
     notificationUpdatedController =
         StreamController<Map<String, dynamic>>.broadcast();
     notificationRemovedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    fileReadyToCommitController =
         StreamController<Map<String, dynamic>>.broadcast();
     isConnected = true;
     macOsCalls.clear();
@@ -262,18 +250,14 @@ void main() {
         .thenAnswer((_) => notificationUpdatedController.stream);
     when(() => mockClient.onNotificationRemoved)
         .thenAnswer((_) => notificationRemovedController.stream);
-    when(() => mockClient.onMediaPlaybackPosted)
-        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
-    when(() => mockClient.onMediaPlaybackUpdated)
-        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
-    when(() => mockClient.onMediaPlaybackRemoved)
-        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onNotificationActionResult)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferReadyToCommit)
+        .thenAnswer((_) => fileReadyToCommitController.stream);
     when(() => mockClient.onFileTransferCompleted)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferFailed)
@@ -292,13 +276,20 @@ void main() {
         )).thenAnswer((_) async => {'operations': [], 'total': 0});
     when(() => mockClient.listClipboardOffers())
         .thenAnswer((_) async => {'offers': []});
-    when(() => mockClient.listMediaPlayback())
-        .thenAnswer((_) async => {'playback': []});
-    when(() => mockClient.listNotifications())
-        .thenAnswer((_) async => {'notifications': []});
     when(() => mockClient.supportsSendQueue()).thenAnswer((_) async => false);
     when(() => mockClient.listSendQueue())
         .thenAnswer((_) async => {'items': []});
+    when(() => mockClient.listPendingFileCommits())
+        .thenAnswer((_) async => {'commits': []});
+    when(() => mockClient.confirmFileCommit(
+          transferId: any(named: 'transferId'),
+          destinationPath: any(named: 'destinationPath'),
+        )).thenAnswer((_) async => {'committed': true});
+    when(() => mockClient.failFileCommit(
+          transferId: any(named: 'transferId'),
+          failureReason: any(named: 'failureReason'),
+          message: any(named: 'message'),
+        )).thenAnswer((_) async => {'failed': true});
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
     when(() => mockClient.listTrustedPeers()).thenAnswer(
@@ -365,13 +356,6 @@ void main() {
         return null;
       },
     );
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-      const MethodChannel('desktop_drop'),
-      (call) async {
-        return null;
-      },
-    );
   });
 
   tearDown(() {
@@ -379,11 +363,18 @@ void main() {
     notificationPostedController.close();
     notificationUpdatedController.close();
     notificationRemovedController.close();
-    MacOSNotifications.debugIsMacOSOverride = null;
+    fileReadyToCommitController.close();
+    setMacOSNotificationBridgeOverride(null);
+    IOSNotifications.debugIsIOSOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
       null,
     );
   });
@@ -400,104 +391,56 @@ void main() {
     expect(find.text('Devices'), findsOneWidget);
     expect(find.text('Activity'), findsOneWidget);
     expect(find.text('Security'), findsOneWidget);
-    expect(find.text('Rift'), findsOneWidget);
+    expect(find.text('Operations'), findsOneWidget);
     expect(find.byTooltip('Settings'), findsWidgets);
-    expect(find.byTooltip('Rift Activity'), findsWidgets);
+    expect(find.text('Rift'), findsOneWidget);
   });
 
-  testWidgets('App shell uses compact navigation on phone-sized layouts',
+  testWidgets('tray right-click opens the configured context menu',
       (WidgetTester tester) async {
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const trayChannel = MethodChannel('tray_manager');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(trayChannel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(trayChannel, null);
+    });
 
     await tester.pumpWidget(buildRiftApp(mockClient));
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    await tester.pumpAndSettle();
+    final dynamic appState = tester.state(find.byType(RiftApp));
+    appState.onTrayIconRightMouseDown();
+    await tester.pump();
 
-    expect(find.byType(NavigationBar), findsOneWidget);
-    final navContext = tester.element(find.byType(NavigationBar));
-    final labelStyle = NavigationBarTheme.of(navContext)
-        .labelTextStyle
-        ?.resolve({WidgetState.selected});
-    expect(labelStyle?.fontSize, 10);
-    expect(find.widgetWithText(FilledButton, 'Add Device'), findsNothing);
+    expect(calls.map((call) => call.method), contains('popUpContextMenu'));
   });
 
-  testWidgets('horizontal swipes traverse Activity tabs before main navigation',
+  testWidgets('AppShell applies a history route queued before mount',
       (WidgetTester tester) async {
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    await tester.pumpWidget(buildRiftApp(mockClient));
-    await tester.pump(const Duration(milliseconds: 300));
+    final routeNotifier = ValueNotifier<String?>(NotificationRoute.historySend);
 
-    int selectedMainSection() =>
-        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
-
-    final mainSwipeArea = find.byKey(
-      const ValueKey('main-navigation-swipe-area'),
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          Provider<JsonRpcRiftClient>.value(value: mockClient),
+          ChangeNotifierProvider<SendQueueController>(
+            create: (_) => SendQueueController(mockClient, false),
+          ),
+        ],
+        child: MaterialApp(
+          home: AppShell(historyRouteNotifier: routeNotifier),
+        ),
+      ),
     );
-    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
-    await mouse.down(tester.getCenter(mainSwipeArea));
-    await mouse.moveBy(const Offset(-120, 0));
-    await mouse.up();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump();
 
-    expect(selectedMainSection(), 1);
     expect(
-      find.byKey(const ValueKey('history-section-content-clipboard')),
-      findsOneWidget,
-    );
-
-    final activitySwipeArea = find.byKey(
-      const ValueKey('activity-section-swipe-area'),
-    );
-    for (final section in ['send', 'incomingOffers', 'transferActivity']) {
-      await tester.drag(activitySwipeArea, const Offset(-120, 0));
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        find.byKey(ValueKey('history-section-content-$section')),
-        findsOneWidget,
-      );
-      expect(selectedMainSection(), 1);
-      expect(tester.takeException(), isNull, reason: 'after $section swipe');
-    }
-
-    await tester.drag(activitySwipeArea, const Offset(-120, 0));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(selectedMainSection(), 2);
-    expect(tester.takeException(), isNull, reason: 'after Operations swipe');
-
-    await tester.drag(mainSwipeArea, const Offset(120, 0));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(selectedMainSection(), 1);
-
-    for (final section in ['incomingOffers', 'send', 'clipboard']) {
-      await tester.drag(activitySwipeArea, const Offset(120, 0));
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        find.byKey(ValueKey('history-section-content-$section')),
-        findsOneWidget,
-      );
-      expect(selectedMainSection(), 1);
-    }
-
-    await tester.drag(activitySwipeArea, const Offset(120, 0));
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(selectedMainSection(), 0);
-    expect(tester.takeException(), isNull, reason: 'after Devices swipe');
-  });
-
-  testWidgets('App shell caps content width on wide desktop layouts',
-      (WidgetTester tester) async {
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-
-    await tester.pumpWidget(buildRiftApp(mockClient));
-    await tester.binding.setSurfaceSize(const Size(1800, 1000));
-    await tester.pumpAndSettle();
-
-    expect(tester.getSize(find.byType(AppShell)).width, 1800);
-    expect(find.byType(NavigationBar), findsNothing);
-    expect(find.widgetWithText(FilledButton, 'Add Device'), findsOneWidget);
-    expect(tester.getSize(find.byType(IndexedStack).first).width, 1280);
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        1);
+    expect(routeNotifier.value, isNull);
   });
 
   test('MockClient getDeviceInfo test', () async {
@@ -529,11 +472,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Linux Laptop'), findsOneWidget);
+    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Approve'),
+    final approveButton = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });
@@ -572,7 +515,7 @@ void main() {
   testWidgets('App shell consumes pending macOS share payload on startup',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
-    MacOSNotifications.debugIsMacOSOverride = true;
+    setMacOSNotificationBridgeOverride(true);
     final channel = const MethodChannel('rift.permissions');
     var consumedPendingShareItems = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -670,6 +613,54 @@ void main() {
       <String, String>{'id': 'open', 'title': 'Open'},
       <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
     ]);
+  });
+
+  testWidgets('iOS consumes launch actions without requesting permission',
+      (WidgetTester tester) async {
+    setMacOSNotificationBridgeOverride(false);
+    IOSNotifications.debugIsIOSOverride = true;
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
+      (call) async {
+        calls.add(call);
+        switch (call.method) {
+          case 'requestPermission':
+          case 'showNotification':
+            return true;
+          case 'consumeLaunchAction':
+            return null;
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-ios',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Hello iPhone',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    expect(calls.any((call) => call.method == 'requestPermission'), isFalse);
+    expect(calls.any((call) => call.method == 'consumeLaunchAction'), isTrue);
+    final showCall =
+        calls.lastWhere((call) => call.method == 'showNotification');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], NotificationRoute.historyNotifications);
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'rift-peer-1 • Hello iPhone');
   });
 
   testWidgets(
