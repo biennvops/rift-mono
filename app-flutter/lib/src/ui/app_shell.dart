@@ -7,11 +7,12 @@ import '../../screens/trusted_devices_screen.dart';
 import '../../screens/clipboard_transfer_screen.dart';
 import '../../screens/operations_screen.dart';
 import '../../screens/settings_screen.dart';
-import '../../screens/notifications_and_media_screen.dart';
+import '../../screens/local_activity_screen.dart';
 import '../../screens/pair_device_screen.dart';
 import '../file_transfer/send_queue_controller.dart';
 import '../platform/notification_route.dart';
 import '../ui/local_events_notifier.dart';
+import '../ui/theme.dart';
 import '../../widgets/file_drop_overlay.dart';
 import '../../widgets/rift_snackbar.dart';
 
@@ -32,8 +33,9 @@ class AppShell extends StatefulWidget {
 class AppShellState extends State<AppShell> {
   int _currentIndex = 0;
   bool _isSidebarCollapsed = false;
-  double _sidebarWidth = 280.0;
+  double _sidebarWidth = RiftDesign.sidebarWidth;
   bool _isDragOverlayVisible = false;
+  double _horizontalDragDistance = 0;
 
   String _guessMediaTypeFromName(String fileName) {
     final normalized = fileName.toLowerCase();
@@ -98,6 +100,7 @@ class AppShellState extends State<AppShell> {
     ClipboardTransferScreen(
       routeNotifier: widget.historyRouteNotifier,
       sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
+      onBoundarySwipe: _handleActivityBoundarySwipe,
     ),
     const OperationsScreen(),
     const SecurityDashboardScreen(),
@@ -112,8 +115,67 @@ class AppShellState extends State<AppShell> {
   }
 
   void showNotificationsRoute() {
-    Navigator.push(context,
-        MaterialPageRoute(builder: (_) => const NotificationsAndMediaScreen()));
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        final theme = Theme.of(sheetContext);
+        return SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.72,
+            child: Container(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(RiftDesign.radiusXl),
+                ),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: LocalActivityPanel(
+                onClose: () => Navigator.of(sheetContext).pop(),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _handleActivityBoundarySwipe(int direction) {
+    _moveToMainSection(direction);
+  }
+
+  void _moveToMainSection(int direction) {
+    if (_currentIndex < 0 || _currentIndex > 3) return;
+    final nextIndex = (_currentIndex + direction).clamp(0, 3);
+    if (nextIndex == _currentIndex) return;
+    setState(() => _currentIndex = nextIndex);
+  }
+
+  void _handleMainHorizontalDragEnd(DragEndDetails details) {
+    if (_currentIndex == 1) return;
+    final velocity = details.primaryVelocity ?? 0;
+    if (_horizontalDragDistance.abs() < 48 && velocity.abs() < 350) {
+      return;
+    }
+    final direction = velocity.abs() >= 350
+        ? (velocity < 0 ? 1 : -1)
+        : (_horizontalDragDistance < 0 ? 1 : -1);
+    _moveToMainSection(direction);
+  }
+
+  Widget _buildMainSwipeArea(Widget child) {
+    return GestureDetector(
+      key: const ValueKey('main-navigation-swipe-area'),
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: _handleMainHorizontalDragEnd,
+      child: child,
+    );
   }
 
   void showRoute(String route) {
@@ -138,7 +200,7 @@ class AppShellState extends State<AppShell> {
             _currentIndex = index;
           });
         },
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(RiftDesign.radius),
         child: Container(
           padding: EdgeInsets.symmetric(
               horizontal: _isSidebarCollapsed ? 0 : 16, vertical: 12),
@@ -146,7 +208,7 @@ class AppShellState extends State<AppShell> {
               _isSidebarCollapsed ? Alignment.center : Alignment.centerLeft,
           decoration: BoxDecoration(
             color: isSelected ? const Color(0xFF0047AB) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(RiftDesign.radius),
           ),
           child: Row(
             mainAxisSize:
@@ -195,8 +257,8 @@ class AppShellState extends State<AppShell> {
           if (_isSidebarCollapsed) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: Image.asset('assets/images/rift_logo.png',
-                  width: 44, height: 44, fit: BoxFit.cover),
+              child: Image.asset('assets/images/rift_nav_logo.png',
+                  width: 44, height: 44, fit: BoxFit.contain),
             ),
             const SizedBox(width: 12),
             Text(
@@ -230,7 +292,7 @@ class AppShellState extends State<AppShell> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(RiftDesign.radius),
                   ),
                 ),
               ),
@@ -239,7 +301,7 @@ class AppShellState extends State<AppShell> {
           _TopBarPopoverButton(
             icon: Icons.notifications_outlined,
             activeIcon: Icons.notifications,
-            tooltip: 'Notifications',
+            tooltip: 'Rift Activity',
             offset: const Offset(-340, 48),
             badge:
                 context.select<LocalEventsNotifier, int>((n) => n.unreadCount),
@@ -324,15 +386,22 @@ class AppShellState extends State<AppShell> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: LocalEventsPanel(onClose: close),
+        child: LocalActivityPanel(onClose: close),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          _buildForWidth(context, constraints.maxWidth),
+    );
+  }
+
+  Widget _buildForWidth(BuildContext context, double availableWidth) {
     final theme = Theme.of(context);
-    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final isDesktop = availableWidth >= RiftDesign.compactBreakpoint;
 
     Widget content;
     if (isDesktop) {
@@ -342,7 +411,7 @@ class AppShellState extends State<AppShell> {
             // Sidebar
             Container(
               width: _isSidebarCollapsed ? 88 : _sidebarWidth,
-              color: const Color(0xFF213145), // inverse-surface
+              color: RiftDesign.sidebar,
               padding: EdgeInsets.all(_isSidebarCollapsed ? 16 : 24),
               child: Column(
                 crossAxisAlignment: _isSidebarCollapsed
@@ -364,8 +433,8 @@ class AppShellState extends State<AppShell> {
                       children: [
                         ClipRRect(
                           borderRadius: BorderRadius.circular(12),
-                          child: Image.asset('assets/images/rift_logo.png',
-                              width: 52, height: 52, fit: BoxFit.cover),
+                          child: Image.asset('assets/images/rift_nav_logo.png',
+                              width: 52, height: 52, fit: BoxFit.contain),
                         ),
                         if (!_isSidebarCollapsed) ...[
                           const SizedBox(width: 16),
@@ -451,9 +520,19 @@ class AppShellState extends State<AppShell> {
                 children: [
                   _buildDesktopTopBar(context),
                   Expanded(
-                    child: IndexedStack(
-                      index: _currentIndex,
-                      children: _screens,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: RiftDesign.contentMaxWidth,
+                        ),
+                        child: _buildMainSwipeArea(
+                          IndexedStack(
+                            index: _currentIndex,
+                            children: _screens,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -484,8 +563,8 @@ class AppShellState extends State<AppShell> {
                   children: [
                     ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.asset('assets/images/rift_logo.png',
-                          width: 32, height: 32, fit: BoxFit.cover),
+                      child: Image.asset('assets/images/rift_nav_logo.png',
+                          width: 32, height: 32, fit: BoxFit.contain),
                     ),
                     const SizedBox(width: 12),
                     Text(
@@ -514,9 +593,11 @@ class AppShellState extends State<AppShell> {
               ),
               // Content
               Expanded(
-                child: IndexedStack(
-                  index: _currentIndex,
-                  children: _screens,
+                child: _buildMainSwipeArea(
+                  IndexedStack(
+                    index: _currentIndex,
+                    children: _screens,
+                  ),
                 ),
               ),
             ],
@@ -528,49 +609,61 @@ class AppShellState extends State<AppShell> {
             border: Border(
                 top: BorderSide(color: theme.colorScheme.outlineVariant)),
           ),
-          child: NavigationBar(
-            height: 64,
-            selectedIndex: mobileNavIndex == -1 ? 0 : mobileNavIndex,
-            backgroundColor: Colors.transparent,
-            elevation: 0,
-            indicatorColor: mobileNavIndex == -1
-                ? Colors.transparent
-                : theme.colorScheme.primary.withValues(alpha: 0.08),
-            onDestinationSelected: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
-            destinations: [
-              NavigationDestination(
-                icon: Icon(Icons.devices_outlined,
-                    size: 22, color: theme.colorScheme.outline),
-                selectedIcon: Icon(Icons.devices,
-                    size: 22, color: theme.colorScheme.primary),
-                label: 'Devices',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.history_outlined,
-                    size: 22, color: theme.colorScheme.outline),
-                selectedIcon: Icon(Icons.history,
-                    size: 22, color: theme.colorScheme.primary),
-                label: 'Activity',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.route_outlined,
-                    size: 22, color: theme.colorScheme.outline),
-                selectedIcon: Icon(Icons.route,
-                    size: 22, color: theme.colorScheme.primary),
-                label: 'Operations',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.security_outlined,
-                    size: 22, color: theme.colorScheme.outline),
-                selectedIcon: Icon(Icons.security,
-                    size: 22, color: theme.colorScheme.primary),
-                label: 'Security',
-              ),
-            ],
+          child: NavigationBarTheme(
+            data: NavigationBarThemeData(
+              labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                return theme.textTheme.labelSmall?.copyWith(
+                  fontSize: 10,
+                  fontWeight: states.contains(WidgetState.selected)
+                      ? FontWeight.w600
+                      : FontWeight.w500,
+                );
+              }),
+            ),
+            child: NavigationBar(
+              height: 64,
+              selectedIndex: mobileNavIndex == -1 ? 0 : mobileNavIndex,
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              indicatorColor: mobileNavIndex == -1
+                  ? Colors.transparent
+                  : theme.colorScheme.primary.withValues(alpha: 0.08),
+              onDestinationSelected: (index) {
+                setState(() {
+                  _currentIndex = index;
+                });
+              },
+              destinations: [
+                NavigationDestination(
+                  icon: Icon(Icons.devices_outlined,
+                      size: 22, color: theme.colorScheme.outline),
+                  selectedIcon: Icon(Icons.devices,
+                      size: 22, color: theme.colorScheme.primary),
+                  label: 'Devices',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.history_outlined,
+                      size: 22, color: theme.colorScheme.outline),
+                  selectedIcon: Icon(Icons.history,
+                      size: 22, color: theme.colorScheme.primary),
+                  label: 'Activity',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.route_outlined,
+                      size: 22, color: theme.colorScheme.outline),
+                  selectedIcon: Icon(Icons.route,
+                      size: 22, color: theme.colorScheme.primary),
+                  label: 'Operations',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.security_outlined,
+                      size: 22, color: theme.colorScheme.outline),
+                  selectedIcon: Icon(Icons.security,
+                      size: 22, color: theme.colorScheme.primary),
+                  label: 'Security',
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -884,7 +977,7 @@ class _MobileBellButton extends StatelessWidget {
       children: [
         IconButton(
           icon: const Icon(Icons.notifications_outlined),
-          tooltip: 'Notifications',
+          tooltip: 'Rift Activity',
           color: theme.colorScheme.onSurfaceVariant,
           onPressed: onTap,
         ),

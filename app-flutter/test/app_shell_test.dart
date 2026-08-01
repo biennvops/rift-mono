@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +12,7 @@ import 'package:app_flutter/src/platform/linux_notifications.dart';
 import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/src/ui/local_events_notifier.dart';
+import 'package:app_flutter/src/ui/app_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -400,7 +402,102 @@ void main() {
     expect(find.text('Security'), findsOneWidget);
     expect(find.text('Rift'), findsOneWidget);
     expect(find.byTooltip('Settings'), findsWidgets);
-    expect(find.byTooltip('Notifications'), findsWidgets);
+    expect(find.byTooltip('Rift Activity'), findsWidgets);
+  });
+
+  testWidgets('App shell uses compact navigation on phone-sized layouts',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(NavigationBar), findsOneWidget);
+    final navContext = tester.element(find.byType(NavigationBar));
+    final labelStyle = NavigationBarTheme.of(navContext)
+        .labelTextStyle
+        ?.resolve({WidgetState.selected});
+    expect(labelStyle?.fontSize, 10);
+    expect(find.widgetWithText(FilledButton, 'Add Device'), findsNothing);
+  });
+
+  testWidgets('horizontal swipes traverse Activity tabs before main navigation',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    int selectedMainSection() =>
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
+
+    final mainSwipeArea = find.byKey(
+      const ValueKey('main-navigation-swipe-area'),
+    );
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.down(tester.getCenter(mainSwipeArea));
+    await mouse.moveBy(const Offset(-120, 0));
+    await mouse.up();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(selectedMainSection(), 1);
+    expect(
+      find.byKey(const ValueKey('history-section-content-clipboard')),
+      findsOneWidget,
+    );
+
+    final activitySwipeArea = find.byKey(
+      const ValueKey('activity-section-swipe-area'),
+    );
+    for (final section in ['send', 'incomingOffers', 'transferActivity']) {
+      await tester.drag(activitySwipeArea, const Offset(-120, 0));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.byKey(ValueKey('history-section-content-$section')),
+        findsOneWidget,
+      );
+      expect(selectedMainSection(), 1);
+      expect(tester.takeException(), isNull, reason: 'after $section swipe');
+    }
+
+    await tester.drag(activitySwipeArea, const Offset(-120, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(selectedMainSection(), 2);
+    expect(tester.takeException(), isNull, reason: 'after Operations swipe');
+
+    await tester.drag(mainSwipeArea, const Offset(120, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(selectedMainSection(), 1);
+
+    for (final section in ['incomingOffers', 'send', 'clipboard']) {
+      await tester.drag(activitySwipeArea, const Offset(120, 0));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        find.byKey(ValueKey('history-section-content-$section')),
+        findsOneWidget,
+      );
+      expect(selectedMainSection(), 1);
+    }
+
+    await tester.drag(activitySwipeArea, const Offset(120, 0));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(selectedMainSection(), 0);
+    expect(tester.takeException(), isNull, reason: 'after Devices swipe');
+  });
+
+  testWidgets('App shell caps content width on wide desktop layouts',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.binding.setSurfaceSize(const Size(1800, 1000));
+    await tester.pumpAndSettle();
+
+    expect(tester.getSize(find.byType(AppShell)).width, 1800);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Add Device'), findsOneWidget);
+    expect(tester.getSize(find.byType(IndexedStack).first).width, 1280);
   });
 
   test('MockClient getDeviceInfo test', () async {
