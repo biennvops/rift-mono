@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
+import 'package:app_flutter/src/file_transfer/file_transfer_coordinator.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
+import 'package:app_flutter/src/ui/app_shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'test_utils/fake_transport.dart';
 
@@ -43,6 +47,18 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _trustChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _connectionChangedController = StreamController<bool>.broadcast();
+  final _fileOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _clipboardOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _clipboardExpiredController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _fileProgressController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _fileCompletedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _fileFailedController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
   final List<Map<String, dynamic>> incomingFileOffers;
@@ -52,6 +68,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final List<Map<String, dynamic>> queueItems;
   final List<Map<String, Object>> clipboardNotifications =
       <Map<String, Object>>[];
+  bool failTrustedPeerLoads = false;
   List<Map<String, dynamic>> trustedPeers = [
     {
       'deviceId': 'rift-peer-1',
@@ -69,6 +86,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final List<String> retriedQueueItems = <String>[];
   final List<String> removedQueueItems = <String>[];
   final List<String> cancelledTransfers = <String>[];
+  final List<Map<String, String>> acceptedOffers = <Map<String, String>>[];
+  final List<Map<String, String>> rejectedOffers = <Map<String, String>>[];
   bool _isConnected;
 
   @override
@@ -76,11 +95,11 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onClipboardOffer =>
-      const Stream<Map<String, dynamic>>.empty();
+      _clipboardOfferController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onClipboardExpired =>
-      const Stream<Map<String, dynamic>>.empty();
+      _clipboardExpiredController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onNotificationPosted =>
@@ -99,20 +118,19 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       const Stream<Map<String, dynamic>>.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileOffer =>
-      const Stream<Map<String, dynamic>>.empty();
+  Stream<Map<String, dynamic>> get onFileOffer => _fileOfferController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferProgress =>
-      const Stream<Map<String, dynamic>>.empty();
+      _fileProgressController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferCompleted =>
-      const Stream<Map<String, dynamic>>.empty();
+      _fileCompletedController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed =>
-      const Stream<Map<String, dynamic>>.empty();
+      _fileFailedController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onTrustChanged =>
@@ -128,8 +146,44 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   }
 
   @override
+  Future<dynamic> getDeviceInfo() async => {
+        'deviceId': 'rift-local-device',
+        'displayName': 'This Device',
+      };
+
+  @override
   Future<dynamic> listIncomingFileOffers() async =>
       {'offers': incomingFileOffers};
+
+  @override
+  Future<dynamic> acceptFileOffer({
+    required String transferId,
+    required String destinationPath,
+    bool overwrite = false,
+  }) async {
+    acceptedOffers.add({
+      'transferId': transferId,
+      'destinationPath': destinationPath,
+    });
+    incomingFileOffers
+        .removeWhere((offer) => offer['transferId'] == transferId);
+    return {'transferId': transferId, 'accepted': true};
+  }
+
+  @override
+  Future<dynamic> rejectFileOffer({
+    required String transferId,
+    required String failureReason,
+    String? message,
+  }) async {
+    rejectedOffers.add({
+      'transferId': transferId,
+      'failureReason': failureReason,
+    });
+    incomingFileOffers
+        .removeWhere((offer) => offer['transferId'] == transferId);
+    return {'transferId': transferId, 'rejected': true};
+  }
 
   @override
   Future<dynamic> listNotifications() async => {
@@ -141,9 +195,12 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
       };
 
   @override
-  Future<dynamic> listTrustedPeers() async => {
-        'peers': trustedPeers,
-      };
+  Future<dynamic> listTrustedPeers() async {
+    if (failTrustedPeerLoads) {
+      throw StateError('Trusted peers are not available yet');
+    }
+    return {'peers': trustedPeers};
+  }
 
   @override
   Future<dynamic> listFileTransfers() async => {'transfers': transfers};
@@ -257,6 +314,22 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   Future<void> emitTrustChanged(Map<String, dynamic> value) async {
     _trustChangedController.add(value);
   }
+
+  Future<void> emitFileOffer(Map<String, dynamic> value) async {
+    _fileOfferController.add(value);
+  }
+
+  Future<void> emitFileProgress(Map<String, dynamic> value) async {
+    _fileProgressController.add(value);
+  }
+
+  Future<void> emitClipboardOffer(Map<String, dynamic> value) async {
+    _clipboardOfferController.add(value);
+  }
+
+  Future<void> emitClipboardExpired(Map<String, dynamic> value) async {
+    _clipboardExpiredController.add(value);
+  }
 }
 
 void main() {
@@ -267,6 +340,8 @@ void main() {
     ValueNotifier<String?>? routeNotifier,
     ValueNotifier<String?>? sharedClipboardTextNotifier,
     bool preferDaemonOnlyOverride = true,
+    Future<String?> Function(String fileName)?
+        buildIncomingDestinationPathOverride,
   }) {
     return MaterialApp(
       home: MultiProvider(
@@ -286,10 +361,81 @@ void main() {
           pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
           sharedClipboardTextNotifier: sharedClipboardTextNotifier,
+          buildIncomingDestinationPathOverride:
+              buildIncomingDestinationPathOverride,
         ),
       ),
     );
   }
+
+  testWidgets('incoming file events are confirmed as one batch',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      AppPrefs.defaultDownloadPath: '/tmp/rift-batched-incoming-test',
+    });
+    final client = FakeTransferJsonRpcClient();
+    final navigatorKey = GlobalKey<NavigatorState>();
+    final appShellKey = GlobalKey<AppShellState>();
+    final messengerKey = GlobalKey<ScaffoldMessengerState>();
+    final coordinator = FileTransferCoordinator(
+      client: client,
+      navigatorKey: navigatorKey,
+      appShellKey: appShellKey,
+      scaffoldMessengerKey: messengerKey,
+      onNotify: (_, __) {},
+      onNotifyWithRoute: ({
+        required title,
+        required body,
+        route,
+        payload,
+        destinationPath,
+      }) {},
+      buildIncomingFilePathOverride: (fileName, _) async => '/tmp/$fileName',
+    )..init();
+    addTearDown(coordinator.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navigatorKey,
+        scaffoldMessengerKey: messengerKey,
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+
+    await client.emitFileOffer({
+      'transferId': 'batch-1',
+      'sourceDeviceId': 'rift-peer-1',
+      'fileName': 'one.txt',
+    });
+    await client.emitFileOffer({
+      'transferId': 'batch-2',
+      'sourceDeviceId': 'rift-peer-1',
+      'fileName': 'two.txt',
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 850));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(client.acceptedOffers, isEmpty);
+    expect(client.rejectedOffers, isEmpty);
+    expect(find.text('2 Incoming Files'), findsOneWidget);
+    expect(find.text('2 files'), findsOneWidget);
+    expect(find.text('Accept'), findsOneWidget);
+
+    await tester.tap(find.text('Accept'));
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+
+    expect(client.acceptedOffers, hasLength(2));
+    expect(
+      client.acceptedOffers.map((offer) => offer['transferId']),
+      containsAll(['batch-1', 'batch-2']),
+    );
+  });
 
   testWidgets('Transfer activity hides folder action for direct-open flow',
       (WidgetTester tester) async {
@@ -463,6 +609,122 @@ void main() {
     expect(find.text('1'), findsOneWidget);
   });
 
+  testWidgets('Incoming Offers accepts and rejects through IPC',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      incomingFileOffers: [
+        {
+          'transferId': 'incoming-accept',
+          'sourceDeviceId': 'rift-peer-1',
+          'fileName': 'accept.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 12,
+        },
+        {
+          'transferId': 'incoming-reject',
+          'sourceDeviceId': 'rift-peer-1',
+          'fileName': 'reject.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 8,
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        revealInFolder: true,
+        client: client,
+        buildIncomingDestinationPathOverride: (fileName) async =>
+            '/tmp/$fileName',
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Incoming Offers'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Accept').first);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    expect(client.acceptedOffers.single['transferId'], 'incoming-accept');
+    expect(find.text('accept.txt'), findsNothing);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Reject').first);
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpAndSettle();
+    expect(client.rejectedOffers.single['transferId'], 'incoming-reject');
+    expect(find.text('No incoming offers'), findsOneWidget);
+  });
+
+  testWidgets('History sections stay overflow-free at target UI sizes',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final offers = List<Map<String, dynamic>>.generate(
+      6,
+      (index) => {
+        'transferId': 'compact-offer-$index',
+        'sourceDeviceId': 'rift-peer-1',
+        'fileName': 'compact-$index.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 128 + index,
+      },
+    );
+
+    for (final size in const [
+      Size(420, 600),
+      Size(800, 600),
+      Size(1200, 800),
+    ]) {
+      await tester.binding.setSurfaceSize(size);
+      await tester.pumpWidget(
+        buildScreen(
+          revealInFolder: true,
+          client: FakeTransferJsonRpcClient(incomingFileOffers: offers),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Incoming Offers'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull, reason: 'viewport $size');
+      expect(find.text('compact-0.txt'), findsOneWidget);
+      expect(find.text('compact-1.txt'), findsOneWidget);
+    }
+  });
+
+  testWidgets('Transfer Activity refreshes when progress events arrive',
+      (WidgetTester tester) async {
+    final transfers = <Map<String, dynamic>>[
+      {
+        'transferId': 'transfer-live',
+        'peerDeviceId': 'rift-peer-1',
+        'fileName': 'live.bin',
+        'mediaType': 'application/octet-stream',
+        'byteSize': 100,
+        'bytesTransferred': 10,
+        'state': 'active',
+        'direction': 'outgoing',
+      },
+    ];
+    final client = FakeTransferJsonRpcClient(transfers: transfers);
+
+    await tester.pumpWidget(
+      buildScreen(revealInFolder: true, client: client),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Transfer Activity'));
+    await tester.pumpAndSettle();
+    expect(find.text('ACTIVE'), findsOneWidget);
+
+    transfers.single
+      ..['bytesTransferred'] = 100
+      ..['state'] = 'done';
+    await client.emitFileProgress({'transferId': 'transfer-live'});
+    await tester.pumpAndSettle();
+
+    expect(find.text('DONE'), findsOneWidget);
+    expect(find.text('ACTIVE'), findsNothing);
+  });
+
   testWidgets('Route notifier can switch History screen sections',
       (WidgetTester tester) async {
     final routeNotifier = ValueNotifier<String?>(null);
@@ -523,7 +785,111 @@ void main() {
     expect(find.text('All devices'), findsOneWidget);
     expect(find.text('All types'), findsOneWidget);
     expect(find.text('Pixel 9 Pro'), findsWidgets);
-    expect(find.text('Encrypted text clip ready to fetch'), findsOneWidget);
+    expect(find.text('Encrypted text clip ready to fetch'), findsNothing);
+    expect(find.text('Auto-synced'), findsNothing);
+    expect(find.text('Copy'), findsNothing);
+    expect(find.byIcon(Icons.copy_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.schedule), findsOneWidget);
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('clipboard-offer-offer-remote-1')),
+          )
+          .height,
+      lessThanOrEqualTo(100),
+    );
+  });
+
+  testWidgets('clipboard offer appears immediately and expires from the UI',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient();
+    await tester.pumpWidget(
+      buildScreen(revealInFolder: true, client: client),
+    );
+    await tester.pumpAndSettle();
+
+    await client.emitClipboardOffer({
+      'offerId': 'offer-live',
+      'sourceDeviceId': 'rift-peer-id-from-offer',
+      'contentType': 'image/png',
+      'byteSize': 512,
+      'expiresInMs': 2000,
+    });
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-live')),
+        findsOneWidget);
+    expect(find.text('Pixel 9 Pro'), findsWidgets);
+    expect(find.textContaining('rift-peer-id-from-offer'), findsNothing);
+    expect(find.text('IMAGE'), findsOneWidget);
+    expect(find.textContaining(RegExp(r'00:0[12]')), findsOneWidget);
+
+    await client.emitClipboardExpired({'offerId': 'offer-live'});
+    await tester.pump();
+    expect(
+        find.byKey(const ValueKey('clipboard-offer-offer-live')), findsNothing);
+  });
+
+  testWidgets('clipboard resolves the device name after reconnecting',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-before-connect',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'text/plain',
+          'byteSize': 24,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+    )..failTrustedPeerLoads = true;
+
+    await tester.pumpWidget(
+      buildScreen(revealInFolder: true, client: client),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Loading device…'), findsOneWidget);
+    expect(find.text('Trusted Device'), findsNothing);
+
+    client.failTrustedPeerLoads = false;
+    await client.emitConnectionChanged(true);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pixel 9 Pro'), findsWidgets);
+    expect(find.text('Loading device…'), findsNothing);
+  });
+
+  testWidgets('clipboard list excludes offers from this device',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-local',
+          'sourceDeviceId': 'rift-local-device',
+          'contentType': 'text/plain',
+          'byteSize': 12,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+        {
+          'offerId': 'offer-peer',
+          'sourceDeviceId': 'rift-peer-1',
+          'contentType': 'text/plain',
+          'byteSize': 24,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+    );
+
+    await tester.pumpWidget(
+      buildScreen(revealInFolder: true, client: client),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-local')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-peer')),
+        findsOneWidget);
   });
 
   testWidgets('clipboard source filter narrows visible offers',
@@ -558,8 +924,8 @@ void main() {
         },
         {
           'deviceId': 'rift-peer-2',
-          'displayName': 'Galaxy Tab',
-          'platform': 'android',
+          'displayName': 'Linux Desktop',
+          'platform': 'linux',
           'trustState': 'trusted',
           'presence': 'online',
           'capabilities': ['file.transfer'],
@@ -575,7 +941,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pixel 9 Pro'), findsWidgets);
-    expect(find.text('Galaxy Tab'), findsWidgets);
+    expect(find.text('Linux Desktop'), findsWidgets);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('clipboard-offer-offer-remote-1')),
+        matching: find.byIcon(Icons.smartphone),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('clipboard-offer-offer-remote-2')),
+        matching: find.byIcon(Icons.computer),
+      ),
+      findsOneWidget,
+    );
 
     await tester.ensureVisible(find.text('All devices'));
     await tester.tap(find.text('All devices'));
@@ -803,6 +1183,63 @@ void main() {
 
     expect(find.text('demo-1.txt'), findsOneWidget);
     expect(find.text('Add Files'), findsOneWidget);
+  });
+
+  testWidgets('Send tab represents Android peers with a phone icon',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(420, 600));
+    final client = FakeTransferJsonRpcClient()
+      ..trustedPeers = List<Map<String, dynamic>>.generate(
+        4,
+        (index) => {
+          'deviceId': 'rift-peer-${index + 1}',
+          'displayName': 'Phone ${index + 1}',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      );
+
+    await tester.pumpWidget(
+      buildScreen(revealInFolder: true, client: client),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Send File'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Phone 1'), findsOneWidget);
+    expect(find.text('Phone 4'), findsOneWidget);
+    expect(find.byIcon(Icons.smartphone), findsNWidgets(4));
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('send-device-chip-Phone 1')),
+          )
+          .height,
+      lessThanOrEqualTo(48),
+    );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('send-device-chip-Phone 1')))
+          .dy,
+      tester
+          .getTopLeft(find.byKey(const ValueKey('send-device-chip-Phone 2')))
+          .dy,
+    );
+    expect(
+      tester
+          .getTopLeft(find.byKey(const ValueKey('send-device-chip-Phone 3')))
+          .dy,
+      greaterThan(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('send-device-chip-Phone 1')))
+            .dy,
+      ),
+    );
+    expect(find.text('No files staged'), findsNothing);
+    expect(find.text('No files staged for sending.'), findsOneWidget);
   });
 
   testWidgets('Send tab cancels active daemon-backed transfer',

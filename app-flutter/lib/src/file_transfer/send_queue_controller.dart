@@ -89,7 +89,10 @@ class SendQueueController extends ChangeNotifier {
     }
     final listed = await client.listSendQueue();
     final restored = List<Map<String, dynamic>>.from(
-      (listed['items'] as List? ?? listed['Items'] as List? ?? const <dynamic>[]).map(
+      (listed['items'] as List? ??
+              listed['Items'] as List? ??
+              const <dynamic>[])
+          .map(
         (item) => Map<String, dynamic>.from(item as Map),
       ),
     ).map(SendQueueEntry.fromDaemonQueueMap).whereType<SendQueueEntry>();
@@ -491,7 +494,13 @@ class SendQueueController extends ChangeNotifier {
         item.transferId != null &&
         item.transferId!.isNotEmpty &&
         !(await _canUseDaemonQueue() && item.queueItemId != null)) {
-      await client.cancelFileTransfer(item.transferId!);
+      try {
+        await client.cancelFileTransfer(item.transferId!);
+      } catch (error) {
+        if (!JsonRpcRiftClient.isResourceNotFoundError(error)) {
+          rethrow;
+        }
+      }
     }
 
     await removeItem(item);

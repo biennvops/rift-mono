@@ -19,6 +19,7 @@ class _FakeQueueClient extends JsonRpcRiftClient {
     this.hideItemsFromList = false,
     this.hideItemsFromGet = false,
     this.listSendQueueCompleter,
+    this.cancelTransferNotFound = false,
   })  : _queueItems = queueItems ?? <Map<String, dynamic>>[],
         super(FakeTransport());
 
@@ -27,6 +28,7 @@ class _FakeQueueClient extends JsonRpcRiftClient {
   final bool hideItemsFromList;
   final bool hideItemsFromGet;
   final Completer<void>? listSendQueueCompleter;
+  final bool cancelTransferNotFound;
   final StreamController<Map<String, dynamic>> _sendQueueChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final StreamController<Map<String, dynamic>> _sendQueueItemUpdatedController =
@@ -155,6 +157,11 @@ class _FakeQueueClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> cancelFileTransfer(String transferId) async {
     cancelledTransfers.add(transferId);
+    if (cancelTransferNotFound) {
+      throw Exception(
+        "JSON-RPC error -32009: Transfer '$transferId' was not found.",
+      );
+    }
     return {'transferId': transferId, 'cancelled': true};
   }
 
@@ -764,6 +771,29 @@ void main() {
     await controller.cancelItem(entry);
 
     expect(client.cancelledTransfers, ['transfer-1']);
+    expect(controller.items, isEmpty);
+  });
+
+  test('controller removes stale item when transfer no longer exists',
+      () async {
+    final client = _FakeQueueClient(
+      sendQueueSupported: false,
+      cancelTransferNotFound: true,
+    );
+    final controller = SendQueueController(client, false);
+    final entry = SendQueueEntry(
+      localPath: '/tmp/stale.txt',
+      fileName: 'stale.txt',
+      mediaType: 'text/plain',
+      byteSize: 5,
+    )
+      ..transferId = 'missing-transfer'
+      ..status = SendQueueStatus.failed;
+    controller.addAll([entry]);
+
+    await controller.cancelItem(entry);
+
+    expect(client.cancelledTransfers, ['missing-transfer']);
     expect(controller.items, isEmpty);
   });
 

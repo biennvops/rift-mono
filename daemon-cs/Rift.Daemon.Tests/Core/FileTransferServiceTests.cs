@@ -178,6 +178,45 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task RejectFileOfferAsync_SucceedsLocallyWhenPeerNotificationFails()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer",
+            State = TrustState.Trusted,
+            Ed25519PublicKey = new byte[32],
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["file.transfer"]);
+
+        await _service.HandleOfferReceivedAsync(new ReceivedFileOffer
+        {
+            DeviceId = "rift-peer",
+            PayloadSourceDeviceId = "rift-peer",
+            TransferId = "transfer-rejected-offline",
+            FileName = "photo.jpg",
+            MediaType = "image/jpeg",
+            ByteSize = 5,
+            Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes("hello"))),
+            ChunkSize = 262144,
+            ChunkCount = 1,
+            ExpiresInMs = 120000,
+            RequiredCapability = "file.transfer"
+        }, CancellationToken.None);
+        _transport.SendException = new ArgumentException("Invalid argument");
+
+        var result = await _service.RejectFileOfferAsync(
+            "transfer-rejected-offline",
+            "PolicyDenied",
+            "User declined incoming file transfer.",
+            CancellationToken.None);
+
+        Assert.True(result.Rejected);
+        var offers = await _service.ListIncomingFileOffersAsync();
+        Assert.DoesNotContain(offers.Offers, offer => offer.TransferId == "transfer-rejected-offline");
+    }
+
+    [Fact]
     public async Task HandleOfferReceivedAsync_RejectsOversizedIncomingOffer()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -882,6 +921,7 @@ public sealed class FileTransferServiceTests : IDisposable
         public bool HasActiveSessionValue { get; set; } = true;
         public bool HasProtectedSessionValue { get; set; } = true;
         public TimeSpan ConnectDelay { get; set; } = TimeSpan.Zero;
+        public Exception? SendException { get; set; }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -901,6 +941,11 @@ public sealed class FileTransferServiceTests : IDisposable
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
+            if (SendException is not null)
+            {
+                throw SendException;
+            }
+
             using var document = JsonDocument.Parse(frameBody);
             var type = document.RootElement.GetProperty("type").GetString() ?? string.Empty;
             var payload = document.RootElement.GetProperty("payload").Clone();

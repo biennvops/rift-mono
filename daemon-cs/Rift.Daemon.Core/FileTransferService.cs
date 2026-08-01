@@ -317,7 +317,14 @@ public sealed class FileTransferService : IFileTransferService
             }
         };
 
-        await SendProtectedMessageAsync(offer.SourceDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await SendProtectedMessageAsync(offer.SourceDeviceId, EncodeEnvelope(envelope), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Best-effort file.reject failed for {TransferId}.", transferId);
+        }
         LogEvent(SecurityEventTypes.PolicyDenied, offer.SourceDeviceId, SecurityEventSeverity.Info, SecurityEventOutcome.Denied, failureReason, null);
 
         return new RejectFileOfferResult

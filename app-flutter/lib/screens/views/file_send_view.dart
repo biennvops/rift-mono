@@ -753,14 +753,14 @@ class _FileSendViewState extends State<FileSendView> {
                 : <String>{};
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       children: [
         if (_activeOutgoingTransfers.isNotEmpty) ...[
           _buildOutgoingTransferBanner(
             theme,
             _activeOutgoingTransfers,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 10),
         ],
         _buildSendControlsCard(
           theme,
@@ -768,7 +768,7 @@ class _FileSendViewState extends State<FileSendView> {
           effectiveSelectedIds: effectiveSelectedIds,
           hasSendableFiles: hasSendableFiles,
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 10),
         _buildTransferHubQueueCard(theme, queueItems),
       ],
     );
@@ -780,6 +780,7 @@ class _FileSendViewState extends State<FileSendView> {
     required Set<String> effectiveSelectedIds,
     required bool hasSendableFiles,
   }) {
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -788,7 +789,7 @@ class _FileSendViewState extends State<FileSendView> {
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -806,34 +807,35 @@ class _FileSendViewState extends State<FileSendView> {
                     backgroundColor: theme.colorScheme.primary,
                     foregroundColor: theme.colorScheme.onPrimary,
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 12,
+                      horizontal: 14,
+                      vertical: 9,
                     ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(4),
                     ),
                   ),
                 ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.cloud_upload_outlined,
-                      size: 20,
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Or drag files here',
-                      style: theme.textTheme.bodyMedium?.copyWith(
+                if (!isMobile)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.cloud_upload_outlined,
+                        size: 20,
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
-                    ),
-                  ],
-                ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Or drag files here',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
             Text(
               'SEND TO',
               style: theme.textTheme.labelMedium?.copyWith(
@@ -842,7 +844,7 @@ class _FileSendViewState extends State<FileSendView> {
                 letterSpacing: 0.8,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             if (peers.isEmpty)
               Text(
                 'No available peers.',
@@ -853,9 +855,12 @@ class _FileSendViewState extends State<FileSendView> {
             else
               LayoutBuilder(
                 builder: (context, constraints) {
+                  final itemWidth = constraints.maxWidth < 600
+                      ? (constraints.maxWidth - 8) / 2
+                      : null;
                   return Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: peers.map((peer) {
                       final deviceId = peer['deviceId']?.toString() ?? '';
                       final isSelected =
@@ -866,6 +871,7 @@ class _FileSendViewState extends State<FileSendView> {
                         platform: peer['platform']?.toString(),
                         isSelected: isSelected,
                         isOnline: peer['presence']?.toString() == 'online',
+                        width: itemWidth,
                         onTap: () =>
                             _toggleSendDevice(deviceId, effectiveSelectedIds),
                       );
@@ -873,57 +879,56 @@ class _FileSendViewState extends State<FileSendView> {
                   );
                 },
               ),
-            const SizedBox(height: 24),
-            Divider(
-              height: 1,
-              thickness: 1,
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                Text(
-                  _sendQueue.items.isEmpty
-                      ? 'No files staged'
-                      : '${_sendQueue.items.length} file(s) ready',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                FilledButton.icon(
-                  onPressed: hasSendableFiles && effectiveSelectedIds.isNotEmpty
-                      ? _sendStagedFilesToSelectedPeers
-                      : null,
-                  icon: const Icon(Icons.arrow_upward, size: 18),
-                  label: Text(
-                    effectiveSelectedIds.isEmpty
-                        ? 'Select a device'
-                        : !hasSendableFiles
-                            ? 'No files to send'
-                            : 'Send to ${effectiveSelectedIds.length} device'
-                                '${effectiveSelectedIds.length == 1 ? '' : 's'}',
-                  ),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: theme.colorScheme.primary,
-                    foregroundColor: theme.colorScheme.onPrimary,
-                    disabledBackgroundColor:
-                        theme.colorScheme.surfaceContainerHigh,
-                    disabledForegroundColor: theme.colorScheme.outline,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 14,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
+            if (_sendQueue.items.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Divider(
+                height: 1,
+                thickness: 1,
+                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  Text(
+                    '${_sendQueue.items.length} file(s) ready',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                ),
-              ],
-            ),
+                  FilledButton.icon(
+                    onPressed:
+                        hasSendableFiles && effectiveSelectedIds.isNotEmpty
+                            ? _sendStagedFilesToSelectedPeers
+                            : null,
+                    icon: const Icon(Icons.arrow_upward, size: 18),
+                    label: Text(
+                      effectiveSelectedIds.isEmpty
+                          ? 'Select a device'
+                          : 'Send to ${effectiveSelectedIds.length} device'
+                              '${effectiveSelectedIds.length == 1 ? '' : 's'}',
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                      disabledBackgroundColor:
+                          theme.colorScheme.surfaceContainerHigh,
+                      disabledForegroundColor: theme.colorScheme.outline,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -936,13 +941,16 @@ class _FileSendViewState extends State<FileSendView> {
     required String? platform,
     required bool isSelected,
     required bool isOnline,
+    required double? width,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
+        key: ValueKey('send-device-chip-$label'),
+        width: width,
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
               ? theme.colorScheme.primary.withValues(alpha: 0.08)
@@ -968,45 +976,30 @@ class _FileSendViewState extends State<FileSendView> {
                     : theme.colorScheme.outlineVariant,
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Icon(
-              Icons.devices,
-              size: 20,
+              _platformIcon(platform),
+              size: 18,
               color: isSelected
                   ? theme.colorScheme.primary
                   : theme.colorScheme.onSurfaceVariant,
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${platform ?? 'Unknown'} · ${isOnline ? 'Online' : 'Offline'}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
+              child: Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: 10),
             Container(
-              width: 20,
-              height: 20,
+              width: 18,
+              height: 18,
               decoration: BoxDecoration(
                 color: isSelected ? theme.colorScheme.primary : Colors.white,
                 borderRadius: BorderRadius.circular(4),
@@ -1019,13 +1012,23 @@ class _FileSendViewState extends State<FileSendView> {
               ),
               alignment: Alignment.center,
               child: isSelected
-                  ? const Icon(Icons.check, size: 14, color: Colors.white)
+                  ? const Icon(Icons.check, size: 12, color: Colors.white)
                   : null,
             ),
           ],
         ),
       ),
     );
+  }
+
+  IconData _platformIcon(String? platform) {
+    return switch (platform?.toLowerCase()) {
+      'android' || 'ios' => Icons.smartphone,
+      'windows' => Icons.desktop_windows,
+      'macos' || 'mac' || 'osx' => Icons.laptop_mac,
+      'linux' => Icons.computer,
+      _ => Icons.devices,
+    };
   }
 
   Widget _buildTransferHubQueueCard(
@@ -1042,39 +1045,30 @@ class _FileSendViewState extends State<FileSendView> {
         children: [
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(color: theme.colorScheme.outlineVariant),
               ),
             ),
-            child: Row(
-              children: [
-                Text(
-                  'Send Queue',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                Text(
-                  ' · ${queueItems.length} ITEM(S)',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+            child: Text(
+              'Send Queue · ${queueItems.length} ITEM(S)',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (queueItems.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 32),
+                    padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Center(
                       child: Text(
                         'No files staged for sending.',
@@ -1121,7 +1115,7 @@ class _FileSendViewState extends State<FileSendView> {
         '${file.errorMessage != null && file.errorMessage!.trim().isNotEmpty ? ' · ${file.errorMessage}' : ''}';
 
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
         border: Border(
             bottom: BorderSide(
@@ -1142,7 +1136,7 @@ class _FileSendViewState extends State<FileSendView> {
             child: Icon(_mediaTypeIcon(file.mediaType),
                 size: 20, color: theme.colorScheme.onSurfaceVariant),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1277,7 +1271,7 @@ class _FileSendViewState extends State<FileSendView> {
         break;
     }
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(4),
@@ -1306,7 +1300,7 @@ class _FileSendViewState extends State<FileSendView> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: theme.colorScheme.primaryContainer,
         borderRadius: BorderRadius.circular(8),

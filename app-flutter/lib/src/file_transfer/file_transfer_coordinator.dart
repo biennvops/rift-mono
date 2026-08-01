@@ -31,6 +31,10 @@ class FileTransferCoordinator {
     Map<String, Object?>? payload,
     String? destinationPath,
   }) onNotifyWithRoute;
+  final Future<String?> Function(
+    String fileName,
+    Set<String> reservedPaths,
+  )? buildIncomingFilePathOverride;
 
   StreamSubscription<Map<String, dynamic>>? _fileOfferSub;
   StreamSubscription<Map<String, dynamic>>? _fileCompletedSub;
@@ -38,7 +42,9 @@ class FileTransferCoordinator {
 
   final Set<String> _autoAcceptingTransferIds = <String>{};
   final Set<String> _reservedIncomingPaths = <String>{};
-  bool _isResolvingPath = false;
+  final Map<String, Map<String, dynamic>> _pendingIncomingOffers = {};
+  Timer? _incomingOfferBatchTimer;
+  bool _isHandlingIncomingBatch = false;
 
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
@@ -50,6 +56,7 @@ class FileTransferCoordinator {
     required this.scaffoldMessengerKey,
     required this.onNotify,
     required this.onNotifyWithRoute,
+    this.buildIncomingFilePathOverride,
   });
 
   void init() {
@@ -60,6 +67,7 @@ class FileTransferCoordinator {
   }
 
   void dispose() {
+    _incomingOfferBatchTimer?.cancel();
     _fileOfferSub?.cancel();
     _fileCompletedSub?.cancel();
     _fileFailedSub?.cancel();
@@ -67,15 +75,7 @@ class FileTransferCoordinator {
 
   void _bindIpcEvents() {
     _fileOfferSub = client.onFileOffer.listen((event) {
-      final fileName = event['fileName']?.toString() ?? 'file';
-      final sourceDeviceId =
-          event['sourceDeviceId']?.toString() ?? 'trusted device';
-      onNotifyWithRoute(
-        title: 'Incoming file',
-        body: '$fileName from $sourceDeviceId.',
-        route: NotificationRoute.historyIncomingOffers,
-      );
-      unawaited(_handleIncomingFileOffer(event));
+      _queueIncomingFileOffer(event);
     });
 
     _fileCompletedSub = client.onFileTransferCompleted.listen((event) {
@@ -205,15 +205,31 @@ class FileTransferCoordinator {
     }());
   }
 
-  Future<bool?> _confirmIncomingFileOffer({
-    required String fileName,
-    required String sourceDeviceId,
-    required String destinationPath,
+  Future<bool?> _confirmIncomingFileBatch({
+    required List<
+            ({
+              String transferId,
+              String fileName,
+              String sourceDeviceId,
+              String destinationPath,
+            })>
+        offers,
   }) async {
     final context = navigatorKey.currentContext;
     if (context == null) {
       return true;
     }
+
+    final sourceDeviceIds = offers.map((offer) => offer.sourceDeviceId).toSet();
+    final singleSource =
+        sourceDeviceIds.length == 1 ? sourceDeviceIds.single : null;
+    final fileLabel =
+        offers.length == 1 ? offers.single.fileName : '${offers.length} files';
+    final sourceLabel =
+        singleSource ?? '${sourceDeviceIds.length} trusted devices';
+    final destinationLabel = offers.length == 1
+        ? offers.single.destinationPath
+        : File(offers.first.destinationPath).parent.path;
 
     bool autoAccept = false;
     return showDialog<bool>(
@@ -221,8 +237,12 @@ class FileTransferCoordinator {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setState) {
           return PremiumDialog(
-            title: 'Incoming File',
-            subtitle: 'A trusted peer wants to send you a file.',
+            title: offers.length == 1
+                ? 'Incoming File'
+                : '${offers.length} Incoming Files',
+            subtitle: offers.length == 1
+                ? 'A trusted peer wants to send you a file.'
+                : 'Review and accept all files together.',
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -250,7 +270,7 @@ class FileTransferCoordinator {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            fileName,
+                            fileLabel,
                             style: Theme.of(context).textTheme.bodyMedium,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -284,7 +304,7 @@ class FileTransferCoordinator {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            sourceDeviceId,
+                            sourceLabel,
                             style: Theme.of(context).textTheme.bodyMedium,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -318,7 +338,7 @@ class FileTransferCoordinator {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            destinationPath,
+                            destinationLabel,
                             style: Theme.of(context)
                                 .textTheme
                                 .bodyMedium
@@ -336,50 +356,51 @@ class FileTransferCoordinator {
                   ],
                 ),
                 const SizedBox(height: 20),
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      autoAccept = !autoAccept;
-                    });
-                  },
-                  behavior: HitTestBehavior.opaque,
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: Checkbox(
-                          value: autoAccept,
-                          onChanged: (val) {
-                            setState(() {
-                              autoAccept = val == true;
-                            });
-                          },
+                if (singleSource != null)
+                  GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        autoAccept = !autoAccept;
+                      });
+                    },
+                    behavior: HitTestBehavior.opaque,
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: Checkbox(
+                            value: autoAccept,
+                            onChanged: (val) {
+                              setState(() {
+                                autoAccept = val == true;
+                              });
+                            },
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          'Always auto-accept files from this device',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Always auto-accept files from this device',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
             cancelText: 'Decline',
             confirmText: 'Accept',
             onCancel: () => Navigator.of(dialogContext).pop(false),
             onConfirm: () async {
-              if (autoAccept) {
+              if (autoAccept && singleSource != null) {
                 final prefs = await SharedPreferences.getInstance();
                 final list =
                     prefs.getStringList(AppPrefs.autoAcceptDeviceIds) ??
                         <String>[];
-                if (!list.contains(sourceDeviceId)) {
-                  list.add(sourceDeviceId);
+                if (!list.contains(singleSource)) {
+                  list.add(singleSource);
                   await prefs.setStringList(AppPrefs.autoAcceptDeviceIds, list);
                 }
               }
@@ -393,11 +414,9 @@ class FileTransferCoordinator {
     );
   }
 
-  Future<void> _handleIncomingFileOffer(Map<String, dynamic> event) async {
+  void _queueIncomingFileOffer(Map<String, dynamic> event) {
     final transferId = event['transferId']?.toString();
     final fileName = event['fileName']?.toString();
-    final sourceDeviceId =
-        event['sourceDeviceId']?.toString() ?? 'trusted device';
     if (transferId == null ||
         transferId.isEmpty ||
         fileName == null ||
@@ -408,97 +427,170 @@ class FileTransferCoordinator {
       return;
     }
 
-    _autoAcceptingTransferIds.add(transferId);
-    String? destinationPath;
+    _pendingIncomingOffers[transferId] = event;
+    _incomingOfferBatchTimer?.cancel();
+    _incomingOfferBatchTimer = Timer(
+      const Duration(milliseconds: 800),
+      () => unawaited(_processIncomingOfferBatch()),
+    );
+  }
+
+  Future<void> _processIncomingOfferBatch() async {
+    if (_isHandlingIncomingBatch || _pendingIncomingOffers.isEmpty) {
+      return;
+    }
+    _isHandlingIncomingBatch = true;
+    final events = _pendingIncomingOffers.values.toList(growable: false);
+    _pendingIncomingOffers.clear();
+    final prepared = <({
+      String transferId,
+      String fileName,
+      String sourceDeviceId,
+      String destinationPath,
+    })>[];
+
     try {
-      while (_isResolvingPath) {
-        await Future.delayed(const Duration(milliseconds: 50));
-      }
-      _isResolvingPath = true;
-      try {
-        destinationPath = await buildDefaultIncomingFilePath(
-          fileName,
-          reservedPaths: _reservedIncomingPaths,
-        );
-        if (destinationPath != null && destinationPath.isNotEmpty) {
-          _reservedIncomingPaths.add(destinationPath);
+      for (final event in events) {
+        final transferId = event['transferId']?.toString() ?? '';
+        final fileName = event['fileName']?.toString() ?? '';
+        final sourceDeviceId =
+            event['sourceDeviceId']?.toString() ?? 'trusted device';
+        if (transferId.isEmpty || fileName.isEmpty) continue;
+
+        final destinationPath = buildIncomingFilePathOverride != null
+            ? await buildIncomingFilePathOverride!(
+                fileName,
+                _reservedIncomingPaths,
+              )
+            : await buildDefaultIncomingFilePath(
+                fileName,
+                reservedPaths: _reservedIncomingPaths,
+              );
+        if (destinationPath == null || destinationPath.isEmpty) {
+          await _rejectUnavailableOffer(transferId, fileName);
+          continue;
         }
-      } finally {
-        _isResolvingPath = false;
+        _reservedIncomingPaths.add(destinationPath);
+        _autoAcceptingTransferIds.add(transferId);
+        prepared.add((
+          transferId: transferId,
+          fileName: fileName,
+          sourceDeviceId: sourceDeviceId,
+          destinationPath: destinationPath,
+        ));
       }
 
-      if (destinationPath == null || destinationPath.isEmpty) {
-        throw const FileSystemException(
-          'Could not resolve a public Downloads/Rift save location.',
-        );
-      }
+      if (prepared.isEmpty) return;
 
-      bool shouldAccept = false;
+      final sourceCount =
+          prepared.map((offer) => offer.sourceDeviceId).toSet().length;
+      onNotifyWithRoute(
+        title: prepared.length == 1
+            ? 'Incoming file'
+            : '${prepared.length} incoming files',
+        body: sourceCount == 1
+            ? 'From ${prepared.first.sourceDeviceId}.'
+            : 'From $sourceCount trusted devices.',
+        route: NotificationRoute.historyIncomingOffers,
+      );
+
       final prefs = await SharedPreferences.getInstance();
       final autoAcceptDevices =
           prefs.getStringList(AppPrefs.autoAcceptDeviceIds) ?? <String>[];
-
-      if (autoAcceptDevices.contains(sourceDeviceId)) {
-        shouldAccept = true;
-      } else {
-        shouldAccept = await _confirmIncomingFileOffer(
-              fileName: fileName,
-              sourceDeviceId: sourceDeviceId,
-              destinationPath: destinationPath,
-            ) ??
-            false;
-      }
+      final shouldAccept = prepared.every(
+            (offer) => autoAcceptDevices.contains(offer.sourceDeviceId),
+          ) ||
+          (await _confirmIncomingFileBatch(offers: prepared) ?? false);
 
       if (!shouldAccept) {
-        await client.rejectFileOffer(
-          transferId: transferId,
-          failureReason: 'PolicyDenied',
-          message: 'User declined incoming file transfer.',
-        );
+        for (final offer in prepared) {
+          await client.rejectFileOffer(
+            transferId: offer.transferId,
+            failureReason: 'PolicyDenied',
+            message: 'User declined incoming file transfer.',
+          );
+        }
         final messenger = scaffoldMessengerKey.currentState;
         if (messenger != null) {
           RiftSnackbar.showWithState(
             messenger: messenger,
-            message: 'Declined $fileName from $sourceDeviceId',
+            message: 'Declined ${prepared.length} incoming file(s).',
             type: RiftSnackbarType.info,
           );
         }
         return;
       }
 
+      var accepted = 0;
+      for (final offer in prepared) {
+        try {
+          await client.acceptFileOffer(
+            transferId: offer.transferId,
+            destinationPath: offer.destinationPath,
+            overwrite: false,
+          );
+          accepted += 1;
+        } catch (error) {
+          onNotifyWithRoute(
+            title: 'Incoming file failed',
+            body: 'Could not receive ${offer.fileName}: $error',
+            route: NotificationRoute.historyTransferActivity,
+          );
+        }
+      }
+
       final messenger = scaffoldMessengerKey.currentState;
-      if (messenger != null) {
+      if (messenger != null && accepted > 0) {
+        final destinationFolder =
+            File(prepared.first.destinationPath).parent.path;
         RiftSnackbar.showWithState(
           messenger: messenger,
           message:
-              'Receiving $fileName from $sourceDeviceId...\nSaved to: $destinationPath',
+              'Receiving $accepted file(s). They will appear in $destinationFolder when complete.',
           type: RiftSnackbarType.info,
         );
       }
-      onNotify('Incoming file', 'Receiving $fileName from $sourceDeviceId.');
-
-      await client.acceptFileOffer(
-        transferId: transferId,
-        destinationPath: destinationPath,
-        overwrite: false,
+      onNotifyWithRoute(
+        title: prepared.length == 1
+            ? 'Incoming file'
+            : '${prepared.length} incoming files',
+        body: 'Receiving $accepted of ${prepared.length} file(s).',
+        route: NotificationRoute.historyTransferActivity,
       );
-    } catch (error) {
+    } finally {
+      for (final offer in prepared) {
+        _autoAcceptingTransferIds.remove(offer.transferId);
+      }
+      _isHandlingIncomingBatch = false;
+      if (_pendingIncomingOffers.isNotEmpty) {
+        _incomingOfferBatchTimer?.cancel();
+        _incomingOfferBatchTimer = Timer(
+          const Duration(milliseconds: 800),
+          () => unawaited(_processIncomingOfferBatch()),
+        );
+      }
+    }
+  }
+
+  Future<void> _rejectUnavailableOffer(
+      String transferId, String fileName) async {
+    try {
       try {
         await client.rejectFileOffer(
           transferId: transferId,
           failureReason: 'PolicyDenied',
-          message: 'Incoming file transfer could not be confirmed.',
+          message: 'No download destination is available.',
         );
       } catch (_) {
-        // Best-effort reject if incoming transfer setup fails.
+        // Best-effort rejection.
       }
       onNotifyWithRoute(
         title: 'Incoming file failed',
-        body: 'Could not auto-save $fileName: $error',
+        body: 'No download destination is available for $fileName.',
         route: NotificationRoute.historyTransferActivity,
       );
-    } finally {
-      _autoAcceptingTransferIds.remove(transferId);
+    } on FileSystemException {
+      // Destination resolution already failed; the notification above is enough.
     }
   }
 }

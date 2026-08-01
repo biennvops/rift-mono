@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import '../../src/file_transfer/file_storage.dart';
+import '../../widgets/rift_snackbar.dart';
 import 'package:provider/provider.dart';
 
 import '../../src/ipc/json_rpc_client.dart';
@@ -21,6 +25,9 @@ class _TransferActivityViewState extends State<TransferActivityView> {
 
   final List<Map<String, dynamic>> _fileTransfers = [];
   final List<Map<String, dynamic>> _peers = [];
+  final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
+  bool _isLoading = true;
+  String? _loadError;
 
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ?? true;
@@ -28,13 +35,32 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   @override
   void initState() {
     super.initState();
+    final client = context.read<JsonRpcRiftClient>();
+    _subscriptions
+      ..add(client.onFileTransferProgress.listen((_) => _loadActivity()))
+      ..add(client.onFileTransferCompleted.listen((_) => _loadActivity()))
+      ..add(client.onFileTransferFailed.listen((_) => _loadActivity()));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadActivity();
     });
   }
 
+  @override
+  void dispose() {
+    for (final subscription in _subscriptions) {
+      unawaited(subscription.cancel());
+    }
+    super.dispose();
+  }
+
   Future<void> _loadActivity() async {
     final client = context.read<JsonRpcRiftClient>();
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _loadError = null;
+      });
+    }
     try {
       final transfersResult = await client.listFileTransfers();
       final peersResult = await client.listTrustedPeers();
@@ -59,8 +85,15 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                   .map((item) => Map<String, dynamic>.from(item as Map)),
             ),
           );
+        _isLoading = false;
       });
-    } catch (_) {}
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _loadError = JsonRpcRiftClient.formatDisplayError(error);
+      });
+    }
   }
 
   String _peerLabel(String? deviceId) {
@@ -110,38 +143,75 @@ class _TransferActivityViewState extends State<TransferActivityView> {
       return true;
     }).toList(growable: false);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildToolbar(theme, filteredTransfers.length),
-          const SizedBox(height: 24),
-          if (filteredTransfers.isEmpty)
-            _buildEmptyState(theme)
-          else
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              child: Column(
-                children: [
-                  for (int i = 0; i < filteredTransfers.length; i++) ...[
-                    if (i > 0)
-                      Divider(
-                        height: 1,
-                        thickness: 1,
-                        color: theme.colorScheme.outlineVariant
-                            .withValues(alpha: 0.5),
-                      ),
-                    _buildTransferActivityRowItem(theme, filteredTransfers[i]),
+    return RefreshIndicator(
+      onRefresh: _loadActivity,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildToolbar(theme, filteredTransfers.length),
+            const SizedBox(height: 10),
+            if (_isLoading && transfers.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(32),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (_loadError != null && transfers.isEmpty)
+              _buildLoadError(theme)
+            else if (filteredTransfers.isEmpty)
+              _buildEmptyState(theme)
+            else
+              Container(
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Column(
+                  children: [
+                    for (int i = 0; i < filteredTransfers.length; i++) ...[
+                      if (i > 0)
+                        Divider(
+                          height: 1,
+                          thickness: 1,
+                          color: theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.5),
+                        ),
+                      _buildTransferActivityRowItem(
+                          theme, filteredTransfers[i]),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoadError(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.error),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.error_outline, color: theme.colorScheme.error),
+          const SizedBox(height: 8),
+          Text(_loadError!, textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          OutlinedButton(
+            onPressed: _loadActivity,
+            child: const Text('Retry'),
+          ),
         ],
       ),
     );
@@ -159,14 +229,14 @@ class _TransferActivityViewState extends State<TransferActivityView> {
               isMobile ? CrossAxisAlignment.start : CrossAxisAlignment.center,
           children: [
             Wrap(
-              spacing: 12,
-              runSpacing: 12,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 _buildDeviceFilterMenu(theme),
                 _buildStatusFilterMenu(theme),
               ],
             ),
-            if (isMobile) const SizedBox(height: 24),
+            if (isMobile) const SizedBox(height: 10),
             Text.rich(
               TextSpan(
                 text: '$transferCount\n',
@@ -226,7 +296,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(4),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           ),
           onPressed: () {
             if (controller.isOpen) {
@@ -362,7 +432,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(4),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           ),
           onPressed: () {
             if (controller.isOpen) {
@@ -454,7 +524,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   Widget _buildEmptyState(ThemeData theme) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 64, horizontal: 24),
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -465,8 +535,8 @@ class _TransferActivityViewState extends State<TransferActivityView> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: 40,
+            height: 40,
             decoration: BoxDecoration(
               color: theme.colorScheme.surfaceContainerLow,
               shape: BoxShape.circle,
@@ -474,9 +544,9 @@ class _TransferActivityViewState extends State<TransferActivityView> {
             ),
             alignment: Alignment.center,
             child: Icon(Icons.swap_horiz,
-                size: 24, color: theme.colorScheme.secondary),
+                size: 20, color: theme.colorScheme.secondary),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 12),
           Text(
             'No transfer activity',
             style: theme.textTheme.titleMedium?.copyWith(
@@ -506,13 +576,13 @@ class _TransferActivityViewState extends State<TransferActivityView> {
     final fileName = transfer['fileName']?.toString() ?? 'Unknown file';
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(12),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
               color: isIncoming
                   ? const Color(0xFF12744F).withValues(alpha: 0.1)
@@ -528,7 +598,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                   : theme.colorScheme.tertiary,
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -549,7 +619,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Row(
                   children: [
                     Flexible(
@@ -573,43 +643,46 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                   ],
                 ),
                 if (canOpenDestination) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
                   Text(
                     'Saved to: $destinationPath',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.primary,
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       if (_revealCompletedTransfersInFolder)
                         OutlinedButton.icon(
-                          onPressed: () {},
+                          onPressed: () => _openDestination(
+                            destinationPath,
+                            reveal: true,
+                          ),
                           icon: const Icon(Icons.folder_open, size: 16),
                           label: const Text('Open Folder',
                               style: TextStyle(
                                   fontSize: 13, fontWeight: FontWeight.w600)),
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
-                            minimumSize: const Size(0, 36),
+                                horizontal: 12, vertical: 8),
+                            minimumSize: const Size(0, 32),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(4)),
                           ),
                         ),
                       OutlinedButton.icon(
-                        onPressed: () {},
+                        onPressed: () => _openDestination(destinationPath),
                         icon: const Icon(Icons.open_in_new, size: 16),
                         label: const Text('Open File',
                             style: TextStyle(
                                 fontSize: 13, fontWeight: FontWeight.w600)),
                         style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 12),
-                          minimumSize: const Size(0, 36),
+                              horizontal: 12, vertical: 8),
+                          minimumSize: const Size(0, 32),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(4)),
                         ),
@@ -620,7 +693,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                 if (progress != null &&
                     state.toLowerCase() != 'done' &&
                     state.toLowerCase() != 'failed') ...[
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(999),
                     child: LinearProgressIndicator(
@@ -641,7 +714,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
               ],
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 10),
           _buildTransferStatusBadge(
             theme,
             state.toUpperCase(),
@@ -653,10 +726,27 @@ class _TransferActivityViewState extends State<TransferActivityView> {
     );
   }
 
+  Future<void> _openDestination(String path, {bool reveal = false}) async {
+    try {
+      if (reveal) {
+        await showFileInFolder(path);
+      } else {
+        await openFilePath(path);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      RiftSnackbar.show(
+        context: context,
+        message: error.toString(),
+        type: RiftSnackbarType.error,
+      );
+    }
+  }
+
   Widget _buildTransferStatusBadge(ThemeData theme, String label,
       {required Color tone, required Color foreground}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: tone,
         borderRadius: BorderRadius.circular(4),

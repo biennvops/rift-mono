@@ -403,6 +403,13 @@ class JsonRpcRiftClient {
         raw.toLowerCase().contains('method not found');
   }
 
+  static bool isResourceNotFoundError(Object error) {
+    final raw = error.toString().toLowerCase();
+    return raw.contains('json-rpc error -32009') ||
+        raw.contains('was not found') ||
+        raw.contains('not found');
+  }
+
   Never _throwNotConnected(String method, [dynamic parameters]) {
     final error = StateError('Not connected to daemon');
     _log.warning('RPC request failed before send: $method params=$parameters');
