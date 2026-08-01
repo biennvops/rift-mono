@@ -128,6 +128,13 @@ DesktopClipboardManager _createDesktopClipboardManager(
     );
   }
 
+  if (Platform.isAndroid) {
+    return DesktopClipboardManager(
+      client,
+      autoApplyIncomingOffers: false,
+    );
+  }
+
   return DesktopClipboardManager(client);
 }
 
@@ -172,7 +179,9 @@ void main(List<String> arguments) async {
   runApp(
     MultiProvider(
       providers: [
-        Provider<DesktopClipboardManager?>.value(value: clipboardManager),
+        ChangeNotifierProvider<DesktopClipboardManager?>.value(
+          value: clipboardManager,
+        ),
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (context) => SendQueueController(

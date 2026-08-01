@@ -8,6 +8,24 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('desktop clipboard manager uses a ChangeNotifier provider', () async {
+    final mainSource = await File('lib/main.dart').readAsString();
+
+    expect(
+      mainSource,
+      contains('ChangeNotifierProvider<DesktopClipboardManager?>.value'),
+    );
+    expect(
+      mainSource.split('\n').any(
+            (line) => line
+                .trim()
+                .startsWith('Provider<DesktopClipboardManager?>.value'),
+          ),
+      isFalse,
+    );
+  });
+
   group('Android download bridge', () {
     const channel = MethodChannel('rift/android/shell');
 

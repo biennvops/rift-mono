@@ -182,6 +182,44 @@ void main() {
       await manager.dispose();
     });
 
+    test('tracks incoming offers without auto-fetching when disabled',
+        () async {
+      await client.connect();
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+        },
+        autoApplyIncomingOffers: false,
+      );
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-ui-only',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(manager.activeOffers.keys, contains('offer-ui-only'));
+      expect(
+        transport.requests.where(
+          (request) => request['method'] == 'rift.fetchClipboardContent',
+        ),
+        isEmpty,
+      );
+      expect(clipboardWrites, isEmpty);
+
+      await manager.dispose();
+    });
+
     test('suppresses clipboard echo after applying fetched content', () async {
       transport.fetchResultsByOfferId['offer-echo'] = {
         'OfferId': 'offer-echo',

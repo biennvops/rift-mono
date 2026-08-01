@@ -47,6 +47,7 @@ class DesktopClipboardManager extends ChangeNotifier {
     ClipboardContentReader? readClipboardContent,
     ClipboardContentWriter? writeClipboardContent,
     Set<String>? supportedContentTypes,
+    bool autoApplyIncomingOffers = true,
   })  : _readClipboardContent = readClipboardContent ??
             _contentReaderFromTextReader(
               readClipboardText ?? _defaultReadClipboardText,
@@ -58,6 +59,7 @@ class DesktopClipboardManager extends ChangeNotifier {
         _supportedContentTypes = Set<String>.unmodifiable(
           supportedContentTypes ?? const <String>{textPlainContentType},
         ),
+        _autoApplyIncomingOffers = autoApplyIncomingOffers,
         _clipboardChanges = clipboardChanges ??
             _defaultClipboardChanges(
               readClipboardContent ??
@@ -198,6 +200,7 @@ class DesktopClipboardManager extends ChangeNotifier {
   final ClipboardContentReader _readClipboardContent;
   final ClipboardContentWriter _writeClipboardContent;
   final Set<String> _supportedContentTypes;
+  final bool _autoApplyIncomingOffers;
   final Logger _log = Logger('DesktopClipboardManager');
   final Map<String, Map<String, dynamic>> _activeOffers = {};
   final Set<String> _handledOfferIds = <String>{};
@@ -427,6 +430,9 @@ class DesktopClipboardManager extends ChangeNotifier {
   }
 
   Future<void> _maybeFetchAndApplyOffer(Map<String, dynamic> offer) async {
+    if (!_autoApplyIncomingOffers) {
+      return;
+    }
     final offerId = offer['offerId']?.toString();
     if (offerId == null ||
         offerId.isEmpty ||
