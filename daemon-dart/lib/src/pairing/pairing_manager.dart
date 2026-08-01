@@ -498,8 +498,15 @@ class PairingManager {
           timeout: Duration(milliseconds: clampedExpiry),
         );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
+        final receivedDisplayName = payload['displayName'];
         final displayName =
-            payload['displayName'] as String? ?? 'Unknown Device';
+            receivedDisplayName is String &&
+                receivedDisplayName.trim().isNotEmpty
+            ? receivedDisplayName.trim()
+            : null;
+        if (displayName != null) {
+          await trustStore.updateDisplayName(peerDeviceId, displayName);
+        }
 
         // Emit event to UI to show popup
         onIpcEvent({
@@ -508,7 +515,8 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
-            'displayName': displayName,
+            'displayName':
+                displayName ?? record.displayName ?? 'Unknown Device',
             'expiresInMs': clampedExpiry,
           },
         });
@@ -594,6 +602,15 @@ class PairingManager {
         if (trustedDeviceId != peerDeviceId) {
           await _rejectPairing(peerDeviceId);
           return;
+        }
+
+        final receivedDisplayName = completePayload['displayName'];
+        if (receivedDisplayName is String &&
+            receivedDisplayName.trim().isNotEmpty) {
+          await trustStore.updateDisplayName(
+            peerDeviceId,
+            receivedDisplayName.trim(),
+          );
         }
 
         if (record.state == TrustState.pairingPending &&
@@ -741,6 +758,7 @@ class PairingManager {
         'payload': {
           'trustedDeviceId': identityManager.deviceId,
           'persistedAt': persistedAt,
+          'displayName': identityManager.displayName,
         },
       });
     } catch (_) {

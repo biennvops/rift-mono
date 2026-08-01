@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:daemon_dart/src/interfaces/identity_manager.dart';
-import 'package:daemon_dart/src/network/transport_impl.dart';
-import 'package:test/test.dart';
+import 'package:app_flutter/src/ipc/android_native_peer_transport.dart';
+import 'package:daemon_dart/daemon_dart.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 class _FakeIdentityManager implements IdentityManager {
   @override
@@ -33,24 +33,28 @@ class _FakeIdentityManager implements IdentityManager {
   Future<void> dispose() async {}
 
   @override
-  Future<void> setDisplayName(String displayName) async {}
+  Future<void> setDisplayName(String name) async {}
 
   @override
   Future<String> generateIdentityProof(
-    Uint8List challenge,
-    Uint8List binding,
-  ) async => '';
+    Uint8List channelBinding,
+    Uint8List localCertDer,
+  ) async =>
+      '';
 }
 
 void main() {
-  test('pre-auth replacement resets the old session synchronously', () {
-    final transport = TransportImpl(_FakeIdentityManager(), port: 0);
+  test('pre-auth native replacement resets the session synchronously', () {
+    final transport = AndroidNativePeerTransport(
+      _FakeIdentityManager(),
+      port: 0,
+    );
     String? disconnectedPeer;
     transport.onPeerDisconnected.listen((peerDeviceId) {
       disconnectedPeer = peerDeviceId;
     });
 
-    transport.resetPeerForPreAuthReplacement('rift-peer');
+    transport.resetSessionForPreAuthReplacement('rift-peer');
 
     expect(disconnectedPeer, 'rift-peer');
   });

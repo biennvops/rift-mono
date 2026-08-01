@@ -204,6 +204,19 @@ void main() {
       );
     });
     
+    test('pre-auth replacement clears a partially received hello', () async {
+      final staleContext =
+          SessionContext(peerDeviceId: 'rift-device2', isInitiator: true)
+            ..localHelloSent = true
+            ..remoteHelloReceived = true;
+      sessionManager1.injectContextForTesting(staleContext);
+
+      transport1.simulateNetworkDrop('rift-device2');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(sessionManager1.getContext('rift-device2'), isNull);
+    });
+
     test('Integration test for full session establishment and capability negotiation', () async {
       transport1.registerPeerCert('rift-device2', testCertDer2);
       

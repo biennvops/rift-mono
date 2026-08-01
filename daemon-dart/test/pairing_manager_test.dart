@@ -227,6 +227,7 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.pairingPending);
+        expect(peer.displayName, 'Peer Device');
 
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
@@ -535,11 +536,17 @@ void main() {
           'params': {'deviceId': 'rift-peer', 'fingerprint': testFingerprint},
         });
 
+        final sentComplete = sessionManager.sentMessages.firstWhere(
+          (message) => message['type'] == 'pairing.complete',
+        );
+        expect(sentComplete['payload']['displayName'], 'Android Phone 01');
+
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.complete',
           'payload': {
             'trustedDeviceId': 'rift-peer',
             'persistedAt': DateTime.now().toUtc().toIso8601String(),
+            'displayName': 'Peer Device',
           },
         });
 
@@ -547,6 +554,7 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.trusted);
+        expect(peer.displayName, 'Peer Device');
         expect(
           ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'),
           isTrue,

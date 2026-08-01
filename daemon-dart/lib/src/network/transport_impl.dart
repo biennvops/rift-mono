@@ -20,6 +20,11 @@ class TransportImpl implements Transport, BoundTransport {
     required bool isAuthenticated,
   }) => isAuthenticated;
 
+  @visibleForTesting
+  void resetPeerForPreAuthReplacement(String peerDeviceId) {
+    disconnect(peerDeviceId);
+  }
+
   final IdentityManager _identityManager;
   final int port;
 
@@ -231,9 +236,7 @@ class TransportImpl implements Transport, BoundTransport {
               '[TLS] Peer $peerDeviceId reconnected using the preferred role. '
               'The existing pre-auth socket is likely stale. Replacing it.',
             );
-            try {
-              previousSocket.destroy();
-            } catch (_) {}
+            resetPeerForPreAuthReplacement(peerDeviceId);
             // Do not destroy the new socket! We must accept the new connection
             // because the peer initiated it, implying their side of the old connection is dead.
           } else {
@@ -243,11 +246,7 @@ class TransportImpl implements Transport, BoundTransport {
               'existingRole=${previousIsServer ? "inbound" : "outbound"} '
               'replacementRole=${isServer ? "inbound" : "outbound"}',
             );
-            try {
-              previousSocket.destroy();
-            } catch (_) {
-              // Best-effort cleanup while switching to the preferred bootstrap path.
-            }
+            resetPeerForPreAuthReplacement(peerDeviceId);
           }
         }
       }
