@@ -648,7 +648,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         return totalRead;
     }
 
-    private static bool IsExpectedSessionTermination(Exception ex, CancellationToken cancellationToken)
+    internal static bool IsExpectedSessionTermination(Exception ex, CancellationToken cancellationToken)
     {
         if (ex is OperationCanceledException)
         {
@@ -664,7 +664,12 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             if (ioEx.InnerException is SocketException socketEx)
             {
-                if (socketEx.SocketErrorCode is SocketError.OperationAborted or SocketError.Interrupted)
+                if (socketEx.SocketErrorCode is
+                    SocketError.OperationAborted or
+                    SocketError.Interrupted or
+                    SocketError.ConnectionAborted or
+                    SocketError.ConnectionReset or
+                    SocketError.Shutdown)
                 {
                     return true;
                 }

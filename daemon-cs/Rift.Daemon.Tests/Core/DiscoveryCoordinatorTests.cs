@@ -2,6 +2,7 @@ using System.Net;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
+using Rift.Daemon.Core.Networking;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -203,6 +204,48 @@ public sealed class DiscoveryCoordinatorTests : IDisposable
         Assert.Equal("192.168.1.77", peer.ObservedEndpoints[0].Address);
         Assert.Equal("10.11.1.67", peer.ObservedEndpoints[1].Address);
     }
+
+    [Fact]
+    public void AnnouncementGate_SuppressesRepeatedEndpointWithinInterval()
+    {
+        var gate = new DiscoveryAnnouncementGate(
+            _timeProvider,
+            TimeSpan.FromSeconds(5));
+        var peer = CreateAnnouncement("192.168.1.77");
+
+        Assert.True(gate.ShouldPublish(peer));
+
+        _timeProvider.Advance(TimeSpan.FromSeconds(4));
+        Assert.False(gate.ShouldPublish(peer));
+
+        _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(gate.ShouldPublish(peer));
+    }
+
+    [Fact]
+    public void AnnouncementGate_PublishesNewEndpointImmediately()
+    {
+        var gate = new DiscoveryAnnouncementGate(
+            _timeProvider,
+            TimeSpan.FromSeconds(5));
+
+        Assert.True(gate.ShouldPublish(CreateAnnouncement("192.168.1.77")));
+        Assert.True(gate.ShouldPublish(CreateAnnouncement("10.11.1.67")));
+    }
+
+    private static PeerDiscoveredEventArgs CreateAnnouncement(string address) =>
+        new(
+            deviceIdHint: "rift-announcement-peer",
+            instanceName: "inst-announcement",
+            host: address,
+            port: 9140,
+            minVersion: "0.1-draft",
+            maxVersion: "0.1-draft",
+            txtRecord: new Dictionary<string, string>
+            {
+                ["did"] = "rift-announcement-peer"
+            },
+            remoteEndPoint: new IPEndPoint(IPAddress.Parse(address), 5353));
 
     public void Dispose()
     {

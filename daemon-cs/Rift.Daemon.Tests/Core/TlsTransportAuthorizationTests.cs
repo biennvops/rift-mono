@@ -249,6 +249,22 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
         Assert.Equal(0, cleanupCalls);
     }
 
+    [Theory]
+    [InlineData(SocketError.ConnectionAborted)]
+    [InlineData(SocketError.ConnectionReset)]
+    [InlineData(SocketError.Shutdown)]
+    public void IsExpectedSessionTermination_TreatsPeerDisconnectAsNormal(
+        SocketError socketError)
+    {
+        var exception = new IOException(
+            "Peer disconnected.",
+            new SocketException((int)socketError));
+
+        Assert.True(TlsTransport.IsExpectedSessionTermination(
+            exception,
+            CancellationToken.None));
+    }
+
     [Fact]
     public async Task RefreshSessionAuthorization_WhenPeerBecomesTrusted_EnablesProtectedTraffic()
     {

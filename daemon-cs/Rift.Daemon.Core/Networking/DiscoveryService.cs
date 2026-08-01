@@ -21,6 +21,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private readonly ServiceDiscovery _serviceDiscovery;
     private readonly object _syncRoot = new();
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly DiscoveryAnnouncementGate _announcementGate = new();
     private ServiceProfile? _profile;
     private string? _advertisedDeviceId;
     private bool _isAdvertising;
@@ -259,7 +260,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private void OnServiceInstanceDiscovered(object? sender, ServiceInstanceDiscoveryEventArgs e)
     {
         var name = e.ServiceInstanceName.ToString();
-        _logger.LogInformation("[mDNS Debug] ServiceDiscovered fired for: {Name}", name);
+        _logger.LogDebug("[mDNS Debug] ServiceDiscovered fired for: {Name}", name);
 
         lock (_syncRoot)
         {
@@ -275,12 +276,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         }
 
         var peerInfo = CreatePeerDiscoveredEventArgs(e);
-        _logger.LogInformation(
-            "Discovered Rift peer instance: {InstanceName} at {Host}:{Port}",
-            peerInfo.InstanceName,
-            peerInfo.Host,
-            peerInfo.Port);
-        PeerDiscovered?.Invoke(this, peerInfo);
+        PublishPeer(peerInfo, "mDNS");
     }
 
     private async Task RunFallbackAdvertiserAsync(
@@ -441,15 +437,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 remoteEndPoint,
                 observedAddresses: [remoteEndPoint.Address.ToString()]);
 
-            _logger.LogInformation(
-                "Discovered Rift peer via UDP fallback: {InstanceName} at {Host}:{Port}",
-                peerInfo.InstanceName,
-                peerInfo.Host,
-                peerInfo.Port);
-            
             _fallbackPingPongTargets[remoteEndPoint.Address] = DateTimeOffset.UtcNow;
-            
-            PeerDiscovered?.Invoke(this, peerInfo);
+            PublishPeer(peerInfo, "UDP fallback");
         }
         catch (Exception ex)
         {
@@ -498,10 +487,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         var port = srvRecord.Port;
 
         var deviceIdHint = txtProperties.GetValueOrDefault("did");
-        _logger.LogInformation("[mDNS Debug] Parsed TXT record. DeviceIdHint: '{DeviceIdHint}'", deviceIdHint);
+        _logger.LogDebug("[mDNS Debug] Parsed TXT record. DeviceIdHint: '{DeviceIdHint}'", deviceIdHint);
         foreach (var kvp in txtProperties)
         {
-            _logger.LogInformation("[mDNS Debug] TXT: {Key} = {Value}", kvp.Key, kvp.Value);
+            _logger.LogDebug("[mDNS Debug] TXT: {Key} = {Value}", kvp.Key, kvp.Value);
         }
 
         return new PeerDiscoveredEventArgs(
@@ -514,6 +503,22 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             txtRecord: txtProperties,
             remoteEndPoint: e.RemoteEndPoint,
             observedAddresses: discoveredAddresses);
+    }
+
+    private void PublishPeer(PeerDiscoveredEventArgs peerInfo, string source)
+    {
+        if (!_announcementGate.ShouldPublish(peerInfo))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "Discovered Rift peer via {Source}: {DeviceId} at {Host}:{Port}",
+            source,
+            peerInfo.DeviceIdHint ?? peerInfo.InstanceName,
+            peerInfo.Host,
+            peerInfo.Port);
+        PeerDiscovered?.Invoke(this, peerInfo);
     }
 
     private static Dictionary<string, string> ParseTxtProperties(TXTRecord? txtRecord)
@@ -640,6 +645,37 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                     Interlocked.Exchange(ref _networkRefreshQueued, 0);
                 }
             }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        }
+    }
+}
+
+internal sealed class DiscoveryAnnouncementGate(
+    TimeProvider? timeProvider = null,
+    TimeSpan? minimumInterval = null)
+{
+    private readonly object _syncRoot = new();
+    private readonly Dictionary<string, DateTimeOffset> _lastPublished = new(StringComparer.Ordinal);
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan _minimumInterval = minimumInterval ?? TimeSpan.FromSeconds(5);
+
+    public bool ShouldPublish(PeerDiscoveredEventArgs peer)
+    {
+        var peerId = string.IsNullOrWhiteSpace(peer.DeviceIdHint)
+            ? peer.InstanceName
+            : peer.DeviceIdHint;
+        var key = $"{peerId}|{peer.Host}|{peer.Port}";
+        var now = _timeProvider.GetUtcNow();
+
+        lock (_syncRoot)
+        {
+            if (_lastPublished.TryGetValue(key, out var lastPublished) &&
+                now - lastPublished < _minimumInterval)
+            {
+                return false;
+            }
+
+            _lastPublished[key] = now;
+            return true;
         }
     }
 }
