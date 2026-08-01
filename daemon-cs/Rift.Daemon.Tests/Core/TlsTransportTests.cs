@@ -24,6 +24,25 @@ public class TlsTransportTests
         Assert.Equal(RiftFrame.MaxPostAuthSize, TlsTransport.GetMaxOutboundFrameSize(isAuthenticated: true));
     }
 
+    [Theory]
+    [InlineData("session.hello")]
+    [InlineData("session.accept")]
+    public void ValidateFirstSessionControlMessage_AcceptsHandshakeMessages(string messageType)
+    {
+        TlsTransport.ValidateFirstSessionControlMessage(messageType);
+    }
+
+    [Fact]
+    public void ValidateFirstSessionControlMessage_RejectsOtherMessages()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            TlsTransport.ValidateFirstSessionControlMessage("capability.advertise"));
+
+        Assert.Equal(
+            "Expected session.hello or session.accept but received capability.advertise.",
+            exception.Message);
+    }
+
     [Fact]
     public async Task CSharpPeers_EstablishProtectedSessionAndExchangeMessagesBidirectionally()
     {

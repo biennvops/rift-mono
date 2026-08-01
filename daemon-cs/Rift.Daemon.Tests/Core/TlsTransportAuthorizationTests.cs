@@ -352,6 +352,24 @@ public sealed class TlsTransportAuthorizationTests : IDisposable
     }
 
     [Fact]
+    public void ReuseExistingSessionBeforeHandshake_ClosesDuplicateCandidate()
+    {
+        const string deviceId = "rift-peer-duplicate-before-handshake";
+        RegisterAuthenticatedSession(deviceId, allowsProtectedTraffic: true, ["file.transfer"]);
+        var candidate = CreateAuthenticatedSession(deviceId, allowsProtectedTraffic: false, []);
+
+        var method = typeof(TlsTransport).GetMethod(
+            "ReuseExistingSessionBeforeHandshake",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var reused = (bool)method!.Invoke(_transport, [deviceId, candidate])!;
+
+        Assert.True(reused);
+        Assert.True(_transport.HasProtectedSession(deviceId));
+    }
+
+    [Fact]
     public void RegisterOrReuseSession_DuplicateAuthenticatedSession_ReusesExistingSession()
     {
         const string deviceId = "rift-peer-duplicate-auth";

@@ -35,7 +35,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
     private int _nextBackgroundTaskId;
-    
+
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
     public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
@@ -90,9 +90,9 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             var stream = client.GetStream();
             var sslStream = new SslStream(stream, false, RemoteCertificateValidationCallback);
-            
+
             var serverCert = _identityManager.GetTlsCertificate();
-            
+
             // Spec §5.1: Mutual TLS with TLS 1.3 preferred.
             await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
             {
@@ -163,6 +163,11 @@ public sealed class TlsTransport : ITransport, IDisposable
             await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
+            if (ReuseExistingSessionBeforeHandshake(deviceId, session))
+            {
+                return deviceId;
+            }
+
             await CompleteSessionHandshakeAsync(session, remoteCert, linkedToken);
             PersistAuthorizedPeer(remoteCert, deviceId);
             var registration = RegisterOrReuseSession(deviceId, session);
@@ -201,6 +206,11 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
 
         var session = new ActiveSession(sslStream, client, deviceId, isInitiator: false);
+        if (ReuseExistingSessionBeforeHandshake(deviceId, session))
+        {
+            return;
+        }
+
         await RunInboundSessionCoreAsync(
             deviceId,
             token => CompleteInboundHandshakeAndRegistrationAsync(
@@ -236,6 +246,21 @@ public sealed class TlsTransport : ITransport, IDisposable
             _logger.LogInformation("Reused existing authenticated session for peer {DeviceId} after duplicate inbound registration.", deviceId);
         }
         return registration;
+    }
+
+    private bool ReuseExistingSessionBeforeHandshake(string deviceId, ActiveSession candidate)
+    {
+        if (!_sessions.TryGetValue(deviceId, out var existingSession) ||
+            !existingSession.IsAuthenticated)
+        {
+            return false;
+        }
+
+        _logger.LogInformation(
+            "Keeping existing authenticated session for peer {DeviceId} and closing duplicate connection before session bootstrap.",
+            deviceId);
+        candidate.Dispose();
+        return true;
     }
 
     private SessionRegistrationResult RegisterOrReuseSession(string deviceId, ActiveSession session)
@@ -290,6 +315,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             throw ex;
         }
         var firstMessageType = GetMessageType(firstPayload);
+        ValidateFirstSessionControlMessage(firstMessageType);
         if (string.Equals(firstMessageType, "session.hello", StringComparison.Ordinal))
         {
             _logger.LogInformation("Received session.hello from peer {DeviceId}.", session.DeviceId);
@@ -306,17 +332,12 @@ public sealed class TlsTransport : ITransport, IDisposable
             _logger.LogInformation("Received session.accept from peer {DeviceId}.", session.DeviceId);
             VerifySessionControlMessage(session.Stream, remoteCert, acceptPayload, expectedType: "session.accept");
         }
-        else if (session.IsInitiator && string.Equals(firstMessageType, "session.accept", StringComparison.Ordinal))
-        {
-            _logger.LogInformation(
-                "Received session.accept from peer {DeviceId} without a preceding peer session.hello. Accepting responder-style handshake.",
-                session.DeviceId);
-            VerifySessionControlMessage(session.Stream, remoteCert, firstPayload, expectedType: "session.accept");
-        }
         else
         {
-            throw new InvalidOperationException(
-                $"Expected session.hello or session.accept but received {firstMessageType ?? "<null>"}.");
+            _logger.LogInformation(
+                "Received session.accept from peer {DeviceId} in response to the locally sent session.hello.",
+                session.DeviceId);
+            VerifySessionControlMessage(session.Stream, remoteCert, firstPayload, expectedType: "session.accept");
         }
 
         _logger.LogInformation("Session control messages verified for peer {DeviceId}. Starting capability negotiation.", session.DeviceId);
@@ -339,6 +360,16 @@ public sealed class TlsTransport : ITransport, IDisposable
                 capability => capability.Version,
                 StringComparer.Ordinal));
         session.IsAuthenticated = true;
+    }
+
+    internal static void ValidateFirstSessionControlMessage(string? messageType)
+    {
+        if (!string.Equals(messageType, "session.hello", StringComparison.Ordinal) &&
+            !string.Equals(messageType, "session.accept", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Expected session.hello or session.accept but received {messageType ?? "<null>"}.");
+        }
     }
 
     private static string? GetMessageType(byte[] payloadBuffer)
@@ -747,7 +778,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             int maxFrameSize = GetMaxOutboundFrameSize(session.IsAuthenticated);
             if (frameBody.Length > maxFrameSize)
                 throw new InvalidOperationException("PayloadTooLarge");
-                 
+
             var frame = RiftFrame.Encode(frameBody.Span);
             await session.WriteGate.RunAsync(
                 writeCancellationToken => session.Stream.WriteAsync(frame, writeCancellationToken).AsTask(),
