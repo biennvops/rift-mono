@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -19,57 +20,182 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   final Set<String> _filteredTypes = {};
   final List<Map<String, dynamic>> _daemonOffers = <Map<String, dynamic>>[];
   final Map<String, String> _trustedPeerNames = <String, String>{};
+  final Map<String, String> _trustedPeerPlatforms = <String, String>{};
+  final Set<String> _onlinePeerIds = <String>{};
+  StreamSubscription<Map<String, dynamic>>? _offerSubscription;
+  StreamSubscription<Map<String, dynamic>>? _expiredSubscription;
+  StreamSubscription<Map<String, dynamic>>? _trustSubscription;
+  StreamSubscription<bool>? _connectionSubscription;
+  Timer? _expiryTicker;
+  String? _localDeviceId;
 
   @override
   void initState() {
     super.initState();
+    final client = context.read<JsonRpcRiftClient>();
+    _offerSubscription = client.onClipboardOffer.listen((offer) {
+      final offerId = offer['offerId']?.toString();
+      if (!mounted || offerId == null || offerId.isEmpty) return;
+      final normalizedOffer = _normalizeOffer(offer);
+      setState(() {
+        _daemonOffers.removeWhere(
+          (item) => item['offerId']?.toString() == offerId,
+        );
+        _daemonOffers.add(normalizedOffer);
+      });
+      if (_resolvePeerId(offer['sourceDeviceId']?.toString()) == null) {
+        unawaited(_loadTrustedPeerMetadata());
+      }
+    });
+    _expiredSubscription = client.onClipboardExpired.listen((event) {
+      final offerId = event['offerId']?.toString();
+      if (!mounted || offerId == null || offerId.isEmpty) return;
+      setState(() {
+        _daemonOffers.removeWhere(
+          (item) => item['offerId']?.toString() == offerId,
+        );
+      });
+    });
+    _trustSubscription = client.onTrustChanged.listen((_) {
+      unawaited(_loadTrustedPeerMetadata());
+    });
+    _connectionSubscription = client.onConnectionChanged.listen((connected) {
+      if (connected) unawaited(_loadClipboardHistory());
+    });
+    _expiryTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(_removeExpiredOffers);
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadClipboardHistory();
     });
   }
 
+  @override
+  void dispose() {
+    _offerSubscription?.cancel();
+    _expiredSubscription?.cancel();
+    _trustSubscription?.cancel();
+    _connectionSubscription?.cancel();
+    _expiryTicker?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadClipboardHistory() async {
+    await Future.wait([
+      _loadClipboardOffers(),
+      _loadTrustedPeerMetadata(),
+      _loadLocalDeviceInfo(),
+    ]);
+  }
+
+  Future<void> _loadClipboardOffers() async {
     final client = context.read<JsonRpcRiftClient>();
     try {
       final offersResult = await client.listClipboardOffers();
-      final peersResult = await client.listTrustedPeers();
-      if (!mounted) {
-        return;
-      }
-
+      if (!mounted) return;
       setState(() {
         _daemonOffers
           ..clear()
           ..addAll(
             List<Map<String, dynamic>>.from(
               (offersResult['offers'] as List? ?? const <dynamic>[])
-                  .map((item) => Map<String, dynamic>.from(item as Map)),
+                  .map((item) => _normalizeOffer(item as Map)),
             ),
           );
-        _trustedPeerNames
-          ..clear()
-          ..addEntries(
-            List<Map<String, dynamic>>.from(
-              (peersResult['peers'] as List? ?? const <dynamic>[])
-                  .map((item) => Map<String, dynamic>.from(item as Map)),
-            ).map((peer) {
-              final deviceId = peer['deviceId']?.toString() ?? '';
-              final displayName = peer['displayName']?.toString() ?? '';
-              return MapEntry(
-                deviceId,
-                displayName.isNotEmpty ? displayName : deviceId,
-              );
-            }).where((entry) => entry.key.isNotEmpty),
-          );
+        _removeExpiredOffers();
       });
     } catch (_) {}
   }
 
-  String _sourceLabel(String? deviceId) {
-    if (deviceId == null || deviceId.isEmpty) {
-      return 'Unknown Device';
+  Future<void> _loadLocalDeviceInfo() async {
+    try {
+      final deviceInfoResult =
+          await context.read<JsonRpcRiftClient>().getDeviceInfo();
+      if (!mounted) return;
+      setState(() {
+        _localDeviceId = (deviceInfoResult as Map?)?['deviceId']?.toString();
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadTrustedPeerMetadata() async {
+    try {
+      final peersResult =
+          await context.read<JsonRpcRiftClient>().listTrustedPeers();
+      if (!mounted) return;
+      final peers = List<Map<String, dynamic>>.from(
+        (peersResult['peers'] as List? ?? const <dynamic>[])
+            .map((item) => Map<String, dynamic>.from(item as Map)),
+      );
+      setState(() {
+        _trustedPeerNames
+          ..clear()
+          ..addEntries(peers.map((peer) {
+            final deviceId = peer['deviceId']?.toString() ?? '';
+            final displayName = peer['displayName']?.toString() ?? '';
+            return MapEntry(deviceId, displayName);
+          }).where((entry) => entry.key.isNotEmpty));
+        _trustedPeerPlatforms
+          ..clear()
+          ..addEntries(peers.map((peer) {
+            return MapEntry(
+              peer['deviceId']?.toString() ?? '',
+              peer['platform']?.toString() ?? '',
+            );
+          }).where((entry) => entry.key.isNotEmpty));
+        _onlinePeerIds
+          ..clear()
+          ..addAll(peers
+              .where((peer) =>
+                  peer['presence']?.toString().toLowerCase() == 'online')
+              .map((peer) => peer['deviceId']?.toString())
+              .whereType<String>());
+      });
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _normalizeOffer(Map<dynamic, dynamic> offer) {
+    final normalized = Map<String, dynamic>.from(offer);
+    if (DateTime.tryParse(normalized['expiresAt']?.toString() ?? '') == null) {
+      final expiresInMs = (normalized['expiresInMs'] as num?)?.toInt();
+      if (expiresInMs != null && expiresInMs > 0) {
+        normalized['expiresAt'] = DateTime.now()
+            .toUtc()
+            .add(Duration(milliseconds: expiresInMs))
+            .toIso8601String();
+      }
     }
-    return _trustedPeerNames[deviceId] ?? deviceId;
+    return normalized;
+  }
+
+  String _sourceLabel(String? deviceId) {
+    final peerId = _resolvePeerId(deviceId);
+    if (peerId == null) return 'Loading device…';
+    final name = _trustedPeerNames[peerId];
+    return name == null || name.isEmpty ? 'Loading device…' : name;
+  }
+
+  String? _resolvePeerId(String? sourceDeviceId) {
+    if (sourceDeviceId != null &&
+        _trustedPeerNames.containsKey(sourceDeviceId)) {
+      return sourceDeviceId;
+    }
+    if (_onlinePeerIds.length == 1) return _onlinePeerIds.single;
+    if (_trustedPeerNames.length == 1) return _trustedPeerNames.keys.single;
+    return null;
+  }
+
+  IconData _sourcePlatformIcon(String? sourceDeviceId) {
+    final platform =
+        _trustedPeerPlatforms[_resolvePeerId(sourceDeviceId)]?.toLowerCase();
+    return switch (platform) {
+      'android' || 'ios' => Icons.smartphone,
+      'windows' => Icons.desktop_windows,
+      'macos' || 'mac' || 'osx' => Icons.laptop_mac,
+      'linux' => Icons.computer,
+      _ => Icons.devices,
+    };
   }
 
   List<Map<String, dynamic>> _getSortedOffers(
@@ -78,6 +204,12 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
         ? manager.activeOffers.values.toList(growable: false)
         : _daemonOffers;
     return List<Map<String, dynamic>>.from(offers)
+        .where(
+          (offer) =>
+              offer['sourceDeviceId']?.toString() != _localDeviceId &&
+              !_isExpired(offer),
+        )
+        .toList(growable: false)
       ..sort((a, b) {
         final expA = DateTime.tryParse(a['expiresAt']?.toString() ?? '') ??
             DateTime.fromMillisecondsSinceEpoch(0);
@@ -85,6 +217,32 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
             DateTime.fromMillisecondsSinceEpoch(0);
         return expB.compareTo(expA);
       });
+  }
+
+  bool _isExpired(Map<String, dynamic> offer) {
+    final expiresAt = DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
+    return expiresAt != null && !expiresAt.isAfter(DateTime.now());
+  }
+
+  void _removeExpiredOffers() {
+    _daemonOffers.removeWhere(_isExpired);
+  }
+
+  String _remainingTime(Map<String, dynamic> offer) {
+    final expiresAt = DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
+    if (expiresAt == null) return '--:--';
+    final remaining = expiresAt.difference(DateTime.now());
+    if (remaining.isNegative) return '00:00';
+    final minutes = remaining.inMinutes;
+    final seconds = remaining.inSeconds.remainder(60);
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _contentTypeLabel(String mediaType) {
+    if (mediaType.startsWith('text/')) return 'TEXT';
+    if (mediaType.startsWith('image/')) return 'IMAGE';
+    return 'FILE';
   }
 
   List<MapEntry<String?, int>> _computeSourceEntries(
@@ -103,7 +261,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     for (final o in offers) {
       final mediaType =
           o['contentType']?.toString() ?? 'application/octet-stream';
-      final typeLabel = mediaType.startsWith('text/') ? 'TEXT' : 'FILE';
+      final typeLabel = _contentTypeLabel(mediaType);
       counts[typeLabel] = (counts[typeLabel] ?? 0) + 1;
     }
     return counts.entries.toList(growable: false);
@@ -118,7 +276,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
       }
       final mediaType =
           o['contentType']?.toString() ?? 'application/octet-stream';
-      final typeLabel = mediaType.startsWith('text/') ? 'TEXT' : 'FILE';
+      final typeLabel = _contentTypeLabel(mediaType);
       if (_filteredTypes.isNotEmpty && !_filteredTypes.contains(typeLabel)) {
         return false;
       }
@@ -143,7 +301,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     );
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -156,7 +314,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
             sourceEntries,
             typeEntries,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 12),
           if (visibleOffers.isEmpty)
             _buildEmptyState(theme, allOffers.isEmpty)
           else
@@ -164,7 +322,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: visibleOffers.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 16),
+              separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (context, index) =>
                   _buildClipboardOfferCard(theme, visibleOffers[index]),
             ),
@@ -198,13 +356,13 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
                 _buildTypeFilterMenu(theme, totalTypes, typeEntries),
               ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 12),
             Row(
               mainAxisAlignment:
                   isMobile ? MainAxisAlignment.start : MainAxisAlignment.end,
               children: [
                 _buildStatItem(theme, '$visibleCount', 'ITEMS'),
-                const SizedBox(width: 32),
+                const SizedBox(width: 20),
                 _buildStatItem(theme, _formatSize(totalBytes), 'TOTAL SIZE'),
               ],
             ),
@@ -241,7 +399,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   Widget _buildEmptyState(ThemeData theme, bool noOffersAtAll) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 64, horizontal: 24),
+      padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -253,10 +411,10 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
         children: [
           Icon(
             Icons.content_paste_off_outlined,
-            size: 48,
+            size: 36,
             color: theme.colorScheme.outlineVariant,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
           Text(
             noOffersAtAll
                 ? 'No clipboard items yet.'
@@ -580,13 +738,12 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
         offer['contentType']?.toString() ?? 'application/octet-stream';
     final sourceDeviceId = offer['sourceDeviceId']?.toString();
     final sizeLabel = _formatSize(offer['byteSize'] as num? ?? 0);
-    final expiresAt = DateTime.tryParse(offer['expiresAt']?.toString() ?? '');
-    final isExpired = expiresAt != null && expiresAt.isBefore(DateTime.now());
     final isText = mediaType.startsWith('text/');
 
     return Container(
+      key: ValueKey('clipboard-offer-${offer['offerId']}'),
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -602,24 +759,24 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
               Row(
                 children: [
                   Container(
-                    width: 36,
-                    height: 36,
+                    width: 28,
+                    height: 28,
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(4),
                     ),
                     alignment: Alignment.center,
                     child: Icon(
-                      Icons.devices_outlined,
-                      size: 18,
+                      _sourcePlatformIcon(sourceDeviceId),
+                      size: 16,
                       color: theme.colorScheme.primary,
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       _sourceLabel(sourceDeviceId),
-                      style: theme.textTheme.bodyLarge?.copyWith(
+                      style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: theme.colorScheme.onSurface,
                       ),
@@ -640,7 +797,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      isText ? 'TEXT' : 'FILE',
+                      _contentTypeLabel(mediaType),
                       style: theme.textTheme.labelSmall?.copyWith(
                         fontSize: 10,
                         fontWeight: FontWeight.w700,
@@ -652,45 +809,13 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
                   ),
                 ],
               ),
-              const SizedBox(height: 16),
-              if (isText)
-                Text(
-                  'Encrypted text clip ready to fetch',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                )
-              else
-                Container(
-                  width: double.infinity,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                  ),
-                  alignment: Alignment.center,
-                  child: Icon(
-                    Icons.insert_drive_file,
-                    size: 32,
-                    color: theme.colorScheme.outline,
-                  ),
-                ),
-              const SizedBox(height: 16),
-              Divider(
-                height: 1,
-                thickness: 1,
-                color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-              ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 4),
               if (isMobile)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
                   children: [
-                    _buildStatusAndSize(theme, isExpired, sizeLabel),
-                    const SizedBox(height: 12),
+                    Expanded(
+                      child: _buildExpiryAndSize(theme, offer, sizeLabel),
+                    ),
                     _buildActionButtons(theme, isText, offer),
                   ],
                 )
@@ -698,7 +823,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildStatusAndSize(theme, isExpired, sizeLabel),
+                    _buildExpiryAndSize(theme, offer, sizeLabel),
                     _buildActionButtons(theme, isText, offer),
                   ],
                 ),
@@ -709,27 +834,24 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     );
   }
 
-  Widget _buildStatusAndSize(
+  Widget _buildExpiryAndSize(
     ThemeData theme,
-    bool isExpired,
+    Map<String, dynamic> offer,
     String sizeLabel,
   ) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-          isExpired ? Icons.access_time : Icons.check_circle,
+          Icons.schedule,
           size: 16,
-          color:
-              isExpired ? theme.colorScheme.outline : theme.colorScheme.primary,
+          color: theme.colorScheme.onSurfaceVariant,
         ),
         const SizedBox(width: 6),
         Text(
-          isExpired ? 'Expired' : 'Auto-synced',
+          _remainingTime(offer),
           style: theme.textTheme.labelMedium?.copyWith(
-            color: isExpired
-                ? theme.colorScheme.onSurfaceVariant
-                : theme.colorScheme.primary,
+            color: theme.colorScheme.onSurfaceVariant,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -745,34 +867,26 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
 
   Widget _buildActionButtons(
       ThemeData theme, bool isText, Map<String, dynamic> offer) {
-    return Wrap(
-      spacing: 8,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        TextButton.icon(
+        IconButton(
           onPressed: () => _copyOffer(offer),
-          icon: const Icon(Icons.copy, size: 16),
-          label: const Text('Copy'),
-          style: TextButton.styleFrom(
+          icon: const Icon(Icons.copy_outlined, size: 18),
+          tooltip: 'Copy',
+          style: IconButton.styleFrom(
             foregroundColor: theme.colorScheme.primary,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            minimumSize: const Size(0, 36),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(4),
-            ),
+            minimumSize: const Size(0, 32),
           ),
         ),
         if (!isText)
-          TextButton.icon(
+          IconButton(
             onPressed: () => _saveOffer(offer),
-            icon: const Icon(Icons.download, size: 16),
-            label: const Text('Save'),
-            style: TextButton.styleFrom(
+            icon: const Icon(Icons.download_outlined, size: 18),
+            tooltip: 'Save',
+            style: IconButton.styleFrom(
               foregroundColor: theme.colorScheme.onSurfaceVariant,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              minimumSize: const Size(0, 36),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(4),
-              ),
+              minimumSize: const Size(0, 32),
             ),
           ),
       ],

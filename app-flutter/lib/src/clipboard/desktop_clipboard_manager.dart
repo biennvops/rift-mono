@@ -353,7 +353,17 @@ class DesktopClipboardManager extends ChangeNotifier {
     if (offerId == null || offerId.isEmpty) {
       return;
     }
-    _activeOffers[offerId] = Map<String, dynamic>.from(offer);
+    final normalized = Map<String, dynamic>.from(offer);
+    if (DateTime.tryParse(normalized['expiresAt']?.toString() ?? '') == null) {
+      final expiresInMs = (normalized['expiresInMs'] as num?)?.toInt();
+      if (expiresInMs != null && expiresInMs > 0) {
+        normalized['expiresAt'] = DateTime.now()
+            .toUtc()
+            .add(Duration(milliseconds: expiresInMs))
+            .toIso8601String();
+      }
+    }
+    _activeOffers[offerId] = normalized;
     notifyListeners();
   }
 
