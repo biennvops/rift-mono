@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
@@ -140,17 +141,27 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
   }
 
-  String _formatFingerprintWithColons(String? fp) {
-    if (fp == null) return 'WAITING...';
+  String _resolveFingerprint(String deviceId) {
+    final payloadFingerprint =
+        peer['fingerprint']?.toString() ?? peer['peerFingerprint']?.toString();
+    if (payloadFingerprint != null && payloadFingerprint.trim().isNotEmpty) {
+      return payloadFingerprint;
+    }
+    return deviceId.toLowerCase().startsWith('rift-')
+        ? deviceId.substring(5)
+        : '';
+  }
+
+  String _formatFingerprint(String fp) {
     final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
-    if (clean.isEmpty) return fp;
+    if (clean.isEmpty) return 'Unavailable';
     final chunks = <String>[];
-    for (int i = 0; i < clean.length; i += 2) {
+    for (int i = 0; i < clean.length; i += 4) {
       chunks.add(
-        clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2),
+        clean.substring(i, (i + 4) > clean.length ? clean.length : i + 4),
       );
     }
-    return chunks.join(':');
+    return chunks.join('-');
   }
 
   String _formatTimestamp(String? raw) {
@@ -358,119 +369,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return result ?? false;
   }
 
-  Future<bool> _showBlockBottomSheet(String displayName) async {
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        final sheetTheme = Theme.of(ctx);
-        return Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-            border: Border(
-                top: BorderSide(color: sheetTheme.colorScheme.outlineVariant)),
-          ),
-          padding: EdgeInsets.only(
-            left: 24,
-            right: 24,
-            top: 24,
-            bottom: MediaQuery.of(ctx).padding.bottom + 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 48,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 24),
-                decoration: BoxDecoration(
-                  color: sheetTheme.colorScheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: sheetTheme.colorScheme.errorContainer,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  Icons.block,
-                  color: sheetTheme.colorScheme.error,
-                  size: 24,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Block $displayName?',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.01,
-                  height: 32 / 24,
-                  color: sheetTheme.colorScheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'This device will be blocked permanently. All connections from this Ed25519 key will be automatically rejected.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                  height: 24 / 16,
-                  color: sheetTheme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: sheetTheme.colorScheme.error,
-                    foregroundColor: sheetTheme.colorScheme.onError,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                  ),
-                  child: const Text('Block permanently',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: sheetTheme.colorScheme.primaryContainer,
-                    side: BorderSide(
-                        color: sheetTheme.colorScheme.primaryContainer),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4)),
-                  ),
-                  child: const Text('Cancel',
-                      style:
-                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-    return result ?? false;
-  }
-
   Future<void> _forgetPeer() async {
     final deviceId = peer['deviceId']?.toString();
     final displayName =
@@ -507,22 +405,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
   }
 
-  Future<void> _blockPeer() async {
-    final deviceId = peer['deviceId']?.toString();
-    final displayName =
-        peer['displayName']?.toString() ?? deviceId ?? 'Unknown';
-    if (deviceId == null) return;
-
-    final confirmed = await _showBlockBottomSheet(displayName);
-    if (!confirmed || !mounted) return;
-
-    RiftSnackbar.show(
-      context: context,
-      message: 'Block not implemented in daemon yet',
-      type: RiftSnackbarType.warning,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -532,7 +414,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
         final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
         final displayName = peer['displayName']?.toString() ?? deviceId;
-        final fingerprint = peer['fingerprint']?.toString() ?? '';
+        final fingerprint = _resolveFingerprint(deviceId);
         final protocolVersion = peer['protocolVersion']?.toString() ?? 'v2.4.0';
         final platform = peer['platform']?.toString() ?? 'Unknown';
         final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
@@ -719,7 +601,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   _buildIdentityRow(theme, Icons.badge, 'Device ID', deviceId,
                       isCode: true),
                   _buildIdentityRow(theme, Icons.fingerprint, 'Fingerprint',
-                      _formatFingerprintWithColons(fingerprint),
+                      _formatFingerprint(fingerprint),
                       isCode: true),
                   _buildIdentityRow(theme, Icons.desktop_windows, 'Platform',
                       platform.toUpperCase()),
@@ -846,23 +728,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     style:
                         TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: _blockPeer,
-                style: FilledButton.styleFrom(
-                  backgroundColor: theme.colorScheme.error,
-                  foregroundColor: theme.colorScheme.onError,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  minimumSize: const Size(double.infinity, 48),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4)),
-                ),
-                icon: const Icon(Icons.block, size: 20),
-                label: const Text('Block Device',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
             ],
           ),
         );
@@ -907,14 +772,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                               width: 48,
                               height: 48,
                               decoration: BoxDecoration(
-                                color: theme.colorScheme.surfaceContainerLow,
+                                color: theme.colorScheme.primaryContainer
+                                    .withValues(alpha: 0.16),
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                     color: theme.colorScheme.outlineVariant),
                               ),
                               child: Icon(_platformIcon(platform),
-                                  color: theme.colorScheme.primaryContainer,
-                                  size: 28),
+                                  color: theme.colorScheme.primary, size: 28),
                             ),
                             const SizedBox(width: 16),
                             Expanded(
@@ -932,7 +797,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                     ),
                                   ),
                                   const SizedBox(height: 4),
-                                  Row(
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 4,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
                                     children: [
                                       Container(
                                         padding: const EdgeInsets.symmetric(
@@ -975,7 +844,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                           ],
                                         ),
                                       ),
-                                      const SizedBox(width: 8),
                                       Text(
                                         'Last seen $lastSeenAt',
                                         style: TextStyle(
@@ -1155,7 +1023,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                       ),
                       const SizedBox(width: 8),
                       InkWell(
-                        onTap: () {},
+                        onTap: () async {
+                          await Clipboard.setData(ClipboardData(text: value));
+                          if (!mounted) return;
+                          RiftSnackbar.show(
+                            context: context,
+                            message: 'Copied to clipboard',
+                            type: RiftSnackbarType.success,
+                          );
+                        },
                         child: Padding(
                           padding: const EdgeInsets.all(4.0),
                           child: Icon(Icons.copy,

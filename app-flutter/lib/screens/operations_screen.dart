@@ -488,7 +488,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: OutlinedButton(
-                      onPressed: () {},
+                      onPressed: null,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: theme.colorScheme.onSurfaceVariant,
                         side: BorderSide(
@@ -636,24 +636,42 @@ class _OperationsScreenState extends State<OperationsScreen> {
                   )
                 : _error != null && _operations.isEmpty
                     ? SliverToBoxAdapter(
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(32.0),
-                            child: Column(
-                              children: [
-                                Icon(Icons.error_outline,
-                                    size: 40, color: theme.colorScheme.error),
-                                const SizedBox(height: 16),
-                                Text('Failed to load operations',
-                                    style: theme.textTheme.bodyLarge?.copyWith(
-                                        fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 8),
-                                Text(_error!,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.error),
-                                    textAlign: TextAlign.center),
-                              ],
+                        child: Container(
+                          key: const ValueKey('operations-load-error-card'),
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 24,
+                            horizontal: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
                             ),
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.errorContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.error_outline,
+                                  size: 28,
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Failed to load operations',
+                                style: theme.textTheme.bodyLarge
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
                           ),
                         ),
                       )

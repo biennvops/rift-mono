@@ -132,11 +132,11 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       case 'ios':
         return Icons.smartphone;
       case 'windows':
-        return Icons.laptop_windows;
+        return Icons.desktop_windows;
       case 'macos':
         return Icons.laptop_mac;
       case 'linux':
-        return Icons.terminal;
+        return Icons.computer;
       default:
         return Icons.devices;
     }
@@ -154,20 +154,20 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final isMobile = constraints.maxWidth < 1024;
+                final isCompact = constraints.maxWidth < 600;
                 return Container(
-                  width: isMobile ? double.infinity : 600,
+                  key: const ValueKey('pair-device-dialog'),
+                  width: isMobile ? constraints.maxWidth - 24 : 600,
                   constraints: BoxConstraints(
                     maxHeight: MediaQuery.of(context).size.height * 0.9,
                   ),
-                  margin: EdgeInsets.all(isMobile ? 0 : 16),
+                  margin: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 0 : 16,
+                    vertical: 16,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.only(
-                      topLeft: const Radius.circular(16),
-                      topRight: const Radius.circular(16),
-                      bottomLeft: Radius.circular(isMobile ? 0 : 16),
-                      bottomRight: Radius.circular(isMobile ? 0 : 16),
-                    ),
+                    borderRadius: BorderRadius.circular(16),
                     border: isMobile
                         ? null
                         : Border.all(color: theme.colorScheme.outlineVariant),
@@ -186,7 +186,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(24),
+                        padding: EdgeInsets.all(isCompact ? 16 : 24),
                         decoration: BoxDecoration(
                           border: Border(
                               bottom: BorderSide(
@@ -201,30 +201,29 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                 children: [
                                   Row(
                                     children: [
-                                      Icon(Icons.shield,
-                                          color: theme
-                                              .colorScheme.primaryContainer,
-                                          size: 28),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'Trust New Device',
-                                        style: TextStyle(
-                                          fontSize: 24,
-                                          fontWeight: FontWeight.w600,
-                                          letterSpacing: -0.01,
-                                          height: 32 / 24,
-                                          color: theme.colorScheme.onSurface,
+                                      Expanded(
+                                        child: Text(
+                                          'Trust New Device',
+                                          style: TextStyle(
+                                            fontSize: isCompact ? 20 : 24,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: -0.01,
+                                            height: isCompact ? 1.2 : 32 / 24,
+                                            color: theme.colorScheme.onSurface,
+                                          ),
                                         ),
                                       ),
                                     ],
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    'Securely pair a new device to your Rift network.',
+                                    isCompact
+                                        ? 'Pair securely on your local network.'
+                                        : 'Securely pair a new device to your Rift network.',
                                     style: TextStyle(
-                                      fontSize: 16,
+                                      fontSize: isCompact ? 14 : 16,
                                       fontWeight: FontWeight.w400,
-                                      height: 24 / 16,
+                                      height: isCompact ? 20 / 14 : 24 / 16,
                                       color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                   ),
@@ -241,7 +240,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                       ),
                       Flexible(
                         child: SingleChildScrollView(
-                          padding: const EdgeInsets.all(24),
+                          padding: EdgeInsets.all(isCompact ? 16 : 24),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -264,11 +263,11 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 16),
+                              SizedBox(height: isCompact ? 10 : 16),
                               if (_discoveredPeers.isEmpty)
                                 Container(
                                   width: double.infinity,
-                                  padding: const EdgeInsets.all(24),
+                                  padding: EdgeInsets.all(isCompact ? 14 : 24),
                                   decoration: BoxDecoration(
                                     border: Border.all(
                                         color:
@@ -278,16 +277,16 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                   child: Column(
                                     children: [
                                       SizedBox(
-                                        width: 24,
-                                        height: 24,
+                                        width: isCompact ? 20 : 24,
+                                        height: isCompact ? 20 : 24,
                                         child: CircularProgressIndicator(
                                           strokeWidth: 2,
                                           color: theme.colorScheme.outline,
                                         ),
                                       ),
-                                      const SizedBox(height: 12),
+                                      SizedBox(height: isCompact ? 8 : 12),
                                       Text(
-                                        'Scanning for nearby Rift devices...',
+                                        'Scanning for nearby devices…',
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w400,
@@ -331,13 +330,14 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                             width: 40,
                                             height: 40,
                                             decoration: BoxDecoration(
-                                              color: theme.colorScheme
-                                                  .surfaceContainerLow,
+                                              color: theme
+                                                  .colorScheme.primaryContainer
+                                                  .withValues(alpha: 0.16),
                                               shape: BoxShape.circle,
                                             ),
                                             child: Icon(_platformIcon(platform),
-                                                color: theme.colorScheme
-                                                    .onSurfaceVariant),
+                                                color:
+                                                    theme.colorScheme.primary),
                                           ),
                                           const SizedBox(width: 16),
                                           Expanded(
@@ -397,7 +397,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                     );
                                   }).toList(),
                                 ),
-                              const SizedBox(height: 32),
+                              SizedBox(height: isCompact ? 20 : 32),
                               Row(
                                 children: [
                                   Expanded(
@@ -424,7 +424,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                               .colorScheme.outlineVariant)),
                                 ],
                               ),
-                              const SizedBox(height: 32),
+                              SizedBox(height: isCompact ? 20 : 32),
                               Row(
                                 children: [
                                   Icon(Icons.edit_note,
@@ -444,9 +444,9 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 16),
+                              SizedBox(height: isCompact ? 10 : 16),
                               Container(
-                                padding: const EdgeInsets.all(16),
+                                padding: EdgeInsets.all(isCompact ? 12 : 16),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
                                   borderRadius: BorderRadius.circular(8),
@@ -457,7 +457,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Enter the IP address or hostname of the device you want to pair.',
+                                      'Enter an IP address or hostname.',
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w400,
@@ -466,7 +466,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                             theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ),
-                                    const SizedBox(height: 16),
+                                    SizedBox(height: isCompact ? 10 : 16),
                                     Text(
                                       'IP Address / Hostname',
                                       style: TextStyle(
@@ -476,7 +476,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                         color: theme.colorScheme.onSurface,
                                       ),
                                     ),
-                                    const SizedBox(height: 8),
+                                    SizedBox(height: isCompact ? 6 : 8),
                                     Row(
                                       children: [
                                         Expanded(
@@ -517,7 +517,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                                             ),
                                           ),
                                         ),
-                                        const SizedBox(width: 16),
+                                        SizedBox(width: isCompact ? 8 : 16),
                                         OutlinedButton(
                                           onPressed: _pairManually,
                                           style: OutlinedButton.styleFrom(
@@ -544,37 +544,6 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.all(24),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          border: Border(
-                              top: BorderSide(
-                                  color: theme.colorScheme.outlineVariant)),
-                          borderRadius: const BorderRadius.vertical(
-                              bottom: Radius.circular(12)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              style: TextButton.styleFrom(
-                                foregroundColor:
-                                    theme.colorScheme.onSurfaceVariant,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 10),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(4)),
-                              ),
-                              child: const Text('Cancel',
-                                  style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600)),
-                            ),
-                          ],
                         ),
                       ),
                     ],

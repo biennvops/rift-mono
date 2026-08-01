@@ -125,8 +125,9 @@ The visual style is **Corporate / Modern** with a focus on high-clarity informat
 ## Colors
 The palette is dominated by a deep, authoritative primary blue derived from the brand mark. This is supported by a sophisticated range of cool grays and deep slate tones to maintain a professional, secure atmosphere.
 
-- **Primary Blue (#0047AB):** Used for primary actions, active navigation states, and critical branding elements.
-- **Secondary Slate (#1E293B):** Used for text, sidebar backgrounds, and high-contrast UI components.
+- **Primary Blue (#00327D):** Used for primary actions and high-emphasis controls.
+- **Primary Container Blue (#0047AB):** Used for active navigation states and critical branding elements.
+- **Secondary Slate (#213145):** Used for sidebar backgrounds and high-contrast UI components.
 - **Neutral Scale:** A series of cool grays (from #F8FAFC to #64748B) defines the UI scaffolding and borders.
 - **Semantic Status:** 
   - **Success:** Emerald green for completed syncs and verified security.
@@ -152,8 +153,8 @@ The system employs a **Fluid Grid** with fixed-width constraints for optimal rea
 ## Elevation & Depth
 Depth in this design system is expressed through **Tonal Layers** and **Low-Contrast Outlines**. We avoid aggressive shadows to maintain a clean, flat aesthetic that feels like a secure digital utility.
 
-1. **Surface Base:** The primary background uses pure white (#FFFFFF).
-2. **Surface Container:** Secondary areas like sidebars or secondary panels use a light gray tint (#F8FAFC).
+1. **Surface Base:** The primary background uses the cool off-white surface token (#F8F9FF).
+2. **Surface Container:** Cards use white (#FFFFFF); secondary panels use the tonal surface-container tokens from the palette.
 3. **Ghost Borders:** Components like cards and input fields are defined by 1px solid borders in a soft neutral (#E2E8F0) rather than heavy shadows.
 4. **Elevation Shadows:** Only used for floating elements like dropdowns or modals. These should be "Ambient Shadows": extra-diffused (20px-40px blur), low opacity (10%), with a slight tint of the primary blue to maintain color harmony.
 

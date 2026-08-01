@@ -92,6 +92,36 @@ void main() {
     );
   }
 
+  testWidgets('DeviceDetailScreen does not overflow at narrow desktop width',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(420, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-abcdefghijklmnopqrstuvwxyz234567',
+          'displayName': 'Pixel 9 Pro Connected Device',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'lastSeenAt': '2026-07-29T00:00:00Z',
+          'capabilities': ['presence.basic'],
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Revoke Trust'), findsOneWidget);
+    expect(find.textContaining('Block Device'), findsNothing);
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
       'DeviceDetailScreen shows removed state when trusted peer disappears',
       (WidgetTester tester) async {

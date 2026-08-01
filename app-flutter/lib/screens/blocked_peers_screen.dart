@@ -226,10 +226,10 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
     if (platform == null) return Icons.device_unknown;
     final p = platform.toLowerCase();
     if (p.contains('android')) return Icons.smartphone;
-    if (p.contains('windows')) return Icons.laptop_windows;
+    if (p.contains('windows')) return Icons.desktop_windows;
     if (p.contains('mac') || p.contains('ios')) return Icons.laptop_mac; // approximate for iOS/Mac
-    if (p.contains('linux')) return Icons.laptop_chromebook;
-    return Icons.desktop_windows;
+    if (p.contains('linux')) return Icons.computer;
+    return Icons.devices;
   }
 
   String _formatDate(String? timestamp) {

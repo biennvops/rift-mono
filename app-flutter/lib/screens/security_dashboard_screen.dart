@@ -668,7 +668,6 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     )
                   else
                     Container(
-                      margin: const EdgeInsets.only(bottom: 24),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(8),
@@ -691,6 +690,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                         ],
                       ),
                     ),
+                  const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton(

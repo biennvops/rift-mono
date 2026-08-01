@@ -467,7 +467,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -477,11 +477,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                        width: 48,
-                        height: 48,
+                        width: 40,
+                        height: 40,
                         decoration: BoxDecoration(
-                          color:
-                              theme.colorScheme.primary.withValues(alpha: 0.08),
+                          color: theme.colorScheme.primaryContainer
+                              .withValues(alpha: 0.16),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Stack(
@@ -489,7 +489,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                           clipBehavior: Clip.none,
                           children: [
                             Icon(_platformIcon(platform),
-                                size: 24, color: theme.colorScheme.primary),
+                                size: 20, color: theme.colorScheme.primary),
                             Positioned(
                               top: -4,
                               right: -4,
@@ -507,7 +507,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                           ],
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -517,7 +517,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                                 Flexible(
                                   child: Text(
                                     titleText,
-                                    style: theme.textTheme.titleLarge?.copyWith(
+                                    style:
+                                        theme.textTheme.titleMedium?.copyWith(
                                       color: theme.colorScheme.onSurface,
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -590,6 +591,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final bool isPending = trustState == 'pairing_pending';
 
     return InkWell(
+      key: ValueKey('trusted-peer-card-$deviceIdStr'),
       onTap: () => _handlePeerAction(
           peer: peer,
           isTrusted: isTrusted,
@@ -597,51 +599,78 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           titleText: titleText),
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: theme.colorScheme.outlineVariant),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: 48,
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Stack(
-                    alignment: Alignment.center,
-                    clipBehavior: Clip.none,
-                    children: [
-                      Icon(_platformIcon(peerPlatform),
-                          size: 24, color: theme.colorScheme.onSurfaceVariant),
-                      Positioned(
-                        top: -4,
-                        right: -4,
-                        child: Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: isOnline
-                                ? const Color(0xFF10B981)
-                                : theme.colorScheme.outlineVariant,
-                            shape: BoxShape.circle,
-                            border: Border.all(color: Colors.white, width: 2),
-                          ),
-                        ),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color:
+                    theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(_platformIcon(peerPlatform),
+                      size: 20, color: theme.colorScheme.primary),
+                  Positioned(
+                    top: -4,
+                    right: -4,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: isOnline
+                            ? const Color(0xFF10B981)
+                            : theme.colorScheme.outlineVariant,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    titleText,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    statusText,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -672,30 +701,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     ],
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  titleText,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  statusText,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
                 if (isPending) ...[
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 2),
                   TextButton(
                     onPressed: () => _handlePeerAction(
                       peer: peer,
@@ -704,9 +711,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                       titleText: titleText,
                     ),
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      minimumSize: const Size(0, 28),
                       foregroundColor: theme.colorScheme.tertiary,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4)),
@@ -749,11 +755,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainer,
+                    color: theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.16),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Icon(_platformIcon(peerPlatform),
-                      size: 20, color: theme.colorScheme.onSurfaceVariant),
+                      size: 20, color: theme.colorScheme.primary),
                 ),
                 const SizedBox(width: 16),
                 Expanded(
@@ -1022,11 +1029,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       case 'ios':
         return Icons.smartphone;
       case 'windows':
-        return Icons.laptop_windows;
+        return Icons.desktop_windows;
       case 'macos':
         return Icons.laptop_mac;
       case 'linux':
-        return Icons.terminal;
+        return Icons.computer;
       default:
         return Icons.devices;
     }
@@ -1049,26 +1056,26 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 fontWeight: FontWeight.w700)),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         _buildLocalDeviceCardHtml(theme),
-        const SizedBox(height: 32),
+        const SizedBox(height: 16),
         if (_trustedPeers
             .any((p) => p is Map && p['trustState'] == 'pairing_pending')) ...[
           Text('Pairing Pending',
               style: theme.textTheme.titleMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                   fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Column(
             children: _trustedPeers
                 .where((p) => p is Map && p['trustState'] == 'pairing_pending')
                 .map((p) => Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.only(bottom: 8),
                     child: _buildPeerCardHtml(
                         p as Map<String, dynamic>, false, theme)))
                 .toList(),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
         ],
         if (_trustedPeers
             .any((p) => p is Map && p['trustState'] == 'trusted')) ...[
@@ -1097,20 +1104,20 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           Column(
             children: _trustedPeers
                 .where((p) => p is Map && p['trustState'] == 'trusted')
                 .map((p) => Padding(
-                    padding: const EdgeInsets.only(bottom: 16),
+                    padding: const EdgeInsets.only(bottom: 8),
                     child: _buildPeerCardHtml(
                         p as Map<String, dynamic>, true, theme)))
                 .toList(),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
         ],
         _buildDiscoveredSection(theme),
-        const SizedBox(height: 32),
+        const SizedBox(height: 16),
         if (_trustedPeers.any((p) => p is Map && p['trustState'] == 'blocked'))
           _buildBlockedSection(theme),
       ],
@@ -1144,17 +1151,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   header,
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 16),
                   if (_error != null)
                     Container(
                       width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 32),
-                      padding: const EdgeInsets.all(16),
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: theme.colorScheme.errorContainer,
                         borderRadius: BorderRadius.circular(8),
@@ -1208,17 +1215,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 32, vertical: 32),
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       header,
-                      const SizedBox(height: 32),
+                      const SizedBox(height: 16),
                       if (_error != null)
                         Container(
                           width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 32),
-                          padding: const EdgeInsets.all(16),
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.errorContainer,
                             borderRadius: BorderRadius.circular(8),
@@ -1313,11 +1320,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Container(
+            key: const ValueKey('nearby-devices-list'),
             width: double.infinity,
+            constraints: const BoxConstraints(minHeight: 80),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(8),
@@ -1337,24 +1346,31 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   ),
                 ),
                 if (_discoveredPeers.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Row(
-                      children: [
-                        Icon(Icons.wifi_find,
-                            size: 24, color: theme.colorScheme.outlineVariant),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Text(
-                            _isDiscovering
-                                ? 'Searching...'
-                                : 'Discovery disabled.',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant),
+                  SizedBox(
+                    height: 78,
+                    child: _isDiscovering
+                        ? const SizedBox.expand()
+                        : Padding(
+                            padding: const EdgeInsets.all(10),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.wifi_off,
+                                  size: 24,
+                                  color: theme.colorScheme.outlineVariant,
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Text(
+                                    'Discovery disabled.',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
                   )
                 else
                   Padding(
@@ -1362,7 +1378,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     child: Column(
                       children: _discoveredPeers
                           .map((p) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.only(bottom: 8),
                               child: _buildDiscoveredCardHtml(
                                   p as Map<String, dynamic>, theme)))
                           .toList(),
@@ -1384,11 +1400,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
                 fontWeight: FontWeight.w700)),
-        const SizedBox(height: 12),
+        const SizedBox(height: 8),
         ..._trustedPeers
             .where((p) => p is Map && p['trustState'] == 'blocked')
             .map((p) => Padding(
-                padding: const EdgeInsets.only(bottom: 16),
+                padding: const EdgeInsets.only(bottom: 8),
                 child: _buildRestrictedCardHtml(
                     p as Map<String, dynamic>, theme))),
       ],

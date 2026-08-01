@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -7,7 +8,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 
 import '../constants.dart';
+import 'blocked_peers_screen.dart';
+import 'clipboard_debug_screen.dart';
 import 'event_log_screen.dart';
+import 'notifications_and_media_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
@@ -399,12 +403,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'System notifications are off';
       case 'notDetermined':
         return Platform.isMacOS
-            ? 'Permission has not been requested yet'
-            : 'Notification permission not granted yet';
+            ? 'Permission not requested'
+            : 'Permission not granted';
       case 'unknown':
-        return Platform.isMacOS
-            ? 'Unable to read macOS notification permission state'
-            : 'Notification status unavailable on this platform';
+        return 'Status unavailable';
       default:
         return 'Notification status: $_notificationPermissionStatus';
     }
@@ -427,16 +429,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   String get _notificationAccessSubtitle {
     if (!AndroidShell.isSupported) {
-      return 'Notification access is only required on Android';
+      return 'Android only';
     }
 
     switch (_notificationAccessStatus) {
       case 'authorized':
-        return 'Android notification access enabled for sync';
+        return 'Enabled for sync';
       case 'denied':
-        return 'Android notification access is off';
+        return 'Access is off';
       default:
-        return 'Notification access status unavailable';
+        return 'Status unavailable';
     }
   }
 
@@ -527,33 +529,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildMobileMenu(ThemeData theme) {
     final tabs = [
-      ('general', 'General', 'Basic identity and pairing', Icons.tune),
-      (
-        'identity',
-        'Identity',
-        'Profiles and trust state',
-        Icons.badge_outlined
-      ),
-      ('permissions', 'Permissions', 'System integrations', Icons.security),
-      (
-        'system',
-        'System Checks',
-        'Connectivity tests',
-        Icons.check_box_outlined
-      ),
-      (
-        'filetransfer',
-        'File Transfer',
-        'Queue and storage',
-        Icons.folder_shared_outlined
-      ),
-      (
-        'trust',
-        'Trust Store',
-        'Trusted devices and revocation',
-        Icons.shield_outlined
-      ),
-      ('about', 'About', 'Version and legal', Icons.info_outline),
+      ('general', 'General', Icons.tune),
+      ('identity', 'Identity', Icons.badge_outlined),
+      ('permissions', 'Permissions', Icons.security),
+      ('system', 'System Checks', Icons.check_box_outlined),
+      ('filetransfer', 'File Transfer', Icons.folder_shared_outlined),
+      ('trust', 'Trust Store', Icons.shield_outlined),
+      ('about', 'About', Icons.info_outline),
     ];
 
     return ListView.separated(
@@ -566,15 +548,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return ListTile(
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          leading: Icon(tab.$4, color: theme.colorScheme.primary),
+          leading: Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(tab.$3, size: 18, color: theme.colorScheme.primary),
+          ),
           title: Text(
             tab.$2,
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            tab.$3,
-            style: TextStyle(
-                fontSize: 14, color: theme.colorScheme.onSurfaceVariant),
           ),
           trailing: const Icon(Icons.chevron_right, size: 20),
           onTap: () => setState(() => _activeTab = tab.$1),
@@ -635,6 +620,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       tooltip: tooltip,
       style: IconButton.styleFrom(
         foregroundColor: theme.colorScheme.onSurfaceVariant,
+        backgroundColor:
+            theme.colorScheme.primaryContainer.withValues(alpha: 0.12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
       ),
     );
@@ -854,8 +841,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'General',
-            'Basic identity and pairing preferences for this device.'),
+        _buildPanelHeader(theme, 'General', 'Device identity and pairing.'),
         _buildRow(
           theme: theme,
           title: 'Device name',
@@ -867,7 +853,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildRow(
           theme: theme,
           title: 'Pair by IP',
-          subtitle: 'Manually pair with a device using its IP address',
+          subtitle: 'Connect using an IP address',
           trailing: _buildIconButton(
               theme, Icons.router, 'Pair by IP', _showManualPairDialog),
           onTap: _showManualPairDialog,
@@ -876,8 +862,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           theme: theme,
           title: 'Theme',
           subtitle: 'System default',
-          trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
-          onTap: () {},
+          trailing: Icon(Icons.lock_outline, color: theme.colorScheme.outline),
         ),
       ],
     );
@@ -890,8 +875,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'Identity',
-            'Your device\'s unique cryptographic identity, used to verify trust with peers.'),
+        _buildPanelHeader(
+            theme, 'Identity', 'Identity used to verify trusted devices.'),
         _buildRow(
           theme: theme,
           title: 'Device ID',
@@ -928,7 +913,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildPanelHeader(theme, 'Permissions & System Sync',
-            'Control what Rift can access on this device and how notifications mirror across your devices.'),
+            'Permissions and cross-device sync.'),
         _buildGroupLabel(theme, 'SYSTEM ACCESS'),
         _buildRow(
           theme: theme,
@@ -977,9 +962,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildGroupLabel(theme, 'NOTIFICATION SYNC'),
         _buildRow(
           theme: theme,
+          title: 'Notifications & Media',
+          subtitle: 'Notifications and media from trusted devices',
+          leadingIcon: Icon(
+            Icons.sync_alt,
+            color: theme.colorScheme.primary,
+            size: 20,
+          ),
+          trailing: Icon(
+            Icons.chevron_right,
+            color: theme.colorScheme.outline,
+          ),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const NotificationsAndMediaScreen(),
+              ),
+            );
+          },
+        ),
+        _buildRow(
+          theme: theme,
           title: 'Clipboard received notifications',
-          subtitle:
-              'Off by default. Shows a system notification when automatic clipboard sync receives content.',
+          subtitle: 'Notify when clipboard content arrives',
           trailing: Switch(
             value: _clipboardNotificationsEnabled,
             onChanged: _setClipboardNotificationsEnabled,
@@ -989,8 +994,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           theme: theme,
           title: 'Android notification sync',
           subtitle: _notificationAccessAuthorized
-              ? 'Mirror Android notifications to trusted desktop devices only.'
-              : 'On by default, but Android notification access must be enabled before sync can work.',
+              ? 'Mirror to trusted desktop devices'
+              : 'Enable Android notification access to sync',
           titleBadge: _buildAndroidBadge(theme),
           trailingBelow: false,
           trailing: Switch(
@@ -1022,7 +1027,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     color: theme.colorScheme.onSurface,
                   )),
               const SizedBox(height: 2),
-              Text('One Android package per line. Blacklisted apps stay local.',
+              Text('One package per line. Blocked apps stay local.',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w400,
@@ -1095,7 +1100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildPanelHeader(
           theme,
           'System Checks',
-          'Platform-level dependencies Rift needs to discover and sync with other devices.',
+          'Requirements for discovery and sync.',
           badge: Platform.isLinux
               ? _buildLinuxBadge(theme)
               : (Platform.isAndroid
@@ -1121,8 +1126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildRow(
               theme: theme,
               title: 'Android Clipboard Monitoring',
-              subtitle:
-                  'Rift uses platform clipboard APIs and foreground service flow. Accessibility Service is not required.',
+              subtitle: 'Native clipboard and foreground service',
               leadingIcon: _buildSuccessIcon(theme)),
         ] else ...[
           _buildRow(
@@ -1150,8 +1154,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'File Transfer',
-            'Where files received from trusted devices are saved.'),
+        _buildPanelHeader(
+            theme, 'File Transfer', 'Where received files are saved.'),
         _buildRow(
           theme: theme,
           title: 'Default Download Location',
@@ -1171,15 +1175,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'Trust Store',
-            'Manage the cryptographic keys and certificates of every device you\'ve trusted.'),
+        _buildPanelHeader(theme, 'Trust Store', 'Manage trusted device keys.'),
         _buildSecondaryButton(
           theme: theme,
           onPressed: () {
-            RiftSnackbar.show(
-                context: context,
-                message: 'Trust Store management is under development.',
-                type: RiftSnackbarType.info);
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const BlockedPeersScreen()),
+            );
           },
           label: 'MANAGE TRUST STORE',
           icon: Icons.folder_outlined,
@@ -1195,8 +1197,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildPanelHeader(theme, 'About Application',
-            'Build, protocol, and audit information.'),
+        _buildPanelHeader(theme, 'About Application', 'Version and audit.'),
         _buildRow(
             theme: theme, title: 'Implementation', subtitle: implementationId),
         _buildRow(
@@ -1207,7 +1208,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildRow(
           theme: theme,
           title: 'Event log',
-          subtitle: 'Open the full local audit trail',
+          subtitle: 'Open local audit trail',
           trailing: Icon(Icons.chevron_right, color: theme.colorScheme.outline),
           onTap: () {
             Navigator.of(context).push(
@@ -1217,6 +1218,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             );
           },
         ),
+        if (kDebugMode)
+          _buildRow(
+            theme: theme,
+            title: 'Clipboard diagnostics',
+            subtitle: 'Inspect clipboard state',
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ClipboardDebugScreen(),
+                ),
+              );
+            },
+          ),
       ],
     );
   }
@@ -1282,7 +1297,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // White card: bg + 1px border + no shadow, rounded-lg (8px)
           Container(
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerLowest,
+              color: Colors.white,
               border: Border.all(color: theme.colorScheme.outlineVariant),
               borderRadius: BorderRadius.circular(8),
             ),
@@ -1342,11 +1357,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final protocolVersion =
         _deviceInfo?['protocolVersion']?.toString() ?? 'Unavailable';
     final localNetworkSubtitle = Platform.isAndroid || Platform.isMacOS
-        ? 'Used during discovery and pairing'
+        ? 'Used for discovery and pairing'
         : 'Managed by the local daemon';
     final backgroundExecSubtitle = Platform.isAndroid
-        ? 'Rift uses a foreground service; some vendors may still restrict background work'
-        : 'Handled by the desktop session and local daemon';
+        ? 'Uses a foreground service'
+        : 'Managed by the local daemon';
 
     final isMobile = MediaQuery.of(context).size.width < 720;
 

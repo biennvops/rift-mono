@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:app_flutter/screens/pair_device_screen.dart';
 import 'package:app_flutter/screens/trusted_devices_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'test_utils/fake_transport.dart';
@@ -172,6 +173,54 @@ void main() {
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
+  testWidgets('TrustedDevicesScreen handles dense peer lists at target sizes',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = List<Map<String, dynamic>>.generate(
+        8,
+        (index) => {
+          'deviceId': 'rift-trusted-$index',
+          'displayName': 'Trusted Device $index',
+          'platform': index.isEven ? 'android' : 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['presence.basic'],
+        },
+      );
+
+    for (final size in const [
+      Size(420, 600),
+      Size(800, 600),
+      Size(1200, 800),
+    ]) {
+      await tester.binding.setSurfaceSize(size);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull, reason: 'viewport $size');
+      expect(find.text('8 Devices'), findsOneWidget);
+      expect(find.text('Trusted Device 0'), findsOneWidget);
+      expect(
+        tester
+            .getSize(
+              find.byKey(
+                const ValueKey('trusted-peer-card-rift-trusted-0'),
+              ),
+            )
+            .height,
+        lessThanOrEqualTo(72),
+      );
+    }
+  });
+
   testWidgets(
       'TrustedDevicesScreen auto-starts discovery when trusted peers exist but discovery is offline',
       (WidgetTester tester) async {
@@ -189,6 +238,64 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.startDiscoveryCallCount, 1);
+  });
+
+  testWidgets('Nearby Devices empty frame is taller on mobile',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeJsonRpcRiftClient()..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .getSize(
+            find.byKey(const ValueKey('nearby-devices-list')),
+          )
+          .height,
+      greaterThanOrEqualTo(80),
+    );
+    expect(find.text('Searching...'), findsNothing);
+    expect(find.byIcon(Icons.wifi_find), findsNothing);
+  });
+
+  testWidgets('Pair device dialog stays compact on a short mobile screen',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(390, 600));
+    final client = FakeJsonRpcRiftClient()..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairDeviceScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Pair securely on your local network.'), findsOneWidget);
+    expect(find.text('Enter an IP address or hostname.'), findsOneWidget);
+    expect(find.byIcon(Icons.shield), findsNothing);
+    expect(find.text('Cancel'), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('pair-device-dialog'))).width,
+      lessThanOrEqualTo(366),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
   });
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
@@ -383,7 +490,7 @@ void main() {
     // Verify Presence indicator
     expect(find.text('Linux Workstation'), findsOneWidget);
     expect(find.text('ONLINE'), findsOneWidget);
-    expect(find.byIcon(Icons.terminal), findsWidgets);
+    expect(find.byIcon(Icons.computer), findsWidgets);
   });
 
   testWidgets(
@@ -533,9 +640,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byIcon(Icons.smartphone), findsOneWidget);
-    expect(find.byIcon(Icons.laptop_windows), findsAtLeastNWidgets(1));
+    expect(find.byIcon(Icons.desktop_windows), findsAtLeastNWidgets(1));
     expect(find.byIcon(Icons.laptop_mac), findsOneWidget);
-    expect(find.byIcon(Icons.terminal), findsAtLeastNWidgets(1));
+    expect(find.byIcon(Icons.computer), findsAtLeastNWidgets(1));
     expect(find.text('Mystery Box'), findsOneWidget);
     expect(find.byIcon(Icons.devices), findsOneWidget);
   });

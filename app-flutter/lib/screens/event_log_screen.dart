@@ -345,7 +345,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
-                  onTap: () {},
+                  onTap: null,
                   borderRadius: BorderRadius.circular(8),
                   hoverColor: theme.colorScheme.surfaceContainerHighest
                       .withValues(alpha: 0.3),
@@ -426,6 +426,9 @@ class _EventLogScreenState extends State<EventLogScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0,
+        shadowColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
         iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
         leading: widget.onBack != null
             ? IconButton(
@@ -446,16 +449,6 @@ class _EventLogScreenState extends State<EventLogScreen> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Text(
-              'Full system activity timeline.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(

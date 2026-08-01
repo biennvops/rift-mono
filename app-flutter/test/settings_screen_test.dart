@@ -100,6 +100,10 @@ void main() {
     when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
     when(() => mockClient.onConnectionChanged)
         .thenAnswer((_) => connectionChangedController.stream);
+    when(() => mockClient.onTrustChanged)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.listTrustedPeers())
+        .thenAnswer((_) async => <String, dynamic>{'peers': <dynamic>[]});
   });
 
   tearDown(() {
@@ -134,7 +138,8 @@ void main() {
     await pumpLoaded(tester);
 
     // Tab rail labels should be visible
-    expect(find.text('General'), findsNWidgets(2)); // Tab rail label + panel header
+    expect(find.text('General'),
+        findsNWidgets(2)); // Tab rail label + panel header
     expect(find.text('Identity'), findsOneWidget);
     expect(find.text('Permissions'), findsOneWidget);
     expect(find.text('System Checks'), findsOneWidget);
@@ -145,6 +150,23 @@ void main() {
     // Default tab is General
     expect(find.text('Device name'), findsOneWidget);
     expect(find.text('Pair by IP'), findsOneWidget);
+    final generalCard = find
+        .ancestor(
+            of: find.text('Device name'), matching: find.byType(Container))
+        .evaluate()
+        .map((element) => element.widget)
+        .whereType<Container>()
+        .firstWhere(
+          (container) =>
+              container.decoration is BoxDecoration &&
+              (container.decoration! as BoxDecoration).color == Colors.white &&
+              (container.decoration! as BoxDecoration).borderRadius ==
+                  BorderRadius.circular(8),
+        );
+    expect(
+      (generalCard.decoration! as BoxDecoration).color,
+      Colors.white,
+    );
 
     // Tap Identity tab to see device info
     await tester.tap(find.text('Identity'));
@@ -152,6 +174,56 @@ void main() {
 
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
+  });
+
+  testWidgets('mobile settings menu uses tinted square icon containers',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    expect(find.byIcon(Icons.tune), findsOneWidget);
+    final tintedSquare = find.byWidgetPredicate(
+      (widget) {
+        if (widget is! DecoratedBox || widget.decoration is! BoxDecoration) {
+          return false;
+        }
+        final decoration = widget.decoration as BoxDecoration;
+        return decoration.color != null &&
+            decoration.color != Colors.transparent &&
+            decoration.borderRadius == BorderRadius.circular(8);
+      },
+    );
+    expect(tintedSquare, findsWidgets);
+  });
+
+  testWidgets('Trust Store opens blocked peer management',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    await tester.tap(find.text('Trust Store'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('MANAGE TRUST STORE'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Blocked Peers'), findsOneWidget);
+    expect(find.text('No Blocked Peers'), findsOneWidget);
   });
 
   testWidgets('SettingsScreen shows error message for generic error',
