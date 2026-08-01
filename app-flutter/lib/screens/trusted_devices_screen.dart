@@ -445,127 +445,228 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         ? displayName
         : (deviceId.isNotEmpty ? deviceId : 'This Device');
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
+    return Material(
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
       ),
-      child: Stack(
-        children: [
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 4,
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.primary,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(8)),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        key: const ValueKey('local-device-card'),
+        onTap: () => _showLocalDeviceDetails(localDeviceInfo),
+        child: Stack(
+          children: [
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 4,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary,
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(8)),
+                ),
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer
-                              .withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          clipBehavior: Clip.none,
-                          children: [
-                            Icon(_platformIcon(platform),
-                                size: 20, color: theme.colorScheme.primary),
-                            Positioned(
-                              top: -4,
-                              right: -4,
-                              child: Container(
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981),
-                                  shape: BoxShape.circle,
-                                  border:
-                                      Border.all(color: Colors.white, width: 2),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    titleText,
-                                    style:
-                                        theme.textTheme.titleMedium?.copyWith(
-                                      color: theme.colorScheme.onSurface,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer
+                                .withValues(alpha: 0.16),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Stack(
+                            alignment: Alignment.center,
+                            clipBehavior: Clip.none,
+                            children: [
+                              Icon(_platformIcon(platform),
+                                  size: 20, color: theme.colorScheme.primary),
+                              Positioned(
+                                top: -4,
+                                right: -4,
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF10B981),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: Colors.white, width: 2),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                Icon(Icons.verified,
-                                    size: 18, color: theme.colorScheme.primary),
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Icon(Icons.fingerprint,
-                                    size: 14,
-                                    color: theme.colorScheme.onSurfaceVariant
-                                        .withValues(alpha: 0.7)),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    _localDeviceId != null
-                                        ? (_localDeviceId!.length > 20
-                                            ? '${_localDeviceId!.substring(0, 20)}...'
-                                            : _localDeviceId!)
-                                        : 'Loading fingerprint...',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                        fontFamily: 'monospace',
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      titleText,
+                                      style:
+                                          theme.textTheme.titleMedium?.copyWith(
+                                        color: theme.colorScheme.onSurface,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Icon(Icons.verified,
+                                      size: 18,
+                                      color: theme.colorScheme.primary),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 2),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.fingerprint,
+                                        size: 14,
                                         color: theme
                                             .colorScheme.onSurfaceVariant
                                             .withValues(alpha: 0.7)),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        _localDeviceId != null
+                                            ? (_localDeviceId!.length > 20
+                                                ? '${_localDeviceId!.substring(0, 20)}...'
+                                                : _localDeviceId!)
+                                            : 'Loading fingerprint...',
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                                fontFamily: 'monospace',
+                                                color: theme.colorScheme
+                                                    .onSurfaceVariant
+                                                    .withValues(alpha: 0.7)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                          ],
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showLocalDeviceDetails(
+    Map<String, dynamic> deviceInfo,
+  ) async {
+    final theme = Theme.of(context);
+    final displayName = deviceInfo['displayName']?.toString();
+    final deviceId = deviceInfo['deviceId']?.toString();
+    final fingerprint = deviceInfo['fingerprint']?.toString();
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        title: Text(
+          'Device details',
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildIdentityDetail(
+                theme,
+                label: 'Device Name',
+                value: displayName?.isNotEmpty == true
+                    ? displayName!
+                    : 'Unavailable',
+              ),
+              const SizedBox(height: 12),
+              _buildIdentityDetail(
+                theme,
+                label: 'Device ID',
+                value: deviceId?.isNotEmpty == true ? deviceId! : 'Unavailable',
+                monospace: true,
+              ),
+              const SizedBox(height: 12),
+              _buildIdentityDetail(
+                theme,
+                label: 'Fingerprint',
+                value: fingerprint?.isNotEmpty == true
+                    ? fingerprint!
+                    : 'Unavailable',
+                monospace: true,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildIdentityDetail(
+    ThemeData theme, {
+    required String label,
+    required String value,
+    bool monospace = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 3),
+        SelectableText(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurface,
+            fontFamily: monospace ? 'monospace' : null,
+          ),
+        ),
+      ],
     );
   }
 

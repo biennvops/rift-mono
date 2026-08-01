@@ -173,6 +173,39 @@ void main() {
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
+  testWidgets('local device card opens compact identity details',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(390, 600));
+    final client = FakeJsonRpcRiftClient()
+      ..deviceInfo = {
+        'deviceId': 'rift-abcdefghijklmnopqrstuvwxyz234567',
+        'displayName': 'Linux Desktop 111',
+        'platform': 'linux',
+        'fingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12-3456',
+      };
+
+    await tester.pumpWidget(MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const TrustedDevicesScreen(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('local-device-card')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Device details'), findsOneWidget);
+    expect(find.text('Linux Desktop 111'), findsWidgets);
+    expect(find.text('rift-abcdefghijklmnopqrstuvwxyz234567'), findsOneWidget);
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12-3456'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('TrustedDevicesScreen handles dense peer lists at target sizes',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -296,6 +329,46 @@ void main() {
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump();
+  });
+
+  testWidgets('Pair device dialog hides already trusted devices',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-trusted',
+          'displayName': 'Trusted Laptop',
+          'platform': 'linux',
+          'trustState': 'trusted',
+        },
+      ]
+      ..discoveredPeers = [
+        {
+          'deviceId': 'rift-trusted',
+          'displayName': 'Trusted Laptop',
+          'platform': 'linux',
+          'trustState': 'discovered',
+        },
+        {
+          'deviceId': 'rift-new',
+          'displayName': 'New Phone',
+          'platform': 'android',
+          'trustState': 'discovered',
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairDeviceScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Trusted Laptop'), findsNothing);
+    expect(find.text('New Phone'), findsOneWidget);
   });
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',

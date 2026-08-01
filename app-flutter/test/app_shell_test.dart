@@ -472,11 +472,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
+    expect(find.textContaining('Linux Laptop'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });

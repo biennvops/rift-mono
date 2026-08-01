@@ -62,8 +62,28 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     if (!mounted) return;
     final client = _client ?? context.read<JsonRpcRiftClient>();
     try {
-      final discoveredResult = await client.listDiscoveredPeers();
-      final peers = List<dynamic>.from(discoveredResult['peers'] ?? const []);
+      final results = await Future.wait([
+        client.listDiscoveredPeers(),
+        client.listTrustedPeers(),
+      ]);
+      final discoveredResult = results[0];
+      final trustedResult = results[1];
+      final managedDeviceIds = List<dynamic>.from(
+        trustedResult['peers'] ?? const [],
+      )
+          .whereType<Map>()
+          .map((peer) => peer['deviceId']?.toString())
+          .whereType<String>()
+          .where((deviceId) => deviceId.isNotEmpty)
+          .toSet();
+      final peers = List<dynamic>.from(
+        discoveredResult['peers'] ?? const [],
+      ).where((peer) {
+        if (peer is! Map) return false;
+        final deviceId = peer['deviceId']?.toString();
+        if (deviceId == null || deviceId.isEmpty) return false;
+        return !managedDeviceIds.contains(deviceId);
+      }).toList(growable: false);
       if (mounted) {
         setState(() {
           _discoveredPeers = peers;

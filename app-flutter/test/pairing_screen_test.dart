@@ -293,10 +293,38 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNull);
+  });
+
+  testWidgets('PairingScreen keeps the Rift layout on a phone viewport',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(),
+        ),
+      ),
+    );
+    await client.emitPairingRequest({
+      'deviceId': 'rift-peer',
+      'displayName': 'Android Phone 73',
+      'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    });
+    await tester.pump();
+
+    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('PairingScreen reacts to trust persisted transition',
