@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/screens/event_log_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/ui/local_events_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -68,7 +69,30 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 }
 
 void main() {
-  testWidgets('EventLogScreen shows queried events', (WidgetTester tester) async {
+  test('LocalEventsNotifier seeds the feed from event history', () async {
+    final client = FakeJsonRpcRiftClient()
+      ..events = [
+        {
+          'eventId': 'evt-clipboard',
+          'eventType': 'clipboard.offered',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-history',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(1));
+    expect(notifier.events.single.title, 'Clipboard received');
+    expect(notifier.unreadCount, 0);
+  });
+
+  testWidgets('EventLogScreen shows queried events',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
 
     await tester.pumpWidget(
@@ -85,9 +109,14 @@ void main() {
     expect(find.text('pairing.completed'), findsOneWidget);
     expect(find.text('auth.failed'), findsOneWidget);
     expect(find.text('AuthenticationFailed'), findsOneWidget);
+    expect(find.text('Full system activity timeline.'), findsNothing);
+    final appBar = tester.widget<AppBar>(find.byType(AppBar));
+    expect(appBar.scrolledUnderElevation, 0);
+    expect(appBar.surfaceTintColor, Colors.transparent);
   });
 
-  testWidgets('EventLogScreen filters by severity', (WidgetTester tester) async {
+  testWidgets('EventLogScreen filters by severity',
+      (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
 
     await tester.pumpWidget(
@@ -100,6 +129,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Errors'));
     await tester.tap(find.text('Errors'));
     await tester.pumpAndSettle();
 
