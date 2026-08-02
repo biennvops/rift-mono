@@ -11,6 +11,7 @@ import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/src/ui/local_events_notifier.dart';
+import 'package:app_flutter/src/ui/app_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -448,6 +449,9 @@ void main() {
           Provider<JsonRpcRiftClient>.value(value: mockClient),
           ChangeNotifierProvider<SendQueueController>(
             create: (_) => SendQueueController(mockClient, false),
+          ),
+          ChangeNotifierProvider<LocalEventsNotifier>(
+            create: (_) => LocalEventsNotifier(mockClient),
           ),
         ],
         child: MaterialApp(

@@ -13,12 +13,7 @@ import 'package:flutter/services.dart';
 import 'constants.dart';
 import 'src/ui/app_shell.dart' as rift_ui;
 import 'src/ui/theme.dart';
-import 'package:app_flutter/screens/security_dashboard_screen.dart';
-import 'package:app_flutter/screens/operations_screen.dart';
 import 'screens/pairing_screen.dart';
-import 'screens/trusted_devices_screen.dart';
-import 'screens/clipboard_transfer_screen.dart';
-import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -215,7 +210,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       Duration(seconds: 2);
 
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  final GlobalKey<_AppShellState> _appShellKey = GlobalKey<_AppShellState>();
+  final GlobalKey<rift_ui.AppShellState> _appShellKey =
+      GlobalKey<rift_ui.AppShellState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
@@ -1763,120 +1759,4 @@ class _IncomingFileDestination {
 
   final String transferPath;
   final String displayPath;
-}
-
-class AppShell extends StatefulWidget {
-  final ValueNotifier<String?>? historyRouteNotifier;
-  final ValueNotifier<String?>? sharedClipboardTextNotifier;
-
-  const AppShell({
-    super.key,
-    this.historyRouteNotifier,
-    this.sharedClipboardTextNotifier,
-  });
-
-  @override
-  State<AppShell> createState() => _AppShellState();
-}
-
-class _AppShellState extends State<AppShell> {
-  late int _currentIndex;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.historyRouteNotifier?.value == null ? 0 : 1;
-  }
-
-  late final List<Widget> _screens = [
-    const TrustedDevicesScreen(),
-    ClipboardTransferScreen(
-      routeNotifier: widget.historyRouteNotifier,
-      sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
-    ),
-    const SecurityDashboardScreen(),
-    const OperationsScreen(),
-  ];
-
-  void showHistoryRoute(String route) {
-    setState(() {
-      _currentIndex = 1;
-    });
-    widget.historyRouteNotifier?.value = route;
-  }
-
-  void showRoute(String route) {
-    if (route == NotificationRoute.devices) {
-      setState(() {
-        _currentIndex = 0;
-      });
-      return;
-    }
-    showHistoryRoute(route);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(Icons.shield, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
-            Text('RIFT',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.devices),
-            selectedIcon: Icon(Icons.devices),
-            label: 'Devices',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.security),
-            selectedIcon: Icon(Icons.security),
-            label: 'Events',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.terminal_outlined),
-            selectedIcon: Icon(Icons.terminal),
-            label: 'Ops',
-          ),
-        ],
-      ),
-    );
-  }
 }

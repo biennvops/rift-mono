@@ -32,6 +32,14 @@ class AppShellState extends State<AppShell> {
   double _sidebarWidth = RiftDesign.sidebarWidth;
   double _horizontalDragDistance = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.historyRouteNotifier?.value != null) {
+      _currentIndex = 1;
+    }
+  }
+
   late final List<Widget> _screens = [
     const TrustedDevicesScreen(),
     ClipboardTransferScreen(
