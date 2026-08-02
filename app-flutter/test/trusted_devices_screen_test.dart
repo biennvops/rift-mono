@@ -173,6 +173,38 @@ void main() {
     expect(find.text('Devices Hub'), findsOneWidget);
   });
 
+  testWidgets('trusted peer uses discovery name when trust record has none',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-without-name',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+      ]
+      ..discoveredPeers = [
+        {
+          'deviceId': 'rift-peer-without-name',
+          'displayName': 'Android Phone 73',
+          'platform': 'android',
+          'address': '192.168.1.32',
+          'port': 11112,
+        },
+      ];
+
+    await tester.pumpWidget(MaterialApp(
+      home: Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: const TrustedDevicesScreen(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Android Phone 73'), findsOneWidget);
+    expect(find.text('rift-peer-witho'), findsNothing);
+  });
+
   testWidgets('local device card opens compact identity details',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));

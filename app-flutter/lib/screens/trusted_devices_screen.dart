@@ -258,13 +258,17 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       final trustedResult = await client.listTrustedPeers();
       final discoveredResult = await client.listDiscoveredPeers();
       final localDeviceId = deviceInfo['deviceId']?.toString();
-      final trustedPeers =
-          List<dynamic>.from(trustedResult['peers'] ?? const []);
+      final rawDiscoveredPeers =
+          List<dynamic>.from(discoveredResult['peers'] ?? const []);
+      final trustedPeers = _enrichTrustedPeersFromDiscovery(
+        trustedPeers: List<dynamic>.from(
+          trustedResult['peers'] ?? const [],
+        ),
+        discoveredPeers: rawDiscoveredPeers,
+      );
       final discoveredPeers = _filterDiscoverablePeers(
         trustedPeers: trustedPeers,
-        discoveredPeers: List<dynamic>.from(
-          discoveredResult['peers'] ?? const [],
-        ),
+        discoveredPeers: rawDiscoveredPeers,
       );
       final isDiscovering = discoveredResult['isDiscovering'] == true;
 
@@ -309,6 +313,45 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     return localDeviceId != null &&
         localDeviceId.isNotEmpty &&
         deviceId == localDeviceId;
+  }
+
+  List<dynamic> _enrichTrustedPeersFromDiscovery({
+    required List<dynamic> trustedPeers,
+    required List<dynamic> discoveredPeers,
+  }) {
+    final discoveredByDeviceId = <String, Map<String, dynamic>>{};
+    for (final peer in discoveredPeers.whereType<Map>()) {
+      final deviceId = peer['deviceId']?.toString();
+      if (deviceId == null || deviceId.isEmpty) continue;
+      discoveredByDeviceId[deviceId] = Map<String, dynamic>.from(peer);
+    }
+
+    return trustedPeers.map((peer) {
+      if (peer is! Map) return peer;
+      final enriched = Map<String, dynamic>.from(peer);
+      final deviceId = enriched['deviceId']?.toString();
+      final discovered = discoveredByDeviceId[deviceId];
+      if (discovered == null) return enriched;
+
+      final displayName = enriched['displayName']?.toString().trim() ?? '';
+      if (displayName.isEmpty) {
+        final discoveredName =
+            discovered['displayName']?.toString().trim() ?? '';
+        if (discoveredName.isNotEmpty) {
+          enriched['displayName'] = discoveredName;
+        }
+      }
+
+      final platform = enriched['platform']?.toString().trim() ?? '';
+      if (platform.isEmpty || platform == 'unknown') {
+        final discoveredPlatform =
+            discovered['platform']?.toString().trim() ?? '';
+        if (discoveredPlatform.isNotEmpty) {
+          enriched['platform'] = discoveredPlatform;
+        }
+      }
+      return enriched;
+    }).toList();
   }
 
   List<dynamic> _filterDiscoverablePeers({
