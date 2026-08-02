@@ -22,6 +22,10 @@ import '../src/platform/android_shell.dart';
 import '../src/platform/ios_clipboard.dart';
 import '../src/platform/macos_send_files.dart';
 import '../src/platform/notification_route.dart';
+import 'views/clipboard_history_view.dart';
+import 'views/file_send_view.dart';
+import 'views/incoming_offers_view.dart';
+import 'views/transfer_activity_view.dart';
 
 enum _HistorySection {
   clipboard,
@@ -57,8 +61,11 @@ class ClipboardTransferScreen extends StatefulWidget {
   final Future<void> Function(IOSClipboardContent content)?
       writeClipboardContentOverride;
   final Future<void> Function(String text)? writeClipboardTextOverride;
+  final Future<String?> Function(String fileName)?
+      buildIncomingDestinationPathOverride;
   final ValueNotifier<String?>? routeNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
+  final ValueChanged<int>? onBoundarySwipe;
 
   const ClipboardTransferScreen({
     super.key,
@@ -74,8 +81,10 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.readClipboardTextOverride,
     this.writeClipboardContentOverride,
     this.writeClipboardTextOverride,
+    this.buildIncomingDestinationPathOverride,
     this.routeNotifier,
     this.sharedClipboardTextNotifier,
+    this.onBoundarySwipe,
   });
 
   @override
@@ -112,6 +121,19 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   bool _isRefreshingTransfers = false;
   bool _isRefreshingPeers = false;
   _HistorySection _activeSection = _HistorySection.clipboard;
+  double _horizontalDragDistance = 0;
+
+  bool get _usesRiftActivityUi =>
+      !Platform.isIOS &&
+      widget.revealCompletedTransfersInFolderOverride == null &&
+      widget.exportCompletedTransfersOverride == null &&
+      widget.openFileOverride == null &&
+      widget.exportFileOverride == null &&
+      widget.iosClipboardActionsOverride == null &&
+      widget.readClipboardContentOverride == null &&
+      widget.readClipboardTextOverride == null &&
+      widget.writeClipboardContentOverride == null &&
+      widget.writeClipboardTextOverride == null;
 
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ??
@@ -1898,49 +1920,269 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   Widget build(BuildContext context) {
     context.watch<SendQueueController>();
     final theme = Theme.of(context);
+    if (_usesRiftActivityUi) {
+      return _buildRiftActivityUi(theme);
+    }
+
     final title = widget.displayName != null && widget.displayName!.isNotEmpty
         ? 'History - ${widget.displayName}'
         : 'History';
 
-    return Scaffold(
-      backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        title: Text(
-          title,
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.primary,
-            fontWeight: FontWeight.bold,
+    return GestureDetector(
+      key: const ValueKey('activity-section-swipe-area'),
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: _handleHorizontalDragEnd,
+      child: Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        appBar: AppBar(
+          title: Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          backgroundColor: theme.colorScheme.surface,
+          foregroundColor: theme.colorScheme.primary,
+          elevation: 0,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child:
+                Container(color: theme.colorScheme.outlineVariant, height: 1),
           ),
         ),
-        backgroundColor: theme.colorScheme.surface,
-        foregroundColor: theme.colorScheme.primary,
-        elevation: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: theme.colorScheme.outlineVariant, height: 1),
+        body: RefreshIndicator(
+          onRefresh: _refreshAll,
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (_isRefreshing)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: LinearProgressIndicator(
+                    minHeight: 2,
+                    color: theme.colorScheme.primary,
+                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+              _buildSectionTabBar(theme),
+              const SizedBox(height: 16),
+              KeyedSubtree(
+                key: ValueKey(
+                  'history-section-content-${_activeSection.name}',
+                ),
+                child: _buildActiveSection(theme),
+              ),
+            ],
+          ),
         ),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refreshAll,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+    );
+  }
+
+  Widget _buildRiftActivityUi(ThemeData theme) {
+    final title = widget.displayName != null && widget.displayName!.isNotEmpty
+        ? 'Activity — ${widget.displayName}'
+        : 'Activity';
+
+    return GestureDetector(
+      key: const ValueKey('activity-section-swipe-area'),
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: _handleHorizontalDragEnd,
+      child: Scaffold(
+        backgroundColor: theme.colorScheme.surface,
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_isRefreshing)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: LinearProgressIndicator(
-                  minHeight: 2,
-                  color: theme.colorScheme.primary,
-                  backgroundColor: theme.colorScheme.surfaceContainerHighest,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 16, 12, 10),
+              child: Text(
+                title,
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                  letterSpacing: -0.5,
                 ),
               ),
-            _buildSectionTabBar(theme),
-            const SizedBox(height: 16),
-            _buildActiveSection(theme),
+            ),
+            _buildRiftSectionTabBar(theme),
+            Expanded(
+              child: KeyedSubtree(
+                key: ValueKey(
+                  'history-section-content-${_activeSection.name}',
+                ),
+                child: _buildRiftActiveSection(),
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildRiftSectionTabBar(ThemeData theme) {
+    final incomingOfferCount = _incomingFileOffers.length;
+    final transferCount = _fileTransfers.length;
+
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
+          ),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: Row(
+          children: [
+            _buildRiftSectionChip(
+              theme,
+              _HistorySection.clipboard,
+              'Clipboard',
+            ),
+            const SizedBox(width: 16),
+            _buildRiftSectionChip(theme, _HistorySection.send, 'Send File'),
+            const SizedBox(width: 16),
+            _buildRiftSectionChip(
+              theme,
+              _HistorySection.incomingOffers,
+              'Incoming Offers',
+              badgeCount: incomingOfferCount,
+            ),
+            const SizedBox(width: 16),
+            _buildRiftSectionChip(
+              theme,
+              _HistorySection.transferActivity,
+              'Transfer Activity',
+              badgeCount: transferCount,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRiftSectionChip(
+    ThemeData theme,
+    _HistorySection section,
+    String label, {
+    int badgeCount = 0,
+  }) {
+    final isSelected = _activeSection == section;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => setState(() => _activeSection = section),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(
+                color:
+                    isSelected ? theme.colorScheme.primary : Colors.transparent,
+                width: 2,
+              ),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected
+                      ? theme.colorScheme.primary
+                      : theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+              if (badgeCount > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 1,
+                  ),
+                  constraints: const BoxConstraints(minWidth: 18),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '$badgeCount',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRiftActiveSection() {
+    switch (_activeSection) {
+      case _HistorySection.clipboard:
+        return const ClipboardHistoryView();
+      case _HistorySection.send:
+        return FileSendView(
+          pickSendFilesOverride: widget.pickSendFilesOverride,
+          onViewActivityRequested: () {
+            setState(() => _activeSection = _HistorySection.transferActivity);
+          },
+        );
+      case _HistorySection.incomingOffers:
+        return IncomingOffersView(
+          buildDestinationPathOverride:
+              widget.buildIncomingDestinationPathOverride,
+          onOffersChanged: _refreshAll,
+        );
+      case _HistorySection.transferActivity:
+        return const TransferActivityView();
+      case _HistorySection.notifications:
+        return _buildNotificationsSection(Theme.of(context));
+    }
+  }
+
+  void _handleHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    if (_horizontalDragDistance.abs() < 48 && velocity.abs() < 350) return;
+
+    final direction = velocity.abs() >= 350
+        ? (velocity < 0 ? 1 : -1)
+        : (_horizontalDragDistance < 0 ? 1 : -1);
+    final sections = _usesRiftActivityUi
+        ? const [
+            _HistorySection.clipboard,
+            _HistorySection.send,
+            _HistorySection.incomingOffers,
+            _HistorySection.transferActivity,
+          ]
+        : _HistorySection.values;
+    final nextIndex = sections.indexOf(_activeSection) + direction;
+    if (nextIndex >= 0 && nextIndex < sections.length) {
+      setState(() => _activeSection = sections[nextIndex]);
+      return;
+    }
+    widget.onBoundarySwipe?.call(direction);
   }
 
   Widget _buildSectionTabBar(ThemeData theme) {
