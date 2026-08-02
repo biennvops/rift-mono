@@ -10,6 +10,7 @@ import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
+import 'package:app_flutter/src/ui/local_events_notifier.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
@@ -175,6 +176,9 @@ void main() {
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (_) => SendQueueController(client, false),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (_) => LocalEventsNotifier(client),
         ),
       ],
       child: const RiftApp(hasCompletedOnboarding: true),
@@ -405,11 +409,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Devices'), findsOneWidget);
-    expect(find.text('History'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
-    expect(find.text('Ops'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    expect(find.text('RIFT'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+    expect(find.text('Operations'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsWidgets);
+    expect(find.text('Rift'), findsOneWidget);
   });
 
   testWidgets('tray right-click opens the configured context menu',
@@ -488,11 +492,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
+    expect(find.textContaining('Linux Laptop'), findsOneWidget);
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });

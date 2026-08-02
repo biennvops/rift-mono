@@ -18,6 +18,7 @@ class PairingScreen extends StatefulWidget {
   final bool initialCanApproveLocally;
   final String? initialStatus;
   final bool autoStart;
+  final VoidCallback? onClose;
 
   const PairingScreen({
     super.key,
@@ -30,6 +31,7 @@ class PairingScreen extends StatefulWidget {
     this.initialCanApproveLocally = false,
     this.initialStatus,
     this.autoStart = false,
+    this.onClose,
   });
 
   @override
@@ -51,7 +53,6 @@ class _PairingScreenState extends State<PairingScreen> {
   String _status = 'No active pairing yet';
   String? _error;
   bool _busy = false;
-  bool _completed = false;
   int? _remainingSeconds;
   bool _hasActivePairingFlow = false;
   bool _canApproveLocally = false;
@@ -66,7 +67,7 @@ class _PairingScreenState extends State<PairingScreen> {
     });
     _approveDelayTimer?.cancel();
     _approveDelayTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && _hasActivePairingFlow && !_completed) {
+      if (mounted && _hasActivePairingFlow && !_isClosingAfterCompletion) {
         setState(() {
           _canApproveDelay = true;
         });
@@ -98,7 +99,6 @@ class _PairingScreenState extends State<PairingScreen> {
           _localFingerprint ??= fingerprint;
         });
       } catch (_) {
-        // Best-effort only. The screen can still function using the peer fingerprint.
       } finally {
         if (mounted) {
           _localFingerprintLoad = null;
@@ -162,7 +162,6 @@ class _PairingScreenState extends State<PairingScreen> {
         _status = 'Incoming pairing request';
         _error = null;
         _busy = false;
-        _completed = false;
         _hasActivePairingFlow = true;
         _canApproveLocally = true;
         _isRecipientFlow = true;
@@ -178,9 +177,9 @@ class _PairingScreenState extends State<PairingScreen> {
     _trustSub = client.onTrustChanged.listen((event) async {
       if (!mounted || event['deviceId']?.toString() != _deviceId) return;
       final newState = event['newState']?.toString();
-      if (newState == 'trusted' && !_completed) {
+      if (newState == 'trusted' && !_isClosingAfterCompletion) {
         await _handlePairingCompleted();
-      } else if (newState == 'discovered' && !_completed) {
+      } else if (newState == 'discovered' && !_isClosingAfterCompletion) {
         final shouldAutoClose = !_isRecipientFlow;
         setState(() {
           _status = 'Pairing closed';
@@ -194,40 +193,29 @@ class _PairingScreenState extends State<PairingScreen> {
         _countdownTimer?.cancel();
         _remainingSeconds = null;
         if (shouldAutoClose && mounted) {
-          Navigator.of(context).maybePop();
+          if (widget.onClose != null) {
+            widget.onClose!();
+          } else {
+            Navigator.of(context).maybePop();
+          }
         }
       }
     });
   }
 
   Future<void> _handlePairingCompleted() async {
-    if (!mounted || _isClosingAfterCompletion) {
-      return;
-    }
-
+    if (!mounted || _isClosingAfterCompletion) return;
+    _isClosingAfterCompletion = true;
     if (_isRecipientFlow) {
-      setState(() {
-        _isClosingAfterCompletion = true;
-        _hasActivePairingFlow = false;
-      });
-      unawaited(_showRecipientPairingSuccessNotice().catchError((_) {}));
-      await WidgetsBinding.instance.endOfFrame;
-      if (mounted) {
-        Navigator.of(context).maybePop();
-      }
-      return;
+      await _showRecipientPairingSuccessNotice();
+      if (!mounted) return;
     }
-
-    setState(() {
-      _status = 'Pairing complete';
-      _error = null;
-      _busy = false;
-      _completed = true;
-      _hasActivePairingFlow = false;
-      _countdownTimer?.cancel();
-      _remainingSeconds = null;
-      _canApproveLocally = false;
-    });
+    if (!mounted) return;
+    if (widget.onClose != null) {
+      widget.onClose!();
+    } else {
+      Navigator.of(context).maybePop();
+    }
   }
 
   Future<void> _showRecipientPairingSuccessNotice() async {
@@ -258,7 +246,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _remainingSeconds = null;
       return;
     }
-
     _remainingSeconds = (expiresInMs / 1000).ceil();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -270,7 +257,7 @@ class _PairingScreenState extends State<PairingScreen> {
         setState(() {
           _remainingSeconds = 0;
           _busy = false;
-          if (!_completed) {
+          if (!_isClosingAfterCompletion) {
             _status = 'Pairing request expired';
           }
         });
@@ -284,21 +271,16 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _startPairing(String deviceId) async {
-    if (_busy && _deviceId == deviceId) {
-      return;
-    }
-
+    if (_busy && _deviceId == deviceId) return;
     final client = context.read<JsonRpcRiftClient>();
     setState(() {
       _busy = true;
       _deviceId = deviceId;
       _status = 'Starting pairing';
       _error = null;
-      _completed = false;
       _hasActivePairingFlow = false;
       _canApproveLocally = false;
     });
-
     try {
       final result = await client.startPairing(deviceId) as Map;
       final resolvedDeviceId = result['deviceId']?.toString() ?? deviceId;
@@ -336,29 +318,23 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _startPairingByEndpoint(String address, int port) async {
-    if (_busy) {
-      return;
-    }
-
+    if (_busy) return;
     final client = context.read<JsonRpcRiftClient>();
     setState(() {
       _busy = true;
       _status = 'Connecting to $address:$port';
       _error = null;
-      _completed = false;
       _hasActivePairingFlow = false;
       _canApproveLocally = false;
     });
-
     try {
       final result = await client.startPairingByEndpoint(address, port) as Map;
       if (!mounted) return;
       final resolvedDeviceId = result['deviceId']?.toString();
-      final resolvedDisplayName =
-          result['displayName']?.toString() ??
-              resolvedDeviceId ??
-              _displayName ??
-              '$address:$port';
+      final resolvedDisplayName = result['displayName']?.toString() ??
+          resolvedDeviceId ??
+          _displayName ??
+          '$address:$port';
       setState(() {
         _deviceId = resolvedDeviceId;
         _displayName = resolvedDisplayName;
@@ -399,7 +375,6 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
       _status = 'Approving pairing';
     });
-
     try {
       await client.approvePairing(deviceId, peerFingerprint);
       if (!mounted) return;
@@ -426,17 +401,13 @@ class _PairingScreenState extends State<PairingScreen> {
       _busy = true;
       _error = null;
     });
-
     try {
       await client.rejectPairing(deviceId);
       if (!mounted) return;
       if (!_isRecipientFlow) {
-        setState(() {
-          _busy = false;
-          _hasActivePairingFlow = false;
-        });
-        await WidgetsBinding.instance.endOfFrame;
-        if (mounted) {
+        if (widget.onClose != null) {
+          widget.onClose!();
+        } else {
           Navigator.of(context).maybePop();
         }
         return;
@@ -470,368 +441,338 @@ class _PairingScreenState extends State<PairingScreen> {
     return formatted;
   }
 
-  List<String> _getWordList(String? fingerprint) {
-    if (fingerprint == null || fingerprint.isEmpty) {
-      return List.filled(8, 'Waiting');
+  Widget _buildFingerprintText(
+    ThemeData theme,
+    String? fp, {
+    TextStyle? textStyle,
+    Color? dividerColor,
+    double letterSpacing = 4,
+  }) {
+    final defaultStyle = TextStyle(
+      fontSize: 24,
+      fontWeight: FontWeight.w600,
+      letterSpacing: letterSpacing,
+      height: 32 / 24,
+      color: theme.colorScheme.primaryContainer,
+    );
+    final effectiveStyle = textStyle ?? defaultStyle;
+
+    if (fp == null) {
+      return Text('WAITING...', style: effectiveStyle);
     }
-    final mockWords = [
-      'Apple',
-      'Banana',
-      'Cherry',
-      'Delta',
-      'Echo',
-      'Foxtrot',
-      'Golf',
-      'Hotel',
-      'India',
-      'Juliett',
-      'Kilo',
-      'Lima',
-      'Mike',
-      'November',
-      'Oscar',
-      'Papa'
-    ];
-    List<String> words = [];
-    final clean = fingerprint.replaceAll(' ', '');
-    for (int i = 0; i < 8; i++) {
-      if (i < clean.length) {
-        final code = clean.codeUnitAt(i);
-        words.add(mockWords[code % mockWords.length]);
-      } else {
-        words.add(mockWords[i % mockWords.length]);
+
+    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+    if (clean.isEmpty) {
+      return Text(fp, style: effectiveStyle);
+    }
+
+    final limit = clean.length > 16 ? 16 : clean.length;
+    final truncated = clean.substring(0, limit);
+
+    final chunks = <String>[];
+    for (int i = 0; i < truncated.length; i += 4) {
+      chunks.add(truncated.substring(
+          i, (i + 4) > truncated.length ? truncated.length : i + 4));
+    }
+
+    final widgets = <Widget>[];
+    for (int i = 0; i < chunks.length; i++) {
+      widgets.add(Text(chunks[i], style: effectiveStyle));
+      if (i < chunks.length - 1) {
+        widgets.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            '|',
+            style: effectiveStyle.copyWith(
+              fontWeight: FontWeight.w400,
+              color: dividerColor ?? theme.colorScheme.outlineVariant,
+            ),
+          ),
+        ));
       }
     }
-    return words;
-  }
 
-  String _formatFingerprint(String? fp) {
-    if (fp == null) return 'WAITING...';
-    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
-    if (clean.isEmpty) return fp;
-    final chunks = <String>[];
-    for (int i = 0; i < clean.length; i += 4) {
-      chunks.add(
-          clean.substring(i, (i + 4) > clean.length ? clean.length : i + 4));
-    }
-    return chunks.join(' ');
-  }
-
-  Widget _buildFingerprintBlock({
-    required ThemeData theme,
-    required String title,
-    required IconData icon,
-    required Color primaryColor,
-    required Color primaryContainer,
-    required Color onPrimaryContainer,
-    required String? fingerprint,
-  }) {
-    final words = _getWordList(fingerprint);
-    final rawFp = _formatFingerprint(fingerprint);
-
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: primaryColor),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            color: primaryContainer,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Icon(icon, size: 18, color: onPrimaryContainer),
-                const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                      color: onPrimaryContainer, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 2,
-                    mainAxisSpacing: 16,
-                    crossAxisSpacing: 8,
-                    childAspectRatio: 3,
-                  ),
-                  itemCount: 8,
-                  itemBuilder: (context, index) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '0${index + 1}',
-                          style: theme.textTheme.labelSmall
-                              ?.copyWith(color: theme.colorScheme.outline),
-                        ),
-                        Text(
-                          words[index],
-                          style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: theme.colorScheme.outlineVariant),
-                  ),
-                  width: double.infinity,
-                  child: Text(
-                    rawFp,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      letterSpacing: 2.0,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: widgets,
       ),
     );
   }
 
-  String _formatFingerprintWithColons(String? fp) {
-    if (fp == null) return 'WAITING...';
-    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
-    if (clean.isEmpty) return fp;
-    final chunks = <String>[];
-    for (int i = 0; i < clean.length; i += 2) {
-      chunks.add(
-          clean.substring(i, (i + 2) > clean.length ? clean.length : i + 2));
-    }
-    return chunks.join(':');
-  }
-
-  Widget _buildSuccessState(ThemeData theme) {
-    return Scaffold(
-      body: Stack(
+  Widget _buildRecipientFlow(
+      BuildContext context,
+      ThemeData theme,
+      bool hasExpired,
+      bool canApprove,
+      bool canReject,
+      bool approveEnabled,
+      bool isMobile,
+      String deviceName) {
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
         children: [
-          Positioned.fill(
-            child: Opacity(
-              opacity: 0.2,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    center: const Alignment(0, -1),
-                    radius: 1.0,
-                    colors: [
-                      theme.colorScheme.secondaryContainer,
-                      Colors.transparent,
-                    ],
-                    stops: const [0.0, 0.5],
-                  ),
-                ),
-              ),
-            ),
-          ),
           Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
+            child: Container(
+              width: 512,
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.95),
+              margin: EdgeInsets.all(isMobile ? 16 : 32),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.1),
+                    blurRadius: 40,
+                    offset: const Offset(0, 20),
+                  ),
+                ],
+              ),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                    height: 96,
-                    width: 96,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          width: 96,
-                          height: 96,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.secondaryContainer
-                                .withValues(alpha: 0.5),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        Container(
-                          width: 64,
-                          height: 64,
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.secondaryContainer,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.verified_user,
-                            size: 32,
-                            color: theme.colorScheme.onSecondaryContainer,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    'Thiết bị đã kết nối',
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  RichText(
-                    textAlign: TextAlign.center,
-                    text: TextSpan(
-                      style: theme.textTheme.bodyLarge
-                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                      children: [
-                        const TextSpan(
-                            text:
-                                'Kênh truyền tin đã được thiết lập an toàn với '),
-                        TextSpan(
-                          text: _displayName ?? _deviceId ?? 'Unknown',
-                          style: TextStyle(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.bold),
-                        ),
-                        const TextSpan(text: '.'),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 32),
                   Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainerLow,
-                      borderRadius: BorderRadius.circular(12),
-                      border:
-                          Border.all(color: theme.colorScheme.outlineVariant),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
+                      height: 4, color: theme.colorScheme.primaryContainer),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.all(isMobile ? 24 : 32),
+                      child: Column(
+                        children: [
+                          const PulseRingIcon(icon: Icons.phonelink_ring),
+                          const SizedBox(height: 16),
+                          Text('Pairing Request',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: -0.01,
+                                height: 32 / 24,
+                                color: theme.colorScheme.onSurface,
+                              )),
+                          const SizedBox(height: 8),
+                          Text(
+                            'A new device is attempting to establish a secure link with your account.',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w400,
+                              height: 24 / 16,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 24),
+                          Text('Compare fingerprints',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.05,
+                                height: 16 / 14,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                              textAlign: TextAlign.center),
+                          if (hasExpired)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: Text('Expired',
+                                  style: TextStyle(
+                                      color: theme.colorScheme.error,
+                                      fontWeight: FontWeight.w600)),
+                            )
+                          else if (_remainingSeconds != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 16),
+                              child: Text('Expires in ${_remainingSeconds!}s',
+                                  style: TextStyle(
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant)),
+                            ),
+                          const SizedBox(height: 24),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
                               children: [
-                                Icon(Icons.desktop_windows,
-                                    color: theme.colorScheme.outline),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _displayName ?? _deviceId ?? 'Unknown',
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color: theme.colorScheme.onSurface,
-                                    fontWeight: FontWeight.bold,
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color:
+                                        theme.colorScheme.surfaceContainerLow,
+                                    border: Border.all(
+                                        color:
+                                            theme.colorScheme.outlineVariant),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Icon(Icons.desktop_windows,
+                                      color:
+                                          theme.colorScheme.onSurfaceVariant),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(deviceName,
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                            height: 24 / 16,
+                                            color: theme.colorScheme.onSurface,
+                                          )),
+                                      Text('Secure Sync v0.1',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w400,
+                                            height: 20 / 14,
+                                            color: theme
+                                                .colorScheme.onSurfaceVariant,
+                                          )),
+                                    ],
                                   ),
                                 ),
                               ],
                             ),
-                            Icon(Icons.verified,
-                                color: theme.colorScheme.secondary),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Divider(
-                            height: 1,
-                            color: theme.colorScheme.outlineVariant
-                                .withValues(alpha: 0.5)),
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                                color: theme.colorScheme.outlineVariant),
                           ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.key,
-                                      size: 14,
-                                      color:
-                                          theme.colorScheme.onSurfaceVariant),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    'ACTIVE FINGERPRINT',
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                        color:
-                                            theme.colorScheme.onSurfaceVariant,
-                                        fontWeight: FontWeight.bold),
+                          const SizedBox(height: 24),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              children: [
+                                Text('VERIFY SECURITY FINGERPRINT',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      letterSpacing: 0.05,
+                                      height: 16 / 14,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    )),
+                                const SizedBox(height: 16),
+                                _buildFingerprintText(
+                                  theme,
+                                  _peerFingerprint ?? _localFingerprint,
+                                  textStyle: TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 3,
+                                    height: 32 / 24,
+                                    color: theme.colorScheme.primaryContainer,
                                   ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _formatFingerprintWithColons(_peerFingerprint),
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  letterSpacing: 1.5,
                                 ),
-                              ),
-                            ],
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Ensure this code matches exactly with the code displayed on the requesting device.',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
                           ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: EdgeInsets.all(isMobile ? 24 : 32),
+                    decoration: BoxDecoration(
+                      border: Border(
+                          top: BorderSide(
+                              color: theme.colorScheme.outlineVariant)),
+                    ),
+                    child: Builder(builder: (context) {
+                      final rejectBtn = OutlinedButton.icon(
+                        onPressed: canReject ? _rejectPairing : null,
+                        icon: const Icon(Icons.close, size: 18),
+                        label: const Text('Reject',
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w600)),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: theme.colorScheme.error,
+                          side: BorderSide(color: theme.colorScheme.error),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 10),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(4)),
                         ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: theme.colorScheme.primary,
-                        foregroundColor: theme.colorScheme.onPrimary,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Bắt đầu ngay',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 16)),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: theme.colorScheme.onSurface,
-                        side: BorderSide(color: theme.colorScheme.outline),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8)),
-                      ),
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Về danh sách',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, fontSize: 16)),
-                    ),
+                      );
+                      final approveBtn = _canApproveLocally
+                          ? FilledButton.icon(
+                              onPressed:
+                                  approveEnabled ? _approvePairing : null,
+                              icon: _busy
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.check_circle, size: 18),
+                              label: const Text('Approve',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600)),
+                              style: FilledButton.styleFrom(
+                                backgroundColor:
+                                    theme.colorScheme.primaryContainer,
+                                foregroundColor: theme.colorScheme.onPrimary,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4)),
+                              ),
+                            )
+                          : Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 16.0),
+                              child: Text('Waiting for peer...',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.outline,
+                                  )),
+                            );
+                      if (isMobile) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            approveBtn,
+                            const SizedBox(height: 12),
+                            if (canReject) rejectBtn,
+                          ],
+                        );
+                      }
+                      return Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 16,
+                        runSpacing: 12,
+                        children: [
+                          if (canReject) rejectBtn,
+                          approveBtn,
+                        ],
+                      );
+                    }),
                   ),
                 ],
               ),
@@ -846,185 +787,502 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    if (_completed) {
-      return _buildSuccessState(theme);
-    }
-    final hasExpired =
-        (_remainingSeconds != null && _remainingSeconds == 0 && !_completed);
+    final hasExpired = (_remainingSeconds != null &&
+        _remainingSeconds == 0 &&
+        !_isClosingAfterCompletion);
     final canApprove = !_busy &&
-        !_completed &&
+        !_isClosingAfterCompletion &&
         !hasExpired &&
         _hasActivePairingFlow &&
         _canApproveLocally &&
         _deviceId != null &&
         _peerFingerprint != null;
-    final canReject =
-        !_busy && !_completed && _deviceId != null && _hasActivePairingFlow;
-
+    final canReject = !_busy &&
+        !_isClosingAfterCompletion &&
+        _deviceId != null &&
+        _hasActivePairingFlow;
     final approveEnabled = canApprove && _canApproveDelay;
+    final deviceName = _displayName ?? _deviceId ?? 'Unknown';
+    final isMobile = MediaQuery.of(context).size.width < 600;
 
-    return PopScope<void>(
-      canPop: !_hasActivePairingFlow || _completed,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop || _busy || !_hasActivePairingFlow || _completed) {
-          return;
-        }
-        unawaited(_rejectPairing());
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(
-            'Pairing with ${_displayName ?? _deviceId ?? 'Unknown'}',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          backgroundColor: theme.colorScheme.surface,
-          foregroundColor: theme.colorScheme.primary,
-          elevation: 0,
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(1),
-            child:
-                Container(color: theme.colorScheme.outlineVariant, height: 1),
-          ),
-        ),
-        body: !_hasActivePairingFlow
-            ? Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (_busy) const CircularProgressIndicator(),
-                    const SizedBox(height: 16),
-                    Text(_status, style: theme.textTheme.bodyLarge),
-                    if (_error != null) ...[
-                      const SizedBox(height: 12),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                        child: Text(_error!,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: theme.colorScheme.error)),
-                      ),
-                    ]
-                  ],
-                ),
-              )
-            : Stack(
-                children: [
-                  ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-                    children: [
-                      Text('Compare fingerprints',
-                          style: theme.textTheme.headlineSmall
-                              ?.copyWith(fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Ensure both screens display the exact same words and codes.',
-                        style: theme.textTheme.bodyLarge?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant),
-                      ),
-                      if (hasExpired) ...[
-                        const SizedBox(height: 8),
-                        Text('Expired',
-                            style: TextStyle(
-                                color: theme.colorScheme.error,
-                                fontWeight: FontWeight.bold)),
-                      ] else if (_remainingSeconds != null) ...[
-                        const SizedBox(height: 8),
-                        Text('Expires in ${_remainingSeconds!}s',
-                            style: TextStyle(
-                                color: theme.colorScheme.onSurfaceVariant)),
-                      ],
-                      const SizedBox(height: 24),
-                      _buildFingerprintBlock(
-                        theme: theme,
-                        title: "This device's fingerprint",
-                        icon: Icons.smartphone,
-                        primaryColor: theme.colorScheme.primary,
-                        primaryContainer: theme.colorScheme.primaryContainer,
-                        onPrimaryContainer:
-                            theme.colorScheme.onPrimaryContainer,
-                        fingerprint: _localFingerprint,
-                      ),
-                      const SizedBox(height: 24),
-                      _buildFingerprintBlock(
-                        theme: theme,
-                        title: "${_displayName ?? 'Peer'}'s fingerprint",
-                        icon: Icons.desktop_windows,
-                        primaryColor: theme.colorScheme.secondary,
-                        primaryContainer: theme.colorScheme.secondaryContainer,
-                        onPrimaryContainer:
-                            theme.colorScheme.onSecondaryContainer,
-                        fingerprint: _peerFingerprint,
-                      ),
-                    ],
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.surface,
-                        border: Border(
-                            top: BorderSide(
-                                color: theme.colorScheme.outlineVariant)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          TextButton(
-                            onPressed: canReject ? _rejectPairing : null,
-                            style: TextButton.styleFrom(
-                              backgroundColor: theme.colorScheme.error,
-                              foregroundColor: theme.colorScheme.onError,
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 32, vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8)),
-                            ),
-                            child: const Text('Reject',
-                                style: TextStyle(fontWeight: FontWeight.bold)),
-                          ),
-                          if (_canApproveLocally)
-                            ElevatedButton(
-                              onPressed:
-                                  approveEnabled ? _approvePairing : null,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: theme.colorScheme.primary,
-                                foregroundColor: theme.colorScheme.onPrimary,
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 32, vertical: 12),
-                                shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8)),
-                                elevation: 0,
-                              ),
-                              child: _busy
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: Colors.white))
-                                  : const Text('Approve',
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold)),
-                            )
-                          else
-                            Padding(
-                              padding: const EdgeInsets.only(right: 16.0),
-                              child: Text(
-                                'Waiting for peer...',
-                                style: theme.textTheme.labelMedium?.copyWith(
-                                    color: theme.colorScheme.outline),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
+    if (_isRecipientFlow && _hasActivePairingFlow) {
+      return _buildRecipientFlow(context, theme, hasExpired, canApprove,
+          canReject, approveEnabled, isMobile, deviceName);
+    }
+
+    final title = 'Verify Connection';
+    final subtitle = 'Pairing request sent to ';
+
+    return Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          Center(
+            child: Container(
+              width: double.infinity,
+              constraints: BoxConstraints(
+                maxWidth: 448,
+                maxHeight: MediaQuery.of(context).size.height * 0.95,
+              ),
+              margin: EdgeInsets.all(isMobile ? 16 : 32),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.colorScheme.outlineVariant),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.primaryContainer
+                        .withValues(alpha: 0.1),
+                    blurRadius: 40,
+                    offset: const Offset(0, 24),
                   ),
                 ],
               ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(isMobile ? 24 : 32),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border(
+                          bottom: BorderSide(
+                              color: theme.colorScheme.outlineVariant)),
+                      borderRadius:
+                          const BorderRadius.vertical(top: Radius.circular(12)),
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primaryContainer,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(Icons.fingerprint,
+                              size: 32,
+                              color: theme.colorScheme.onPrimaryContainer),
+                        ),
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.01,
+                            height: 32 / 24,
+                            color: theme.colorScheme.onSurface,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        RichText(
+                          textAlign: TextAlign.center,
+                          text: TextSpan(
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w400,
+                              height: 28 / 18,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            children: [
+                              TextSpan(text: subtitle),
+                              TextSpan(
+                                text: deviceName,
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const TextSpan(text: '.'),
+                            ],
+                          ),
+                        ),
+                        if (hasExpired)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text('Expired',
+                                style: TextStyle(
+                                    color: theme.colorScheme.error,
+                                    fontWeight: FontWeight.w600)),
+                          )
+                        else if (_remainingSeconds != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text('Expires in ${_remainingSeconds!}s',
+                                style: TextStyle(
+                                    color: theme.colorScheme.onSurfaceVariant)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.all(isMobile ? 24 : 32),
+                      child: !_hasActivePairingFlow
+                          ? Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (_busy) const CircularProgressIndicator(),
+                                const SizedBox(height: 16),
+                                Text(_status,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w400,
+                                      height: 28 / 18,
+                                      color: theme.colorScheme.onSurface,
+                                    )),
+                                if (_error != null) ...[
+                                  const SizedBox(height: 12),
+                                  Text(_error!,
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                          color: theme.colorScheme.error)),
+                                ]
+                              ],
+                            )
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Compare fingerprints',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.05,
+                                    height: 16 / 14,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Compare the security fingerprint below with the one displayed on the destination device. They must match exactly.',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w400,
+                                    height: 24 / 16,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 24),
+                                Text(
+                                  "This device's fingerprint",
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w400,
+                                    height: 20 / 14,
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                ShimmerPulseContainer(
+                                  child: _buildFingerprintText(theme,
+                                      _peerFingerprint ?? _localFingerprint),
+                                ),
+                                const SizedBox(height: 24),
+                                Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                        color:
+                                            theme.colorScheme.outlineVariant),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Icon(Icons.info,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                          size: 20),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          'If the codes do not match, reject this request immediately. Your connection may be intercepted.',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w400,
+                                            height: 20 / 14,
+                                            color: theme
+                                                .colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (_hasActivePairingFlow)
+                    Container(
+                      padding: EdgeInsets.all(isMobile ? 24 : 32),
+                      decoration: BoxDecoration(
+                        border: Border(
+                            top: BorderSide(
+                                color: theme.colorScheme.outlineVariant)),
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(12)),
+                      ),
+                      child: Builder(builder: (context) {
+                        final rejectBtn = OutlinedButton(
+                          onPressed: canReject ? _rejectPairing : null,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: theme.colorScheme.primaryContainer,
+                            side: BorderSide(
+                                color: theme.colorScheme.primaryContainer),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 10),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(4)),
+                          ),
+                          child: const Text('Reject',
+                              style: TextStyle(
+                                  fontSize: 14, fontWeight: FontWeight.w600)),
+                        );
+                        final approveBtn = _canApproveLocally
+                            ? FilledButton.icon(
+                                onPressed:
+                                    approveEnabled ? _approvePairing : null,
+                                icon: _busy
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: Colors.white))
+                                    : const Icon(Icons.check_circle, size: 20),
+                                label: const Text('Approve',
+                                    style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600)),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor:
+                                      theme.colorScheme.primaryContainer,
+                                  foregroundColor: theme.colorScheme.onPrimary,
+                                  elevation: 0,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4)),
+                                ),
+                              )
+                            : Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 16.0, horizontal: 16.0),
+                                child: Text('Waiting for peer...',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w400,
+                                      height: 20 / 14,
+                                      color: theme.colorScheme.outline,
+                                    )),
+                              );
+                        if (isMobile) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              approveBtn,
+                              const SizedBox(height: 12),
+                              if (_isRecipientFlow || canReject) rejectBtn,
+                            ],
+                          );
+                        }
+                        return Wrap(
+                          alignment: WrapAlignment.end,
+                          spacing: 16,
+                          runSpacing: 12,
+                          children: [
+                            if (_isRecipientFlow || canReject) rejectBtn,
+                            approveBtn,
+                          ],
+                        );
+                      }),
+                    )
+                  else
+                    Container(
+                      padding: EdgeInsets.all(isMobile ? 24 : 32),
+                      decoration: BoxDecoration(
+                        border: Border(
+                            top: BorderSide(
+                                color: theme.colorScheme.outlineVariant)),
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(12)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          FilledButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            style: FilledButton.styleFrom(
+                              backgroundColor:
+                                  theme.colorScheme.primaryContainer,
+                              foregroundColor: theme.colorScheme.onPrimary,
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4)),
+                            ),
+                            child: const Text('Close',
+                                style: TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w600)),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ShimmerPulseContainer extends StatefulWidget {
+  final Widget child;
+  const ShimmerPulseContainer({super.key, required this.child});
+  @override
+  State<ShimmerPulseContainer> createState() => _ShimmerPulseContainerState();
+}
+
+class _ShimmerPulseContainerState extends State<ShimmerPulseContainer>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<Color?> _colorAnimation;
+  late Animation<Color?> _borderColorAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller =
+        AnimationController(vsync: this, duration: const Duration(seconds: 3))
+          ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final theme = Theme.of(context);
+    _colorAnimation = ColorTween(
+      begin: Colors.white,
+      end: theme.colorScheme.surfaceContainerLow,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    _borderColorAnimation = ColorTween(
+      begin: theme.colorScheme.outlineVariant,
+      end: const Color(0xFFb1c5ff),
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(maxWidth: 480),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          decoration: BoxDecoration(
+            color: _colorAnimation.value,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: _borderColorAnimation.value ?? Colors.transparent,
+                width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFb1c5ff)
+                    .withValues(alpha: 0.15 * _controller.value),
+                blurRadius: 20,
+                spreadRadius: 0,
+              ),
+            ],
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+class PulseRingIcon extends StatefulWidget {
+  final IconData icon;
+  const PulseRingIcon({super.key, required this.icon});
+  @override
+  State<PulseRingIcon> createState() => _PulseRingIconState();
+}
+
+class _PulseRingIconState extends State<PulseRingIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: 80,
+      height: 80,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) {
+              return Transform.scale(
+                scale: 0.8 + (_controller.value * 0.7),
+                child: Opacity(
+                  opacity: 0.5 * (1.0 - _controller.value),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            child:
+                Icon(widget.icon, color: theme.colorScheme.onPrimary, size: 28),
+          ),
+        ],
       ),
     );
   }

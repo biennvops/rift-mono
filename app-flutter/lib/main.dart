@@ -9,9 +9,10 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'constants.dart';
+import 'src/ui/app_shell.dart' as rift_ui;
+import 'src/ui/theme.dart';
 import 'package:app_flutter/screens/security_dashboard_screen.dart';
 import 'package:app_flutter/screens/operations_screen.dart';
 import 'screens/pairing_screen.dart';
@@ -28,6 +29,7 @@ import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
+import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
@@ -127,6 +129,13 @@ DesktopClipboardManager _createDesktopClipboardManager(
     );
   }
 
+  if (Platform.isAndroid) {
+    return DesktopClipboardManager(
+      client,
+      autoApplyIncomingOffers: false,
+    );
+  }
+
   return DesktopClipboardManager(client);
 }
 
@@ -174,12 +183,18 @@ void main(List<String> arguments) async {
   runApp(
     MultiProvider(
       providers: [
-        Provider<DesktopClipboardManager?>.value(value: clipboardManager),
+        ChangeNotifierProvider<DesktopClipboardManager?>.value(
+          value: clipboardManager,
+        ),
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (context) => SendQueueController(
             context.read<JsonRpcRiftClient>(),
           ),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (context) =>
+              LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
         ),
       ],
       child: RiftApp(hasCompletedOnboarding: hasCompletedOnboarding),
@@ -1728,9 +1743,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       scaffoldMessengerKey: _scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
-      theme: _buildRiftTheme(),
+      theme: buildRiftTheme(),
       home: widget.hasCompletedOnboarding
-          ? AppShell(
+          ? rift_ui.AppShell(
               key: _appShellKey,
               historyRouteNotifier: _historyRouteNotifier,
               sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
@@ -1748,82 +1763,6 @@ class _IncomingFileDestination {
 
   final String transferPath;
   final String displayPath;
-}
-
-ThemeData _buildRiftTheme() {
-  const colorScheme = ColorScheme(
-    brightness: Brightness.light,
-    primary: Color(0xFF00328a),
-    onPrimary: Color(0xFFffffff),
-    primaryContainer: Color(0xFF0047bb),
-    onPrimaryContainer: Color(0xFFafc1ff),
-    secondary: Color(0xFF006e06),
-    onSecondary: Color(0xFFffffff),
-    secondaryContainer: Color(0xFF91f77e),
-    onSecondaryContainer: Color(0xFF007306),
-    tertiary: Color(0xFF701a00),
-    onTertiary: Color(0xFFffffff),
-    tertiaryContainer: Color(0xFF982700),
-    onTertiaryContainer: Color(0xFFffb09a),
-    error: Color(0xFFba1a1a),
-    onError: Color(0xFFffffff),
-    errorContainer: Color(0xFFffdad6),
-    onErrorContainer: Color(0xFF93000a),
-    surface: Color(0xFFfdf8f6),
-    onSurface: Color(0xFF1c1b1a),
-    surfaceContainerHighest: Color(0xFFe6e2df),
-    onSurfaceVariant: Color(0xFF434653),
-    outline: Color(0xFF737685),
-    outlineVariant: Color(0xFFc3c6d6),
-  );
-
-  final inter = GoogleFonts.interTextTheme();
-  final jetBrainsStyle = GoogleFonts.jetBrainsMono();
-
-  return ThemeData(
-    useMaterial3: true,
-    colorScheme: colorScheme,
-    scaffoldBackgroundColor: colorScheme.surface,
-    textTheme: inter.copyWith(
-      headlineLarge: inter.headlineLarge?.copyWith(
-          fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
-      headlineMedium: inter.headlineMedium?.copyWith(
-          fontSize: 24, fontWeight: FontWeight.w600, height: 32 / 24),
-      headlineSmall: inter.headlineSmall?.copyWith(
-          fontSize: 20, fontWeight: FontWeight.w600, height: 28 / 20),
-      bodyLarge: inter.bodyLarge?.copyWith(
-          fontSize: 16, fontWeight: FontWeight.w400, height: 24 / 16),
-      bodyMedium: inter.bodyMedium?.copyWith(
-          fontSize: 14, fontWeight: FontWeight.w400, height: 20 / 14),
-      labelMedium: jetBrainsStyle.copyWith(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          letterSpacing: 0.05,
-          height: 16 / 13),
-      labelSmall: jetBrainsStyle.copyWith(
-          fontSize: 11, fontWeight: FontWeight.w400, height: 14 / 11),
-    ),
-    navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: colorScheme.surface,
-      indicatorColor: colorScheme.secondaryContainer,
-      labelTextStyle: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.selected)) {
-          return jetBrainsStyle.copyWith(
-              fontSize: 11,
-              color: colorScheme.onSurface,
-              fontWeight: FontWeight.w600);
-        }
-        return jetBrainsStyle.copyWith(
-            fontSize: 11, color: colorScheme.onSurfaceVariant);
-      }),
-      iconTheme: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.selected)) {
-          return IconThemeData(color: colorScheme.onSecondaryContainer);
-        }
-        return IconThemeData(color: colorScheme.onSurfaceVariant);
-      }),
-    ),
-  );
 }
 
 class AppShell extends StatefulWidget {
