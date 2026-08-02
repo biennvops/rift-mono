@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
-        android:label="app_flutter"
+        android:label="Rift"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -87,8 +87,8 @@
         </receiver>
         <service
             android:name=".RiftTileService"
-            android:label="Gửi tới Rift"
-            android:icon="@mipmap/ic_launcher"
+            android:label="Send clipboard"
+            android:icon="@drawable/rift_nav_logo"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
             <intent-filter>

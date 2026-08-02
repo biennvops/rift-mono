@@ -1,96 +1,102 @@
 ---
-name: Rift System Protocol
+name: Rift System
 colors:
-  surface: '#fdf8f6'
-  surface-dim: '#ddd9d7'
-  surface-bright: '#fdf8f6'
+  surface: '#f8f9ff'
+  surface-dim: '#cbdbf5'
+  surface-bright: '#f8f9ff'
   surface-container-lowest: '#ffffff'
-  surface-container-low: '#f7f3f0'
-  surface-container: '#f1edeb'
-  surface-container-high: '#ece7e5'
-  surface-container-highest: '#e6e2df'
-  on-surface: '#1c1b1a'
+  surface-container-low: '#eff4ff'
+  surface-container: '#e5eeff'
+  surface-container-high: '#dce9ff'
+  surface-container-highest: '#d3e4fe'
+  on-surface: '#0b1c30'
   on-surface-variant: '#434653'
-  inverse-surface: '#31302f'
-  inverse-on-surface: '#f4f0ee'
-  outline: '#737685'
-  outline-variant: '#c3c6d6'
-  surface-tint: '#2156ca'
-  primary: '#00328a'
+  inverse-surface: '#213145'
+  inverse-on-surface: '#eaf1ff'
+  outline: '#737784'
+  outline-variant: '#c3c6d5'
+  surface-tint: '#2559bd'
+  primary: '#00327d'
   on-primary: '#ffffff'
-  primary-container: '#0047bb'
-  on-primary-container: '#afc1ff'
-  inverse-primary: '#b3c5ff'
-  secondary: '#006e06'
+  primary-container: '#0047ab'
+  on-primary-container: '#a5bdff'
+  inverse-primary: '#b1c5ff'
+  secondary: '#545f73'
   on-secondary: '#ffffff'
-  secondary-container: '#91f77e'
-  on-secondary-container: '#007306'
-  tertiary: '#701a00'
+  secondary-container: '#d5e0f8'
+  on-secondary-container: '#586377'
+  tertiary: '#1a12af'
   on-tertiary: '#ffffff'
-  tertiary-container: '#982700'
-  on-tertiary-container: '#ffb09a'
+  tertiary-container: '#3636c5'
+  on-tertiary-container: '#b7b8ff'
   error: '#ba1a1a'
   on-error: '#ffffff'
   error-container: '#ffdad6'
   on-error-container: '#93000a'
-  primary-fixed: '#dbe1ff'
-  primary-fixed-dim: '#b3c5ff'
-  on-primary-fixed: '#00174a'
-  on-primary-fixed-variant: '#003ea6'
-  secondary-fixed: '#94fa81'
-  secondary-fixed-dim: '#79dd68'
-  on-secondary-fixed: '#002200'
-  on-secondary-fixed-variant: '#005303'
-  tertiary-fixed: '#ffdbd1'
-  tertiary-fixed-dim: '#ffb5a0'
-  on-tertiary-fixed: '#3b0900'
-  on-tertiary-fixed-variant: '#872100'
-  background: '#fdf8f6'
-  on-background: '#1c1b1a'
-  surface-variant: '#e6e2df'
+  primary-fixed: '#dae2ff'
+  primary-fixed-dim: '#b1c5ff'
+  on-primary-fixed: '#001946'
+  on-primary-fixed-variant: '#00419e'
+  secondary-fixed: '#d8e3fb'
+  secondary-fixed-dim: '#bcc7de'
+  on-secondary-fixed: '#111c2d'
+  on-secondary-fixed-variant: '#3c475a'
+  tertiary-fixed: '#e1e0ff'
+  tertiary-fixed-dim: '#c0c1ff'
+  on-tertiary-fixed: '#07006c'
+  on-tertiary-fixed-variant: '#2f2ebe'
+  background: '#f8f9ff'
+  on-background: '#0b1c30'
+  surface-variant: '#d3e4fe'
 typography:
+  headline-xl:
+    fontFamily: Inter
+    fontSize: 40px
+    fontWeight: '700'
+    lineHeight: 48px
+    letterSpacing: -0.02em
   headline-lg:
     fontFamily: Inter
     fontSize: 32px
-    fontWeight: '700'
+    fontWeight: '600'
     lineHeight: 40px
-    letterSpacing: -0.02em
+    letterSpacing: -0.01em
+  headline-lg-mobile:
+    fontFamily: Inter
+    fontSize: 24px
+    fontWeight: '600'
+    lineHeight: 32px
   headline-md:
     fontFamily: Inter
     fontSize: 24px
     fontWeight: '600'
     lineHeight: 32px
-  headline-sm:
-    fontFamily: Inter
-    fontSize: 20px
-    fontWeight: '600'
-    lineHeight: 28px
   body-lg:
+    fontFamily: Inter
+    fontSize: 18px
+    fontWeight: '400'
+    lineHeight: 28px
+  body-md:
     fontFamily: Inter
     fontSize: 16px
     fontWeight: '400'
     lineHeight: 24px
-  body-md:
+  body-sm:
     fontFamily: Inter
     fontSize: 14px
     fontWeight: '400'
     lineHeight: 20px
-  label-mono:
-    fontFamily: JetBrains Mono
-    fontSize: 13px
-    fontWeight: '500'
+  label-md:
+    fontFamily: Inter
+    fontSize: 14px
+    fontWeight: '600'
     lineHeight: 16px
     letterSpacing: 0.05em
-  label-mono-sm:
-    fontFamily: JetBrains Mono
-    fontSize: 11px
-    fontWeight: '400'
-    lineHeight: 14px
-  headline-lg-mobile:
+  label-sm:
     fontFamily: Inter
-    fontSize: 26px
-    fontWeight: '700'
-    lineHeight: 32px
+    fontSize: 12px
+    fontWeight: '500'
+    lineHeight: 16px
 rounded:
   sm: 0.125rem
   DEFAULT: 0.25rem
@@ -99,7 +105,7 @@ rounded:
   xl: 0.75rem
   full: 9999px
 spacing:
-  base: 4px
+  unit: 4px
   xs: 4px
   sm: 8px
   md: 16px
@@ -107,80 +113,69 @@ spacing:
   xl: 32px
   gutter: 16px
   margin-mobile: 16px
-  margin-desktop: 48px
+  margin-desktop: 32px
+  sidebar-width: 280px
 ---
 
-# Rift System Protocol - Design System
-
 ## Brand & Style
-The design system is engineered for **Rift**, a high-utility security tool for device synchronization. The brand personality is rooted in **Cyber-Reliability**: it is clinical, authoritative, and transparent. The interface must evoke a sense of "hardened" security—users should feel that their data is protected not through obfuscation, but through robust, visible encryption and clear state management.
+The design system is engineered for **Rift**, a secure cross-platform synchronization tool. The brand personality is anchored in **Professionalism, Reliability, and Precision**. It evokes a sense of impenetrable security through a structured, clinical aesthetic that remains highly accessible.
 
-The design style follows a **Modern Corporate** aesthetic with **Functional Brutalist** undertones. It prioritizes information density and utilitarian clarity over decorative elements. It utilizes structured grids, high-contrast states, and specific typographic treatments to distinguish between human-readable actions and machine-generated security data.
+The visual style is **Corporate / Modern** with a focus on high-clarity information architecture. It leverages generous white space to reduce cognitive load during complex synchronization tasks. The aesthetic avoids unnecessary decoration, favoring functional clarity and a systematic approach to depth and hierarchy. The core metaphor is the "Secure Link"—represented by the intersection of solid forms and precise alignment.
 
 ## Colors
-The palette is centered on **Trust Blue**, a high-saturation, deep navy that signals stability and enterprise-grade encryption. 
+The palette is dominated by a deep, authoritative primary blue derived from the brand mark. This is supported by a sophisticated range of cool grays and deep slate tones to maintain a professional, secure atmosphere.
 
-- **Primary (Trust Blue):** Used for primary actions, active connection states, and brand-identifiable elements.
-- **Success (Trusted Green):** Reserved exclusively for verified pairings and successful transfers.
-- **Warning (Pending Amber):** Used for unverified devices and discovery phases.
-- **Danger (Revoked Red):** Used for blocked hardware, expired tokens, and critical security mismatches.
-- **Neutral:** A range of cool grays. In dark mode, use deep charcoal (`#121212`) to reduce eye strain while maintaining high contrast for technical data.
+- **Primary Blue (#00327D):** Used for primary actions and high-emphasis controls.
+- **Primary Container Blue (#0047AB):** Used for active navigation states and critical branding elements.
+- **Secondary Slate (#213145):** Used for sidebar backgrounds and high-contrast UI components.
+- **Neutral Scale:** A series of cool grays (from #F8FAFC to #64748B) defines the UI scaffolding and borders.
+- **Semantic Status:** 
+  - **Success:** Emerald green for completed syncs and verified security.
+  - **Warning:** Amber for storage limits or sync conflicts.
+  - **Error:** High-intensity red for security breaches or failed connections.
+  - **Pending:** A vibrant violet-blue for active processes.
 
 ## Typography
-The system employs a dual-typeface strategy to separate UI navigation from security data.
+This design system utilizes **Inter** exclusively for its utilitarian, highly legible characteristics. The type scale is optimized for readability at small sizes (essential for device names and file paths) and authoritative impact at larger sizes.
 
-- **Inter (Sans-Serif):** Used for all functional UI elements, headers, and instructional text. Its neutral, systematic nature ensures high legibility in dense layouts.
-- **JetBrains Mono (Monospace):** Reserved for technical identifiers—Device IDs, Fingerprints, Hashes, and Word-lists. This visual distinction alerts the user that they are viewing "System Data" which requires verification.
-
-**Hierarchy Rules:**
-- Use `headline-md` for device names in cards.
-- Use `label-mono` for all hash outputs and ID strings.
-- Bold weights should be used sparingly for status indicators (e.g., **CONNECTED**).
+- **Headlines:** Use semi-bold and bold weights with slight negative letter-spacing to appear compact and modern.
+- **Body:** Standardized on 16px for optimal desktop legibility, dropping to 14px for dense data tables or metadata.
+- **Labels:** Use a slightly tighter tracking and semi-bold weight for secondary metadata and form headings.
+- **Security Contexts:** Critical alerts use the `label-md` style to ensure immediate recognition.
 
 ## Layout & Spacing
-The layout follows a **Fluid Grid** model with a strict 4px baseline rhythm. 
+The system employs a **Fluid Grid** with fixed-width constraints for optimal readability. The spacing rhythm is based on a 4px baseline, ensuring all components align to a predictable vertical and horizontal cadence.
 
-- **Desktop/Tablet:** 12-column grid with 24px gutters. Use sidebar navigation for device lists and a primary central area for active clipboard or pairing logs.
-- **Mobile:** Single column with 16px margins. Utilize Material 3 bottom sheets for "Add Device" or "Security Info" to keep the main view focused on the active connection list.
-- **Information Density:** Vertical spacing is tight (`8px` or `12px` between list items) to allow for the monitoring of multiple devices simultaneously without excessive scrolling.
+- **Desktop (Expanded):** Utilizes a fixed left-side navigation (280px) with a fluid content area. Page content is capped at 1280px width for readability.
+- **Mobile (Compact):** Shifts to a bottom navigation pattern with 16px safe-area margins.
+- **Rhythm:** Use `lg` (24px) for spacing between major sections and `md` (16px) for internal card padding. This creates a clear "grouping" effect that aids in visual scanning.
 
 ## Elevation & Depth
-This design system uses **Tonal Layers** and **Low-Contrast Outlines** rather than heavy shadows to maintain a professional, utility-driven feel.
+Depth in this design system is expressed through **Tonal Layers** and **Low-Contrast Outlines**. We avoid aggressive shadows to maintain a clean, flat aesthetic that feels like a secure digital utility.
 
-- **Level 0 (Background):** Base surface (`#F5F7F8` or `#121212`).
-- **Level 1 (Cards/Containers):** Slightly elevated using a 1px solid border (`#D1D5DB` or `#2E2E2E`) and a secondary surface color.
-- **Level 2 (Active States/Popovers):** Subtle, tight shadow (0px 2px 4px rgba(0,0,0,0.05)) and a high-contrast border to indicate focus.
-- **Interaction:** On hover or active state, cards should not "lift" (no shadow change), but instead change border color to `Primary Trust Blue`.
+1. **Surface Base:** The primary background uses the cool off-white surface token (#F8F9FF).
+2. **Surface Container:** Cards use white (#FFFFFF); secondary panels use the tonal surface-container tokens from the palette.
+3. **Ghost Borders:** Components like cards and input fields are defined by 1px solid borders in a soft neutral (#E2E8F0) rather than heavy shadows.
+4. **Elevation Shadows:** Only used for floating elements like dropdowns or modals. These should be "Ambient Shadows": extra-diffused (20px-40px blur), low opacity (10%), with a slight tint of the primary blue to maintain color harmony.
 
 ## Shapes
-The shape language is **Soft (0.25rem)**. This provides a professional, modern look without the "playfulness" of highly rounded corners.
+The shape language is **Soft (0.25rem)**. This provides a professional edge while feeling modern. 
 
-- **Buttons & Inputs:** `rounded-sm` (4px).
-- **Cards & Bottom Sheets:** `rounded-lg` (8px).
-- **Status Dots:** Perfect circles (100% radius) for immediate recognition.
-- **Fingerprint Blocks:** Containers should use 4px rounding to frame the monospaced text as a discrete unit of data.
+- **Standard Elements:** Buttons, inputs, and small chips use `rounded` (0.25rem).
+- **Containers:** Large cards and modals use `rounded-lg` (0.5rem) to differentiate them as structural containers.
+- **Strictness:** Do not use pill-shaped elements for primary buttons; keep the corner radius consistent to reinforce the "built-to-last" security narrative.
 
 ## Components
+Consistent component styling reinforces the trust-based identity of the application.
 
-### Device Cards
-The primary unit of the UI.
-- **Structure:** Platform icon (Top Left), Device Name (Headline-md), Status Dot (Success/Warning/Danger), and a "Trust Badge" icon.
-- **Styling:** 1px border, minimal internal padding (12px). Display the last-seen timestamp in `label-mono-sm`.
-
-### Fingerprint Blocks
-- **Word-lists:** Large font-size Inter, bold, for easy verbal verification during pairing.
-- **Hex/Hash:** Below word-lists, using `label-mono-sm` in a muted gray container.
-
-### Banners (System Alerts)
-- **Design:** Full-width at the top of the viewport or container.
-- **Logic:** Use solid background colors for Error/Danger, and tinted borders with white/dark backgrounds for Info/Warning to prevent visual fatigue.
-- **Iconography:** Always include a state-specific icon (e.g., a shield-x for blocked) to ensure accessibility for color-blind users.
-
-### Filter Chips
-- **Usage:** For logs and history filtering.
-- **Style:** Outlined buttons with 16px height, using `label-mono` for the text.
-
-### Buttons
-- **Primary:** Solid Trust Blue with white text.
-- **Secondary:** Outlined with 1px Trust Blue border.
-- **Destructive:** Solid Blocked Red for "Revoke Access" or "Clear History."
+- **Buttons:** 
+  - *Primary:* Solid Primary Blue with white text. 
+  - *Secondary:* Transparent with a 1px Primary Blue border.
+  - *Destructive:* Solid Error Red with white text. These actions should always trigger a confirmation modal with high-contrast warning visuals.
+- **Status Chips:** Small, subtle backgrounds (10% opacity of the status color) with high-contrast text. For example, a "Secure" chip uses a light green background with dark green text.
+- **Input Fields:** 1px borders (#E2E8F0) that transition to Primary Blue on focus. Labels should always be visible above the field in `label-sm`.
+- **Cards:** White background, 1px neutral border, and no shadow. Use a subtle 4px top-border accent in Primary Blue for "featured" or "active" device cards.
+- **Navigation:**
+  - *Sidebar (Desktop):* Dark Slate background with active states highlighted in Primary Blue.
+  - *Bottom Bar (Mobile):* White background with a 1px top border and Primary Blue icons for active tabs.
+- **Lists:** Clean rows with 1px bottom dividers. Use `body-md` for the title and `body-sm` in a neutral tint for metadata (e.g., "Last synced 2m ago").
