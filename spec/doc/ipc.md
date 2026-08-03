@@ -8,7 +8,7 @@ The IPC API is the only interface through which a client application interacts w
 
 ## 1. Transport Independence
 
-The IPC contract is defined independently of transport. In v0.1-draft, four transport bindings exist:
+The IPC contract is defined independently of transport. In v0.1-draft, five transport bindings exist:
 
 | Platform | Transport                | Notes                                                        |
 | -------- | ------------------------ | ------------------------------------------------------------ |
@@ -16,8 +16,10 @@ The IPC contract is defined independently of transport. In v0.1-draft, four tran
 | macOS    | Unix domain socket       | Flutter client connects to the `daemon-cs` macOS host        |
 | Linux    | Unix domain socket       | Flutter client connects to the `daemon-cs` Linux host        |
 | Android  | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
+| iOS      | In-process channel       | Flutter UI hosts `daemon-dart` in the application process    |
 
-Future transports such as in-process channels on iOS require only a new transport binding, not changes to this contract.
+Additional transports require only a new transport binding, not changes to
+this contract.
 
 All transports carry JSON-RPC 2.0 messages. Each message is a single JSON object. Framing (length-prefix, newline-delimited, or transport-native) is transport-specific and outside this specification.
 
@@ -287,6 +289,10 @@ rejected.
 
 Returns all peers in the trust store for a given `trustState`.
 
+This is a Dart-daemon diagnostic extension in the current implementation. It
+is not required for portable Flutter-client behavior; shared client flows use
+the discovery and trusted-peer list methods.
+
 **Params:**
 
 | Field        | Type   | Required | Description                                                               |
@@ -327,6 +333,23 @@ Removes a block on a peer, returning them to `discovered` state.
 **Result:** `{ "unblocked": true }`
 
 **Errors:** `-32009` if peer not found, `-32008` if peer is not in `blocked` state.
+
+#### `rift.resetRevokedPeer`
+
+Explicitly clears retained negative-trust evidence for a revoked identity and
+returns the peer to `discovered`. This is the only client-facing path that
+permits a previously revoked identity to pair again.
+
+**Params:**
+
+| Field      | Type             | Required | Description       |
+| ---------- | ---------------- | -------- | ----------------- |
+| `deviceId` | device ID string | Yes      | Revoked peer to reset |
+
+**Result:** `{ "reset": true }`
+
+**Errors:** `-32009` if peer not found, `-32008` if peer is not in `revoked`
+state.
 
 ### 4.5 Clipboard
 
@@ -570,6 +593,33 @@ Cancels an in-flight file transfer initiated or accepted by the local daemon.
 }
 ```
 
+#### `rift.listIncomingFileOffers`
+
+Returns active incoming file offers that still await a local accept or reject
+decision.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "offers": [
+    {
+      "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+      "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "fileName": "example.png",
+      "mediaType": "image/png",
+      "byteSize": 1024,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "chunkSize": 262144,
+      "chunkCount": 1,
+      "expiresAt": "2026-07-14T10:00:00Z"
+    }
+  ]
+}
+```
+
 #### `rift.acceptFileOffer`
 
 Accepts an incoming file offer and records the publication destination selected
@@ -699,6 +749,36 @@ Rejects an incoming file offer.
 }
 ```
 
+#### `rift.listFileTransfers`
+
+Returns active and retained transfer records for the local history UI.
+
+**Params:** none.
+
+**Result:**
+
+```json
+{
+  "transfers": [
+    {
+      "transferId": "018f2f9a-8b7c-4a4b-9c0d-888888888888",
+      "operationId": "018f2f9a-8b7c-4a4b-9c0d-999999999999",
+      "direction": "incoming",
+      "peerDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
+      "fileName": "example.png",
+      "mediaType": "image/png",
+      "byteSize": 1024,
+      "bytesTransferred": 1024,
+      "state": "done",
+      "failureReason": null,
+      "destinationPath": "/home/user/Downloads/example.png"
+    }
+  ]
+}
+```
+
+`failureReason` and `destinationPath` MAY be omitted when they do not apply.
+
 ### 4.7 Notification Sync
 
 #### `rift.listNotifications`
@@ -782,6 +862,8 @@ Submits a locally observed or locally generated notification event into the daem
 
 `posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
 
+### 4.8 Media Playback
+
 #### `rift.listMediaPlayback`
 
 Returns the locally cached mirrored media playback state.
@@ -814,7 +896,7 @@ Submits a locally observed or locally generated media playback event into the da
 
 `posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
 
-### 4.8 Presence
+### 4.9 Presence
 
 #### `rift.getPeerPresence`
 
@@ -839,7 +921,7 @@ Returns presence information for a specific trusted peer.
 
 **Errors:** `-32009` if peer not found, `-32004` if peer not trusted.
 
-### 4.9 Operations
+### 4.10 Operations
 
 #### `rift.listOperations`
 
@@ -901,7 +983,7 @@ Returns details for a single operation, including its transition history.
 
 **Errors:** `-32009` if operation not found.
 
-### 4.10 Event Log
+### 4.11 Event Log
 
 #### `rift.queryEventLog`
 
@@ -911,7 +993,7 @@ Queries the security event log with optional filters.
 
 | Field          | Type             | Required | Description                                          |
 | -------------- | ---------------- | -------- | ---------------------------------------------------- |
-| `eventTypes`   | array of strings | No       | Filter by event type (Section 13.1 of protocol spec) |
+| `eventTypes`   | array of strings | No       | Filter by event type (Section 14.1 of protocol spec) |
 | `severities`   | array of strings | No       | Filter by severity level                             |
 | `peerDeviceId` | device ID string | No       | Filter by peer                                       |
 | `since`        | RFC 3339 string  | No       | Events after this timestamp                          |
@@ -961,7 +1043,10 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onMediaPlaybackActionRequest` | `{ "requestId", "playbackId", "sourceDeviceId", "requestingDeviceId", "action", "positionMs?", "requestedAt?" }` | Local playback action requested by a peer |
 | `rift.onMediaPlaybackActionResult` | `{ "playbackId", "sourceDeviceId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote playback action result |
 | `rift.onFileOffer`           | `{ "transferId", "sourceDeviceId", "fileName", "mediaType", "byteSize", "sha256", "chunkSize", "chunkCount", "expiresAt" }` | New incoming file offer              |
+| `rift.onFileTransferProgress` | `{ "transferId", "operationId", "direction", "peerDeviceId", "fileName", "mediaType", "byteSize", "bytesTransferred", "state", "failureReason?" }` | File-transfer progress or state changed |
 | `rift.onFileTransferReadyToCommit` | `{ "transferId", "operationId", "peerDeviceId", "fileName", "mediaType", "byteSize", "sha256", "stagingPath", "destinationPath", "state" }` | Verified incoming file awaits user-session publication |
+| `rift.onFileTransferCompleted` | `{ "transferId", "operationId", "peerDeviceId", "fileName", "byteSize", "destinationPath?" }` | File transfer completed locally      |
+| `rift.onFileTransferFailed` | `{ "transferId", "operationId", "peerDeviceId", "fileName", "byteSize", "failureReason", "message?" }` | File transfer failed locally         |
 | `rift.onSendQueueChanged`    | `{ "queueItemId", "removed" }`                                                         | Durable send queue item removed      |
 | `rift.onSendQueueItemUpdated`| `{ "queueItemId", "status", "targetDeviceId?", "currentOperationId?", "lastTransferId?", "failureReason?", "failureMessage?" }` | Durable send queue item changed      |
 | `rift.onPresenceUpdate`      | `{ "deviceId", "status", "lastSeenAt?", "capabilities" }`                              | Peer presence changed                |
@@ -980,6 +1065,6 @@ The IPC API enforces the following security invariants:
 
 4. **The client holds no authoritative state.** The daemon's SQLite database is the single source of truth for identity, trust store, capabilities, and event log. The client MAY cache view-model state in memory but MUST NOT persist authoritative protocol state.
 
-5. **Transport security is transport-specific.** Named pipes on Windows inherit OS access control (the pipe ACL restricts access to the current user session). `SendPort`/`ReceivePort` on Android is process-internal. Desktop Unix sockets are restricted to the current user. This specification does not define additional IPC-layer encryption because all v0.1-draft transports are local and OS-protected.
+5. **Transport security is transport-specific.** Named pipes on Windows inherit OS access control (the pipe ACL restricts access to the current user session). `SendPort`/`ReceivePort` on Android and the iOS in-process channel are process-internal. Desktop Unix sockets are restricted to the current user. This specification does not define additional IPC-layer encryption because all v0.1-draft transports are local and OS-protected.
 
 6. **Desktop file publication crosses the IPC boundary.** The daemon exposes a verified private staging path only to an authorized same-user client. The client treats staging content as read-only, publishes through a temporary destination file plus atomic rename, and reports the final path. The daemon independently verifies the committed file before acknowledging peer success. File content, staging paths, and destination paths MUST NOT be included in security-event details beyond the minimum local diagnostic metadata allowed by policy.

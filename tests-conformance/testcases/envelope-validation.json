@@ -1,6 +1,6 @@
 {
   "suite": "envelope-validation",
-  "description": "Verify peer message envelope acceptance and rejection (protocol.md §15.4)",
+  "description": "Verify peer message envelope acceptance and rejection (protocol.md §16.4)",
   "vectorsRef": "../../spec/vectors/vectors.json",
   "testCases": [
     {

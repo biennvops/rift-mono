@@ -1,6 +1,6 @@
 {
   "suite": "identity-derivation",
-  "description": "Verify Ed25519 public key to device ID and fingerprint derivation (protocol.md §15.1)",
+  "description": "Verify Ed25519 public key to device ID and fingerprint derivation (protocol.md §16.1)",
   "vectorsRef": "../../spec/vectors/vectors.json",
   "testCases": [
     {

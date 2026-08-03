@@ -9,7 +9,8 @@ surface across platforms.
 - pairing and trusted-device management UI
 - security event log and settings views
 - clipboard and operation workflow UI
-- transport-agnostic JSON-RPC client for desktop and Android
+- transport-agnostic JSON-RPC client for Windows, macOS, Linux, Android, and
+  iOS
 
 Normative behavior lives in:
 
@@ -21,6 +22,8 @@ Normative behavior lives in:
 - Windows: named-pipe transport to `daemon-cs`
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
 - Android 10 (API 29) or later: isolate transport to `daemon-dart`
+- iOS: in-process transport to `daemon-dart`, with native Keychain identity
+  storage and a Network.framework TLS bridge
 
 Windows notes:
 
@@ -60,6 +63,17 @@ macOS notes:
 The Flutter layer should not duplicate authoritative trust or identity state.
 That data lives in the daemon.
 
+iOS notes:
+
+- the Dart daemon runs in the Flutter process through
+  `InProcessDaemonTransport`; there is no separate background daemon process
+- the permanent identity private key is stored through the iOS Keychain bridge
+- peer TLS uses the native `IOSNativeTlsBridge`
+- iOS can receive and present mirrored notifications, but platform sandboxing
+  does not allow publishing arbitrary notifications from third-party apps
+- media controls apply to Rift-managed remote playback; iOS cannot publish the
+  now-playing state of unrelated apps
+
 ## Development
 
 ```bash
@@ -75,6 +89,7 @@ flutter run -d windows
 flutter run -d macos
 flutter run -d linux
 flutter run -d <android-device>
+flutter run -d <ios-device>
 ```
 
 Build and install the Linux release bundle, desktop entry, and login autostart
@@ -98,7 +113,8 @@ The Linux desktop entry forwards supported files opened with Rift to the
 existing process and adds them to the durable send queue.
 
 Desktop targets expect a compatible daemon endpoint to be available. Android
-starts the Dart daemon through the isolate bridge.
+starts the Dart daemon through the isolate bridge; iOS hosts the same daemon
+implementation in-process.
 
 ## Structure
 
@@ -115,4 +131,4 @@ app-flutter/
 
 - `DESIGN.md`
 - `../tests-interop/README.md`
-- `../docs/macos-permissions.md`
+- `../docs/macOS/TCC.md`

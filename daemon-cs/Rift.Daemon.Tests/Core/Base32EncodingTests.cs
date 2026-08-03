@@ -9,7 +9,7 @@ public class Base32EncodingTests
     [Fact]
     public void Encode_MatchesProtocolSpecVector()
     {
-        // SHA-256 from protocol spec §15.1
+        // SHA-256 from protocol spec §16.1
         var sha256Hex = "13cd677ac428d57b5cb434aa2486c9f30efe18b067fc7f6b248644a9580d21e7";
         var inputBytes = Convert.FromHexString(sha256Hex);
 

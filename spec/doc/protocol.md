@@ -314,7 +314,7 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
 
-### 7.5 Notification Sync
+### 7.6 Notification Sync
 
 Notification sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate `notification.posted`, `notification.updated`, and `notification.removed` for locally observed or locally generated notifications. Peers MUST negotiate `notification.sync@1` before sending or accepting any notification-sync message.
 
@@ -344,7 +344,7 @@ The v1 notification record fields are:
 
 `notification.actionResult` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
-### 7.5A Media Playback Sync
+### 7.7 Media Playback Sync
 
 Media playback sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate current playback state. Peers MUST negotiate `media.playback@1` before sending or accepting media-playback messages.
 
@@ -399,7 +399,7 @@ MUST NOT fail the session.
 
 The `offerSequence` field is a strictly increasing per-peer monotonic sequence number. Each device MUST increment `offerSequence` for every new `clipboard.offer` it sends within a session. The receiver MUST maintain a high-water mark of the highest `offerSequence` seen from each peer. An incoming `clipboard.offer` with an `offerSequence` less than or equal to the current high-water mark for that peer MUST be silently discarded and logged as a `warning` security event of type `clipboard.offer_replay`. This provides defense-in-depth against application-layer replay or reordering of clipboard offers beyond the transport-layer protections provided by TLS.
 
-### 7.6 File Transfer Messages
+### 7.8 File Transfer Messages
 
 The `file.transfer` capability is an optional authenticated extension in
 v0.1-draft. Peers that do not advertise or select `file.transfer` remain fully
@@ -460,17 +460,17 @@ MUST verify chunk bounds and integrity before accepting a chunk, and MUST
 verify total byte count and whole-file SHA-256 before committing the received
 file as complete.
 
-### 7.7 Operation Messages
+### 7.9 Operation Messages
 
 `operation.transition` payload fields: `operationId`, `operationType` string, `previousState` operation state, `nextState` operation state, optional `failureReason`, optional `details` object.
 
-### 7.8 Trust Messages
+### 7.10 Trust Messages
 
 `trust.remove` payload fields: `removedDeviceId` device ID, `reason` string, `removedAt` RFC 3339 timestamp.
 
 Removal messages are advisory. Local trust state is authoritative and MUST NOT depend on receiving a peer's `trust.remove`.
 
-### 7.9 Error Messages
+### 7.11 Error Messages
 
 `error` payload fields: `failureReason`, optional `refMessageId`, optional `message` string, optional `details` object.
 
@@ -528,9 +528,11 @@ Capability negotiation proceeds as follows:
 
 If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
 
-### 9.3 Required v0.1-Draft Capabilities
+### 9.3 v0.1-Draft Capability Registry
 
-The following capabilities are REQUIRED for a conformant v0.1-draft session:
+The following capabilities are defined for v0.1-draft. The required
+clipboard-first subset is stated below the table; `file.transfer`,
+`notification.sync`, and `media.playback` are optional extensions.
 
 | Name                    | Version | Minimum | Description                                              |
 | ----------------------- | ------- | ------- | -------------------------------------------------------- |
@@ -539,7 +541,8 @@ The following capabilities are REQUIRED for a conformant v0.1-draft session:
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
 | `security.event_log`    | 1       | 1       | Security event logging for audit                         |
-| `notification.sync`     | 1       | 1       | Android-to-desktop mirrored notification sync           |
+| `notification.sync`     | 1       | 1       | Bidirectional mirrored notification sync                |
+| `media.playback`        | 1       | 1       | Bidirectional playback state and remote media actions    |
 
 The required capability set for a clipboard-first v0.1-draft session is
 `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and
@@ -609,7 +612,7 @@ Each event MUST include `eventId`, `eventType`, `severity`, `localDeviceId`, opt
 
 Security tests for the KDE Connect vulnerability classes MUST assert both network rejection behavior and the expected event-log failure reason.
 
-### 13.1 Event Type Strings
+### 14.1 Event Type Strings
 
 The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT emit event types outside this vocabulary in v0.1-draft.
 
@@ -639,7 +642,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `certificate.malformed`      | Peer certificate failed extension parsing                                |
 | `policy.denied`              | Action denied by local policy                                            |
 
-### 13.2 Severity Levels
+### 14.2 Severity Levels
 
 | `severity` | Usage                                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -648,12 +651,12 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `error`    | Failed operations or rejected sessions: pairing rejected, connection lost, operation failed                              |
 | `critical` | Security violations: authentication failure, identity mismatch, malformed certificate |
 
-### 13.3 Outcome Values
+### 14.3 Outcome Values
 
 | `outcome` | Meaning                                                                            |
 | --------- | ---------------------------------------------------------------------------------- |
 | `success` | Event completed normally                                                           |
-| `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
+| `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 15 |
 | `denied`  | Event blocked by local policy; `failureReason` MUST be present                     |
 
 ## 15. Failure Reasons
@@ -675,14 +678,22 @@ The v0.1-draft failure reason vocabulary is:
 - `ProtocolError`
 - `PayloadTooLarge`
 - `InvalidTransition`
+- `Cancelled`
+- `NotFound`
+- `FileIntegrityFailed`
+- `StorageUnavailable`
+- `TransferStateMismatch`
 
 Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draft. Additional diagnostics may appear in local event `details` or optional human-readable `message` fields.
 
 ## 16. Test Vectors
 
-The protocol requires deterministic test vectors for both daemon implementations. The full certificate bytes are future conformance material and are not defined in this draft. Machine-readable JSON versions of these vectors will be maintained in `spec/vectors/`.
+The protocol maintains deterministic vectors under `spec/vectors/`, including
+machine-readable identity, envelope, clipboard, valid-certificate, and
+malformed-certificate material. Executable runner coverage is implementation
+specific and is described by `tests-conformance/README.md`.
 
-### 15.1 Identity Derivation
+### 16.1 Identity Derivation
 
 Test input: the Ed25519 public key from RFC 8032 §7.1 Test Vector 1.
 
@@ -697,11 +708,11 @@ Test input: the Ed25519 public key from RFC 8032 §7.1 Test Vector 1.
 
 Both implementations MUST produce identical device ID and fingerprint values from this public key.
 
-### 15.2 Custom Extension DER Encoding
+### 16.2 Custom Extension DER Encoding
 
 Note: The authoritative full certificate vector containing this extension is `spec/vectors/cert-valid.der`, deterministically generated by `spec/vectors/generate-vectors.sh`.
 
-Using the test public key from Section 15.1, the custom X.509 extension has the following DER structure:
+Using the test public key from Section 16.1, the custom X.509 extension has the following DER structure:
 
 **OID encoding** for `2.25.293029629918709742181702189012786017422` (20 value bytes):
 
@@ -734,7 +745,7 @@ Using the test public key from Section 15.1, the custom X.509 extension has the 
 
 Both implementations MUST produce byte-identical extension DER for a given Ed25519 public key. The OID value bytes and the inner OCTET STRING encoding are the critical conformance surfaces.
 
-### 15.3 Clipboard Hash
+### 16.3 Clipboard Hash
 
 | Field                                 | Value                                                              |
 | ------------------------------------- | ------------------------------------------------------------------ |
@@ -746,7 +757,7 @@ Both implementations MUST produce byte-identical extension DER for a given Ed255
 
 A receiver MUST verify both `byteSize` and `sha256` match after decoding `contentBase64`.
 
-### 15.4 Envelope Validation
+### 16.4 Envelope Validation
 
 **Valid envelope** using the test device ID:
 
@@ -777,7 +788,7 @@ A receiver MUST verify both `byteSize` and `sha256` match after decoding `conten
 
 Implementations MUST reject this envelope with `MalformedMessage`.
 
-## 16. Security Considerations
+## 17. Security Considerations
 
 Rift's security design specifically addresses three KDE Connect vulnerability classes documented in the project register.
 
@@ -807,7 +818,9 @@ The complete `extnValue` payload for a valid key is exactly 34 bytes: `04 20` fo
 
 ## Appendix B. Example Certificates
 
-Deterministic certificate vector bytes are future conformance material to be generated by each implementation and placed in `spec/vectors/`. This appendix defines the structural requirements and the malformed-input rejection catalog.
+Deterministic valid and malformed certificate bytes are maintained in
+`spec/vectors/`. This appendix defines their structural requirements and the
+malformed-input rejection catalog.
 
 ### B.1 Conformant Certificate Structure
 

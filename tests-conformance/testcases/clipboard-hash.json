@@ -1,6 +1,6 @@
 {
   "suite": "clipboard-hash",
-  "description": "Verify clipboard content hashing (protocol.md §15.3)",
+  "description": "Verify clipboard content hashing (protocol.md §16.3)",
   "vectorsRef": "../../spec/vectors/vectors.json",
   "testCases": [
     {

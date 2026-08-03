@@ -16,6 +16,10 @@ Rift implementations.
 - `runners/dart/` - executable Dart runner
 - `runners/dotnet/` - .NET runner work-in-progress
 
+The current CI job builds the C# daemon but executes the declarative cases only
+through the Dart runner. Until the .NET runner is implemented and runs the same
+manifest, this harness must not be cited as cross-implementation vector parity.
+
 ## Run The Dart Runner
 
 ```bash

@@ -14,7 +14,7 @@ Options considered: (1) Register under an IANA Private Enterprise Number arc —
 
 Use OID `2.25.293029629918709742181702189012786017422` under the ITU-T 2.25 UUID-derived arc. The OID is derived from a UUIDv5 (SHA-1 name-based, version nibble `5`), within the valid set per ITU-T X.667. The extension is non-critical. The `extnValue` contains a DER-encoded OCTET STRING of exactly 32 bytes (the raw Ed25519 public key), producing the inner encoding `04 20 <32 bytes>`.
 
-See protocol specification Sections 3.5, Appendix A, and Section 15.2 for the DER test vector.
+See protocol specification Sections 3.5, Appendix A, and Section 16.2 for the DER test vector.
 
 ## Consequences
 

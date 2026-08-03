@@ -1,9 +1,11 @@
 # Mobile Device Interop Test Matrix
 
 Manual validation procedure for mobile↔mobile peer capability parity
-(Android↔iOS, Android↔Android, iOS↔iOS). Desktop pairs are covered by the
-automated harness in `test/`; mobile pairs require real devices because the
-transport is platform-native TLS (see `spec/decisions/0012`).
+(Android↔iOS, Android↔Android, iOS↔iOS). Desktop live-transport coverage lives
+in the C# daemon test suite and the desktop real-machine runbook; the
+`tests-interop/test/` package currently exercises two in-memory Dart stacks.
+Mobile pairs require real devices because the transport is platform-native TLS
+(see `spec/decisions/0012`).
 
 ## Prerequisites
 

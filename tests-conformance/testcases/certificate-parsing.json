@@ -1,6 +1,6 @@
 {
   "suite": "certificate-parsing",
-  "description": "Verify X.509 custom extension parsing accepts valid certs and rejects each malformed class (protocol.md §15.2, Appendix B.3)",
+  "description": "Verify X.509 custom extension parsing accepts valid certs and rejects each malformed class (protocol.md §16.2, Appendix B.3)",
   "vectorsRef": "../../spec/vectors/malformed-vectors.json",
   "testCases": [
     {

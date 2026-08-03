@@ -137,8 +137,9 @@ native notifications.
 
 ## Evidence table
 
-Copy one table per pair into the results section below (or into
-`docs/final-test-report.md` when that lands).
+Copy one table per pair into the results section below. Formal reports may
+reference the recorded table, but must preserve its commit, date, and OS
+version fields.
 
 ```markdown
 ### Pair: <P1|P2|P3> — <machine A> ↔ <machine B>   Date: YYYY-MM-DD
@@ -161,6 +162,12 @@ OS versions: <A>, <B>
 ```
 
 ## Results
+
+The entries below are historical executions on the commits shown in each
+section. They are valid evidence for those builds, not automatic sign-off for
+the current `main`. Re-run the affected pair before upgrading a Partial,
+Pending, Deferred, N/A, or branch-specific result in a formal test report. See
+`implementation-conformance-matrix.md` for the current implementation boundary.
 
 ### Pair: P1 — Windows ↔ macOS   Date: 2026-07-28
 

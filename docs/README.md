@@ -12,8 +12,9 @@ reference material, not sprint history.
 - `../spec/doc/ipc.md` - normative local JSON-RPC IPC contract
 - `../spec/decisions/README.md` - architecture decision record index
 - `../AGENTS.md` - agent-facing repo guidance
-- `macos-permissions.md` - focused platform notes for macOS runtime behavior
-- `macOS`/`Windows`/`Linux` - useful tips and tricks for each platform
+- `macOS/TCC.md` - focused platform notes for macOS privacy permissions
+- `macOS/` - current macOS integration notes; add Windows, Linux, Android, and
+  iOS platform directories only when durable platform-specific docs exist
 - `macOS/NotificationExtractor.md` - macOS Full Disk Access notification-extractor boundary
 - `macOS/NotificationExtractorXpc.md` - authenticated extractor IPC prototype
 
@@ -23,6 +24,7 @@ reference material, not sprint history.
 - `../spec/vectors/README.md` - deterministic conformance vectors
 - `clipboard-file-transfer-boundary.md` - implementation boundary and rollout order for clipboard, file transfer, and later continuity extensions
 - `desktop-pair-runbook.md` - real two-machine desktop pair qualification procedure
+- `implementation-conformance-matrix.md` - implementation boundaries, evidence levels, and known verification gaps
 - `../tests-conformance/README.md` - conformance harness overview
 - `../tests-interop/README.md` - interoperability harness overview
 - `../app-flutter/DESIGN.md` - Flutter design system guidance

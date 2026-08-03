@@ -39,7 +39,7 @@ Examples:
 
 - `spec/asn1/README.md`
 - `spec/vectors/README.md`
-- `spec/examples/README.md`
+- assets under `spec/examples/`
 - `tests-conformance/README.md`
 - `tests-interop/README.md`
 - `app-flutter/DESIGN.md`

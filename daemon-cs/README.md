@@ -33,7 +33,8 @@ daemon-cs/
 - trust-state persistence and revocation
 - peer discovery and authenticated transport bootstrap
 - capability negotiation and presence handling
-- clipboard and operation lifecycle handling
+- clipboard, file transfer, notification sync, media playback, presence, and
+  operation lifecycle handling
 - local JSON-RPC IPC for the Flutter client
 
 ## Build And Run

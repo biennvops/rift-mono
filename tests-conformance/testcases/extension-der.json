@@ -1,6 +1,6 @@
 {
   "suite": "extension-der",
-  "description": "Verify DER encoding of the custom X.509 extension (protocol.md §15.2)",
+  "description": "Verify DER encoding of the custom X.509 extension (protocol.md §16.2)",
   "vectorsRef": "../../spec/vectors/vectors.json",
   "testCases": [
     {

@@ -8,7 +8,7 @@ namespace Rift.Daemon.Tests.Core;
 
 public class IdentityManagerTests
 {
-    // Test Vector from spec §15.1
+    // Test Vector from spec §16.1
     private static readonly byte[] TestPublicKey = Convert.FromHexString("d75a980182b10ab7d54bfed3c964073a0ee172f3daa3f4a18446b0b8d183f8e3");
 
     [Fact]
