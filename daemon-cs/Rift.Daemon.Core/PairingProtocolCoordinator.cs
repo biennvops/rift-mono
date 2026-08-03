@@ -277,42 +277,32 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var endpoints = peer.ObservedEndpoints.Count > 0
             ? peer.ObservedEndpoints
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
-        var failures = new List<(DiscoveredPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(deviceId, endpoint, token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            var connectedDeviceId = winner.Result;
+            _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
             {
-                var connectedDeviceId = await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
-                _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
-                {
-                    Address = endpoint.Address,
-                    Port = endpoint.Port,
-                    Source = "discovery-pairing",
-                    AddressFamily = System.Net.IPAddress.TryParse(endpoint.Address, out var ipAddress)
-                        ? ipAddress.AddressFamily.ToString()
-                        : null,
-                    LastSuccessAt = _timeProvider.GetUtcNow()
-                };
-                return connectedDeviceId;
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-                _logger.LogInformation(
-                    ex,
-                    "Outbound pairing connect attempt for {DeviceId} via {Address}:{Port} failed. Classification={Classification}",
-                    deviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    ClassifyConnectFailure(ex));
-            }
+                Address = winner.Endpoint.Address,
+                Port = winner.Endpoint.Port,
+                Source = "discovery-pairing",
+                AddressFamily = System.Net.IPAddress.TryParse(winner.Endpoint.Address, out var ipAddress)
+                    ? ipAddress.AddressFamily.ToString()
+                    : null,
+                LastSuccessAt = _timeProvider.GetUtcNow()
+            };
+            return connectedDeviceId;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All discovered endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All discovered endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToTrustedEndpointsAsync(
@@ -320,24 +310,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         IReadOnlyList<TrustedPeerEndpoint> endpoints,
         CancellationToken cancellationToken)
     {
-        var failures = new List<(TrustedPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                return await ConnectToEndpointWithRetryAsync(deviceId, new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port }, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-            }
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(
+                    deviceId,
+                    new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port },
+                    token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            return winner.Result;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All persisted endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All persisted endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToEndpointWithRetryAsync(

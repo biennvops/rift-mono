@@ -1634,21 +1634,26 @@ public sealed class FileTransferService : IFileTransferService
     private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
     {
         Exception? lastError = null;
-        foreach (var endpoint in peer.TrustedEndpoints)
+        try
         {
-            try
-            {
-                await ConnectToEndpointWithRetryAsync(
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    cancellationToken).ConfigureAwait(false);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                peer.TrustedEndpoints,
+                async (endpoint, token) =>
+                {
+                    await ConnectToEndpointWithRetryAsync(
+                        peerDeviceId,
+                        endpoint.Address,
+                        endpoint.Port,
+                        token);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         if (_discoveryCoordinator.TryGetDiscoveredPeer(peerDeviceId, out var discoveredPeer) &&
@@ -1676,21 +1681,26 @@ public sealed class FileTransferService : IFileTransferService
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
 
         Exception? lastError = null;
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                await ConnectToEndpointWithRetryAsync(
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    cancellationToken).ConfigureAwait(false);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                async (endpoint, token) =>
+                {
+                    await ConnectToEndpointWithRetryAsync(
+                        peerDeviceId,
+                        endpoint.Address,
+                        endpoint.Port,
+                        token);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         throw new FileTransferFailureException(

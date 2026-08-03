@@ -35,7 +35,9 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private DateTimeOffset _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
     private int _networkRefreshQueued;
     private Timer? _networkRefreshDebounceTimer;
+    private Timer? _periodicDiscoveryTimer;
     private readonly bool _subscribedToNetworkChanges;
+    private static readonly TimeSpan PeriodicDiscoveryInterval = TimeSpan.FromSeconds(60);
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -123,6 +125,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             // browse query and wires responses back into
             // ServiceInstanceDiscovered.
             _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+            _periodicDiscoveryTimer = new Timer(
+                _ => QueryServiceInstancesSafely(),
+                null,
+                PeriodicDiscoveryInterval,
+                PeriodicDiscoveryInterval);
 
             _logger.LogInformation("Started mDNS discovery for peers.");
         }
@@ -139,6 +146,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
 
             _isDiscovering = false;
+            _periodicDiscoveryTimer?.Dispose();
+            _periodicDiscoveryTimer = null;
             StopFallbackDiscoveryIfIdle();
             StopMdnsIfIdle();
             _logger.LogInformation("Stopped mDNS discovery for peers.");
@@ -554,6 +563,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _shutdownCts.Cancel();
             _networkRefreshDebounceTimer?.Dispose();
             _networkRefreshDebounceTimer = null;
+            _periodicDiscoveryTimer?.Dispose();
+            _periodicDiscoveryTimer = null;
             _fallbackAdvertiser?.Dispose();
             _fallbackAdvertiser = null;
             _fallbackDiscoveryListener?.Dispose();
@@ -600,6 +611,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
     internal static bool ShouldSubscribeToNetworkChanges(bool isMacOS) => !isMacOS;
 
+    public void NotifyNetworkChanged()
+    {
+        QueueNetworkRefresh();
+    }
+
     private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
     {
         QueueNetworkRefresh();
@@ -637,7 +653,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
 
                         if (_isDiscovering)
                         {
-                            _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+                            QueryServiceInstancesSafely();
                         }
                     }
                 }
@@ -650,6 +666,26 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                     Interlocked.Exchange(ref _networkRefreshQueued, 0);
                 }
             }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void QueryServiceInstancesSafely()
+    {
+        lock (_syncRoot)
+        {
+            if (!_isDiscovering || !_isMdnsRunning)
+            {
+                return;
+            }
+
+            try
+            {
+                _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to refresh mDNS service query.");
+            }
         }
     }
 }

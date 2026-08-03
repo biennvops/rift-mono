@@ -270,37 +270,52 @@ Future<String> reconnectTrustedPeerViaEndpoints({
     );
   }
 
-  Object? lastError;
-  for (final endpoint in trustedEndpoints) {
-    RiftLog.info(
-      '[Reconnect] Trying trusted endpoint for peerDeviceId=$peerDeviceId '
-      'address=${endpoint.address}:${endpoint.port} source=${endpoint.source}',
+  final attempts =
+      <
+        int,
+        Future<
+          ({
+            int index,
+            TrustedPeerEndpoint endpoint,
+            String? peerDeviceId,
+            Object? error,
+          })
+        >
+      >{};
+  for (var index = 0; index < trustedEndpoints.length; index++) {
+    final endpoint = trustedEndpoints[index];
+    attempts[index] = _attemptTrustedEndpoint(
+      index,
+      endpoint,
+      peerDeviceId,
+      transport,
+      getContext,
+      sendSessionHello,
+      waitForSessionEstablished,
+      timeout,
     );
-    try {
-      final connectedPeerDeviceId = await transport
-          .connectTo(
-            endpoint.address,
-            endpoint.port,
-            expectedDeviceId: peerDeviceId,
-            forceFreshSession: true,
-          )
-          .timeout(timeout);
+  }
 
-      if (getContext(connectedPeerDeviceId) == null) {
-        await sendSessionHello(connectedPeerDeviceId);
-      }
-      await waitForSessionEstablished(connectedPeerDeviceId).timeout(timeout);
-      await persistTrustedEndpoint(connectedPeerDeviceId, 'trusted-reconnect');
-      return connectedPeerDeviceId;
-    } catch (error) {
-      lastError = error;
-      final classification = _classifyPairingConnectFailure(error);
-      RiftLog.warn(
-        '[Reconnect] Trusted endpoint failed for peerDeviceId=$peerDeviceId '
-        'address=${endpoint.address}:${endpoint.port} '
-        'classification=$classification detail=${_describePairingConnectFailure(error)}',
-      );
+  Object? lastError;
+  while (attempts.isNotEmpty) {
+    final result = await Future.any(attempts.values);
+    attempts.remove(result.index);
+    if (result.error == null && result.peerDeviceId != null) {
+      // A transport implementation retains the first authenticated session for
+      // duplicate connections. Let losing attempts finish and consume their
+      // results, but only persist the endpoint that won the race.
+      unawaited(Future.wait(attempts.values));
+      await persistTrustedEndpoint(result.peerDeviceId!, 'trusted-reconnect');
+      return result.peerDeviceId!;
     }
+
+    lastError = result.error;
+    final classification = _classifyPairingConnectFailure(result.error!);
+    RiftLog.warn(
+      '[Reconnect] Trusted endpoint failed for peerDeviceId=$peerDeviceId '
+      'address=${result.endpoint.address}:${result.endpoint.port} '
+      'classification=$classification detail=${_describePairingConnectFailure(result.error!)}',
+    );
   }
 
   throw RiftException(
@@ -308,6 +323,53 @@ Future<String> reconnectTrustedPeerViaEndpoints({
     'Failed to reconnect trusted peer $peerDeviceId using persisted endpoints. '
     '${lastError == null ? "" : _describePairingConnectFailure(lastError)}',
   );
+}
+
+Future<
+  ({
+    int index,
+    TrustedPeerEndpoint endpoint,
+    String? peerDeviceId,
+    Object? error,
+  })
+>
+_attemptTrustedEndpoint(
+  int index,
+  TrustedPeerEndpoint endpoint,
+  String expectedPeerDeviceId,
+  Transport transport,
+  SessionContext? Function(String peerDeviceId) getContext,
+  Future<void> Function(String peerDeviceId) sendSessionHello,
+  Future<void> Function(String peerDeviceId) waitForSessionEstablished,
+  Duration timeout,
+) async {
+  try {
+    final connectedPeerDeviceId = await transport
+        .connectTo(
+          endpoint.address,
+          endpoint.port,
+          expectedDeviceId: expectedPeerDeviceId,
+          forceFreshSession: true,
+        )
+        .timeout(timeout);
+
+    if (getContext(connectedPeerDeviceId) == null) {
+      await sendSessionHello(connectedPeerDeviceId);
+    }
+    await waitForSessionEstablished(connectedPeerDeviceId).timeout(timeout);
+    RiftLog.info(
+      '[Reconnect] Trusted endpoint succeeded for peerDeviceId=$expectedPeerDeviceId '
+      'address=${endpoint.address}:${endpoint.port} source=${endpoint.source}',
+    );
+    return (
+      index: index,
+      endpoint: endpoint,
+      peerDeviceId: connectedPeerDeviceId,
+      error: null,
+    );
+  } catch (error) {
+    return (index: index, endpoint: endpoint, peerDeviceId: null, error: error);
+  }
 }
 
 @visibleForTesting
@@ -1924,8 +1986,8 @@ class RiftDaemon {
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
-    await _transport?.stopServer();
     await _sessionManager?.dispose();
+    await _transport?.stopServer();
     _trustStore?.dispose();
     await _identityManager?.dispose();
   }

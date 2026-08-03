@@ -97,6 +97,15 @@ public class Worker(
             {
                 // Normal shutdown
             }
+            try
+            {
+                await heartbeatManager.SendOfflinePresenceAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to send offline presence updates during shutdown.");
+            }
+
             discoveryService.StopAdvertising();
             discoveryService.StopDiscovery();
             trustedReconnectCts.Cancel();
@@ -205,7 +214,11 @@ public class Worker(
                 {
                     try
                     {
-                        await SendPresenceUpdateAsync(args.PeerDeviceId, args.SelectedCapabilities, stoppingToken);
+                        await SendPresenceUpdateAsync(
+                            args.PeerDeviceId,
+                            args.SelectedCapabilities,
+                            "online",
+                            stoppingToken);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
@@ -276,53 +289,9 @@ public class Worker(
                     }
                 }
 
-                foreach (var endpoint in peer.TrustedEndpoints.OrderByDescending(endpoint => endpoint.LastSuccessAt))
+                if (await TryReconnectEndpointsInParallelAsync(peer, trustedReconnectToken))
                 {
-                    if (transport.HasActiveSession(peerDeviceId))
-                    {
-                        break;
-                    }
-
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(trustedReconnectToken);
-                    timeoutCts.CancelAfter(TrustedReconnectEndpointTimeout);
-                    try
-                    {
-                        var connectedDeviceId = await transport.ConnectToPeerWithIdentityAsync(
-                            endpoint.Address,
-                            endpoint.Port,
-                            timeoutCts.Token);
-                        if (!string.Equals(connectedDeviceId, peerDeviceId, StringComparison.Ordinal))
-                        {
-                            logger.LogWarning(
-                                "Trusted reconnect endpoint {Address}:{Port} authenticated unexpected peer {ConnectedDeviceId} instead of {ExpectedDeviceId}.",
-                                endpoint.Address,
-                                endpoint.Port,
-                                connectedDeviceId,
-                                peerDeviceId);
-                            await transport.DisconnectPeerAsync(connectedDeviceId, trustedReconnectToken);
-                            continue;
-                        }
-
-                        logger.LogInformation(
-                            "Reconnected trusted peer {DeviceId} using persisted endpoint {Address}:{Port}.",
-                            peerDeviceId,
-                            endpoint.Address,
-                            endpoint.Port);
-                        break;
-                    }
-                    catch (OperationCanceledException) when (trustedReconnectToken.IsCancellationRequested)
-                    {
-                        return;
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogDebug(
-                            ex,
-                            "Trusted reconnect attempt failed for {DeviceId} via {Address}:{Port}.",
-                            peerDeviceId,
-                            endpoint.Address,
-                            endpoint.Port);
-                    }
+                    passiveDelayApplied = false;
                 }
 
                 if (!transport.HasActiveSession(peerDeviceId))
@@ -332,7 +301,100 @@ public class Worker(
             }
         }
 
-        async Task SendPresenceUpdateAsync(string peerDeviceId, IReadOnlyList<string> selectedCapabilities, CancellationToken cancellationToken)
+        async Task<bool> TryReconnectEndpointsInParallelAsync(
+            PeerIdentity peer,
+            CancellationToken cancellationToken)
+        {
+            var endpoints = peer.TrustedEndpoints
+                .OrderByDescending(endpoint => endpoint.LastSuccessAt)
+                .ToArray();
+            if (endpoints.Length == 0)
+            {
+                return false;
+            }
+
+            using var attemptsCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var attempts = endpoints
+                .Select(endpoint => ConnectEndpointAsync(endpoint, attemptsCts.Token))
+                .ToList();
+
+            try
+            {
+                while (attempts.Count > 0)
+                {
+                    var completed = await Task.WhenAny(attempts);
+                    attempts.Remove(completed);
+
+                    try
+                    {
+                        var result = await completed;
+                        if (!string.Equals(result.ConnectedDeviceId, peer.DeviceId, StringComparison.Ordinal))
+                        {
+                            logger.LogWarning(
+                                "Trusted reconnect endpoint {Address}:{Port} authenticated unexpected peer {ConnectedDeviceId} instead of {ExpectedDeviceId}.",
+                                result.Endpoint.Address,
+                                result.Endpoint.Port,
+                                result.ConnectedDeviceId,
+                                peer.DeviceId);
+                            await transport.DisconnectPeerAsync(result.ConnectedDeviceId, cancellationToken);
+                            continue;
+                        }
+
+                        logger.LogInformation(
+                            "Reconnected trusted peer {DeviceId} using endpoint {Address}:{Port}.",
+                            peer.DeviceId,
+                            result.Endpoint.Address,
+                            result.Endpoint.Port);
+                        attemptsCts.Cancel();
+                        return true;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex, "Trusted reconnect endpoint attempt failed for {DeviceId}.", peer.DeviceId);
+                    }
+                }
+
+                return false;
+            }
+            finally
+            {
+                attemptsCts.Cancel();
+                try
+                {
+                    await Task.WhenAll(attempts);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || attemptsCts.IsCancellationRequested)
+                {
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "One or more parallel reconnect attempts failed for {DeviceId}.", peer.DeviceId);
+                }
+            }
+
+            async Task<(TrustedPeerEndpoint Endpoint, string ConnectedDeviceId)> ConnectEndpointAsync(
+                TrustedPeerEndpoint endpoint,
+                CancellationToken attemptCancellationToken)
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(attemptCancellationToken);
+                timeoutCts.CancelAfter(TrustedReconnectEndpointTimeout);
+                var connectedDeviceId = await transport.ConnectToPeerWithIdentityAsync(
+                    endpoint.Address,
+                    endpoint.Port,
+                    timeoutCts.Token);
+                return (endpoint, connectedDeviceId);
+            }
+        }
+
+        async Task SendPresenceUpdateAsync(
+            string peerDeviceId,
+            IReadOnlyList<string> selectedCapabilities,
+            string status,
+            CancellationToken cancellationToken)
         {
             var envelope = new
             {
@@ -342,7 +404,7 @@ public class Worker(
                 sourceDeviceId = deviceId,
                 payload = new
                 {
-                    status = "online",
+                    status,
                     lastSeenAt = DateTimeOffset.UtcNow.ToString("O"),
                     capabilities = selectedCapabilities
                 }

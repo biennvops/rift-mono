@@ -247,9 +247,30 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Keeping existing authenticated session for peer {DeviceId} and dropping duplicate fresh connection.", deviceId);
-            session.Dispose();
-            return SessionRegistrationResult.ReusedExisting;
+            var preferredInitiator = string.CompareOrdinal(
+                _identityManager.GetDeviceId(),
+                deviceId) < 0;
+            var keepExisting = existingSession.IsInitiator == preferredInitiator ||
+                session.IsInitiator != preferredInitiator;
+            if (keepExisting)
+            {
+                _logger.LogInformation(
+                    "Keeping the deterministic {Role} session for peer {DeviceId} and dropping the duplicate.",
+                    preferredInitiator ? "outbound" : "inbound",
+                    deviceId);
+                session.Dispose();
+                return SessionRegistrationResult.ReusedExisting;
+            }
+
+            if (_sessions.TryUpdate(deviceId, session, existingSession))
+            {
+                _logger.LogInformation(
+                    "Replacing the non-preferred session for peer {DeviceId} with the deterministic {Role} session.",
+                    deviceId,
+                    preferredInitiator ? "outbound" : "inbound");
+                existingSession.Dispose();
+                return SessionRegistrationResult.RegisteredNew;
+            }
         }
 
         session.Dispose();

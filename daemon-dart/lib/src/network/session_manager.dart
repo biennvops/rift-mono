@@ -276,6 +276,20 @@ class SessionManager {
   }
 
   Future<void> dispose() async {
+    final activeSessions = _sessions.values
+        .where(
+          (ctx) =>
+              ctx.handshakeState == HandshakeState.established &&
+              ctx.capabilityNegotiated &&
+              ctx.hasCapability('presence.basic'),
+        )
+        .toList();
+    await Future.wait(
+      activeSessions.map(
+        (ctx) => _sendPresence(ctx, 'offline').catchError((_) {}),
+      ),
+    );
+
     for (final waiter in _establishmentWaiters.values) {
       if (!waiter.isCompleted) {
         waiter.complete();
@@ -1376,7 +1390,7 @@ class SessionManager {
       }
 
       ctx.heartbeatTimer?.cancel();
-      ctx.heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      ctx.heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
         unawaited(
           _sendHeartbeat(ctx).catchError((Object error, StackTrace stackTrace) {
             _transport.disconnect(ctx.peerDeviceId);
@@ -1395,9 +1409,10 @@ class SessionManager {
 
   void _resetOfflineTimeout(SessionContext ctx) {
     ctx.offlineTimeoutTimer?.cancel();
-    ctx.offlineTimeoutTimer = Timer(const Duration(seconds: 90), () {
+    ctx.offlineTimeoutTimer = Timer(const Duration(seconds: 45), () {
       ctx.currentPresenceStatus = 'offline';
       _presenceUpdateController.add(ctx);
+      _transport.disconnect(ctx.peerDeviceId);
     });
   }
 
@@ -1420,7 +1435,10 @@ class SessionManager {
     }
   }
 
-  Future<void> _sendHeartbeat(SessionContext ctx) async {
+  Future<void> _sendHeartbeat(SessionContext ctx) =>
+      _sendPresence(ctx, 'online');
+
+  Future<void> _sendPresence(SessionContext ctx, String status) async {
     final payload = {
       'rift': '0.1-draft',
       'id': const Uuid().v4(),
@@ -1429,7 +1447,7 @@ class SessionManager {
       'sourceDeviceId': _identityManager.deviceId,
       'destinationDeviceId': ctx.peerDeviceId,
       'payload': {
-        'status': 'online',
+        'status': status,
         'capabilities': ctx.negotiatedCapabilities.map((c) => c.name).toList(),
       },
     };
