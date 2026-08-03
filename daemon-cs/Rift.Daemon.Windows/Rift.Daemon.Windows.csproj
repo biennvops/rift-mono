@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.8" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.151.0" />
     <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
   </ItemGroup>
 

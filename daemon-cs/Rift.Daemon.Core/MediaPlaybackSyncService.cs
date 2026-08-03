@@ -1,16 +1,23 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
+using SkiaSharp;
 
 namespace Rift.Daemon.Core;
 
 public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
 {
     private const string RequiredCapability = "media.playback";
+    private const int MaxArtworkBytes = 2 * 1024 * 1024;
+    private const int MaxSourceArtworkBytes = 20 * 1024 * 1024;
+    private const int MaxSourceArtworkBase64Length = ((MaxSourceArtworkBytes + 2) / 3) * 4;
+    private const int MaxArtworkDimension = 1024;
+    private const int MaxArtworkCacheEntries = 8;
     private static readonly StringComparer Comparer = StringComparer.Ordinal;
     private static readonly TimeSpan DefaultActionTimeout = TimeSpan.FromSeconds(30);
     private static readonly Regex Rfc3339UtcTimestamp = new(
@@ -35,6 +42,8 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         "InvalidTransition"
     };
     private readonly Lock _gate = new();
+    private readonly Lock _artworkCacheGate = new();
+    private readonly Dictionary<string, IReadOnlyDictionary<string, object?>> _artworkCache = new(Comparer);
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
@@ -827,7 +836,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Title = playback.Title,
             Artist = playback.Artist,
             Album = playback.Album,
-            Artwork = NormalizeArtwork(playback.Artwork),
+            Artwork = NormalizeArtworkForTransport(playback.Artwork),
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,
@@ -1029,7 +1038,144 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         return details;
     }
 
-    private static IReadOnlyDictionary<string, object?>? NormalizeArtwork(IReadOnlyDictionary<string, object?>? artwork)
+    private IReadOnlyDictionary<string, object?>? NormalizeArtworkForTransport(
+        IReadOnlyDictionary<string, object?>? artwork)
+    {
+        var normalized = NormalizeArtworkValues(artwork);
+        if (normalized is null ||
+            !normalized.TryGetValue("dataBase64", out var dataValue) ||
+            dataValue is not string dataBase64 ||
+            string.IsNullOrWhiteSpace(dataBase64))
+        {
+            return normalized;
+        }
+
+        if (dataBase64.Length > MaxSourceArtworkBase64Length)
+        {
+            return WithoutArtworkData(normalized);
+        }
+
+        byte[] sourceBytes;
+        try
+        {
+            sourceBytes = Convert.FromBase64String(dataBase64);
+        }
+        catch (FormatException)
+        {
+            return WithoutArtworkData(normalized);
+        }
+
+        if (sourceBytes.Length > MaxSourceArtworkBytes)
+        {
+            return WithoutArtworkData(normalized);
+        }
+
+        var cacheKey = Convert.ToHexString(SHA256.HashData(sourceBytes));
+        lock (_artworkCacheGate)
+        {
+            if (_artworkCache.TryGetValue(cacheKey, out var cached))
+            {
+                return cached;
+            }
+        }
+
+        using var source = SKBitmap.Decode(sourceBytes);
+        if (source is null)
+        {
+            return WithoutArtworkData(normalized);
+        }
+
+        IReadOnlyDictionary<string, object?> result;
+        if (sourceBytes.Length <= MaxArtworkBytes &&
+            source.Width <= MaxArtworkDimension &&
+            source.Height <= MaxArtworkDimension)
+        {
+            result = normalized;
+        }
+        else
+        {
+            var encoded = EncodeArtwork(source);
+            if (encoded is null)
+            {
+                result = WithoutArtworkData(normalized);
+            }
+            else
+            {
+                result = new Dictionary<string, object?>(normalized, StringComparer.Ordinal)
+                {
+                    ["dataBase64"] = Convert.ToBase64String(encoded),
+                    ["mediaType"] = "image/jpeg"
+                };
+            }
+        }
+
+        lock (_artworkCacheGate)
+        {
+            if (_artworkCache.Count >= MaxArtworkCacheEntries && !_artworkCache.ContainsKey(cacheKey))
+            {
+                _artworkCache.Remove(_artworkCache.Keys.First());
+            }
+            _artworkCache[cacheKey] = result;
+        }
+        return result;
+    }
+
+    private static byte[]? EncodeArtwork(SKBitmap source)
+    {
+        var scale = Math.Min(
+            1d,
+            Math.Min(
+                MaxArtworkDimension / (double)source.Width,
+                MaxArtworkDimension / (double)source.Height));
+        var width = Math.Max(1, (int)Math.Round(source.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(source.Height * scale));
+
+        while (true)
+        {
+            using var resized = new SKBitmap(new SKImageInfo(
+                width,
+                height,
+                SKColorType.Rgba8888,
+                SKAlphaType.Premul));
+            using (var canvas = new SKCanvas(resized))
+            {
+                canvas.Clear(SKColors.White);
+                canvas.DrawBitmap(
+                    source,
+                    new SKRect(0, 0, width, height),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+            }
+
+            using var image = SKImage.FromBitmap(resized);
+            foreach (var quality in new[] { 85, 75, 65, 55, 45 })
+            {
+                using var data = image.Encode(SKEncodedImageFormat.Jpeg, quality);
+                if (data is not null && data.Size <= MaxArtworkBytes)
+                {
+                    return data.ToArray();
+                }
+            }
+
+            if (width <= 256 || height <= 256)
+            {
+                return null;
+            }
+
+            width = Math.Max(256, (int)Math.Round(width * 0.75));
+            height = Math.Max(256, (int)Math.Round(height * 0.75));
+        }
+    }
+
+    private static IReadOnlyDictionary<string, object?> WithoutArtworkData(
+        IReadOnlyDictionary<string, object?> artwork)
+    {
+        var result = new Dictionary<string, object?>(artwork, StringComparer.Ordinal);
+        result.Remove("dataBase64");
+        return result;
+    }
+
+    private static IReadOnlyDictionary<string, object?>? NormalizeArtworkValues(
+        IReadOnlyDictionary<string, object?>? artwork)
     {
         if (artwork is null)
         {
@@ -1071,7 +1217,7 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
             Title = playback.Title,
             Artist = playback.Artist,
             Album = playback.Album,
-            Artwork = NormalizeArtwork(playback.Artwork),
+            Artwork = NormalizeArtworkValues(playback.Artwork),
             PlaybackState = playback.PlaybackState,
             PositionMs = playback.PositionMs,
             DurationMs = playback.DurationMs,
