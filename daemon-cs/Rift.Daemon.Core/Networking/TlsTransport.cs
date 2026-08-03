@@ -825,7 +825,10 @@ public sealed class TlsTransport : ITransport, IDisposable
             return null;
         }
 
-        return new PeerSessionEndpoint(remoteEndPoint.Address.ToString(), remoteEndPoint.Port);
+        return new PeerSessionEndpoint(
+            remoteEndPoint.Address.ToString(),
+            remoteEndPoint.Port,
+            session.IsInitiator);
     }
 
     public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)

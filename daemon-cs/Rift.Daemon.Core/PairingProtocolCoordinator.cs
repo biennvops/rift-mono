@@ -403,14 +403,23 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }, cancellationToken);
     }
 
-    public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+    public async Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
     {
-        return SendProtocolMessageAsync(deviceId, "trust.remove", new
+        try
         {
-            removedDeviceId = deviceId,
-            reason,
-            removedAt = _timeProvider.GetUtcNow().ToString("O")
-        }, cancellationToken);
+            await SendProtocolMessageAsync(deviceId, "trust.remove", new
+            {
+                removedDeviceId = deviceId,
+                reason,
+                removedAt = _timeProvider.GetUtcNow().ToString("O")
+            }, cancellationToken);
+        }
+        finally
+        {
+            await _transport.DisconnectPeerAsync(deviceId, CancellationToken.None);
+            _pairingStates.TryRemove(deviceId, out _);
+            TryStartDiscoveryAfterTrustRemoval();
+        }
     }
 
     private async Task<string> EnsureActiveSessionForPairingAsync(string deviceId, CancellationToken cancellationToken)
@@ -514,6 +523,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _trustStore.DeletePeer(peerDeviceId);
         _pairingStates.TryRemove(peerDeviceId, out _);
         await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken);
+        TryStartDiscoveryAfterTrustRemoval();
         await LogEventAsync(SecurityEventTypes.TrustRemoved, peerDeviceId, SecurityEventOutcome.Success, reason, cancellationToken);
         await NotifyTrustChangedAsync(peerDeviceId, "trusted", "removed", reason ?? "Peer removed trust.", cancellationToken);
     }
@@ -975,9 +985,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             };
         }
 
-        if (peer.TrustedEndpoints.Count > 0)
+        if (peer.TrustedEndpoints.Count > 0 && !activeEndpoint.IsInitiator)
         {
-            var existingEndpoint = peer.TrustedEndpoints[0];
+            return peer.TrustedEndpoints[0];
+        }
+
+        if (peer.TrustedEndpoints.Count > 0 || activeEndpoint.IsInitiator)
+        {
+            var existingEndpoint = peer.TrustedEndpoints.FirstOrDefault();
             return new TrustedPeerEndpoint
             {
                 Address = activeEndpoint.Address,
@@ -985,12 +1000,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 Source = source,
                 AddressFamily = System.Net.IPAddress.TryParse(activeEndpoint.Address, out var activeIpAddress)
                     ? activeIpAddress.AddressFamily.ToString()
-                    : existingEndpoint.AddressFamily,
+                    : existingEndpoint?.AddressFamily,
                 LastSuccessAt = _timeProvider.GetUtcNow()
             };
         }
 
         return null;
+    }
+
+    private void TryStartDiscoveryAfterTrustRemoval()
+    {
+        try
+        {
+            _discoveryCoordinator.StartDiscovery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resume discovery after trust removal.");
+        }
     }
 
     private Task NotifyTrustChangedAsync(string deviceId, string previousState, string newState, string reason, CancellationToken cancellationToken)

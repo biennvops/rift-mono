@@ -105,10 +105,17 @@ public sealed class PeerSessionEndpoint
 
     public int Port { get; }
 
-    public PeerSessionEndpoint(string address, int port)
+    /// <summary>
+    /// Indicates that the local daemon initiated this session. An inbound session's
+    /// remote port is an ephemeral client port and must not be persisted as a listener endpoint.
+    /// </summary>
+    public bool IsInitiator { get; }
+
+    public PeerSessionEndpoint(string address, int port, bool isInitiator = true)
     {
         Address = address ?? throw new ArgumentNullException(nameof(address));
         Port = port;
+        IsInitiator = isInitiator;
     }
 }
 
