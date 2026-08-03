@@ -1,8 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:daemon_dart/daemon_dart.dart';
 
 import '../platform/android_native_tls.dart';
@@ -24,7 +23,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   final StreamController<TransportMessage> _messages =
       StreamController<TransportMessage>.broadcast();
   final StreamController<String> _disconnects =
-      StreamController<String>.broadcast();
+      StreamController<String>.broadcast(sync: true);
   bool _stopping = false;
   int _boundPort = 0;
 
@@ -151,13 +150,23 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     _peers[peerDeviceId] = peer;
     if (existing != null) {
       _authenticatedPeers.remove(peerDeviceId);
-      // Notify for authenticated replacements so the session layer discards
-      // its established context; otherwise the peer's new session.hello is
-      // rejected by the duplicate-session tie-breaker.
-      await _closeConnection(existing, notify: wasAuthenticated);
+      if (wasAuthenticated) {
+        // Reset the old session before the replacement can start its
+        // handshake. The old socket is closed silently below so its teardown
+        // cannot remove the replacement session.
+        resetSessionForReplacement(peerDeviceId);
+      }
+      await _closeConnection(existing, notify: false);
     }
     _startReadLoop(peer);
     return peerDeviceId;
+  }
+
+  @visibleForTesting
+  void resetSessionForReplacement(String peerDeviceId) {
+    if (!_disconnects.isClosed) {
+      _disconnects.add(peerDeviceId);
+    }
   }
 
   void _startReadLoop(_NativePeerConnection peer) {
