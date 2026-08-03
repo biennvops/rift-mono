@@ -61,6 +61,14 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     }
   }
 
+  static bool shouldKeepExistingPreAuthConnection({
+    required bool existingIsServer,
+    required bool candidateIsServer,
+    required bool preferredIsServer,
+  }) =>
+      existingIsServer == preferredIsServer ||
+      candidateIsServer != preferredIsServer;
+
   @override
   Future<String> connectTo(
     String host,
@@ -104,10 +112,24 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     final existing = _peers[peerDeviceId];
     final wasAuthenticated = _authenticatedPeers.contains(peerDeviceId);
 
-    if (existing != null && wasAuthenticated && !isServer) {
-      // Our own redundant outbound dial; keep the authenticated session.
-      await _tls.close(connection.connectionId);
-      return peerDeviceId;
+    if (existing != null) {
+      if (wasAuthenticated && !isServer) {
+        // Our own redundant outbound dial; keep the authenticated session.
+        await _tls.close(connection.connectionId);
+        return peerDeviceId;
+      }
+      if (!wasAuthenticated) {
+        final preferredIsServer =
+            _identityManager.deviceId.compareTo(peerDeviceId) > 0;
+        if (shouldKeepExistingPreAuthConnection(
+          existingIsServer: existing.isServer,
+          candidateIsServer: isServer,
+          preferredIsServer: preferredIsServer,
+        )) {
+          await _tls.close(connection.connectionId);
+          return peerDeviceId;
+        }
+      }
     }
     // A fresh inbound connection from an authenticated peer means its side
     // of the old socket is dead (mobile apps are killed/suspended without a
