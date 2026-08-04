@@ -847,48 +847,45 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         : (shortId.isNotEmpty ? shortId : 'Unknown Device');
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: theme.colorScheme.outlineVariant),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color:
+                  theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(_platformIcon(peerPlatform),
+                size: 20, color: theme.colorScheme.primary),
+          ),
+          const SizedBox(width: 10),
           Expanded(
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer
-                        .withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(_platformIcon(peerPlatform),
-                      size: 20, color: theme.colorScheme.primary),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(titleText,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface),
-                          overflow: TextOverflow.ellipsis),
-                      Text('Local Network',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant)),
-                    ],
-                  ),
-                ),
+                Text(titleText,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface),
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text('Local Network',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant)),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           FilledButton.icon(
             onPressed: () => _handlePeerAction(
               peer: peer,
@@ -896,11 +893,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               trustState: 'discovered',
               titleText: titleText,
             ),
-            icon: const Icon(Icons.link, size: 18),
+            icon: const Icon(Icons.link, size: 16),
             label: const Text('Pair'),
             style: FilledButton.styleFrom(
               backgroundColor: theme.colorScheme.primaryContainer,
               foregroundColor: theme.colorScheme.onPrimaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              minimumSize: const Size(0, 36),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),
               ),
@@ -1579,31 +1578,31 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               ],
             ),
             const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                key: const ValueKey('nearby-devices-list'),
-                width: double.infinity,
-                constraints: const BoxConstraints(minHeight: 80),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: theme.colorScheme.outlineVariant),
-                ),
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: AnimatedBuilder(
-                        animation: _bubbleController,
-                        builder: (context, child) {
-                          return BubbleBackground(
-                            progress: _bubbleController.value,
-                            color: bubbleColor,
-                          );
-                        },
+            if (_discoveredPeers.isEmpty)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  key: const ValueKey('nearby-devices-list'),
+                  width: double.infinity,
+                  constraints: const BoxConstraints(minHeight: 80),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: theme.colorScheme.outlineVariant),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: AnimatedBuilder(
+                          animation: _bubbleController,
+                          builder: (context, child) {
+                            return BubbleBackground(
+                              progress: _bubbleController.value,
+                              color: bubbleColor,
+                            );
+                          },
+                        ),
                       ),
-                    ),
-                    if (_discoveredPeers.isEmpty)
                       SizedBox(
                         height: 78,
                         child: Padding(
@@ -1633,23 +1632,21 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                             ],
                           ),
                         ),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          children: _discoveredPeers
-                              .map((p) => Padding(
-                                  padding: const EdgeInsets.only(bottom: 8),
-                                  child: _buildDiscoveredCardHtml(
-                                      p as Map<String, dynamic>, theme)))
-                              .toList(),
-                        ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
+              )
+            else
+              Column(
+                key: const ValueKey('nearby-devices-list'),
+                children: _discoveredPeers
+                    .map((p) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: _buildDiscoveredCardHtml(
+                            p as Map<String, dynamic>, theme)))
+                    .toList(),
               ),
-            ),
             const SizedBox(height: 8),
             TextButton.icon(
               key: const ValueKey('manual-connect-toggle'),
