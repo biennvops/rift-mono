@@ -5,11 +5,19 @@ abstract final class RiftDesign {
   static const contentMaxWidth = 1280.0;
   static const sidebarWidth = 280.0;
 
+  static const space2Xs = 2.0;
   static const spaceXs = 4.0;
   static const spaceSm = 8.0;
   static const spaceMd = 16.0;
   static const spaceLg = 24.0;
   static const spaceXl = 32.0;
+  static const space2Xl = 48.0;
+
+  static const padScreenMobile =
+      EdgeInsets.symmetric(horizontal: 16, vertical: 16);
+  static const padScreenDesktop =
+      EdgeInsets.symmetric(horizontal: 24, vertical: 24);
+  static const padCard = EdgeInsets.all(16);
 
   static const radiusSm = 2.0;
   static const radius = 4.0;

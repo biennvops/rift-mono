@@ -9,6 +9,7 @@ import '../widgets/rift_snackbar.dart';
 import '../src/ui/app_shell.dart';
 import '../src/platform/notification_route.dart';
 import '../widgets/bubble_background.dart';
+import '../src/ui/theme.dart';
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -1452,7 +1453,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             controller: _mobileScrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+              padding: RiftDesign.padScreenMobile,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1515,8 +1516,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               child: SingleChildScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                  padding: RiftDesign.padScreenDesktop,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
