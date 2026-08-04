@@ -452,7 +452,7 @@ void main() {
       await expectLater(
         sessionManager.waitForSessionEstablished(
           'rift-peer',
-          timeout: const Duration(milliseconds: 10),
+          timeout: const Duration(seconds: 1),
         ),
         throwsA(
           isA<SessionException>().having(
