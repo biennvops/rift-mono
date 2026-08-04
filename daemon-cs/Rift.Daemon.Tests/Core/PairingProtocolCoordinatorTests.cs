@@ -824,6 +824,58 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_FromTrustedPeer_RejectsWithoutPrompt()
+    {
+        var peerDeviceId = "rift-peer-already-trusted";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            peerDeviceId,
+            CreateEnvelope(peerDeviceId, "pairing.start", new { expiresInMs = 120000 }),
+            CancellationToken.None);
+
+        var rejection = Assert.Single(
+            _transport.SentMessages,
+            message => message.PeerDeviceId == peerDeviceId && message.Type == "pairing.reject");
+        Assert.Equal("PolicyDenied", rejection.Payload.GetProperty("failureReason").GetString());
+        Assert.DoesNotContain(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onPairingRequest");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PairingReject_DoesNotNotifyForNonPendingPeer()
+    {
+        var peerDeviceId = "rift-peer-no-longer-pending";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            peerDeviceId,
+            CreateEnvelope(peerDeviceId, "pairing.reject", new
+            {
+                failureReason = "PolicyDenied",
+                message = "stale rejection"
+            }),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onTrustChanged");
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_BeforeLocalApproval_TransitionsTrustedAfterLocalApprove()
     {
         _transport.ActiveSessions.Add("rift-peer-android-initiated");

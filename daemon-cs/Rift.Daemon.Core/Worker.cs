@@ -197,18 +197,18 @@ public class Worker(
             EnsureTrustedReconnectLoop(args.PeerDeviceId);
             if (args.IsOnline)
             {
-                presenceService.UpdatePeerPresence(
-                    args.PeerDeviceId,
-                    "online",
-                    DateTimeOffset.UtcNow.ToString("O"),
-                    args.SelectedCapabilities);
-
                 heartbeatManager.OnSessionStateChanged(args);
 
                 if (!SessionHeartbeatManager.ShouldTrackPresence(args))
                 {
                     return;
                 }
+
+                presenceService.UpdatePeerPresence(
+                    args.PeerDeviceId,
+                    "online",
+                    DateTimeOffset.UtcNow.ToString("O"),
+                    args.SelectedCapabilities);
 
                 _ = Task.Run(async () =>
                 {

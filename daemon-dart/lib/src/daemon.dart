@@ -3380,8 +3380,7 @@ class RiftDaemon {
   static bool hasActivePairingSession(
     SessionContext? context,
     PeerSocketEndpoint? endpoint,
-  ) =>
-      context != null && endpoint != null;
+  ) => context != null && endpoint != null;
 
   Future<String> _ensureSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager;
@@ -3392,9 +3391,18 @@ class RiftDaemon {
       );
     }
 
+    final record = await _trustStore?.getPeer(peerDeviceId);
+    final expectedTrustState = record?.state ?? TrustState.discovered;
     final ctx = sessionManager.getContext(peerDeviceId);
     final activeEndpoint = transport.getPeerSocketEndpoint(peerDeviceId);
-    if (ctx != null && !hasActivePairingSession(ctx, activeEndpoint)) {
+    if (ctx != null && ctx.trustState != expectedTrustState) {
+      RiftLog.warn(
+        '[Pairing] Session context for peerDeviceId=$peerDeviceId had stale '
+        'trust state ${ctx.trustState.toJson()} (expected ${expectedTrustState.toJson()}); '
+        'restarting session prefetch.',
+      );
+      sessionManager.disconnectPeer(peerDeviceId);
+    } else if (ctx != null && !hasActivePairingSession(ctx, activeEndpoint)) {
       RiftLog.warn(
         '[Pairing] Session context for peerDeviceId=$peerDeviceId had no active '
         'transport socket. Restarting session prefetch.',

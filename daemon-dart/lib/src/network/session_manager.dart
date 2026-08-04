@@ -1502,6 +1502,14 @@ class SessionManager {
     Map<String, dynamic> jsonMap,
   ) async {
     _requireNegotiatedSessionCapability(ctx, 'presence.basic');
+    final record = await _trustStore.getPeer(ctx.peerDeviceId);
+    if (record?.state != TrustState.trusted) {
+      if (ctx.currentPresenceStatus != 'offline') {
+        ctx.currentPresenceStatus = 'offline';
+        _presenceUpdateController.add(ctx);
+      }
+      return;
+    }
 
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
     if (payload == null) {

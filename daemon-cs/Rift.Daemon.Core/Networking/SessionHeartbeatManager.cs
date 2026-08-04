@@ -55,6 +55,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         if (!ShouldTrackPresence(args))
         {
             _sessions.TryRemove(args.PeerDeviceId, out _);
+            _presenceService.MarkPeerOffline(args.PeerDeviceId);
             return;
         }
 

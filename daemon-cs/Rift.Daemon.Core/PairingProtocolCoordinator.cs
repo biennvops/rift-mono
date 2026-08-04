@@ -536,6 +536,23 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
+        if (peer.State == TrustState.Trusted)
+        {
+            _pairingStates.TryRemove(peerDeviceId, out _);
+            await SendProtocolMessageAsync(peerDeviceId, "pairing.reject", new
+            {
+                failureReason = "PolicyDenied",
+                message = "Peer trust must be removed locally before pairing again."
+            }, cancellationToken);
+            await LogEventAsync(
+                SecurityEventTypes.PairingRejected,
+                peerDeviceId,
+                SecurityEventOutcome.Failure,
+                "PolicyDenied",
+                cancellationToken);
+            return;
+        }
+
         var previousState = peer.State;
         if (peer.State == TrustState.Discovered)
         {
@@ -609,9 +626,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private async Task HandlePairingRejectAsync(string peerDeviceId)
     {
         _pairingStates.TryRemove(peerDeviceId, out _);
-        _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        var transitioned = peer?.State == TrustState.PairingPending &&
+            _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
         await LogEventAsync(SecurityEventTypes.PairingRejected, peerDeviceId, SecurityEventOutcome.Failure, "PeerRejected", CancellationToken.None);
-        await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+        if (transitioned)
+        {
+            await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+        }
     }
 
     private static string? NormalizeRemoteDisplayName(string? displayName)
