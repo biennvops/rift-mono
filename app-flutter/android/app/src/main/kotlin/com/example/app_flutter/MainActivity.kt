@@ -55,19 +55,16 @@ class MainActivity: FlutterActivity() {
     private val shellChannelName = "rift/android/shell"
     private val tlsChannelName = "rift/android/tls"
     private val identityChannelName = "rift/android/identity"
-    private val mediaObserverChannelName = "rift/android/media_playback"
-    private val mediaObserverEventChannelName = "rift/android/media_playback_events"
+    private val serviceRpcChannelName = RiftBackgroundHost.uiRpcChannelName
+    private val serviceEventsChannelName = RiftBackgroundHost.uiEventsChannelName
     private val tag = "RiftMainActivity"
     private var clipboardChannel: MethodChannel? = null
     private var shellChannel: MethodChannel? = null
     private var tlsChannel: MethodChannel? = null
     private val tlsBridge = AndroidTlsBridge()
-    private var mediaSessionObserver: AndroidMediaSessionObserver? = null
-    private lateinit var remoteMediaPlaybackManager: RemoteMediaPlaybackManager
     private var pendingLaunchAction: Map<String, Any?>? = null
     private var pendingNotificationPermissionResult: MethodChannel.Result? = null
     private var clipboardReceiverRegistered: Boolean = false
-    private var notificationSyncReceiverRegistered: Boolean = false
 
     private val clipboardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -99,33 +96,44 @@ class MainActivity: FlutterActivity() {
         }
     }
 
-    private val notificationSyncReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val payload = extractNotificationSyncPayload(intent) ?: return
-            NotificationSyncRelay.acknowledgeDeliveredEvent(this@MainActivity, payload)
-            shellChannel?.invokeMethod("notificationSyncEvent", payload)
-        }
-    }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         Log.i(tag, "configureFlutterEngine")
         createNotificationChannel()
         createMediaPlaybackNotificationChannel()
         isClipboardRelayReady = true
-        remoteMediaPlaybackManager =
-            RemoteMediaPlaybackManager(
-                this,
-                launchIntentFactory = {
-                    Intent(this, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, serviceEventsChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    RiftBackgroundHost.setUiEventSink(events)
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    RiftBackgroundHost.setUiEventSink(null)
+                }
+            })
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, serviceRpcChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "attach" -> {
+                        RiftBackgroundHost.attachUi(this)
+                        result.success(true)
                     }
-                },
-                actionCallback = { action ->
-                    shellChannel?.invokeMethod("mediaPlaybackAction", action)
-                },
-            )
-        remoteMediaPlaybackManager.start()
+                    "detach" -> {
+                        RiftBackgroundHost.detachUi()
+                        result.success(true)
+                    }
+                    "send" -> {
+                        val message = call.arguments as? String
+                        if (message == null) {
+                            result.error("invalid_args", "JSON-RPC message is required", null)
+                        } else {
+                            RiftBackgroundHost.sendUiRpc(this, message, result)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         clipboardChannel =
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, clipboardChannelName)
 
@@ -172,50 +180,6 @@ class MainActivity: FlutterActivity() {
         tlsChannel?.setMethodCallHandler { call, result ->
             tlsBridge.handle(call, result)
         }
-
-        val mediaObserver = AndroidMediaSessionObserver(this)
-        mediaSessionObserver = mediaObserver
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverEventChannelName)
-            .setStreamHandler(object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    mediaObserver.setEventSink(events)
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    mediaObserver.setEventSink(null)
-                }
-            })
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, mediaObserverChannelName)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "startObservation" -> result.success(mediaObserver.startObservation())
-                    "stopObservation" -> {
-                        mediaObserver.stopObservation()
-                        result.success(true)
-                    }
-                    "performAction" -> {
-                        val args = call.arguments as? Map<*, *>
-                        val playbackId = args?.get("playbackId") as? String
-                        val action = args?.get("action") as? String
-                        if (playbackId == null || action == null) {
-                            result.error(
-                                "invalid_args",
-                                "playbackId and action are required",
-                                null,
-                            )
-                        } else {
-                            result.success(
-                                mediaObserver.performAction(
-                                    playbackId,
-                                    action,
-                                    (args["positionMs"] as? Number)?.toLong(),
-                                ),
-                            )
-                        }
-                    }
-                    else -> result.notImplemented()
-                }
-            }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, identityChannelName)
             .setMethodCallHandler { call, result ->
@@ -341,23 +305,12 @@ class MainActivity: FlutterActivity() {
                     "showTestNotification" -> {
                         result.success(showTestNotification())
                     }
-                    "showMediaPlayback" -> {
-                        val args = call.arguments as? Map<*, *>
-                        val playback = args?.get("playback") as? Map<*, *>
-                        if (playback == null) {
-                            result.error("invalid_args", "playback is required", null)
-                        } else {
-                            result.success(
-                                remoteMediaPlaybackManager.show(
-                                    playback.entries.associate { (key, value) ->
-                                        key.toString() to value
-                                    },
-                                ),
-                            )
-                        }
-                    }
-                    "clearMediaPlayback" -> {
-                        result.success(remoteMediaPlaybackManager.clear())
+                    "showMediaPlayback", "clearMediaPlayback" -> {
+                        RiftBackgroundHost.sendUiNativeCommand(
+                            call.method,
+                            call.arguments,
+                            result,
+                        )
                     }
                     "openFile" -> {
                         val args = call.arguments as? Map<*, *>
@@ -382,18 +335,6 @@ class MainActivity: FlutterActivity() {
         clipboardReceiverRegistered = true
         Log.i(tag, "Clipboard broadcast receiver registered")
 
-        val notificationSyncFilter = IntentFilter(NotificationSyncRelay.broadcastAction)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(
-                notificationSyncReceiver,
-                notificationSyncFilter,
-                Context.RECEIVER_NOT_EXPORTED,
-            )
-        } else {
-            registerReceiver(notificationSyncReceiver, notificationSyncFilter)
-        }
-        notificationSyncReceiverRegistered = true
-        deliverPendingNotificationSyncEvents()
     }
 
     override fun onStart() {
@@ -405,7 +346,6 @@ class MainActivity: FlutterActivity() {
         super.onResume()
         Log.i(tag, "onResume")
         deliverPendingLaunchActionIfPossible()
-        deliverPendingNotificationSyncEvents()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -431,13 +371,7 @@ class MainActivity: FlutterActivity() {
             unregisterReceiver(clipboardReceiver)
             clipboardReceiverRegistered = false
         }
-        if (notificationSyncReceiverRegistered) {
-            unregisterReceiver(notificationSyncReceiver)
-            notificationSyncReceiverRegistered = false
-        }
-        remoteMediaPlaybackManager.stop()
-        mediaSessionObserver?.stopObservation()
-        mediaSessionObserver = null
+        RiftBackgroundHost.detachUi()
         tlsBridge.dispose()
         super.onDestroy()
     }

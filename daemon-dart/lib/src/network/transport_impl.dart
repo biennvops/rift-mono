@@ -211,12 +211,14 @@ class TransportImpl implements Transport, BoundTransport {
       if (previousSocket != null &&
           previousIsServer != null &&
           !identical(previousSocket, socket)) {
-        if (retainExistingSessionOnDuplicate(
-          isAuthenticated: _authenticatedPeers.contains(peerDeviceId),
-        )) {
+        final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
+        final keepExisting =
+            previousIsServer == preferredIsServer ||
+            isServer != preferredIsServer;
+        if (keepExisting) {
           RiftLog.info(
-            '[TLS] Keeping existing authenticated session for '
-            'peerDeviceId=$peerDeviceId and dropping duplicate connection.',
+            '[TLS] Keeping the deterministic ${preferredIsServer ? "inbound" : "outbound"} '
+            'session for peerDeviceId=$peerDeviceId and dropping the duplicate.',
           );
           try {
             socket.destroy();
@@ -224,31 +226,18 @@ class TransportImpl implements Transport, BoundTransport {
             // Best-effort cleanup for a duplicate connection.
           }
           return peerDeviceId;
-        } else {
-          final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
-          if (previousIsServer == preferredIsServer) {
-            RiftLog.warn(
-              '[TLS] Peer $peerDeviceId reconnected using the preferred role. '
-              'The existing pre-auth socket is likely stale. Replacing it.',
-            );
-            try {
-              previousSocket.destroy();
-            } catch (_) {}
-            // Do not destroy the new socket! We must accept the new connection
-            // because the peer initiated it, implying their side of the old connection is dead.
-          } else {
-            RiftLog.debug(
-              '[TLS] Replacing pre-auth socket for peerDeviceId=$peerDeviceId '
-              'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
-              'existingRole=${previousIsServer ? "inbound" : "outbound"} '
-              'replacementRole=${isServer ? "inbound" : "outbound"}',
-            );
-            try {
-              previousSocket.destroy();
-            } catch (_) {
-              // Best-effort cleanup while switching to the preferred bootstrap path.
-            }
-          }
+        }
+
+        RiftLog.debug(
+          '[TLS] Replacing duplicate socket for peerDeviceId=$peerDeviceId '
+          'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
+          'existingRole=${previousIsServer ? "inbound" : "outbound"} '
+          'replacementRole=${isServer ? "inbound" : "outbound"}',
+        );
+        try {
+          previousSocket.destroy();
+        } catch (_) {
+          // Best-effort cleanup while switching to the deterministic role.
         }
       }
 

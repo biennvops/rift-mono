@@ -161,7 +161,7 @@ public sealed class LinuxMediaPlaybackServiceTests
         var path = Path.Combine(Path.GetTempPath(), $"rift-art-large-{Guid.NewGuid():N}");
         await using (var stream = File.Create(path))
         {
-            stream.SetLength(LinuxMprisArtworkLoader.MaxArtworkBytes + 1L);
+            stream.SetLength(LinuxMprisArtworkLoader.MaxSourceArtworkBytes + 1L);
         }
         try
         {

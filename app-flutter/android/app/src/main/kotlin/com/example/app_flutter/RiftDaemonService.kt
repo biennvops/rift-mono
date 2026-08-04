@@ -11,8 +11,15 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.dart.DartExecutor
+import io.flutter.FlutterInjector
+import io.flutter.plugins.GeneratedPluginRegistrant
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
 
 class RiftDaemonService : Service() {
     companion object {
@@ -21,8 +28,14 @@ class RiftDaemonService : Service() {
         private const val notificationId = 4108
         private const val actionStart = "com.example.app_flutter.action.START_DAEMON_SERVICE"
         private const val actionStop = "com.example.app_flutter.action.STOP_DAEMON_SERVICE"
+        internal const val preferencesName = "rift_background_sync"
+        internal const val backgroundEnabledKey = "enabled"
 
         fun start(context: Context) {
+            context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(backgroundEnabledKey, true)
+                .apply()
             val intent = Intent(context, RiftDaemonService::class.java).apply {
                 action = actionStart
             }
@@ -30,6 +43,10 @@ class RiftDaemonService : Service() {
         }
 
         fun stop(context: Context) {
+            context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(backgroundEnabledKey, false)
+                .apply()
             val intent = Intent(context, RiftDaemonService::class.java).apply {
                 action = actionStop
             }
@@ -37,9 +54,16 @@ class RiftDaemonService : Service() {
         }
     }
 
+    private var engine: FlutterEngine? = null
+    private var tlsBridge: AndroidTlsBridge? = null
+    private var mediaObserver: AndroidMediaSessionObserver? = null
+    private var remoteMediaPlaybackManager: RemoteMediaPlaybackManager? = null
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        createActivityNotificationChannel()
+        createMediaPlaybackNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -50,9 +74,6 @@ class RiftDaemonService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                // connectedDevice: peer TLS sessions with other devices on the
-                // LAN. Unlike dataSync it has no runtime cap on Android 15+,
-                // which previously killed the app after ~6 hours.
                 ServiceCompat.startForeground(
                     this,
                     notificationId,
@@ -63,18 +84,193 @@ class RiftDaemonService : Service() {
                         0
                     },
                 )
+                startBackgroundRuntime()
                 return START_STICKY
             }
         }
     }
 
+    override fun onDestroy() {
+        mediaObserver?.stopObservation()
+        mediaObserver = null
+        remoteMediaPlaybackManager?.stop()
+        remoteMediaPlaybackManager = null
+        tlsBridge?.dispose()
+        tlsBridge = null
+        RiftBackgroundHost.detachService()
+        engine?.destroy()
+        engine = null
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+    private fun startBackgroundRuntime() {
+        if (engine != null) {
             return
         }
 
+        val flutterEngine = FlutterEngine(this)
+        GeneratedPluginRegistrant.registerWith(flutterEngine)
+        engine = flutterEngine
+
+        val identityChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "rift/android/identity",
+        )
+        identityChannel.setMethodCallHandler { call, result ->
+            if (call.method != "loadOrCreate") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            try {
+                val legacyPath = (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
+                result.success(AndroidIdentityKeystore.loadOrCreate(this, legacyPath))
+            } catch (error: Exception) {
+                result.error("identity_keystore_error", error.message, null)
+            }
+        }
+
+        val tls = AndroidTlsBridge()
+        tlsBridge = tls
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "rift/android/tls",
+        ).setMethodCallHandler { call, result -> tls.handle(call, result) }
+
+        RiftBackgroundHost.attachService(this, flutterEngine, ::handleNativeCommand)
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "rift/android/shell",
+        ).setMethodCallHandler { call, result -> handleNativeCommand(call.method, call.arguments, result) }
+
+        remoteMediaPlaybackManager = RemoteMediaPlaybackManager(
+            this,
+            launchIntentFactory = {
+                Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+            },
+            actionCallback = { action ->
+                val event = linkedMapOf<String, Any?>("eventType" to "mediaPlaybackAction")
+                event.putAll(action)
+                RiftBackgroundHost.sendNativeEvent(this, event)
+            },
+        ).also { it.start() }
+
+        mediaObserver = AndroidMediaSessionObserver(this) { event ->
+            RiftBackgroundHost.sendNativeEvent(this, event)
+        }.also { it.startObservation() }
+
+        val loader = FlutterInjector.instance().flutterLoader()
+        if (!loader.initialized()) {
+            loader.startInitialization(this)
+        }
+        loader.ensureInitializationComplete(this, null)
+        flutterEngine.dartExecutor.executeDartEntrypoint(
+            DartExecutor.DartEntrypoint(
+                loader.findAppBundlePath(),
+                "androidBackgroundMain",
+            ),
+        )
+    }
+
+    private fun handleNativeCommand(
+        method: String,
+        arguments: Any?,
+        result: MethodChannel.Result,
+    ) {
+        when (method) {
+            "showNotification" -> {
+                result.success(showActivityNotification(arguments))
+            }
+            "showMediaPlayback" -> {
+                val playback = (arguments as? Map<*, *>)?.get("playback") as? Map<*, *>
+                if (playback == null) {
+                    result.error("invalid_args", "playback is required", null)
+                } else {
+                    result.success(
+                        remoteMediaPlaybackManager?.show(
+                            playback.entries.associate { it.key.toString() to it.value },
+                        ) ?: false,
+                    )
+                }
+            }
+            "clearMediaPlayback" -> result.success(remoteMediaPlaybackManager?.clear() ?: false)
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun createActivityNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(
+            NotificationChannel(
+                "rift.events",
+                "Rift activity",
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply { description = "Rift pairing, clipboard, and file activity" },
+        )
+    }
+
+    private fun createMediaPlaybackNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(
+            NotificationChannel(
+                RemoteMediaPlaybackManager.notificationChannelId,
+                RemoteMediaPlaybackManager.notificationChannelName,
+                NotificationManager.IMPORTANCE_LOW,
+            ),
+        )
+    }
+
+    private fun showActivityNotification(arguments: Any?): Boolean {
+        val args = arguments as? Map<*, *> ?: return false
+        val title = args["title"] as? String ?: return false
+        val body = args["body"] as? String ?: return false
+        val route = args["route"] as? String ?: return false
+        val payload = args["payload"] as? Map<*, *>
+        val launchIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("rift.notification.route", route)
+            payload?.forEach { (key, value) ->
+                val name = key as? String ?: return@forEach
+                when (value) {
+                    is String -> putExtra("rift.notification.payload.$name", value)
+                    is Boolean -> putExtra("rift.notification.payload.$name", value)
+                    is Int -> putExtra("rift.notification.payload.$name", value)
+                    is Long -> putExtra("rift.notification.payload.$name", value)
+                }
+            }
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            (route + title + body).hashCode(),
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notificationId = (payload?.get("notificationId")?.toString() ?: "$route:$title:$body").hashCode()
+        return try {
+            NotificationManagerCompat.from(this).notify(
+                notificationId,
+                NotificationCompat.Builder(this, "rift.events")
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
+                    .build(),
+            )
+            true
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
+    private fun createChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
             channelId,
@@ -102,10 +298,10 @@ class RiftDaemonService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Rift background sync active")
             .setContentText("Keeping trusted peer sync available while the app is in the background")
-            .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setContentIntent(pendingIntent)
             .build()
     }
 }

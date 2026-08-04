@@ -61,6 +61,8 @@ public class TlsTransportTests
         Assert.Equal(serverIdentity.GetDeviceId(), connectedDeviceId);
         Assert.True(server.HasProtectedSession(clientIdentity.GetDeviceId()));
         Assert.True(client.HasProtectedSession(serverIdentity.GetDeviceId()));
+        Assert.False(server.GetPeerSessionEndpoint(clientIdentity.GetDeviceId())!.IsInitiator);
+        Assert.True(client.GetPeerSessionEndpoint(serverIdentity.GetDeviceId())!.IsInitiator);
 
         var clientPayload = Encoding.UTF8.GetBytes("{\"type\":\"desktop.interop.client\"}");
         await client.SendAsync(serverIdentity.GetDeviceId(), clientPayload, cancellation.Token);

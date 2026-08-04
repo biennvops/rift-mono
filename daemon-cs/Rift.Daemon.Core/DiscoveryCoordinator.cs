@@ -15,7 +15,7 @@ public sealed class DiscoveryCoordinator : IDiscoveryCoordinator
         IReadOnlyDictionary<string, string> TxtRecord,
         IReadOnlyList<ObservedEndpoint> Endpoints);
 
-    private static readonly TimeSpan DefaultDiscoveryPeerTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultDiscoveryPeerTtl = TimeSpan.FromSeconds(90);
 
     private readonly IDiscoveryService _discoveryService;
     private readonly ITrustStore _trustStore;

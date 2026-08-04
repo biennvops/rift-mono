@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="4.151.0" />
     <PackageReference Include="StreamJsonRpc" Version="2.25.29" />
   </ItemGroup>
 

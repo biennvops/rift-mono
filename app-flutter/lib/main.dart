@@ -21,6 +21,7 @@ import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'src/ipc/android_background_entrypoint.dart';
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
@@ -28,7 +29,6 @@ import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/platform/android_shell.dart';
-import 'src/media_playback/android_media_playback_publisher.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
@@ -129,6 +129,9 @@ DesktopClipboardManager _createDesktopClipboardManager(
   return DesktopClipboardManager(client);
 }
 
+@pragma('vm:entry-point')
+Future<void> androidBackgroundMain() => runAndroidBackgroundMain();
+
 void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -213,7 +216,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   StreamSubscription<Map<String, dynamic>>? _notificationRemovedSub;
   StreamSubscription<bool>? _connectionChangedSub;
   String? _activePairingDeviceId;
-  bool _clipboardServiceStarted = false;
   DesktopClipboardManager? _clipboardManager;
   final Set<String> _autoAcceptingTransferIds = <String>{};
   final Set<String> _publishingTransferIds = <String>{};
@@ -231,7 +233,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
-  AndroidMediaPlaybackPublisher? _androidMediaPlaybackPublisher;
   IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
@@ -306,7 +307,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
     try {
       final started = await _clipboardChannel.invokeMethod('startService');
-      _clipboardServiceStarted = true;
       if (started != true) {
         debugPrint('[Android Clipboard] startService returned $started');
       }
@@ -424,8 +424,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       _androidRemoteMediaPlayback =
           AndroidRemoteMediaPlaybackCoordinator(client);
       unawaited(_androidRemoteMediaPlayback!.start());
-      _androidMediaPlaybackPublisher = AndroidMediaPlaybackPublisher(client);
-      unawaited(_androidMediaPlaybackPublisher!.start());
+      // Android media observation is owned by the foreground service. The UI
+      // only subscribes to the daemon's mirrored playback events.
     } else if (Platform.isIOS) {
       _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_iosRemoteMediaPlayback!.start());
@@ -1024,18 +1024,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
     unawaited(_androidRemoteMediaPlayback?.dispose());
-    unawaited(_androidMediaPlaybackPublisher?.dispose());
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
-    if (Platform.isAndroid && _clipboardServiceStarted) {
-      unawaited(
-        _clipboardChannel
-            .invokeMethod('stopService')
-            .catchError((Object error) {
-          debugPrint('Failed to stop clipboard service: $error');
-        }),
-      );
-    }
     super.dispose();
   }
 

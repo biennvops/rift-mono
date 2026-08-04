@@ -8,8 +8,8 @@ namespace Rift.Daemon.Core.Networking;
 internal sealed class SessionHeartbeatManager : IAsyncDisposable
 {
     internal const string PresenceBasicCapability = "presence.basic";
-    private static readonly TimeSpan HeartbeatCadence = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan OfflineThreshold = TimeSpan.FromSeconds(90);
+    internal static readonly TimeSpan HeartbeatCadence = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan OfflineThreshold = TimeSpan.FromSeconds(45);
 
     private readonly ITransport _transport;
     private readonly IIdentityManager _identityManager;
@@ -55,6 +55,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         if (!ShouldTrackPresence(args))
         {
             _sessions.TryRemove(args.PeerDeviceId, out _);
+            _presenceService.MarkPeerOffline(args.PeerDeviceId);
             return;
         }
 
@@ -101,13 +102,32 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
                 continue;
             }
 
-            sendTasks.Add(SendHeartbeatAsync(entry.Key, tracked, now, cancellationToken));
+            sendTasks.Add(SendHeartbeatAsync(entry.Key, tracked, now, "online", cancellationToken));
         }
 
         await Task.WhenAll(sendTasks);
     }
 
-    private async Task SendHeartbeatAsync(string peerDeviceId, TrackedSession tracked, long now, CancellationToken cancellationToken)
+    internal async Task SendOfflinePresenceAsync(CancellationToken cancellationToken)
+    {
+        var sendTasks = _sessions
+            .Select(entry => SendHeartbeatAsync(
+                entry.Key,
+                entry.Value,
+                Environment.TickCount64,
+                "offline",
+                cancellationToken))
+            .ToArray();
+
+        await Task.WhenAll(sendTasks);
+    }
+
+    private async Task SendHeartbeatAsync(
+        string peerDeviceId,
+        TrackedSession tracked,
+        long now,
+        string status,
+        CancellationToken cancellationToken)
     {
         var envelope = new
         {
@@ -117,7 +137,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
             sourceDeviceId = _identityManager.GetDeviceId(),
             payload = new
             {
-                status = "online",
+                status,
                 lastSeenAt = DateTimeOffset.UtcNow.ToString("O"),
                 capabilities = tracked.SelectedCapabilities
             }

@@ -364,6 +364,109 @@ void main() {
       expect(sessionManager.getContext('rift-peer'), isNull);
     });
 
+    test('capability timeout only rejects its current unnegotiated context', () {
+      final stale = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true);
+      sessionManager.injectContextForTesting(stale);
+      expect(
+        SessionManager.shouldRejectCapabilityNegotiationTimeout(
+          activeContext: stale,
+          timedContext: stale,
+        ),
+        isTrue,
+      );
+
+      stale.capabilityNegotiated = true;
+      expect(
+        SessionManager.shouldRejectCapabilityNegotiationTimeout(
+          activeContext: stale,
+          timedContext: stale,
+        ),
+        isFalse,
+      );
+
+      final replacement = SessionContext(
+        peerDeviceId: 'rift-peer',
+        isInitiator: false,
+      );
+      sessionManager.injectContextForTesting(replacement);
+      stale.capabilityNegotiated = false;
+      expect(
+        SessionManager.shouldRejectCapabilityNegotiationTimeout(
+          activeContext: replacement,
+          timedContext: stale,
+        ),
+        isFalse,
+      );
+      expect(
+        SessionManager.shouldRejectCapabilityNegotiationTimeout(
+          activeContext: replacement,
+          timedContext: replacement,
+        ),
+        isTrue,
+      );
+    });
+
+    test('presence sends only from the current established context', () {
+      final active = SessionContext(
+        peerDeviceId: 'rift-peer',
+        isInitiator: true,
+      )
+        ..handshakeState = HandshakeState.established
+        ..capabilityNegotiated = true;
+      final stale = SessionContext(
+        peerDeviceId: 'rift-peer',
+        isInitiator: false,
+      )
+        ..handshakeState = HandshakeState.established
+        ..capabilityNegotiated = true;
+
+      expect(
+        SessionManager.isCurrentEstablishedContext(
+          activeContext: active,
+          candidateContext: active,
+        ),
+        isTrue,
+      );
+      expect(
+        SessionManager.isCurrentEstablishedContext(
+          activeContext: active,
+          candidateContext: stale,
+        ),
+        isFalse,
+      );
+
+      active.capabilityNegotiated = false;
+      expect(
+        SessionManager.isCurrentEstablishedContext(
+          activeContext: active,
+          candidateContext: active,
+        ),
+        isFalse,
+      );
+    });
+
+    test('waitForSessionEstablished timeout clears stale session and transport', () async {
+      final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: true);
+      sessionManager.injectContextForTesting(ctx);
+
+      await expectLater(
+        sessionManager.waitForSessionEstablished(
+          'rift-peer',
+          timeout: const Duration(seconds: 1),
+        ),
+        throwsA(
+          isA<SessionException>().having(
+            (e) => e.message,
+            'message',
+            contains('Timed out waiting for session establishment'),
+          ),
+        ),
+      );
+
+      expect(sessionManager.getContext('rift-peer'), isNull);
+      expect(transport.disconnectedPeers, contains('rift-peer'));
+    });
+
     test('disconnectPeer clears context and notifies transport', () async {
       final ctx = SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
         ..handshakeState = HandshakeState.established

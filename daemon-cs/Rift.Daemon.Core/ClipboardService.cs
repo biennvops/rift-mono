@@ -748,32 +748,25 @@ public sealed class ClipboardService : IClipboardService
     private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
     {
         Exception? lastError = null;
-        foreach (var endpoint in peer.TrustedEndpoints)
+        try
         {
-            try
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Reconnected trusted peer {DeviceId} using persisted endpoint {Address}:{Port} from {Source}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    endpoint.Source);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _logger.LogWarning(
-                    ex,
-                    "Trusted reconnect attempt failed for peer {DeviceId} via {Address}:{Port} from {Source}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    endpoint.Source);
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                peer.TrustedEndpoints,
+                async (endpoint, token) =>
+                {
+                    await _transport.ConnectToPeerAsync(
+                        endpoint.Address,
+                        endpoint.Port,
+                        token).ConfigureAwait(false);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         if (_discoveryCoordinator.TryGetDiscoveredPeer(peerDeviceId, out var discoveredPeer) &&
@@ -807,31 +800,25 @@ public sealed class ClipboardService : IClipboardService
             ? peer.ObservedEndpoints
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
         Exception? lastError = null;
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Reconnected trusted peer {DeviceId} using discovery endpoint {Address}:{Port}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _logger.LogWarning(
-                    ex,
-                    "Discovery reconnect attempt failed for trusted peer {DeviceId} via {Address}:{Port}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port);
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                async (endpoint, token) =>
+                {
+                    await _transport.ConnectToPeerAsync(
+                        endpoint.Address,
+                        endpoint.Port,
+                        token).ConfigureAwait(false);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         throw new ClipboardFailureException(

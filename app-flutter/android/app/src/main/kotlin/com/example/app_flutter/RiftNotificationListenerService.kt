@@ -18,6 +18,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         Log.i(tag, "Notification listener connected")
+        getActiveNotifications()?.forEach(::onNotificationPosted)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -25,7 +26,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
             return
         }
         val payload = buildPostedPayload(sbn) ?: return
-        NotificationSyncRelay.queueAndBroadcast(this, payload)
+        RiftBackgroundHost.sendNativeEvent(this, payload)
         Log.d(
             tag,
             "Notification ${payload["eventType"]} from ${sbn.packageName} key=${sbn.key}",
@@ -43,7 +44,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
                 "notificationId" to sbn.key,
                 "removedAt" to formatUtcTimestamp(System.currentTimeMillis()),
             )
-        NotificationSyncRelay.queueAndBroadcast(this, payload)
+        RiftBackgroundHost.sendNativeEvent(this, payload)
         Log.d(tag, "Notification removed from ${sbn.packageName} key=${sbn.key}")
     }
 
@@ -74,6 +75,7 @@ class RiftNotificationListenerService : NotificationListenerService() {
         return mapOf(
             "eventType" to eventType,
             "notificationId" to notificationId,
+            "sourcePlatform" to "android",
             "packageName" to sbn.packageName,
             "appName" to appName,
             "title" to title,

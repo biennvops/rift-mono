@@ -277,42 +277,32 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var endpoints = peer.ObservedEndpoints.Count > 0
             ? peer.ObservedEndpoints
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
-        var failures = new List<(DiscoveredPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(deviceId, endpoint, token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            var connectedDeviceId = winner.Result;
+            _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
             {
-                var connectedDeviceId = await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
-                _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
-                {
-                    Address = endpoint.Address,
-                    Port = endpoint.Port,
-                    Source = "discovery-pairing",
-                    AddressFamily = System.Net.IPAddress.TryParse(endpoint.Address, out var ipAddress)
-                        ? ipAddress.AddressFamily.ToString()
-                        : null,
-                    LastSuccessAt = _timeProvider.GetUtcNow()
-                };
-                return connectedDeviceId;
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-                _logger.LogInformation(
-                    ex,
-                    "Outbound pairing connect attempt for {DeviceId} via {Address}:{Port} failed. Classification={Classification}",
-                    deviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    ClassifyConnectFailure(ex));
-            }
+                Address = winner.Endpoint.Address,
+                Port = winner.Endpoint.Port,
+                Source = "discovery-pairing",
+                AddressFamily = System.Net.IPAddress.TryParse(winner.Endpoint.Address, out var ipAddress)
+                    ? ipAddress.AddressFamily.ToString()
+                    : null,
+                LastSuccessAt = _timeProvider.GetUtcNow()
+            };
+            return connectedDeviceId;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All discovered endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All discovered endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToTrustedEndpointsAsync(
@@ -320,24 +310,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         IReadOnlyList<TrustedPeerEndpoint> endpoints,
         CancellationToken cancellationToken)
     {
-        var failures = new List<(TrustedPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                return await ConnectToEndpointWithRetryAsync(deviceId, new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port }, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-            }
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(
+                    deviceId,
+                    new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port },
+                    token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            return winner.Result;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All persisted endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All persisted endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToEndpointWithRetryAsync(
@@ -413,14 +403,23 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }, cancellationToken);
     }
 
-    public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+    public async Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
     {
-        return SendProtocolMessageAsync(deviceId, "trust.remove", new
+        try
         {
-            removedDeviceId = deviceId,
-            reason,
-            removedAt = _timeProvider.GetUtcNow().ToString("O")
-        }, cancellationToken);
+            await SendProtocolMessageAsync(deviceId, "trust.remove", new
+            {
+                removedDeviceId = deviceId,
+                reason,
+                removedAt = _timeProvider.GetUtcNow().ToString("O")
+            }, cancellationToken);
+        }
+        finally
+        {
+            await _transport.DisconnectPeerAsync(deviceId, CancellationToken.None);
+            _pairingStates.TryRemove(deviceId, out _);
+            TryStartDiscoveryAfterTrustRemoval();
+        }
     }
 
     private async Task<string> EnsureActiveSessionForPairingAsync(string deviceId, CancellationToken cancellationToken)
@@ -524,6 +523,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _trustStore.DeletePeer(peerDeviceId);
         _pairingStates.TryRemove(peerDeviceId, out _);
         await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken);
+        TryStartDiscoveryAfterTrustRemoval();
         await LogEventAsync(SecurityEventTypes.TrustRemoved, peerDeviceId, SecurityEventOutcome.Success, reason, cancellationToken);
         await NotifyTrustChangedAsync(peerDeviceId, "trusted", "removed", reason ?? "Peer removed trust.", cancellationToken);
     }
@@ -533,6 +533,23 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var peer = _trustStore.GetPeer(peerDeviceId);
         if (peer is null)
         {
+            return;
+        }
+
+        if (peer.State == TrustState.Trusted)
+        {
+            _pairingStates.TryRemove(peerDeviceId, out _);
+            await SendProtocolMessageAsync(peerDeviceId, "pairing.reject", new
+            {
+                failureReason = "PolicyDenied",
+                message = "Peer trust must be removed locally before pairing again."
+            }, cancellationToken);
+            await LogEventAsync(
+                SecurityEventTypes.PairingRejected,
+                peerDeviceId,
+                SecurityEventOutcome.Failure,
+                "PolicyDenied",
+                cancellationToken);
             return;
         }
 
@@ -609,9 +626,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private async Task HandlePairingRejectAsync(string peerDeviceId)
     {
         _pairingStates.TryRemove(peerDeviceId, out _);
-        _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        var transitioned = peer?.State == TrustState.PairingPending &&
+            _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
         await LogEventAsync(SecurityEventTypes.PairingRejected, peerDeviceId, SecurityEventOutcome.Failure, "PeerRejected", CancellationToken.None);
-        await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+        if (transitioned)
+        {
+            await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
+        }
     }
 
     private static string? NormalizeRemoteDisplayName(string? displayName)
@@ -985,9 +1007,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             };
         }
 
-        if (peer.TrustedEndpoints.Count > 0)
+        if (peer.TrustedEndpoints.Count > 0 && !activeEndpoint.IsInitiator)
         {
-            var existingEndpoint = peer.TrustedEndpoints[0];
+            return peer.TrustedEndpoints[0];
+        }
+
+        if (peer.TrustedEndpoints.Count > 0 || activeEndpoint.IsInitiator)
+        {
+            var existingEndpoint = peer.TrustedEndpoints.FirstOrDefault();
             return new TrustedPeerEndpoint
             {
                 Address = activeEndpoint.Address,
@@ -995,12 +1022,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 Source = source,
                 AddressFamily = System.Net.IPAddress.TryParse(activeEndpoint.Address, out var activeIpAddress)
                     ? activeIpAddress.AddressFamily.ToString()
-                    : existingEndpoint.AddressFamily,
+                    : existingEndpoint?.AddressFamily,
                 LastSuccessAt = _timeProvider.GetUtcNow()
             };
         }
 
         return null;
+    }
+
+    private void TryStartDiscoveryAfterTrustRemoval()
+    {
+        try
+        {
+            _discoveryCoordinator.StartDiscovery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resume discovery after trust removal.");
+        }
     }
 
     private Task NotifyTrustChangedAsync(string deviceId, string previousState, string newState, string reason, CancellationToken cancellationToken)

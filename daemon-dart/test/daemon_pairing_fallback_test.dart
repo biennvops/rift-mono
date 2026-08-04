@@ -3,10 +3,28 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:daemon_dart/src/daemon.dart';
+import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
+import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
 
 void main() {
+  test('pairing session reuse requires an active transport socket', () {
+    final context = SessionContext(
+      peerDeviceId: 'rift-test-peer',
+      isInitiator: true,
+    );
+
+    expect(RiftDaemon.hasActivePairingSession(context, null), isFalse);
+    expect(
+      RiftDaemon.hasActivePairingSession(
+        context,
+        const PeerSocketEndpoint(address: '192.168.1.2', port: 9140),
+      ),
+      isTrue,
+    );
+  });
+
   test(
     'RiftDaemon openSessionForPairing falls back to trustedEndpoints if discovery is empty',
     () async {

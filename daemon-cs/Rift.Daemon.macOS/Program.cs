@@ -14,6 +14,7 @@ builder.Services.AddSingleton<ILocalMediaPlaybackActionHandler>(sp => sp.GetRequ
 builder.Services.AddSingleton<IMacOSNotificationExtractorClient, MacOSNotificationExtractorClient>();
 builder.Services.AddSingleton<MacOSNotificationSyncObserver>();
 builder.Services.AddHostedService<Worker>();
+builder.Services.AddHostedService<MacOSNetworkMonitor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<MacOSNotificationSyncObserver>());
 
 var host = builder.Build();

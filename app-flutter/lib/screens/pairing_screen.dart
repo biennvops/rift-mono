@@ -206,9 +206,15 @@ class _PairingScreenState extends State<PairingScreen> {
     }
 
     if (_isRecipientFlow) {
-      _isClosingAfterCompletion = true;
+      setState(() {
+        _isClosingAfterCompletion = true;
+        _hasActivePairingFlow = false;
+      });
       unawaited(_showRecipientPairingSuccessNotice().catchError((_) {}));
-      Navigator.of(context).maybePop();
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted) {
+        Navigator.of(context).maybePop();
+      }
       return;
     }
 
@@ -425,7 +431,14 @@ class _PairingScreenState extends State<PairingScreen> {
       await client.rejectPairing(deviceId);
       if (!mounted) return;
       if (!_isRecipientFlow) {
-        Navigator.of(context).maybePop();
+        setState(() {
+          _busy = false;
+          _hasActivePairingFlow = false;
+        });
+        await WidgetsBinding.instance.endOfFrame;
+        if (mounted) {
+          Navigator.of(context).maybePop();
+        }
         return;
       }
       setState(() {
@@ -850,157 +863,169 @@ class _PairingScreenState extends State<PairingScreen> {
 
     final approveEnabled = canApprove && _canApproveDelay;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          'Pairing with ${_displayName ?? _deviceId ?? 'Unknown'}',
-          style: theme.textTheme.titleMedium?.copyWith(
-            color: theme.colorScheme.primary,
-            fontWeight: FontWeight.bold,
+    return PopScope<void>(
+      canPop: !_hasActivePairingFlow || _completed,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop || _busy || !_hasActivePairingFlow || _completed) {
+          return;
+        }
+        unawaited(_rejectPairing());
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            'Pairing with ${_displayName ?? _deviceId ?? 'Unknown'}',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          backgroundColor: theme.colorScheme.surface,
+          foregroundColor: theme.colorScheme.primary,
+          elevation: 0,
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child:
+                Container(color: theme.colorScheme.outlineVariant, height: 1),
           ),
         ),
-        backgroundColor: theme.colorScheme.surface,
-        foregroundColor: theme.colorScheme.primary,
-        elevation: 0,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: theme.colorScheme.outlineVariant, height: 1),
-        ),
-      ),
-      body: !_hasActivePairingFlow
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_busy) const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(_status, style: theme.textTheme.bodyLarge),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-                      child: Text(_error!,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: theme.colorScheme.error)),
-                    ),
-                  ]
-                ],
-              ),
-            )
-          : Stack(
-              children: [
-                ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+        body: !_hasActivePairingFlow
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text('Compare fingerprints',
-                        style: theme.textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Ensure both screens display the exact same words and codes.',
-                      style: theme.textTheme.bodyLarge
-                          ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                    ),
-                    if (hasExpired) ...[
-                      const SizedBox(height: 8),
-                      Text('Expired',
-                          style: TextStyle(
-                              color: theme.colorScheme.error,
-                              fontWeight: FontWeight.bold)),
-                    ] else if (_remainingSeconds != null) ...[
-                      const SizedBox(height: 8),
-                      Text('Expires in ${_remainingSeconds!}s',
-                          style: TextStyle(
-                              color: theme.colorScheme.onSurfaceVariant)),
-                    ],
-                    const SizedBox(height: 24),
-                    _buildFingerprintBlock(
-                      theme: theme,
-                      title: "This device's fingerprint",
-                      icon: Icons.smartphone,
-                      primaryColor: theme.colorScheme.primary,
-                      primaryContainer: theme.colorScheme.primaryContainer,
-                      onPrimaryContainer: theme.colorScheme.onPrimaryContainer,
-                      fingerprint: _localFingerprint,
-                    ),
-                    const SizedBox(height: 24),
-                    _buildFingerprintBlock(
-                      theme: theme,
-                      title: "${_displayName ?? 'Peer'}'s fingerprint",
-                      icon: Icons.desktop_windows,
-                      primaryColor: theme.colorScheme.secondary,
-                      primaryContainer: theme.colorScheme.secondaryContainer,
-                      onPrimaryContainer:
-                          theme.colorScheme.onSecondaryContainer,
-                      fingerprint: _peerFingerprint,
-                    ),
+                    if (_busy) const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(_status, style: theme.textTheme.bodyLarge),
+                    if (_error != null) ...[
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                        child: Text(_error!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: theme.colorScheme.error)),
+                      ),
+                    ]
                   ],
                 ),
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.surface,
-                      border: Border(
-                          top: BorderSide(
-                              color: theme.colorScheme.outlineVariant)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        TextButton(
-                          onPressed: canReject ? _rejectPairing : null,
-                          style: TextButton.styleFrom(
-                            backgroundColor: theme.colorScheme.error,
-                            foregroundColor: theme.colorScheme.onError,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 32, vertical: 12),
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8)),
-                          ),
-                          child: const Text('Reject',
-                              style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                        if (_canApproveLocally)
-                          ElevatedButton(
-                            onPressed: approveEnabled ? _approvePairing : null,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: theme.colorScheme.primary,
-                              foregroundColor: theme.colorScheme.onPrimary,
+              )
+            : Stack(
+                children: [
+                  ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+                    children: [
+                      Text('Compare fingerprints',
+                          style: theme.textTheme.headlineSmall
+                              ?.copyWith(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Ensure both screens display the exact same words and codes.',
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant),
+                      ),
+                      if (hasExpired) ...[
+                        const SizedBox(height: 8),
+                        Text('Expired',
+                            style: TextStyle(
+                                color: theme.colorScheme.error,
+                                fontWeight: FontWeight.bold)),
+                      ] else if (_remainingSeconds != null) ...[
+                        const SizedBox(height: 8),
+                        Text('Expires in ${_remainingSeconds!}s',
+                            style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant)),
+                      ],
+                      const SizedBox(height: 24),
+                      _buildFingerprintBlock(
+                        theme: theme,
+                        title: "This device's fingerprint",
+                        icon: Icons.smartphone,
+                        primaryColor: theme.colorScheme.primary,
+                        primaryContainer: theme.colorScheme.primaryContainer,
+                        onPrimaryContainer:
+                            theme.colorScheme.onPrimaryContainer,
+                        fingerprint: _localFingerprint,
+                      ),
+                      const SizedBox(height: 24),
+                      _buildFingerprintBlock(
+                        theme: theme,
+                        title: "${_displayName ?? 'Peer'}'s fingerprint",
+                        icon: Icons.desktop_windows,
+                        primaryColor: theme.colorScheme.secondary,
+                        primaryContainer: theme.colorScheme.secondaryContainer,
+                        onPrimaryContainer:
+                            theme.colorScheme.onSecondaryContainer,
+                        fingerprint: _peerFingerprint,
+                      ),
+                    ],
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surface,
+                        border: Border(
+                            top: BorderSide(
+                                color: theme.colorScheme.outlineVariant)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton(
+                            onPressed: canReject ? _rejectPairing : null,
+                            style: TextButton.styleFrom(
+                              backgroundColor: theme.colorScheme.error,
+                              foregroundColor: theme.colorScheme.onError,
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 32, vertical: 12),
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8)),
-                              elevation: 0,
                             ),
-                            child: _busy
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white))
-                                : const Text('Approve',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold)),
-                          )
-                        else
-                          Padding(
-                            padding: const EdgeInsets.only(right: 16.0),
-                            child: Text(
-                              'Waiting for peer...',
-                              style: theme.textTheme.labelMedium
-                                  ?.copyWith(color: theme.colorScheme.outline),
-                            ),
+                            child: const Text('Reject',
+                                style: TextStyle(fontWeight: FontWeight.bold)),
                           ),
-                      ],
+                          if (_canApproveLocally)
+                            ElevatedButton(
+                              onPressed:
+                                  approveEnabled ? _approvePairing : null,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: theme.colorScheme.primary,
+                                foregroundColor: theme.colorScheme.onPrimary,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 32, vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8)),
+                                elevation: 0,
+                              ),
+                              child: _busy
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: Colors.white))
+                                  : const Text('Approve',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold)),
+                            )
+                          else
+                            Padding(
+                              padding: const EdgeInsets.only(right: 16.0),
+                              child: Text(
+                                'Waiting for peer...',
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                    color: theme.colorScheme.outline),
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
+      ),
     );
   }
 }

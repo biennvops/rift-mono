@@ -6,6 +6,7 @@ using Rift.Daemon.Core;
 using Rift.Daemon.Core.Cryptography;
 using Rift.Daemon.Core.Data;
 using Rift.Daemon.Core.Interfaces;
+using SkiaSharp;
 using StreamJsonRpc;
 
 namespace Rift.Daemon.Tests.Core;
@@ -259,6 +260,25 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeerSessionOnline_ReplaysLocalPlayback()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(_identityManager.GetDeviceId(), "playback-1", "Track"),
+            CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["media.playback"],
+            allowsProtectedTraffic: true));
+
+        var sent = Assert.Single(_transport.SentMessages);
+        Assert.Equal("rift-peer", sent.PeerDeviceId);
+        Assert.Equal("media.playbackPosted", sent.Type);
+    }
+
+    [Fact]
     public async Task PeerSessionOffline_RemovesRemotePlaybackRecords()
     {
         var service = CreateService();
@@ -352,6 +372,43 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PublishLocalPlaybackToPeerAsync_NormalizesLargeArtwork()
+    {
+        using var source = new SKBitmap(2048, 2048);
+        using (var canvas = new SKCanvas(source))
+        {
+            canvas.Clear(SKColors.CornflowerBlue);
+        }
+        using var image = SKImage.FromBitmap(source);
+        using var encodedSource = image.Encode(SKEncodedImageFormat.Png, 100);
+        var playback = CreatePlayback(
+            string.Empty,
+            "playback-large-artwork",
+            "Large Artwork",
+            new Dictionary<string, object?>
+            {
+                ["dataBase64"] = Convert.ToBase64String(encodedSource.ToArray()),
+                ["mediaType"] = "image/png"
+            });
+        var service = CreateService();
+
+        await service.PublishLocalPlaybackToPeerAsync(
+            "rift-new-peer",
+            playback,
+            CancellationToken.None);
+
+        var payload = Assert.Single(_transport.Payloads);
+        var artwork = payload.GetProperty("payload").GetProperty("artwork");
+        Assert.Equal("image/jpeg", artwork.GetProperty("mediaType").GetString());
+        var normalizedBytes = Convert.FromBase64String(artwork.GetProperty("dataBase64").GetString()!);
+        Assert.InRange(normalizedBytes.Length, 1, 2 * 1024 * 1024);
+        using var normalized = SKBitmap.Decode(normalizedBytes);
+        Assert.NotNull(normalized);
+        Assert.InRange(normalized!.Width, 1, 1024);
+        Assert.InRange(normalized.Height, 1, 1024);
+    }
+
+    [Fact]
     public async Task PublishLocalPlaybackToPeerAsync_SendsDirectlyWithoutPresenceEntry()
     {
         var service = CreateService();
@@ -435,13 +492,18 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
         logger: NullLogger<MediaPlaybackSyncService>.Instance,
         actionTimeout: actionTimeout);
 
-    private static MediaPlaybackRecord CreatePlayback(string sourceDeviceId, string playbackId, string title) => new()
+    private static MediaPlaybackRecord CreatePlayback(
+        string sourceDeviceId,
+        string playbackId,
+        string title,
+        IReadOnlyDictionary<string, object?>? artwork = null) => new()
     {
         PlaybackId = playbackId,
         SourceDeviceId = sourceDeviceId,
         AppId = "com.example.music",
         AppName = "Example Music",
         Title = title,
+        Artwork = artwork,
         PlaybackState = "playing",
         PositionMs = 1000,
         CanPlay = true,

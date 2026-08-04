@@ -79,7 +79,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task NotifyLocalTrustRemovedAsync_SendsTrustRemoveMessage()
+    public async Task NotifyLocalTrustRemovedAsync_SendsTrustRemoveAndClosesSession()
     {
         await _coordinator.NotifyLocalTrustRemovedAsync("rift-peer-removed", "User removed trusted device");
 
@@ -88,6 +88,8 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         Assert.Equal("trust.remove", message.Type);
         Assert.Equal("rift-peer-removed", message.Payload.GetProperty("removedDeviceId").GetString());
         Assert.Equal("User removed trusted device", message.Payload.GetProperty("reason").GetString());
+        Assert.Contains("rift-peer-removed", _transport.DisconnectedPeers);
+        Assert.Equal(1, _discoveryService.StartDiscoveryCalls);
     }
 
     [Fact]
@@ -822,6 +824,58 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_FromTrustedPeer_RejectsWithoutPrompt()
+    {
+        var peerDeviceId = "rift-peer-already-trusted";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            peerDeviceId,
+            CreateEnvelope(peerDeviceId, "pairing.start", new { expiresInMs = 120000 }),
+            CancellationToken.None);
+
+        var rejection = Assert.Single(
+            _transport.SentMessages,
+            message => message.PeerDeviceId == peerDeviceId && message.Type == "pairing.reject");
+        Assert.Equal("PolicyDenied", rejection.Payload.GetProperty("failureReason").GetString());
+        Assert.DoesNotContain(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onPairingRequest");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PairingReject_DoesNotNotifyForNonPendingPeer()
+    {
+        var peerDeviceId = "rift-peer-no-longer-pending";
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            peerDeviceId,
+            CreateEnvelope(peerDeviceId, "pairing.reject", new
+            {
+                failureReason = "PolicyDenied",
+                message = "stale rejection"
+            }),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(
+            _notificationService.Notifications,
+            notification => notification.Method == "rift.onTrustChanged");
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingComplete_BeforeLocalApproval_TransitionsTrustedAfterLocalApprove()
     {
         _transport.ActiveSessions.Add("rift-peer-android-initiated");
@@ -975,7 +1029,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             maxVersion: "0.1-draft",
             txtRecord: new Dictionary<string, string> { ["did"] = "rift-peer-trusted-online" },
             remoteEndPoint: null));
-        _transport.SessionEndpoints["rift-peer-trusted-online"] = new PeerSessionEndpoint("192.168.1.125", 48084);
+        _transport.SessionEndpoints["rift-peer-trusted-online"] = new PeerSessionEndpoint("192.168.1.125", 48084, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             "rift-peer-trusted-online",
@@ -993,6 +1047,42 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task SessionStateChanged_InboundSessionDoesNotReplaceStableEndpointWithEphemeralPort()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-inbound-endpoint",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "192.168.1.125",
+                    Port = 11112,
+                    Source = "discovery-pairing",
+                    LastSuccessAt = DateTimeOffset.UtcNow.AddMinutes(-5)
+                }
+            ]
+        });
+        _transport.SessionEndpoints["rift-peer-inbound-endpoint"] =
+            new PeerSessionEndpoint("192.168.1.125", 48084, isInitiator: false);
+
+        _transport.RaiseSessionStateChanged(
+            "rift-peer-inbound-endpoint",
+            isOnline: true,
+            allowsProtectedTraffic: true);
+
+        await Task.Delay(50);
+
+        var peer = _trustStore.GetPeer("rift-peer-inbound-endpoint");
+        Assert.NotNull(peer);
+        Assert.Equal("192.168.1.125", peer!.TrustedEndpoints[0].Address);
+        Assert.Equal(11112, peer.TrustedEndpoints[0].Port);
+    }
+
+    [Fact]
     public async Task ConnectToEndpointForPairingAsync_ManualEndpointHint_PersistsStablePortInsteadOfEphemeralSocketPort()
     {
         _transport.ActiveSessions.Add("rift-manual-peer");
@@ -1004,7 +1094,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             State = TrustState.Trusted,
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
-        _transport.SessionEndpoints[resolvedDeviceId] = new PeerSessionEndpoint("192.168.1.125", 48084);
+        _transport.SessionEndpoints[resolvedDeviceId] = new PeerSessionEndpoint("192.168.1.125", 48084, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             resolvedDeviceId,
@@ -1030,7 +1120,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             State = TrustState.Trusted,
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
-        _transport.SessionEndpoints["rift-peer-unprotected-online"] = new PeerSessionEndpoint("10.53.38.174", 9140);
+        _transport.SessionEndpoints["rift-peer-unprotected-online"] = new PeerSessionEndpoint("10.53.38.174", 9140, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             "rift-peer-unprotected-online",
@@ -1358,11 +1448,13 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     {
         public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
+        public int StartDiscoveryCalls { get; private set; }
+
         public void StartAdvertising(string deviceId, string minVersion, string maxVersion) { }
 
         public void StopAdvertising() { }
 
-        public void StartDiscovery() { }
+        public void StartDiscovery() => StartDiscoveryCalls++;
 
         public void StopDiscovery() { }
 
@@ -1410,6 +1502,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         public Exception? SendException { get; set; }
         public HashSet<string> ActiveSessions { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, PeerSessionEndpoint> SessionEndpoints { get; } = new(StringComparer.Ordinal);
+        public List<string> DisconnectedPeers { get; } = [];
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -1455,7 +1548,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         public void RefreshSessionAuthorization(string peerDeviceId) => RaiseSessionStateChanged(peerDeviceId, isOnline: true, allowsProtectedTraffic: ActiveSessions.Contains(peerDeviceId));
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) =>
             SessionEndpoints.TryGetValue(peerDeviceId, out var endpoint) ? endpoint : null;
-        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
+        {
+            DisconnectedPeers.Add(peerDeviceId);
+            return Task.CompletedTask;
+        }
 
         public void RaiseSessionStateChanged(string peerDeviceId, bool isOnline, bool allowsProtectedTraffic = false)
         {

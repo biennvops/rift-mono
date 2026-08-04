@@ -5,6 +5,24 @@ import 'package:test/test.dart';
 
 void main() {
   group('RiftDaemon notification sync', () {
+    test('replays active notifications as updates', () {
+      final record = <String, dynamic>{
+        'notificationId': 'android:com.example.chat:42',
+        'sourceDeviceId': 'rift-local',
+      };
+
+      final message = RiftDaemon.buildNotificationReplayMessage(
+        localDeviceId: 'rift-local',
+        peerDeviceId: 'rift-peer',
+        record: record,
+      );
+
+      expect(message['type'], 'notification.updated');
+      expect(message['sourceDeviceId'], 'rift-local');
+      expect(message['destinationDeviceId'], 'rift-peer');
+      expect(message['payload'], same(record));
+    });
+
     late Directory tempDir;
     late RiftDaemon daemon;
 

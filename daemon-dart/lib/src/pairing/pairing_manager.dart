@@ -61,7 +61,7 @@ class PairingManager {
         return;
       }
 
-      _cancelTimeoutTimer(peerDeviceId);
+      _clearPairingState(peerDeviceId);
       final record = await trustStore.getPeer(peerDeviceId);
       if (record != null && record.state == TrustState.pairingPending) {
         await trustStore.transitionState(
@@ -132,6 +132,8 @@ class PairingManager {
     if (record.state == TrustState.blocked) {
       throw const RiftUnauthorizedException('Peer is blocked');
     }
+
+    _clearPairingState(peerDeviceId);
 
     // Transition state to pairingPending
     await trustStore.transitionState(
@@ -286,10 +288,7 @@ class PairingManager {
   /// Called by Flutter App when User clicks "Reject"
   Future<void> _rejectPairing(String peerDeviceId) async {
     RiftLog.debug('[Pairing] Rejecting pairing with $peerDeviceId');
-    _cancelTimeoutTimer(peerDeviceId);
-    _localApprovals.remove(peerDeviceId);
-    _remoteApprovals.remove(peerDeviceId);
-    _completionSent.remove(peerDeviceId);
+    _clearPairingState(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
     if (record == null) return;
 
@@ -351,6 +350,7 @@ class PairingManager {
   }
 
   Future<void> _unpair(String peerDeviceId, {required String reason}) async {
+    _clearPairingState(peerDeviceId);
     final record = await trustStore.getPeer(peerDeviceId);
     // Issue 2 fix: throw NotFound so the IPC layer returns -32009 instead of
     // silently reporting success when the peer does not exist in the trust store.
@@ -443,8 +443,13 @@ class PairingManager {
       '[Pairing] Received network message ${type ?? "<unknown>"} from $peerDeviceId',
     );
 
-    // Ensure peer is stored with the latest certificate before processing
-    await _ensurePeerInTrustStore(peerDeviceId, msg.peerCertDer);
+    // Ensure peer is stored with the latest certificate before processing.
+    // A late trust.remove must not recreate a deleted peer record.
+    await _ensurePeerInTrustStore(
+      peerDeviceId,
+      msg.peerCertDer,
+      createIfMissing: type != 'trust.remove',
+    );
 
     switch (type) {
       case 'pairing.start':
@@ -469,6 +474,23 @@ class PairingManager {
 
         // If blocked, silently drop the packet
         if (record.state == TrustState.blocked) {
+          return;
+        }
+
+        if (record.state == TrustState.trusted) {
+          _clearPairingState(peerDeviceId);
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'pairing.reject',
+            'sourceDeviceId': identityManager.deviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': {
+              'failureReason': 'PolicyDenied',
+              'message':
+                  'Peer trust must be removed locally before pairing again.',
+            },
+          });
           return;
         }
 
@@ -645,6 +667,14 @@ class PairingManager {
         }
 
         final record = await trustStore.getPeer(peerDeviceId);
+        _clearPairingState(peerDeviceId);
+        if (record?.state == TrustState.pairingPending) {
+          await trustStore.transitionState(
+            peerDeviceId,
+            TrustState.pairingPending,
+            TrustState.discovered,
+          );
+        }
         if (record == null || record.state != TrustState.trusted) {
           RiftLog.warn(
             '[Pairing] Ignoring trust.remove from non-trusted peer $peerDeviceId',
@@ -671,11 +701,16 @@ class PairingManager {
 
   Future<void> _ensurePeerInTrustStore(
     String peerDeviceId,
-    Uint8List? certDer,
-  ) async {
+    Uint8List? certDer, {
+    bool createIfMissing = true,
+  }) async {
     if (certDer == null) return;
 
     var record = await trustStore.getPeer(peerDeviceId);
+    if (record == null && !createIfMissing) {
+      return;
+    }
+
     if (record == null) {
       record = PeerRecord(
         deviceId: peerDeviceId,
@@ -771,9 +806,17 @@ class PairingManager {
     }
   }
 
+  void _clearPairingState(String peerDeviceId) {
+    _cancelTimeoutTimer(peerDeviceId);
+    _outboundPairings.remove(peerDeviceId);
+    _localApprovals.remove(peerDeviceId);
+    _remoteApprovals.remove(peerDeviceId);
+    _completionSent.remove(peerDeviceId);
+  }
+
   Future<void> dispose() async {
-    for (final timer in _pairingTimeouts.values) {
-      timer.cancel();
+    for (final peerDeviceId in _pairingTimeouts.keys.toList()) {
+      _clearPairingState(peerDeviceId);
     }
     _pairingTimeouts.clear();
     _outboundPairings.clear();

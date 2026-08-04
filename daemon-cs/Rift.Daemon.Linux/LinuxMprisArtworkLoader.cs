@@ -12,7 +12,7 @@ internal interface ILinuxMprisArtworkLoader
 internal sealed class LinuxMprisArtworkLoader(
     ILogger<LinuxMprisArtworkLoader> logger) : ILinuxMprisArtworkLoader
 {
-    internal const int MaxArtworkBytes = 20 * 1024 * 1024;
+    internal const int MaxSourceArtworkBytes = 20 * 1024 * 1024;
     private const int MaxCacheEntries = 4;
 
     private readonly Lock _gate = new();
@@ -30,7 +30,7 @@ internal sealed class LinuxMprisArtworkLoader(
         try
         {
             var file = new FileInfo(filePath);
-            if (!file.Exists || file.Length is <= 0 or > MaxArtworkBytes)
+            if (!file.Exists || file.Length is <= 0 or > MaxSourceArtworkBytes)
             {
                 return null;
             }

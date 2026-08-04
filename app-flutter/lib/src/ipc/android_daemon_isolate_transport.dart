@@ -33,9 +33,10 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamController<String>? _outgoing;
   NativeTlsProxyHost? _tlsProxyHost;
   AndroidRootDiscoveryBridge? _discoveryBridge;
+  Future<AndroidRootDiscoveryBridge>? _discoveryBridgeFuture;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
-  StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _discoveryRetrySub;
   int _nextSyntheticId = 1000000;
   int _nextBootstrapRequestId = -1;
   String? _daemonDeviceId;
@@ -65,7 +66,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     }
 
     _uiReceive = ReceivePort();
-    _incoming = StreamController<String>();
+    _incoming = StreamController<String>.broadcast();
     _errorPort = ReceivePort();
     _exitPort = ReceivePort();
 
@@ -236,7 +237,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     await _discoveryAddedSub?.cancel();
     await _discoveryLostSub?.cancel();
-    await _reverseTcpPingSub?.cancel();
+    await _discoveryRetrySub?.cancel();
 
     _discoveryAddedSub = bridge.onPeerDiscovered.listen((peer) {
       _incoming?.add(jsonEncode({
@@ -258,18 +259,13 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       _syncDiscoverySnapshotToDaemon();
     });
 
-    _reverseTcpPingSub = bridge.onReverseTcpPingRequested.listen((peer) {
+    _discoveryRetrySub = bridge.onReverseTcpPingRequested.listen((peer) {
       final port = _rpcPort;
-      if (port == null) return;
-      // Send a ping command to the daemon isolate to establish a TCP connection
-      // with the Linux machine. This completely bypasses the Hotspot UDP block!
+      final deviceId = peer.deviceIdHint;
+      if (port == null || deviceId == null) return;
       port.send({
-        'jsonrpc': '2.0',
-        'method': 'rift.pingEndpoint',
-        'params': {
-          'address': peer.address,
-          'port': peer.port,
-        },
+        'internal': 'android.prefetchPeer',
+        'deviceId': deviceId,
       });
     });
 
@@ -332,12 +328,27 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     }
   }
 
-  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {
+  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() {
     final existing = _discoveryBridge;
     if (existing != null) {
-      return existing;
+      return Future.value(existing);
     }
 
+    final pending = _discoveryBridgeFuture;
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _bootstrapDiscoveryBridge();
+    _discoveryBridgeFuture = future;
+    return future.whenComplete(() {
+      if (identical(_discoveryBridgeFuture, future)) {
+        _discoveryBridgeFuture = null;
+      }
+    });
+  }
+
+  Future<AndroidRootDiscoveryBridge> _bootstrapDiscoveryBridge() async {
     if (_daemonDeviceId == null || _daemonAdvertisedPort == null) {
       throw StateError(
         'Android discovery is not ready yet. Wait a moment for the daemon to finish startup, then try again.',
@@ -441,6 +452,17 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     });
   }
 
+  Stream<String> get rawIncoming =>
+      _incoming?.stream ?? const Stream<String>.empty();
+
+  Future<void> sendRaw(String message) async {
+    final outgoing = _outgoing;
+    if (outgoing == null) {
+      throw StateError('Android daemon is not connected');
+    }
+    outgoing.add(message);
+  }
+
   @override
   Future<void> disconnect() async {
     await _tlsProxyHost?.dispose();
@@ -451,6 +473,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _discoveryLostSub = null;
     await _discoveryBridge?.dispose();
     _discoveryBridge = null;
+    _discoveryBridgeFuture = null;
 
     await _incoming?.close();
     await _outgoing?.close();

@@ -6,6 +6,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 project="$repo_root/daemon-cs/Rift.Daemon.macOS/Rift.Daemon.macOS.csproj"
 xpc_native_dir="$repo_root/daemon-cs/Rift.NotificationExtractor.macOS/Native"
+network_native_source="$repo_root/daemon-cs/Rift.Daemon.macOS/Native/NetworkMonitorShim.swift"
 
 runtime="${1:-}"
 if [[ -z "$runtime" ]]; then
@@ -74,6 +75,14 @@ xcrun swiftc \
   -framework Foundation \
   -module-name RiftNotificationXpcClient \
   -o "$app_dir/Contents/MacOS/librift-notification-xpc-client.dylib"
+
+xcrun swiftc \
+  "$network_native_source" \
+  -emit-library \
+  -framework Foundation \
+  -framework Network \
+  -module-name RiftNetworkMonitor \
+  -o "$app_dir/Contents/MacOS/librift-network-monitor.dylib"
 
 codesign --deep --force --sign "$codesign_identity" \
   --identifier com.rift.daemon "$app_dir"
