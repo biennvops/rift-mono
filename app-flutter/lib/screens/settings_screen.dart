@@ -1372,6 +1372,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           backgroundColor: theme.colorScheme.surface,
           elevation: 0,
           scrolledUnderElevation: 0,
+          centerTitle: false,
+          titleSpacing: showingDetail || widget.onClose != null ? 0 : 16,
           leading: showingDetail
               ? IconButton(
                   icon: const Icon(Icons.arrow_back),
