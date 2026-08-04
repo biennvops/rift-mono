@@ -112,6 +112,8 @@ class AndroidRootDiscoveryBridge {
       _fallbackPeersByInstanceId = {};
   final String _instanceId;
   final Set<String> _recentlyTcpPinged = {};
+  Set<String> _localIpv4Prefixes = const <String>{};
+  int _discoverySnapshotGeneration = 0;
 
   AndroidRootDiscoveryBridge({
     required this.port,
@@ -173,6 +175,7 @@ class AndroidRootDiscoveryBridge {
   Future<void> startDiscovery() async {
     if (_discovery != null) return;
 
+    await _refreshLocalIpv4Prefixes();
     _discovery = await nsd.startDiscovery('_rift._tcp');
     _discovery!.addListener(_onDiscoveryChanged);
     await _ensureFallbackDiscovery();
@@ -222,9 +225,22 @@ class AndroidRootDiscoveryBridge {
     final discovery = _discovery;
     if (discovery == null) return;
 
+    final generation = ++_discoverySnapshotGeneration;
+    final services = List<nsd.Service>.from(discovery.services);
+    unawaited(_ingestDiscoveryServices(services, generation));
+  }
+
+  Future<void> _ingestDiscoveryServices(
+    List<nsd.Service> services,
+    int generation,
+  ) async {
+    final peers = await Future.wait(services.map(_peerFromService));
+    if (generation != _discoverySnapshotGeneration) return;
+
     final mdnsSnapshot = <AndroidDiscoveredPeer>[];
-    for (final service in discovery.services) {
-      final peer = _peerFromService(service);
+    for (var i = 0; i < services.length; i += 1) {
+      final peer = peers[i];
+      final service = services[i];
       if (peer != null) {
         if (peer.deviceIdHint != deviceIdHint) {
           if (_shouldSuppressMdnsPeer(peer)) {
@@ -266,7 +282,7 @@ class AndroidRootDiscoveryBridge {
     }
   }
 
-  AndroidDiscoveredPeer? _peerFromService(nsd.Service service) {
+  Future<AndroidDiscoveredPeer?> _peerFromService(nsd.Service service) async {
     final instanceId = service.name;
     final port = service.port;
     final observedEndpoints = <({String address, int port})>[];
@@ -280,8 +296,25 @@ class AndroidRootDiscoveryBridge {
     }
 
     final host = service.host;
-    if (host != null && seenAddresses.add(host)) {
-      observedEndpoints.add((address: host, port: port ?? 0));
+    final lookupHosts = <String>{
+      if (host != null && InternetAddress.tryParse(host) == null) host,
+      if (instanceId != null) '$instanceId.rift.local',
+    };
+    for (final lookupHost in lookupHosts) {
+      try {
+        final resolvedAddresses = await InternetAddress.lookup(
+          lookupHost,
+          type: InternetAddressType.IPv4,
+        );
+        for (final address in resolvedAddresses) {
+          if (seenAddresses.add(address.address)) {
+            observedEndpoints.add((address: address.address, port: port ?? 0));
+          }
+        }
+      } catch (_) {
+        // The service.addresses list is still useful when hostname resolution
+        // is unavailable on a particular Android network.
+      }
     }
 
     if (instanceId == null ||
@@ -290,6 +323,12 @@ class AndroidRootDiscoveryBridge {
         instanceId == _instanceId) {
       return null;
     }
+
+    observedEndpoints.sort(
+      (a, b) => _endpointPriority(b.address).compareTo(
+        _endpointPriority(a.address),
+      ),
+    );
 
     final txt = service.txt ?? {};
     final minV =
@@ -309,6 +348,54 @@ class AndroidRootDiscoveryBridge {
       deviceIdHint: did,
       fingerprintPrefix: fp,
     );
+  }
+
+  Future<void> _refreshLocalIpv4Prefixes() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      _localIpv4Prefixes = {
+        for (final address
+            in interfaces.expand((interface) => interface.addresses))
+          if (address.type == InternetAddressType.IPv4)
+            _ipv4Prefix(address.address),
+      };
+    } catch (_) {
+      _localIpv4Prefixes = const <String>{};
+    }
+  }
+
+  int _endpointPriority(String address) {
+    final parsed = InternetAddress.tryParse(address);
+    if (parsed == null || parsed.type != InternetAddressType.IPv4) {
+      return 0;
+    }
+    if (_localIpv4Prefixes.contains(_ipv4Prefix(address))) {
+      return 3;
+    }
+    if (_isPrivateIpv4(address)) {
+      return 2;
+    }
+    return 1;
+  }
+
+  String _ipv4Prefix(String address) {
+    final parts = address.split('.');
+    return parts.length == 4 ? '${parts[0]}.${parts[1]}.${parts[2]}' : address;
+  }
+
+  bool _isPrivateIpv4(String address) {
+    final parts = address.split('.').map(int.tryParse).toList(growable: false);
+    if (parts.length != 4 || parts.any((part) => part == null)) {
+      return false;
+    }
+    final first = parts[0]!;
+    final second = parts[1]!;
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
   }
 
   bool _isBenignStopDiscoveryError(Object error) {

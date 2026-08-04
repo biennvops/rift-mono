@@ -24,13 +24,34 @@ import java.util.TimeZone
  * Requires notification listener access: `MediaSessionManager.getActiveSessions`
  * is gated on the same permission as `RiftNotificationListenerService`.
  */
-class AndroidMediaSessionObserver(private val context: Context) {
+class AndroidMediaSessionObserver(
+    private val context: Context,
+    private val payloadCallback: ((Map<String, Any?>) -> Unit)? = null,
+) {
     companion object {
         private const val tag = "RiftMediaObserver"
         private const val artworkMaxDimension = 256
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            val manager = sessionManager
+            val listener = sessionsListener
+            if (manager != null && listener != null) {
+                try {
+                    syncControllers(
+                        manager.getActiveSessions(
+                            ComponentName(context, RiftNotificationListenerService::class.java),
+                        ),
+                    )
+                } catch (error: SecurityException) {
+                    Log.w(tag, "Media session refresh rejected", error)
+                }
+                mainHandler.postDelayed(this, 2_000L)
+            }
+        }
+    }
     private var eventSink: EventChannel.EventSink? = null
     private var sessionManager: MediaSessionManager? = null
     private var sessionsListener: MediaSessionManager.OnActiveSessionsChangedListener? = null
@@ -64,6 +85,8 @@ class AndroidMediaSessionObserver(private val context: Context) {
             sessionManager = manager
             sessionsListener = listener
             syncControllers(manager.getActiveSessions(component))
+            mainHandler.removeCallbacks(refreshRunnable)
+            mainHandler.postDelayed(refreshRunnable, 2_000L)
             true
         } catch (error: SecurityException) {
             Log.w(tag, "Media session observation rejected", error)
@@ -72,6 +95,7 @@ class AndroidMediaSessionObserver(private val context: Context) {
     }
 
     fun stopObservation() {
+        mainHandler.removeCallbacks(refreshRunnable)
         sessionsListener?.let { sessionManager?.removeOnActiveSessionsChangedListener(it) }
         sessionsListener = null
         sessionManager = null
@@ -171,13 +195,13 @@ class AndroidMediaSessionObserver(private val context: Context) {
         val controller = controllersById.remove(id) ?: return
         callbacksById.remove(id)?.let { controller.unregisterCallback(it) }
         if (postedIds.remove(id)) {
-            eventSink?.success(
-                mapOf(
-                    "eventType" to "removed",
-                    "playbackId" to id,
-                    "removedAt" to isoNow(),
-                ),
+            val payload = mapOf(
+                "eventType" to "removed",
+                "playbackId" to id,
+                "removedAt" to isoNow(),
             )
+            eventSink?.success(payload)
+            payloadCallback?.invoke(payload)
         }
     }
 
@@ -226,6 +250,7 @@ class AndroidMediaSessionObserver(private val context: Context) {
 
         postedIds.add(id)
         eventSink?.success(payload)
+        payloadCallback?.invoke(payload)
     }
 
     private fun encodeArtwork(metadata: MediaMetadata): Map<String, Any?>? {

@@ -548,6 +548,7 @@ class RiftDaemon {
             source: 'session-established',
           ),
         );
+        unawaited(_replayActiveSyncState(ctx.peerDeviceId));
       });
       _sessionManager!.onPresenceUpdate.listen((ctx) {
         _forwardIpcEvent({
@@ -856,6 +857,74 @@ class RiftDaemon {
       throw const RiftException(-32009, 'Media playback was not found');
     }
     return playback.toJson();
+  }
+
+  Future<void> _replayActiveSyncState(String peerDeviceId) async {
+    final sessionManager = _sessionManager;
+    final identityManager = _identityManager;
+    final mediaPlaybackManager = _mediaPlaybackManager;
+    if (sessionManager == null ||
+        identityManager == null ||
+        mediaPlaybackManager == null) {
+      return;
+    }
+
+    final context = sessionManager.getContext(peerDeviceId);
+    if (context == null || context.trustState != TrustState.trusted) {
+      return;
+    }
+
+    final localDeviceId = identityManager.deviceId;
+    if (context.hasCapability('notification.sync')) {
+      for (final record in _notificationSyncRecords.values) {
+        if (record['sourceDeviceId'] != localDeviceId) {
+          continue;
+        }
+        try {
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'notification.posted',
+            'sourceDeviceId': localDeviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': record,
+          });
+        } catch (error) {
+          RiftLog.warn(
+            '[NotificationSync] Failed to replay active state to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
+
+    if (context.hasCapability('media.playback')) {
+      final playbacks = mediaPlaybackManager.listStateJson()['playbacks'];
+      if (playbacks is! List) {
+        return;
+      }
+      for (final playback in playbacks.whereType<Map>()) {
+        final record = Map<String, dynamic>.from(playback);
+        if (record['sourceDeviceId'] != localDeviceId) {
+          continue;
+        }
+        try {
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'media.playbackPosted',
+            'sourceDeviceId': localDeviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': record,
+          });
+        } catch (error) {
+          RiftLog.warn(
+            '[MediaPlayback] Failed to replay active state to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
   }
 
   Future<List<String>> _broadcastMediaPlaybackEnvelope({

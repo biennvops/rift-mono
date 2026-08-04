@@ -97,7 +97,7 @@ object NotificationSyncRelay {
         prefs.edit().putStringSet(activeNotificationIdsKey, current).apply()
     }
 
-    private fun queueEvent(context: Context, payload: Map<String, Any?>) {
+    fun queueEvent(context: Context, payload: Map<String, Any?>) {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         val existingRaw = prefs.getString(pendingEventsKey, null)
         val entries =
@@ -135,7 +135,8 @@ object NotificationSyncRelay {
         val keys = obj.keys()
         while (keys.hasNext()) {
             val key = keys.next()
-            result[key] = obj.opt(key)
+            val value = obj.opt(key)
+            result[key] = if (value == JSONObject.NULL) null else value
         }
         return result
     }

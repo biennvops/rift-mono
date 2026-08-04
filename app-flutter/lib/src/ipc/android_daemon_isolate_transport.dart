@@ -33,6 +33,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   StreamController<String>? _outgoing;
   NativeTlsProxyHost? _tlsProxyHost;
   AndroidRootDiscoveryBridge? _discoveryBridge;
+  Future<AndroidRootDiscoveryBridge>? _discoveryBridgeFuture;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
   StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
@@ -65,7 +66,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     }
 
     _uiReceive = ReceivePort();
-    _incoming = StreamController<String>();
+    _incoming = StreamController<String>.broadcast();
     _errorPort = ReceivePort();
     _exitPort = ReceivePort();
 
@@ -332,12 +333,27 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     }
   }
 
-  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {
+  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() {
     final existing = _discoveryBridge;
     if (existing != null) {
-      return existing;
+      return Future.value(existing);
     }
 
+    final pending = _discoveryBridgeFuture;
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _bootstrapDiscoveryBridge();
+    _discoveryBridgeFuture = future;
+    return future.whenComplete(() {
+      if (identical(_discoveryBridgeFuture, future)) {
+        _discoveryBridgeFuture = null;
+      }
+    });
+  }
+
+  Future<AndroidRootDiscoveryBridge> _bootstrapDiscoveryBridge() async {
     if (_daemonDeviceId == null || _daemonAdvertisedPort == null) {
       throw StateError(
         'Android discovery is not ready yet. Wait a moment for the daemon to finish startup, then try again.',
@@ -441,6 +457,17 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     });
   }
 
+  Stream<String> get rawIncoming =>
+      _incoming?.stream ?? const Stream<String>.empty();
+
+  Future<void> sendRaw(String message) async {
+    final outgoing = _outgoing;
+    if (outgoing == null) {
+      throw StateError('Android daemon is not connected');
+    }
+    outgoing.add(message);
+  }
+
   @override
   Future<void> disconnect() async {
     await _tlsProxyHost?.dispose();
@@ -451,6 +478,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     _discoveryLostSub = null;
     await _discoveryBridge?.dispose();
     _discoveryBridge = null;
+    _discoveryBridgeFuture = null;
 
     await _incoming?.close();
     await _outgoing?.close();

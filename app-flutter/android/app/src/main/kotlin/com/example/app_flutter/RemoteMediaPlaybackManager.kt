@@ -24,7 +24,7 @@ class RemoteMediaPlaybackManager(
     companion object {
         const val notificationChannelId = "rift.media_playback"
         const val notificationChannelName = "Rift media playback"
-        private const val notificationId = 4108
+        private const val notificationId = 4109
         private const val actionIntent = "com.example.app_flutter.MEDIA_PLAYBACK_ACTION"
         private const val extraSourceDeviceId = "sourceDeviceId"
         private const val extraPlaybackId = "playbackId"
