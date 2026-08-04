@@ -957,8 +957,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   void _openIncomingPairingRequest(Map<String, dynamic> payload) {
-    final navigator = _navigatorKey.currentState;
-    if (navigator == null) {
+    final navContext = _navigatorKey.currentContext;
+    if (navContext == null) {
       return;
     }
 
@@ -971,20 +971,19 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     _activePairingDeviceId = deviceId;
-    navigator
-        .push(
-      MaterialPageRoute<void>(
-        builder: (_) => PairingScreen(
-          initialDeviceId: deviceId,
-          initialDisplayName: payload['displayName']?.toString(),
-          initialPeerFingerprint: payload['fingerprint']?.toString(),
-          initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
-          initialCanApproveLocally: true,
-          initialStatus: 'Incoming pairing request',
-        ),
+    showDialog<void>(
+      context: navContext,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.4),
+      builder: (_) => PairingScreen(
+        initialDeviceId: deviceId,
+        initialDisplayName: payload['displayName']?.toString(),
+        initialPeerFingerprint: payload['fingerprint']?.toString(),
+        initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
+        initialCanApproveLocally: true,
+        initialStatus: 'Incoming pairing request',
       ),
-    )
-        .whenComplete(() {
+    ).whenComplete(() {
       if (mounted && _activePairingDeviceId == deviceId) {
         _activePairingDeviceId = null;
       }

@@ -510,10 +510,17 @@ class _PairingScreenState extends State<PairingScreen> {
       bool approveEnabled,
       bool isMobile,
       String deviceName) {
+    final route = ModalRoute.of(context);
+    final isDialogOrEmbedded = route is PopupRoute || widget.onClose != null;
+
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: [
+          if (!isDialogOrEmbedded)
+            Positioned.fill(
+              child: Container(color: theme.colorScheme.surface),
+            ),
           Center(
             child: Container(
               width: 512,
@@ -813,10 +820,17 @@ class _PairingScreenState extends State<PairingScreen> {
     final title = 'Verify Connection';
     final subtitle = 'Pairing request sent to ';
 
+    final route = ModalRoute.of(context);
+    final isDialogOrEmbedded = route is PopupRoute || widget.onClose != null;
+
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: [
+          if (!isDialogOrEmbedded)
+            Positioned.fill(
+              child: Container(color: theme.colorScheme.surface),
+            ),
           Center(
             child: Container(
               width: double.infinity,

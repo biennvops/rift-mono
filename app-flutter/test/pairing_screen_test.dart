@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:app_flutter/screens/pairing_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'test_utils/fake_transport.dart';
 
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
@@ -109,6 +110,9 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 }
 
 void main() {
+  setUp(() {
+    MacOSNotifications.debugIsMacOSOverride = false;
+  });
   testWidgets('PairingScreen shows pairing data for selected peer',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -438,7 +442,7 @@ void main() {
       'deviceId': 'rift-peer',
       'newState': 'trusted',
     });
-    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 1));
 
     expect(find.text('Open'), findsOneWidget);
     expect(find.text('Pairing complete'), findsNothing);
