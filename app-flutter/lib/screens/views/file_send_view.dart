@@ -627,7 +627,8 @@ class _FileSendViewState extends State<FileSendView> {
   Future<void> _chooseDeviceForStagedFile(SendQueueEntry file) async {
     final messenger = ScaffoldMessenger.of(context);
     final peers = _fileCapablePeers;
-    final targetDeviceId = peers.isNotEmpty ? peers.first['deviceId']?.toString() : null;
+    final targetDeviceId =
+        peers.isNotEmpty ? peers.first['deviceId']?.toString() : null;
     try {
       if (targetDeviceId != null) {
         await _sendQueue.assignTarget(file, targetDeviceId: targetDeviceId);
@@ -772,7 +773,7 @@ class _FileSendViewState extends State<FileSendView> {
                 : <String>{};
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
         if (_activeOutgoingTransfers.isNotEmpty) ...[
           _buildOutgoingTransferBanner(
@@ -1248,7 +1249,8 @@ class _FileSendViewState extends State<FileSendView> {
           Wrap(
             spacing: 8,
             children: [
-              if (file.targetDeviceId == null || file.targetDeviceId!.isEmpty) ...[
+              if (file.targetDeviceId == null ||
+                  file.targetDeviceId!.isEmpty) ...[
                 OutlinedButton(
                   onPressed: () => _chooseDeviceForStagedFile(file),
                   style: OutlinedButton.styleFrom(

@@ -97,7 +97,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   void _bindTransferEvents() {
     final client = context.read<JsonRpcRiftClient>();
     _progressSub = client.onFileProgress.listen((_) => _loadActiveTransfers());
-    _completedSub = client.onFileCompleted.listen((_) => _loadActiveTransfers());
+    _completedSub =
+        client.onFileCompleted.listen((_) => _loadActiveTransfers());
     _failedSub = client.onFileFailed.listen((_) => _loadActiveTransfers());
   }
 
@@ -171,7 +172,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 16, 12, 10),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
               child: Text(
                 title,
                 style: theme.textTheme.headlineMedium?.copyWith(
@@ -199,7 +200,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   Widget _buildRiftSectionTabBar(ThemeData theme) {
     final sendQueue = context.watch<SendQueueController?>();
     final activeQueueCount = sendQueue?.items
-            .where((e) => e.status == SendQueueStatus.sending || e.status == SendQueueStatus.queued)
+            .where((e) =>
+                e.status == SendQueueStatus.sending ||
+                e.status == SendQueueStatus.queued)
             .length ??
         0;
     final totalBadgeCount =
@@ -215,7 +218,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         child: Row(
           children: [
             _buildRiftSectionChip(

@@ -322,7 +322,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     );
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

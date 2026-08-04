@@ -178,7 +178,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
       onRefresh: _loadActivity,
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -720,8 +720,8 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                       ),
                       if (_exportCompletedTransfers)
                         OutlinedButton.icon(
-                          onPressed: () => _openDestination(destinationPath,
-                              isExport: true),
+                          onPressed: () =>
+                              _openDestination(destinationPath, isExport: true),
                           icon: const Icon(Icons.ios_share, size: 16),
                           label: const Text('Export',
                               style: TextStyle(

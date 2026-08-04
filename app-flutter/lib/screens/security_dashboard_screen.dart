@@ -469,6 +469,9 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final screenPadding =
+        isDesktop ? RiftDesign.padScreenDesktop : RiftDesign.padScreenMobile;
     final isConnected = _error == null;
     final statusColor =
         isConnected ? theme.colorScheme.primary : theme.colorScheme.error;
@@ -480,7 +483,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
         child: _isLoading && _trustedCount == 0 && _recentEvents.isEmpty
             ? const Center(child: CircularProgressIndicator())
             : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
+                padding: screenPadding,
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -533,7 +536,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: RiftDesign.spaceXl),
+                  const SizedBox(height: RiftDesign.spaceMd),
                   _buildStatsGrid(theme),
                   const SizedBox(height: RiftDesign.spaceXl),
                   if (_criticalAlert != null) ...[

@@ -28,8 +28,6 @@ class _OperationsScreenState extends State<OperationsScreen> {
   String? _error;
   StreamSubscription<Map<String, dynamic>>? _transitionSub;
 
-
-
   @override
   void initState() {
     super.initState();
@@ -520,6 +518,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final screenPadding =
+        isDesktop ? RiftDesign.padScreenDesktop : RiftDesign.padScreenMobile;
 
     List<Map<String, dynamic>> filteredOps = _operations;
     if (_activeFilter != 'All Ops') {
@@ -535,20 +536,19 @@ class _OperationsScreenState extends State<OperationsScreen> {
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: RiftDesign.spaceMd, vertical: RiftDesign.spaceLg),
+              padding: screenPadding,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     'Operations',
                     style: theme.textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.bold,
                       color: theme.colorScheme.onSurface,
-                      letterSpacing: -0.01,
+                      letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(height: RiftDesign.spaceLg),
+                  const SizedBox(height: RiftDesign.spaceMd),
                   Container(
                     padding: RiftDesign.padCard,
                     decoration: BoxDecoration(
@@ -579,7 +579,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
                                   isOutlined: true),
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
-                              _buildLegendItem('Pending', theme.colorScheme.tertiary, theme,
+                              _buildLegendItem(
+                                  'Pending', theme.colorScheme.tertiary, theme,
                                   isOutlined: true),
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
@@ -588,8 +589,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
                                   isBold: true),
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
-                              _buildLegendItem(
-                                  'Completed', theme.colorScheme.primary, theme),
+                              _buildLegendItem('Completed',
+                                  theme.colorScheme.primary, theme),
                               _buildLegendItem(
                                   'Failed', theme.colorScheme.error, theme),
                             ],
