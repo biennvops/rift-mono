@@ -18,6 +18,7 @@ import '../src/platform/android_shell.dart';
 import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
+import '../src/ui/theme.dart';
 import '../src/platform/windows_shell.dart';
 import '../widgets/rift_snackbar.dart';
 import '../widgets/premium_dialog.dart';
@@ -714,14 +715,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: RiftDesign.spaceLg),
       ],
     );
   }
 
   Widget _buildGroupLabel(ThemeData theme, String label, {Widget? badge}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8, top: 16),
+      padding: EdgeInsets.only(bottom: RiftDesign.spaceSm, top: RiftDesign.spaceMd),
       child: Row(
         children: [
           // label-md: 14px / 600 / 0.05em / 16px line-height

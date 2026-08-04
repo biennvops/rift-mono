@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../src/ui/theme.dart';
+
 import '../src/ipc/json_rpc_client.dart';
 
 class OperationsScreen extends StatefulWidget {
@@ -533,7 +535,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: RiftDesign.spaceMd, vertical: RiftDesign.spaceLg),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -545,9 +548,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
                       letterSpacing: -0.01,
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: RiftDesign.spaceLg),
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: RiftDesign.padCard,
                     decoration: BoxDecoration(
                       color: Colors.white,
                       border: Border.all(

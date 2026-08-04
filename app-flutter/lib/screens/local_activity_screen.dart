@@ -63,7 +63,7 @@ class _LocalActivityPanelState extends State<LocalActivityPanel> {
       children: [
         if (widget.onClose != null)
           Container(
-            padding: const EdgeInsets.fromLTRB(20, 16, 12, 12),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
             decoration: BoxDecoration(
               border: Border(
                 bottom: BorderSide(
@@ -76,7 +76,7 @@ class _LocalActivityPanelState extends State<LocalActivityPanel> {
               children: [
                 Icon(Icons.notifications_outlined,
                     size: 20, color: theme.colorScheme.primary),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Text(
                   'Rift Activity',
                   style: theme.textTheme.titleSmall
@@ -98,13 +98,13 @@ class _LocalActivityPanelState extends State<LocalActivityPanel> {
           child: events.isEmpty
               ? Center(
                   child: Padding(
-                    padding: const EdgeInsets.all(32),
+                    padding: const EdgeInsets.all(RiftDesign.spaceXl),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(Icons.notifications_none,
                             size: 48, color: theme.colorScheme.outlineVariant),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: RiftDesign.spaceMd),
                         Text(
                           'No local activity',
                           style: theme.textTheme.bodyMedium?.copyWith(

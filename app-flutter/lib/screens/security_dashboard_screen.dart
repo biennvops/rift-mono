@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'event_log_screen.dart';
+import '../src/ui/theme.dart';
 import 'blocked_peers_screen.dart';
 
 class SecurityDashboardScreen extends StatefulWidget {
@@ -262,7 +263,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   }) {
     final theme = Theme.of(context);
     final cardContent = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: RiftDesign.padCard,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -414,7 +415,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -532,13 +533,13 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: RiftDesign.spaceXl),
                   _buildStatsGrid(theme),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: RiftDesign.spaceXl),
                   if (_criticalAlert != null) ...[
                     Container(
-                      margin: const EdgeInsets.only(bottom: 24),
-                      padding: const EdgeInsets.all(16),
+                      margin: const EdgeInsets.only(bottom: RiftDesign.spaceLg),
+                      padding: RiftDesign.padCard,
                       decoration: BoxDecoration(
                         color: theme.colorScheme.errorContainer,
                         borderRadius: BorderRadius.circular(8),
@@ -574,8 +575,8 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                   ],
                   if (_error != null) ...[
                     Container(
-                      margin: const EdgeInsets.only(bottom: 24),
-                      padding: const EdgeInsets.all(16),
+                      margin: const EdgeInsets.only(bottom: RiftDesign.spaceLg),
+                      padding: RiftDesign.padCard,
                       decoration: BoxDecoration(
                         color: theme.colorScheme.errorContainer,
                         borderRadius: BorderRadius.circular(8),
