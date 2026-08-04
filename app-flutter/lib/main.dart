@@ -1337,8 +1337,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _trustChangedSub = client.onTrustChanged.listen((event) {
       final deviceId = event['deviceId']?.toString() ?? 'unknown device';
       final newState = event['newState']?.toString();
-      if (newState == null || newState.isEmpty) return;
-      _maybeNotify('Trust updated', '$deviceId is now $newState.');
+      final reason = event['reason']?.toString() ?? '';
+      if (newState == 'revoked' && reason.contains('remote')) {
+        final displayName = event['displayName']?.toString() ?? deviceId;
+        _maybeNotifyWithRoute(
+          title: 'Trust revoked',
+          body: '$displayName revoked trust with this device.',
+          route: NotificationRoute.devices,
+        );
+      }
     });
 
     _pairingCompleteSub = client.onPairingComplete.listen((event) {
