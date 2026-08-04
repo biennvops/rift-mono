@@ -23,6 +23,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private readonly CancellationTokenSource _shutdownCts = new();
     private ServiceProfile? _profile;
     private string? _advertisedDeviceId;
+    private string? _advertisedMinVersion;
+    private string? _advertisedMaxVersion;
     private bool _isAdvertising;
     private bool _isDiscovering;
     private bool _isMdnsRunning;
@@ -70,14 +72,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             // Implementations SHOULD use an opaque random identifier.
             var instanceName = Guid.NewGuid().ToString("N");
 
-            _profile = new ServiceProfile(instanceName, "_rift._tcp", RiftNetworkDefaults.DefaultPort);
-
-            // spec §4.2: Required TXT records
-            _profile.AddProperty("minV", minVersion);
-            _profile.AddProperty("maxV", maxVersion);
-            _profile.AddProperty("did", deviceId);
-            // Optionally add fp if available; here we just use deviceId for recognition
+            _profile = CreateServiceProfile(instanceName, deviceId, minVersion, maxVersion);
             _advertisedDeviceId = deviceId;
+            _advertisedMinVersion = minVersion;
+            _advertisedMaxVersion = maxVersion;
 
             _serviceDiscovery.Advertise(_profile);
             StartMdnsIfNeeded();
@@ -98,6 +96,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 _serviceDiscovery.Unadvertise(_profile);
                 _profile = null;
                 _advertisedDeviceId = null;
+                _advertisedMinVersion = null;
+                _advertisedMaxVersion = null;
                 _isAdvertising = false;
                 StopFallbackAdvertisingIfIdle();
                 StopMdnsIfIdle();
@@ -585,6 +585,74 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         }
     }
 
+    private ServiceProfile CreateServiceProfile(
+        string instanceName,
+        string deviceId,
+        string minVersion,
+        string maxVersion)
+    {
+        var addresses = NetworkInterface.GetAllNetworkInterfaces()
+            .Where(networkInterface =>
+                networkInterface.OperationalStatus == OperationalStatus.Up &&
+                networkInterface.Supports(NetworkInterfaceComponent.IPv4) &&
+                !IsVirtualInterface(networkInterface.Name))
+            .SelectMany(networkInterface =>
+            {
+                try
+                {
+                    return networkInterface.GetIPProperties().UnicastAddresses;
+                }
+                catch
+                {
+                    return [];
+                }
+            })
+            .Select(unicast => unicast.Address)
+            .Where(address =>
+                address.AddressFamily == AddressFamily.InterNetwork &&
+                !IPAddress.IsLoopback(address) &&
+                !IsApipa(address))
+            .Distinct()
+            .ToArray();
+
+        var profile = new ServiceProfile(
+            instanceName,
+            "_rift._tcp",
+            RiftNetworkDefaults.DefaultPort,
+            addresses.Length == 0 ? null : addresses);
+        profile.AddProperty("minV", minVersion);
+        profile.AddProperty("maxV", maxVersion);
+        profile.AddProperty("did", deviceId);
+        return profile;
+    }
+
+    private static bool IsVirtualInterface(string name)
+    {
+        var normalized = name.ToLowerInvariant();
+        return normalized.StartsWith("lo") ||
+            normalized.StartsWith("utun") ||
+            normalized.StartsWith("tun") ||
+            normalized.StartsWith("tap") ||
+            normalized.StartsWith("awdl") ||
+            normalized.StartsWith("llw") ||
+            normalized.StartsWith("bridge") ||
+            normalized.StartsWith("docker") ||
+            normalized.StartsWith("br-") ||
+            normalized.StartsWith("veth") ||
+            normalized.StartsWith("virbr") ||
+            normalized.StartsWith("tailscale") ||
+            normalized.StartsWith("wireguard") ||
+            normalized.StartsWith("wg") ||
+            normalized.StartsWith("anpi") ||
+            normalized.StartsWith("ap");
+    }
+
+    private static bool IsApipa(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes is [169, 254, _, _];
+    }
+
     private IReadOnlyList<FallbackBroadcastTarget> GetFallbackBroadcastTargets()
     {
         lock (_syncRoot)
@@ -645,9 +713,19 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                         _fallbackBroadcastTargets = [];
                         _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
 
-                        if (_profile is not null && _isAdvertising)
+                        if (_profile is not null &&
+                            _isAdvertising &&
+                            _advertisedDeviceId is not null &&
+                            _advertisedMinVersion is not null &&
+                            _advertisedMaxVersion is not null)
                         {
+                            var instanceName = _profile.InstanceName.ToString();
                             _serviceDiscovery.Unadvertise(_profile);
+                            _profile = CreateServiceProfile(
+                                instanceName,
+                                _advertisedDeviceId,
+                                _advertisedMinVersion,
+                                _advertisedMaxVersion);
                             _serviceDiscovery.Advertise(_profile);
                         }
 
