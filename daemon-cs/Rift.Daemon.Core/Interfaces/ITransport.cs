@@ -111,7 +111,7 @@ public sealed class PeerSessionEndpoint
     /// </summary>
     public bool IsInitiator { get; }
 
-    public PeerSessionEndpoint(string address, int port, bool isInitiator = true)
+    public PeerSessionEndpoint(string address, int port, bool isInitiator)
     {
         Address = address ?? throw new ArgumentNullException(nameof(address));
         Port = port;

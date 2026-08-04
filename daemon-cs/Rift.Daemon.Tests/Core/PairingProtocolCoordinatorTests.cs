@@ -1029,7 +1029,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             maxVersion: "0.1-draft",
             txtRecord: new Dictionary<string, string> { ["did"] = "rift-peer-trusted-online" },
             remoteEndPoint: null));
-        _transport.SessionEndpoints["rift-peer-trusted-online"] = new PeerSessionEndpoint("192.168.1.125", 48084);
+        _transport.SessionEndpoints["rift-peer-trusted-online"] = new PeerSessionEndpoint("192.168.1.125", 48084, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             "rift-peer-trusted-online",
@@ -1094,7 +1094,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             State = TrustState.Trusted,
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
-        _transport.SessionEndpoints[resolvedDeviceId] = new PeerSessionEndpoint("192.168.1.125", 48084);
+        _transport.SessionEndpoints[resolvedDeviceId] = new PeerSessionEndpoint("192.168.1.125", 48084, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             resolvedDeviceId,
@@ -1120,7 +1120,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             State = TrustState.Trusted,
             LastStateTransitionAt = DateTimeOffset.UtcNow
         });
-        _transport.SessionEndpoints["rift-peer-unprotected-online"] = new PeerSessionEndpoint("10.53.38.174", 9140);
+        _transport.SessionEndpoints["rift-peer-unprotected-online"] = new PeerSessionEndpoint("10.53.38.174", 9140, isInitiator: true);
 
         _transport.RaiseSessionStateChanged(
             "rift-peer-unprotected-online",
