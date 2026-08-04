@@ -530,4 +530,41 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+      'PairingScreen close button invokes onClose callback on start failure',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    client.startPairingError = Exception(
+      'JSON-RPC error -32000: Failed to establish a secure session with peer',
+    );
+
+    bool onCloseCalled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+            onClose: () {
+              onCloseCalled = true;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Unable to start pairing'), findsOneWidget);
+    final closeBtn = find.widgetWithText(FilledButton, 'Close');
+    expect(closeBtn, findsOneWidget);
+
+    await tester.tap(closeBtn);
+    await tester.pumpAndSettle();
+
+    expect(onCloseCalled, isTrue);
+  });
 }

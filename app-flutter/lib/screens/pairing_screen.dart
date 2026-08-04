@@ -61,6 +61,14 @@ class _PairingScreenState extends State<PairingScreen> {
   bool _isClosingAfterCompletion = false;
   Future<void>? _localFingerprintLoad;
 
+  void _closeScreen() {
+    if (widget.onClose != null) {
+      widget.onClose!();
+    } else {
+      Navigator.of(context).maybePop();
+    }
+  }
+
   void _startApproveDelay() {
     setState(() {
       _canApproveDelay = false;
@@ -193,11 +201,7 @@ class _PairingScreenState extends State<PairingScreen> {
         _countdownTimer?.cancel();
         _remainingSeconds = null;
         if (shouldAutoClose && mounted) {
-          if (widget.onClose != null) {
-            widget.onClose!();
-          } else {
-            Navigator.of(context).maybePop();
-          }
+          _closeScreen();
         }
       }
     });
@@ -211,11 +215,7 @@ class _PairingScreenState extends State<PairingScreen> {
       if (!mounted) return;
     }
     if (!mounted) return;
-    if (widget.onClose != null) {
-      widget.onClose!();
-    } else {
-      Navigator.of(context).maybePop();
-    }
+    _closeScreen();
   }
 
   Future<void> _showRecipientPairingSuccessNotice() async {
@@ -405,11 +405,7 @@ class _PairingScreenState extends State<PairingScreen> {
       await client.rejectPairing(deviceId);
       if (!mounted) return;
       if (!_isRecipientFlow) {
-        if (widget.onClose != null) {
-          widget.onClose!();
-        } else {
-          Navigator.of(context).maybePop();
-        }
+        _closeScreen();
         return;
       }
       setState(() {
@@ -1221,7 +1217,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           FilledButton(
-                            onPressed: () => Navigator.of(context).pop(),
+                            onPressed: _closeScreen,
                             style: FilledButton.styleFrom(
                               backgroundColor:
                                   theme.colorScheme.primaryContainer,
