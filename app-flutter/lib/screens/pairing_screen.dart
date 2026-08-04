@@ -749,9 +749,11 @@ class _PairingScreenState extends State<PairingScreen> {
                                     borderRadius: BorderRadius.circular(4)),
                               ),
                             )
-                          : Padding(
+                          : Container(
+                              height: 40,
+                              alignment: Alignment.center,
                               padding:
-                                  const EdgeInsets.symmetric(horizontal: 16.0),
+                                  const EdgeInsets.symmetric(horizontal: 12),
                               child: Text('Waiting for peer...',
                                   style: TextStyle(
                                     fontSize: 14,
@@ -772,6 +774,7 @@ class _PairingScreenState extends State<PairingScreen> {
                       }
                       return Wrap(
                         alignment: WrapAlignment.end,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         spacing: 16,
                         runSpacing: 12,
                         children: [
@@ -1088,9 +1091,11 @@ class _PairingScreenState extends State<PairingScreen> {
                                       borderRadius: BorderRadius.circular(4)),
                                 ),
                               )
-                            : Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 16.0, horizontal: 16.0),
+                            : Container(
+                                height: 40,
+                                alignment: Alignment.center,
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 12),
                                 child: Text('Waiting for peer...',
                                     style: TextStyle(
                                       fontSize: 14,
@@ -1111,6 +1116,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         }
                         return Wrap(
                           alignment: WrapAlignment.end,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           spacing: 16,
                           runSpacing: 12,
                           children: [
