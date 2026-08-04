@@ -162,4 +162,35 @@ void main() {
     expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Device unavailable'), findsNothing);
   });
+
+  testWidgets(
+      'DeviceDetailScreen renders self device details and copy actions when isSelf is true',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: DeviceDetailScreen(
+            peer: <String, dynamic>{
+              'deviceId': 'rift-local-device-12345678',
+              'displayName': 'My Laptop',
+              'platform': 'macos',
+              'fingerprint': '1234-5678-90AB-CDEF',
+            },
+            isOnline: true,
+            isSelf: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('My Laptop'), findsWidgets);
+    expect(find.text('This Device'), findsWidgets);
+    expect(find.text('Copy Device ID'), findsOneWidget);
+    expect(find.text('Copy Fingerprint'), findsOneWidget);
+    expect(find.text('Revoke Trust'), findsNothing);
+  });
 }

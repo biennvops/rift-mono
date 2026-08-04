@@ -13,6 +13,7 @@ const _kSuccessBgColor = Color(0x14047857);
 class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
+  final bool isSelf;
   final VoidCallback? onClose;
 
   const DeviceDetailScreen({
@@ -20,6 +21,7 @@ class DeviceDetailScreen extends StatefulWidget {
     super.key,
     required this.peer,
     required this.isOnline,
+    this.isSelf = false,
   });
 
   @override
@@ -42,7 +44,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     peer = widget.peer;
     isOnline = widget.isOnline;
     _deviceId = widget.peer['deviceId']?.toString() ?? '';
-    _subscribeToPeerUpdates();
+    if (!widget.isSelf) {
+      _subscribeToPeerUpdates();
+    }
   }
 
   @override
@@ -191,6 +195,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       default:
         return Icons.devices;
     }
+  }
+
+  void _copyToClipboard(String text, String message) {
+    Clipboard.setData(ClipboardData(text: text));
+    RiftSnackbar.show(
+      context: context,
+      message: message,
+      type: RiftSnackbarType.success,
+    );
   }
 
   Future<bool> _showForgetBottomSheet(
@@ -451,7 +464,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                       child: Container(color: _kSuccessColor),
                     ),
                     Padding(
-                      padding: const EdgeInsets.all(24),
+                      padding: EdgeInsets.all(isMobile ? 16 : 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -464,7 +477,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      'Trust Status',
+                                      widget.isSelf
+                                          ? 'Device details'
+                                          : 'Trust Status',
                                       style: TextStyle(
                                         fontSize: 24,
                                         fontWeight: FontWeight.w600,
@@ -475,7 +490,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      'This device is currently authorized to sync data.',
+                                      widget.isSelf
+                                          ? 'This local device is active and running the Rift client & daemon.'
+                                          : 'This device is currently authorized to sync data.',
                                       style: TextStyle(
                                         fontSize: 16,
                                         fontWeight: FontWeight.w400,
@@ -518,7 +535,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                     const SizedBox(width: 16),
                                     Expanded(
                                       child: Text(
-                                        'Trusted Peer',
+                                        widget.isSelf
+                                            ? 'This Device'
+                                            : 'Trusted Peer',
                                         textAlign: TextAlign.right,
                                         style: TextStyle(
                                           fontSize: 16,
@@ -542,7 +561,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                       MainAxisAlignment.spaceBetween,
                                   children: [
                                     Text(
-                                      'Trust Established',
+                                      widget.isSelf
+                                          ? 'Local Device'
+                                          : 'Trust Established',
                                       style: TextStyle(
                                         fontSize: 14,
                                         fontWeight: FontWeight.w600,
@@ -553,7 +574,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                     const SizedBox(width: 16),
                                     Expanded(
                                       child: Text(
-                                        pairedAt,
+                                        widget.isSelf ? 'Self' : pairedAt,
                                         textAlign: TextAlign.right,
                                         style: TextStyle(
                                           fontSize: 16,
@@ -583,7 +604,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: theme.colorScheme.outlineVariant),
               ),
-              padding: const EdgeInsets.all(24),
+              padding: EdgeInsets.all(isMobile ? 16 : 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -618,7 +639,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: theme.colorScheme.outlineVariant),
               ),
-              padding: const EdgeInsets.all(24),
+              padding: EdgeInsets.all(isMobile ? 16 : 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -660,7 +681,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             borderRadius: BorderRadius.circular(8),
             border: Border.all(color: theme.colorScheme.outlineVariant),
           ),
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(isMobile ? 16 : 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -713,21 +734,57 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 child:
                     Divider(height: 1, color: theme.colorScheme.outlineVariant),
               ),
-              OutlinedButton.icon(
-                onPressed: _forgetPeer,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: theme.colorScheme.error,
-                  side: BorderSide(color: theme.colorScheme.error),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  minimumSize: const Size(double.infinity, 48),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4)),
+              if (widget.isSelf) ...[
+                OutlinedButton.icon(
+                  onPressed: () => _copyToClipboard(
+                      deviceId, 'Device ID copied to clipboard'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primaryContainer,
+                    side: BorderSide(color: theme.colorScheme.primaryContainer),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    minimumSize: const Size(double.infinity, 44),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4)),
+                  ),
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: const Text('Copy Device ID',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
-                icon: const Icon(Icons.delete_outline, size: 20),
-                label: const Text('Revoke Trust',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-              ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () => _copyToClipboard(
+                      _formatFingerprint(fingerprint),
+                      'Fingerprint copied to clipboard'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.primaryContainer,
+                    side: BorderSide(color: theme.colorScheme.primaryContainer),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    minimumSize: const Size(double.infinity, 44),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4)),
+                  ),
+                  icon: const Icon(Icons.copy, size: 18),
+                  label: const Text('Copy Fingerprint',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
+              ] else
+                OutlinedButton.icon(
+                  onPressed: _forgetPeer,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: theme.colorScheme.error,
+                    side: BorderSide(color: theme.colorScheme.error),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    minimumSize: const Size(double.infinity, 48),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4)),
+                  ),
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  label: const Text('Revoke Trust',
+                      style:
+                          TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                ),
             ],
           ),
         );
@@ -830,7 +887,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                               ),
                                             ),
                                             Text(
-                                              isOnline ? 'Online' : 'Offline',
+                                              widget.isSelf
+                                                  ? 'This Device'
+                                                  : (isOnline
+                                                      ? 'Online'
+                                                      : 'Offline'),
                                               style: TextStyle(
                                                 fontSize: 12,
                                                 fontWeight: FontWeight.w500,
@@ -845,7 +906,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                                         ),
                                       ),
                                       Text(
-                                        'Last seen $lastSeenAt',
+                                        widget.isSelf
+                                            ? 'Local host device'
+                                            : 'Last seen $lastSeenAt',
                                         style: TextStyle(
                                           fontSize: 14,
                                           fontWeight: FontWeight.w400,
@@ -978,6 +1041,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
               const SizedBox(width: 8),
@@ -992,7 +1056,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               ),
             ],
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           Expanded(
             child: isCode
                 ? Row(
@@ -1011,6 +1075,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           child: Text(
                             value,
                             overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
                             style: TextStyle(
                               fontFamily: 'JetBrains Mono',
                               fontSize: 14,
@@ -1021,7 +1086,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 4),
                       InkWell(
                         onTap: () async {
                           await Clipboard.setData(ClipboardData(text: value));
@@ -1043,6 +1108,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   )
                 : Text(value,
                     textAlign: TextAlign.right,
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w400,

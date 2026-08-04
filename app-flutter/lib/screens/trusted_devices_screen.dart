@@ -648,90 +648,33 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Future<void> _showLocalDeviceDetails(
     Map<String, dynamic> deviceInfo,
   ) async {
-    final theme = Theme.of(context);
-    final displayName = deviceInfo['displayName']?.toString();
-    final deviceId = deviceInfo['deviceId']?.toString();
-    final fingerprint = deviceInfo['fingerprint']?.toString();
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        title: Text(
-          'Device details',
-          style: theme.textTheme.titleLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildIdentityDetail(
-                theme,
-                label: 'Device Name',
-                value: displayName?.isNotEmpty == true
-                    ? displayName!
-                    : 'Unavailable',
-              ),
-              const SizedBox(height: 12),
-              _buildIdentityDetail(
-                theme,
-                label: 'Device ID',
-                value: deviceId?.isNotEmpty == true ? deviceId! : 'Unavailable',
-                monospace: true,
-              ),
-              const SizedBox(height: 12),
-              _buildIdentityDetail(
-                theme,
-                label: 'Fingerprint',
-                value: fingerprint?.isNotEmpty == true
-                    ? fingerprint!
-                    : 'Unavailable',
-                monospace: true,
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final detailScreen = DeviceDetailScreen(
+      peer: deviceInfo,
+      isOnline: true,
+      isSelf: true,
+      onClose: isDesktop
+          ? () {
+              setState(() {
+                _selectedPeerWidget = null;
+              });
+              _loadData();
+            }
+          : null,
     );
-  }
 
-  Widget _buildIdentityDetail(
-    ThemeData theme, {
-    required String label,
-    required String value,
-    bool monospace = false,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: theme.textTheme.labelMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w600,
-          ),
+    if (isDesktop) {
+      setState(() {
+        _selectedPeerWidget = detailScreen;
+      });
+    } else {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => detailScreen,
         ),
-        const SizedBox(height: 3),
-        SelectableText(
-          value,
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurface,
-            fontFamily: monospace ? 'monospace' : null,
-          ),
-        ),
-      ],
-    );
+      );
+      await _loadData();
+    }
   }
 
   Widget _buildPeerCardHtml(
