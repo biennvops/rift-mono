@@ -346,7 +346,7 @@ void main() {
     expect(find.text('Send File'), findsOneWidget);
     expect(find.text('Incoming Offers'), findsOneWidget);
     expect(find.text('Transfer Activity'), findsOneWidget);
-    expect(find.text('Notifications'), findsNothing);
+    expect(find.text('Notifications'), findsOneWidget);
   });
 
   testWidgets('default Activity remains compact on a phone viewport',
@@ -784,7 +784,7 @@ void main() {
 
     expect(find.text('Clipboard History'), findsNothing);
     expect(find.text('Pixel 9 Pro'), findsOneWidget);
-    expect(find.textContaining('Text'), findsWidgets);
+    expect(find.textContaining('TEXT'), findsWidgets);
   });
 
   testWidgets('send flow uses daemon queue actions when supported',

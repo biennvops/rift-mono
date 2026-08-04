@@ -1,21 +1,43 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../src/clipboard/desktop_clipboard_manager.dart';
 import '../../src/file_transfer/file_storage.dart';
 import '../../src/ipc/json_rpc_client.dart';
+import '../../src/platform/ios_clipboard.dart';
 import '../../widgets/rift_snackbar.dart';
 
 class ClipboardHistoryView extends StatefulWidget {
-  const ClipboardHistoryView({super.key});
+  final bool? iosClipboardActionsOverride;
+  final Future<IOSClipboardContent?> Function()? readClipboardContentOverride;
+  final Future<String?> Function()? readClipboardTextOverride;
+  final Future<void> Function(IOSClipboardContent content)?
+      writeClipboardContentOverride;
+  final Future<void> Function(String text)? writeClipboardTextOverride;
+
+  const ClipboardHistoryView({
+    super.key,
+    this.iosClipboardActionsOverride,
+    this.readClipboardContentOverride,
+    this.readClipboardTextOverride,
+    this.writeClipboardContentOverride,
+    this.writeClipboardTextOverride,
+  });
 
   @override
   State<ClipboardHistoryView> createState() => _ClipboardHistoryViewState();
 }
 
 class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
+  bool get _iosClipboardActions =>
+      widget.iosClipboardActionsOverride ??
+      (Platform.isIOS || Platform.isAndroid);
+  String? _localDeviceId;
   final Set<String> _filteredSourceDeviceIds = {};
   final Set<String> _filteredTypes = {};
   final List<Map<String, dynamic>> _daemonOffers = <Map<String, dynamic>>[];
@@ -27,7 +49,6 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   StreamSubscription<Map<String, dynamic>>? _trustSubscription;
   StreamSubscription<bool>? _connectionSubscription;
   Timer? _expiryTicker;
-  String? _localDeviceId;
 
   @override
   void initState() {
@@ -352,6 +373,12 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
               runSpacing: 12,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                if (_iosClipboardActions)
+                  FilledButton.icon(
+                    onPressed: _sendClipboard,
+                    icon: const Icon(Icons.send, size: 16),
+                    label: const Text('Send Clipboard'),
+                  ),
                 _buildDeviceFilterMenu(theme, totalSources, sourceEntries),
                 _buildTypeFilterMenu(theme, totalTypes, typeEntries),
               ],
@@ -867,19 +894,21 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
 
   Widget _buildActionButtons(
       ThemeData theme, bool isText, Map<String, dynamic> offer) {
+    final copyLabel = isText ? 'Copy' : 'Copy Image';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
+        FilledButton.icon(
           onPressed: () => _copyOffer(offer),
-          icon: const Icon(Icons.copy_outlined, size: 18),
-          tooltip: 'Copy',
-          style: IconButton.styleFrom(
-            foregroundColor: theme.colorScheme.primary,
-            minimumSize: const Size(0, 32),
+          icon: const Icon(Icons.copy_outlined, size: 16),
+          label: Text(copyLabel),
+          style: FilledButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            visualDensity: VisualDensity.compact,
           ),
         ),
-        if (!isText)
+        if (!isText) ...[
+          const SizedBox(width: 8),
           IconButton(
             onPressed: () => _saveOffer(offer),
             icon: const Icon(Icons.download_outlined, size: 18),
@@ -889,46 +918,163 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
               minimumSize: const Size(0, 32),
             ),
           ),
+        ],
       ],
     );
   }
 
+  Future<void> _sendClipboard() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      IOSClipboardContent? content;
+      if (widget.readClipboardContentOverride != null) {
+        content = await widget.readClipboardContentOverride!();
+      } else if (widget.readClipboardTextOverride != null) {
+        final text = await widget.readClipboardTextOverride!();
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      } else if (Platform.isIOS) {
+        content = await IOSClipboard.readContent();
+      } else if (Platform.isAndroid) {
+        content = await _readAndroidClipboardContent();
+      } else {
+        final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+        if (text != null) {
+          content = IOSClipboardContent(
+            contentType: 'text/plain',
+            bytes: Uint8List.fromList(utf8.encode(text)),
+          );
+        }
+      }
+
+      if (content == null || content.bytes.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('The clipboard has no text or image to send.'),
+          ),
+        );
+        return;
+      }
+
+      final sha256Hash = sha256.convert(content.bytes).toString();
+      await client.notifyClipboardChange(
+        contentType: content.contentType,
+        byteSize: content.bytes.length,
+        sha256: sha256Hash,
+        contentBase64: base64Encode(content.bytes),
+      );
+      final isImage = content.contentType.startsWith('image/');
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              isImage
+                  ? 'Clipboard image sent to trusted devices.'
+                  : 'Clipboard sent to trusted devices.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Error publishing clipboard: $e')),
+        );
+      }
+    }
+  }
+
+  Future<IOSClipboardContent?> _readAndroidClipboardContent() async {
+    final raw = await const MethodChannel('rift/android/clipboard')
+        .invokeMethod<Object>('getClipboardContent');
+    if (raw is! Map) return null;
+    final contentType = raw['contentType'] as String?;
+    final bytes = raw['bytes'];
+    if (contentType == null || bytes is! Uint8List) return null;
+    return IOSClipboardContent(contentType: contentType, bytes: bytes);
+  }
+
   Future<void> _copyOffer(Map<String, dynamic> offer) async {
     final manager = context.read<DesktopClipboardManager?>();
-    if (manager == null) {
-      RiftSnackbar.show(
-        context: context,
-        message: 'Clipboard manager not available.',
-        type: RiftSnackbarType.error,
-      );
-      return;
-    }
-
     final offerId = offer['offerId']?.toString();
     if (offerId == null) return;
 
-    RiftSnackbar.show(
-      context: context,
-      message: 'Fetching clipboard content...',
-      type: RiftSnackbarType.info,
-      duration: const Duration(seconds: 2),
-    );
-
-    final success = await manager.fetchAndApplyOffer(offerId);
-    if (!mounted) return;
-
-    if (success) {
+    if (manager != null) {
       RiftSnackbar.show(
         context: context,
-        message: 'Copied to clipboard!',
-        type: RiftSnackbarType.success,
+        message: 'Fetching clipboard content...',
+        type: RiftSnackbarType.info,
+        duration: const Duration(seconds: 2),
       );
-    } else {
-      RiftSnackbar.show(
-        context: context,
-        message: 'Failed to copy clipboard content or offer expired.',
-        type: RiftSnackbarType.error,
-      );
+      final success = await manager.fetchAndApplyOffer(offerId);
+      if (!mounted) return;
+      if (success) {
+        RiftSnackbar.show(
+          context: context,
+          message: 'Copied to clipboard!',
+          type: RiftSnackbarType.success,
+        );
+      } else {
+        RiftSnackbar.show(
+          context: context,
+          message: 'Failed to copy clipboard content or offer expired.',
+          type: RiftSnackbarType.error,
+        );
+      }
+      return;
+    }
+
+    final client = context.read<JsonRpcRiftClient>();
+    try {
+      final content = await client.fetchClipboardContent(offerId);
+      final rawType = content['contentType']?.toString() ?? 'text/plain';
+      Uint8List? bytes = content['bytes'] as Uint8List?;
+      if (bytes == null && content['contentBase64'] != null) {
+        bytes = base64Decode(content['contentBase64'].toString());
+      }
+
+      if (bytes != null) {
+        if (widget.writeClipboardContentOverride != null) {
+          await widget.writeClipboardContentOverride!(
+            IOSClipboardContent(contentType: rawType, bytes: bytes),
+          );
+        }
+        if (widget.writeClipboardTextOverride != null) {
+          final text = utf8.decode(bytes);
+          await widget.writeClipboardTextOverride!(text);
+        }
+        if (widget.writeClipboardContentOverride == null &&
+            widget.writeClipboardTextOverride == null) {
+          if (Platform.isIOS) {
+            await IOSClipboard.writeContent(
+              IOSClipboardContent(contentType: rawType, bytes: bytes),
+            );
+          } else {
+            final text = utf8.decode(bytes);
+            await Clipboard.setData(ClipboardData(text: text));
+          }
+        }
+        if (mounted) {
+          RiftSnackbar.show(
+            context: context,
+            message: 'Copied to clipboard.',
+            type: RiftSnackbarType.success,
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        RiftSnackbar.show(
+          context: context,
+          message: 'Failed to copy clipboard content: $e',
+          type: RiftSnackbarType.error,
+        );
+      }
     }
   }
 

@@ -347,6 +347,9 @@ void main() {
         action: any(named: 'action'),
       ),
     ).thenAnswer((_) async => <String, Object?>{'success': true});
+    when(() => mockClient.onFileProgress).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileCompleted).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileFailed).thenAnswer((_) => const Stream.empty());
     when(() => mockClient.connect()).thenAnswer((_) async {});
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -413,8 +416,7 @@ void main() {
     expect(find.text('Activity'), findsOneWidget);
     expect(find.text('Security'), findsOneWidget);
     expect(find.text('Operations'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsWidgets);
-    expect(find.text('Rift'), findsOneWidget);
+    expect(find.text('Settings'), findsWidgets);
   });
 
   testWidgets('tray right-click opens the configured context menu',

@@ -314,7 +314,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
           _buildStatCard(
             label: 'TRUSTED',
             count: _trustedCount,
-            labelColor: const Color(0xFF10B981),
+            labelColor: theme.colorScheme.primary,
           ),
           _buildStatCard(
             label: 'BLOCKED',
@@ -329,12 +329,12 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
           _buildStatCard(
             label: 'PENDING',
             count: _pendingCount,
-            labelColor: const Color(0xFFF59E0B),
+            labelColor: theme.colorScheme.tertiary,
           ),
           _buildStatCard(
             label: 'DISCOVERED',
             count: _discoveredCount,
-            labelColor: theme.colorScheme.primary,
+            labelColor: theme.colorScheme.secondary,
           ),
         ];
 
@@ -465,20 +465,12 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     );
   }
 
-  bool _showEventLog = false;
-
   @override
   Widget build(BuildContext context) {
-    if (_showEventLog) {
-      return EventLogScreen(onBack: () {
-        setState(() => _showEventLog = false);
-      });
-    }
-
     final theme = Theme.of(context);
     final isConnected = _error == null;
     final statusColor =
-        isConnected ? const Color(0xFF10B981) : theme.colorScheme.error;
+        isConnected ? theme.colorScheme.primary : theme.colorScheme.error;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -695,7 +687,13 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
                     width: double.infinity,
                     child: OutlinedButton(
                       onPressed: () {
-                        setState(() => _showEventLog = true);
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (navContext) => EventLogScreen(
+                              onBack: () => Navigator.of(navContext).pop(),
+                            ),
+                          ),
+                        );
                       },
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),

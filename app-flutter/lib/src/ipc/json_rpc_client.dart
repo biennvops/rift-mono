@@ -127,6 +127,10 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileTransferFailed =>
       _fileTransferFailedController.stream;
 
+  Stream<Map<String, dynamic>> get onFileProgress => onFileTransferProgress;
+  Stream<Map<String, dynamic>> get onFileCompleted => onFileTransferCompleted;
+  Stream<Map<String, dynamic>> get onFileFailed => onFileTransferFailed;
+
   late final _operationTransitionController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onOperationTransition =>

@@ -1,15 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../../screens/security_dashboard_screen.dart';
 import '../../screens/trusted_devices_screen.dart';
 import '../../screens/clipboard_transfer_screen.dart';
 import '../../screens/operations_screen.dart';
 import '../../screens/settings_screen.dart';
-import '../../screens/local_activity_screen.dart';
-import '../../screens/pair_device_screen.dart';
 import '../platform/notification_route.dart';
-import '../ui/local_events_notifier.dart';
 import '../ui/theme.dart';
 
 class AppShell extends StatefulWidget {
@@ -60,31 +56,7 @@ class AppShellState extends State<AppShell> {
   }
 
   void showNotificationsRoute() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        final theme = Theme.of(sheetContext);
-        return SafeArea(
-          child: FractionallySizedBox(
-            heightFactor: 0.72,
-            child: Container(
-              decoration: BoxDecoration(
-                color: theme.colorScheme.surface,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(RiftDesign.radiusXl),
-                ),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: LocalActivityPanel(
-                onClose: () => Navigator.of(sheetContext).pop(),
-              ),
-            ),
-          ),
-        );
-      },
-    );
+    showHistoryRoute(NotificationRoute.historyNotifications);
   }
 
   void _handleActivityBoundarySwipe(int direction) {
@@ -92,8 +64,8 @@ class AppShellState extends State<AppShell> {
   }
 
   void _moveToMainSection(int direction) {
-    if (_currentIndex < 0 || _currentIndex > 3) return;
-    final nextIndex = (_currentIndex + direction).clamp(0, 3);
+    if (_currentIndex < 0 || _currentIndex > 4) return;
+    final nextIndex = (_currentIndex + direction).clamp(0, 4);
     if (nextIndex == _currentIndex) return;
     setState(() => _currentIndex = nextIndex);
   }
@@ -184,157 +156,7 @@ class AppShellState extends State<AppShell> {
     );
   }
 
-  Widget _buildDesktopTopBar(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border(
-          bottom: BorderSide(
-            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3),
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          if (_isSidebarCollapsed) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.asset('assets/images/rift_nav_logo.png',
-                  width: 44, height: 44, fit: BoxFit.contain),
-            ),
-            const SizedBox(width: 12),
-            Text(
-              'Rift',
-              style: theme.textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-          ],
-          const Spacer(),
-          if (_isSidebarCollapsed)
-            IconButton(
-              icon: const Icon(Icons.add_circle_outline),
-              tooltip: 'Add Device',
-              onPressed: () => _showAddDeviceDialog(context),
-              style: IconButton.styleFrom(
-                foregroundColor: theme.colorScheme.onSurfaceVariant,
-              ),
-            )
-          else
-            Tooltip(
-              message: 'Add Device',
-              child: FilledButton.icon(
-                onPressed: () => _showAddDeviceDialog(context),
-                icon: const Icon(Icons.add_circle_outline, size: 18),
-                label: const Text('Add Device'),
-                style: FilledButton.styleFrom(
-                  foregroundColor: theme.colorScheme.onPrimary,
-                  backgroundColor: theme.colorScheme.primary,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(RiftDesign.radius),
-                  ),
-                ),
-              ),
-            ),
-          SizedBox(width: _isSidebarCollapsed ? 6 : 14),
-          _TopBarPopoverButton(
-            icon: Icons.notifications_outlined,
-            activeIcon: Icons.notifications,
-            tooltip: 'Rift Activity',
-            offset: const Offset(-340, 48),
-            badge:
-                context.select<LocalEventsNotifier, int>((n) => n.unreadCount),
-            popoverBuilder: (close) =>
-                _buildNotificationsPopover(context, close),
-          ),
-          SizedBox(width: _isSidebarCollapsed ? 6 : 14),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => _showSettingsDialog(context),
-            style: IconButton.styleFrom(
-              foregroundColor: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  void _showAddDeviceDialog(BuildContext context) {
-    if (MediaQuery.of(context).size.width < 1024) {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => const PairDeviceScreen(),
-      );
-      return;
-    }
-    showDialog(
-      context: context,
-      builder: (_) => const Dialog(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        child: PairDeviceScreen(),
-      ),
-    );
-  }
-
-  void _showSettingsDialog(BuildContext context) {
-    if (MediaQuery.of(context).size.width < 1024) {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        backgroundColor: Colors.transparent,
-        builder: (sheetContext) => SettingsScreen(
-          onClose: () => Navigator.of(sheetContext).pop(),
-        ),
-      );
-      return;
-    }
-    showDialog(
-      context: context,
-      builder: (dialogContext) => _ResizableDialogContainer(
-        child: SettingsScreen(
-          onClose: () => Navigator.of(dialogContext).pop(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNotificationsPopover(BuildContext context, VoidCallback close) {
-    final theme = Theme.of(context);
-    return Container(
-      width: 380,
-      constraints: const BoxConstraints(maxHeight: 520),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: LocalActivityPanel(onClose: close),
-      ),
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -422,6 +244,8 @@ class AppShellState extends State<AppShell> {
                             context, 2, Icons.route, 'Operations'),
                         _buildSidebarItem(
                             context, 3, Icons.security, 'Security'),
+                        _buildSidebarItem(
+                            context, 4, Icons.settings, 'Settings'),
                       ],
                     ),
                   ),
@@ -461,26 +285,19 @@ class AppShellState extends State<AppShell> {
 
             // Main Content
             Expanded(
-              child: Column(
-                children: [
-                  _buildDesktopTopBar(context),
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxWidth: RiftDesign.contentMaxWidth,
-                        ),
-                        child: _buildMainSwipeArea(
-                          IndexedStack(
-                            index: _currentIndex,
-                            children: _screens,
-                          ),
-                        ),
-                      ),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: RiftDesign.contentMaxWidth,
+                  ),
+                  child: _buildMainSwipeArea(
+                    IndexedStack(
+                      index: _currentIndex,
+                      children: _screens,
                     ),
                   ),
-                ],
+                ),
               ),
             ),
           ],
@@ -488,64 +305,14 @@ class AppShellState extends State<AppShell> {
       );
     } else {
       // Mobile
-      final mobileNavIndex = _currentIndex <= 3 ? _currentIndex : -1;
+      final mobileNavIndex = _currentIndex <= 4 ? _currentIndex : 0;
       content = Scaffold(
         body: SafeArea(
-          child: Column(
-            children: [
-              // App bar
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface,
-                  border: Border(
-                      bottom: BorderSide(
-                          color: theme.colorScheme.outlineVariant
-                              .withValues(alpha: 0.5))),
-                ),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.asset('assets/images/rift_nav_logo.png',
-                          width: 32, height: 32, fit: BoxFit.contain),
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      'Rift',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.add_circle_outline),
-                      tooltip: 'Add Device',
-                      color: theme.colorScheme.onSurfaceVariant,
-                      onPressed: () => _showAddDeviceDialog(context),
-                    ),
-                    _MobileBellButton(onTap: showNotificationsRoute),
-                    IconButton(
-                      icon: const Icon(Icons.settings_outlined),
-                      tooltip: 'Settings',
-                      color: theme.colorScheme.onSurfaceVariant,
-                      onPressed: () => _showSettingsDialog(context),
-                    ),
-                  ],
-                ),
-              ),
-              // Content
-              Expanded(
-                child: _buildMainSwipeArea(
-                  IndexedStack(
-                    index: _currentIndex,
-                    children: _screens,
-                  ),
-                ),
-              ),
-            ],
+          child: _buildMainSwipeArea(
+            IndexedStack(
+              index: _currentIndex,
+              children: _screens,
+            ),
           ),
         ),
         bottomNavigationBar: Container(
@@ -606,6 +373,13 @@ class AppShellState extends State<AppShell> {
                   selectedIcon: Icon(Icons.security,
                       size: 22, color: theme.colorScheme.primary),
                   label: 'Security',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.settings_outlined,
+                      size: 22, color: theme.colorScheme.outline),
+                  selectedIcon: Icon(Icons.settings,
+                      size: 22, color: theme.colorScheme.primary),
+                  label: 'Settings',
                 ),
               ],
             ),
@@ -749,184 +523,4 @@ class _ResizableDialogContainerState extends State<_ResizableDialogContainer> {
   }
 }
 
-class _TopBarPopoverButton extends StatefulWidget {
-  final IconData icon;
-  final IconData activeIcon;
-  final String tooltip;
-  final Offset offset;
-  final Widget Function(VoidCallback close) popoverBuilder;
-  final int badge;
 
-  const _TopBarPopoverButton({
-    required this.icon,
-    required this.activeIcon,
-    required this.tooltip,
-    this.offset = const Offset(-340, 48),
-    required this.popoverBuilder,
-    this.badge = 0,
-  });
-
-  @override
-  State<_TopBarPopoverButton> createState() => _TopBarPopoverButtonState();
-}
-
-class _TopBarPopoverButtonState extends State<_TopBarPopoverButton> {
-  final LayerLink _layerLink = LayerLink();
-  OverlayEntry? _overlayEntry;
-  bool _isOpen = false;
-
-  bool get _isActive => _isOpen;
-
-  void _togglePopover() {
-    if (_isOpen) {
-      _closePopover();
-    } else {
-      _openPopover();
-    }
-  }
-
-  void _openPopover() {
-    if (_overlayEntry != null) return;
-    setState(() => _isOpen = true);
-
-    _overlayEntry = OverlayEntry(
-      builder: (context) => Stack(
-        children: [
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: _closePopover,
-              child: const SizedBox.shrink(),
-            ),
-          ),
-          CompositedTransformFollower(
-            link: _layerLink,
-            showWhenUnlinked: false,
-            offset: widget.offset,
-            child: Material(
-              color: Colors.transparent,
-              child: widget.popoverBuilder(_closePopover),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    Overlay.of(context).insert(_overlayEntry!);
-  }
-
-  void _closePopover() {
-    if (!_isOpen) return;
-    _overlayEntry?.remove();
-    _overlayEntry = null;
-    if (mounted) {
-      setState(() => _isOpen = false);
-    }
-  }
-
-  @override
-  void dispose() {
-    _overlayEntry?.remove();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return CompositedTransformTarget(
-      link: _layerLink,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          IconButton(
-            icon: Icon(_isActive ? widget.activeIcon : widget.icon),
-            tooltip: widget.tooltip,
-            onPressed: _togglePopover,
-            style: IconButton.styleFrom(
-              foregroundColor: _isActive
-                  ? theme.colorScheme.primary
-                  : theme.colorScheme.onSurfaceVariant,
-              backgroundColor: _isActive
-                  ? theme.colorScheme.primaryContainer.withValues(alpha: 0.5)
-                  : null,
-            ),
-          ),
-          if (widget.badge > 0)
-            Positioned(
-              top: 4,
-              right: 4,
-              child: Container(
-                width: 16,
-                height: 16,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.error,
-                  shape: BoxShape.circle,
-                  border:
-                      Border.all(color: theme.colorScheme.surface, width: 1.5),
-                ),
-                child: Center(
-                  child: Text(
-                    widget.badge > 9 ? '9+' : '${widget.badge}',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: theme.colorScheme.onError,
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MobileBellButton extends StatelessWidget {
-  const _MobileBellButton({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final unread =
-        context.select<LocalEventsNotifier, int>((n) => n.unreadCount);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        IconButton(
-          icon: const Icon(Icons.notifications_outlined),
-          tooltip: 'Rift Activity',
-          color: theme.colorScheme.onSurfaceVariant,
-          onPressed: onTap,
-        ),
-        if (unread > 0)
-          Positioned(
-            top: 4,
-            right: 4,
-            child: Container(
-              width: 16,
-              height: 16,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.error,
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: theme.colorScheme.surface, width: 1.5),
-              ),
-              child: Center(
-                child: Text(
-                  unread > 9 ? '9+' : '$unread',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onError,
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}

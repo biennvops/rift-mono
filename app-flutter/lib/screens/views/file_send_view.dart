@@ -543,6 +543,16 @@ class _FileSendViewState extends State<FileSendView> {
     }
   }
 
+  Future<void> _clearFinishedStagedFiles() async {
+    final sentItems = _sendQueue.items
+        .where((item) => item.status == SendQueueStatus.sent)
+        .toList();
+    for (final item in sentItems) {
+      await _sendQueue.removeItem(item);
+    }
+    if (mounted) setState(() {});
+  }
+
   Future<void> _retryFailedStagedFile(SendQueueEntry file) async {
     final messenger = ScaffoldMessenger.of(context);
     final client = context.read<JsonRpcRiftClient>();
@@ -614,17 +624,26 @@ class _FileSendViewState extends State<FileSendView> {
     );
   }
 
-  void _chooseDeviceForStagedFile(SendQueueEntry file) {
-    unawaited(() async {
-      await _sendQueue.retargetForSelection(file);
+  Future<void> _chooseDeviceForStagedFile(SendQueueEntry file) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final peers = _fileCapablePeers;
+    final targetDeviceId = peers.isNotEmpty ? peers.first['deviceId']?.toString() : null;
+    try {
+      if (targetDeviceId != null) {
+        await _sendQueue.assignTarget(file, targetDeviceId: targetDeviceId);
+      } else {
+        await _sendQueue.retargetForSelection(file);
+      }
       if (!mounted) return;
       setState(() {});
-      RiftSnackbar.show(
-        context: context,
-        message: 'Choose a device below to send ${file.fileName} again.',
-        type: RiftSnackbarType.info,
+    } catch (error) {
+      if (!mounted) return;
+      RiftSnackbar.showWithState(
+        messenger: messenger,
+        message: JsonRpcRiftClient.formatDisplayError(error),
+        type: RiftSnackbarType.error,
       );
-    }());
+    }
   }
 
   Future<void> _handleLegacyTransferProgress(Map<String, dynamic> event) async {
@@ -1033,6 +1052,11 @@ class _FileSendViewState extends State<FileSendView> {
 
   Widget _buildTransferHubQueueCard(
       ThemeData theme, List<SendQueueEntry> queueItems) {
+    final activeItems =
+        queueItems.where((e) => e.status != SendQueueStatus.sent).toList();
+    final sentItems =
+        queueItems.where((e) => e.status == SendQueueStatus.sent).toList();
+
     return Container(
       width: double.infinity,
       decoration: BoxDecoration(
@@ -1051,14 +1075,25 @@ class _FileSendViewState extends State<FileSendView> {
                 bottom: BorderSide(color: theme.colorScheme.outlineVariant),
               ),
             ),
-            child: Text(
-              'Send Queue · ${queueItems.length} ITEM(S)',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontWeight: FontWeight.w700,
-              ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Send Queue · ${activeItems.length} ITEM(S)',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (sentItems.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: _clearFinishedStagedFiles,
+                    icon: const Icon(Icons.cleaning_services, size: 16),
+                    label: const Text('Clear Sent'),
+                  ),
+              ],
             ),
           ),
           Padding(
@@ -1066,12 +1101,22 @@ class _FileSendViewState extends State<FileSendView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (queueItems.isEmpty)
+                if (_fileCapablePeers.isEmpty && activeItems.isNotEmpty) ...[
+                  Text(
+                    'No trusted peer currently advertises file.transfer.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (activeItems.isEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     child: Center(
                       child: Text(
-                        'No files staged for sending.',
+                        'Queue Empty',
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -1082,12 +1127,32 @@ class _FileSendViewState extends State<FileSendView> {
                   ListView.separated(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    itemCount: queueItems.length,
+                    itemCount: activeItems.length,
                     separatorBuilder: (context, index) =>
                         const SizedBox.shrink(),
                     itemBuilder: (context, index) =>
-                        _buildTransferQueueFileTile(theme, queueItems[index]),
+                        _buildTransferQueueFileTile(theme, activeItems[index]),
                   ),
+                if (sentItems.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Completed Transfers',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: sentItems.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox.shrink(),
+                    itemBuilder: (context, index) =>
+                        _buildTransferQueueFileTile(theme, sentItems[index]),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1183,6 +1248,34 @@ class _FileSendViewState extends State<FileSendView> {
           Wrap(
             spacing: 8,
             children: [
+              if (file.targetDeviceId == null || file.targetDeviceId!.isEmpty) ...[
+                OutlinedButton(
+                  onPressed: () => _chooseDeviceForStagedFile(file),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: theme.colorScheme.primary),
+                    foregroundColor: theme.colorScheme.primary,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    minimumSize: const Size(0, 32),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4)),
+                  ),
+                  child: Text(
+                    () {
+                      final unassignedCount = _sendQueue.items
+                          .where((item) =>
+                              item.targetDeviceId == null ||
+                              item.targetDeviceId!.isEmpty)
+                          .length;
+                      return unassignedCount > 0
+                          ? 'Send Unassigned ($unassignedCount)'
+                          : 'Send Unassigned';
+                    }(),
+                    style: const TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
               if (canRetry)
                 OutlinedButton(
                   onPressed: () => _retryFailedStagedFile(file),

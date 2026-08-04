@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
+import 'pair_device_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
 import '../src/ui/app_shell.dart';
@@ -1268,13 +1269,37 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  void _showAddDeviceDialog(BuildContext context) {
+    if (MediaQuery.of(context).size.width < 1024) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => const PairDeviceScreen(),
+      );
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (_) => const Dialog(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        child: PairDeviceScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
 
-    final header = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final header = Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 12,
+      runSpacing: 12,
       children: [
         Text(
           'Devices Hub',
@@ -1283,6 +1308,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             color: theme.colorScheme.onSurface,
             letterSpacing: -0.5,
           ),
+        ),
+        FilledButton.icon(
+          onPressed: () => _showAddDeviceDialog(context),
+          icon: const Icon(Icons.add_circle_outline, size: 18),
+          label: const Text('Add Device'),
         ),
       ],
     );

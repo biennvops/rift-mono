@@ -26,10 +26,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
   String? _error;
   StreamSubscription<Map<String, dynamic>>? _transitionSub;
 
-  static const Color _successColor = Color(0xFF059669);
-  static const Color _successBg = Color(0x1A059669);
-  static const Color _pendingColor = Color(0xFF6366F1);
-  static const Color _pendingBg = Color(0x1A6366F1);
+
 
   @override
   void initState() {
@@ -194,9 +191,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
     switch (status) {
       case 'Completed':
-        statusColor = _successColor;
-        iconBgColor = _successBg;
-        iconColor = _successColor;
+        statusColor = theme.colorScheme.primary;
+        iconBgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.5);
+        iconColor = theme.colorScheme.primary;
         borderColor = theme.colorScheme.outlineVariant;
         break;
       case 'Failed':
@@ -213,9 +210,10 @@ class _OperationsScreenState extends State<OperationsScreen> {
         borderColor = theme.colorScheme.primary.withValues(alpha: 0.4);
         break;
       case 'Pending':
-        statusColor = _pendingColor;
-        iconBgColor = _pendingBg;
-        iconColor = _pendingColor;
+        statusColor = theme.colorScheme.tertiary;
+        iconBgColor =
+            theme.colorScheme.tertiaryContainer.withValues(alpha: 0.5);
+        iconColor = theme.colorScheme.tertiary;
         borderColor = theme.colorScheme.outlineVariant;
         break;
       default:
@@ -399,13 +397,13 @@ class _OperationsScreenState extends State<OperationsScreen> {
                             stateColor = theme.colorScheme.outline;
                             break;
                           case 'Pending':
-                            stateColor = _pendingColor;
+                            stateColor = theme.colorScheme.tertiary;
                             break;
                           case 'In Progress':
                             stateColor = theme.colorScheme.primary;
                             break;
                           case 'Completed':
-                            stateColor = _successColor;
+                            stateColor = theme.colorScheme.primary;
                             break;
                           case 'Failed':
                             stateColor = theme.colorScheme.error;
@@ -578,7 +576,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
                                   isOutlined: true),
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
-                              _buildLegendItem('Pending', _pendingColor, theme,
+                              _buildLegendItem('Pending', theme.colorScheme.tertiary, theme,
                                   isOutlined: true),
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
@@ -588,7 +586,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
                               const Icon(Icons.arrow_right,
                                   color: Colors.grey, size: 16),
                               _buildLegendItem(
-                                  'Completed', _successColor, theme),
+                                  'Completed', theme.colorScheme.primary, theme),
                               _buildLegendItem(
                                   'Failed', theme.colorScheme.error, theme),
                             ],

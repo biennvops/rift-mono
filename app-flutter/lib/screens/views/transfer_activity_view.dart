@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import '../../src/file_transfer/file_storage.dart';
@@ -9,10 +10,16 @@ import '../../src/ipc/json_rpc_client.dart';
 
 class TransferActivityView extends StatefulWidget {
   final bool? revealCompletedTransfersInFolderOverride;
+  final bool? exportCompletedTransfersOverride;
+  final Future<void> Function(String path)? openFileOverride;
+  final Future<void> Function(String path)? exportFileOverride;
 
   const TransferActivityView({
     super.key,
     this.revealCompletedTransfersInFolderOverride,
+    this.exportCompletedTransfersOverride,
+    this.openFileOverride,
+    this.exportFileOverride,
   });
 
   @override
@@ -31,18 +38,42 @@ class _TransferActivityViewState extends State<TransferActivityView> {
 
   bool get _revealCompletedTransfersInFolder =>
       widget.revealCompletedTransfersInFolderOverride ?? true;
+  bool get _exportCompletedTransfers =>
+      widget.exportCompletedTransfersOverride ?? Platform.isIOS;
 
   @override
   void initState() {
     super.initState();
     final client = context.read<JsonRpcRiftClient>();
     _subscriptions
-      ..add(client.onFileTransferProgress.listen((_) => _loadActivity()))
-      ..add(client.onFileTransferCompleted.listen((_) => _loadActivity()))
-      ..add(client.onFileTransferFailed.listen((_) => _loadActivity()));
+      ..add(client.onFileProgress.listen(_handleTransferEvent))
+      ..add(client.onFileCompleted.listen(_handleTransferEvent))
+      ..add(client.onFileFailed.listen(_handleTransferEvent))
+      ..add(client.onFileTransferProgress.listen(_handleTransferEvent))
+      ..add(client.onFileTransferCompleted.listen(_handleTransferEvent))
+      ..add(client.onFileTransferFailed.listen(_handleTransferEvent));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadActivity();
     });
+  }
+
+  void _handleTransferEvent(Map<String, dynamic> event) {
+    if (!mounted) return;
+    final transferId = event['transferId']?.toString();
+    if (transferId != null) {
+      final index = _fileTransfers.indexWhere(
+        (t) => t['transferId']?.toString() == transferId,
+      );
+      setState(() {
+        if (index != -1) {
+          _fileTransfers[index] = {..._fileTransfers[index], ...event};
+        } else {
+          _fileTransfers.insert(0, Map<String, dynamic>.from(event));
+        }
+      });
+    } else {
+      _loadActivity();
+    }
   }
 
   @override
@@ -687,18 +718,50 @@ class _TransferActivityViewState extends State<TransferActivityView> {
                               borderRadius: BorderRadius.circular(4)),
                         ),
                       ),
+                      if (_exportCompletedTransfers)
+                        OutlinedButton.icon(
+                          onPressed: () => _openDestination(destinationPath,
+                              isExport: true),
+                          icon: const Icon(Icons.ios_share, size: 16),
+                          label: const Text('Export',
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            minimumSize: const Size(0, 32),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(4)),
+                          ),
+                        ),
                     ],
                   ),
                 ],
                 if (progress != null &&
                     state.toLowerCase() != 'done' &&
-                    state.toLowerCase() != 'failed') ...[
+                    state.toLowerCase() != 'failed' &&
+                    state.toLowerCase() != 'cancelled') ...[
                   const SizedBox(height: 8),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(999),
                     child: LinearProgressIndicator(
                       value: progress,
                       minHeight: 6,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => _cancelTransfer(transfer),
+                    icon: const Icon(Icons.stop_circle_outlined, size: 16),
+                    label: const Text('Cancel',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: theme.colorScheme.outlineVariant),
+                      foregroundColor: theme.colorScheme.onSurfaceVariant,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      minimumSize: const Size(0, 30),
                     ),
                   ),
                 ],
@@ -726,8 +789,35 @@ class _TransferActivityViewState extends State<TransferActivityView> {
     );
   }
 
-  Future<void> _openDestination(String path, {bool reveal = false}) async {
+  Future<void> _cancelTransfer(Map<String, dynamic> transfer) async {
+    final transferId = transfer['transferId']?.toString();
+    if (transferId == null) return;
     try {
+      final client = context.read<JsonRpcRiftClient>();
+      await client.cancelFileTransfer(transferId);
+      if (mounted) _loadActivity();
+    } catch (e) {
+      if (mounted) {
+        RiftSnackbar.show(
+          context: context,
+          message: 'Error cancelling transfer: $e',
+          type: RiftSnackbarType.error,
+        );
+      }
+    }
+  }
+
+  Future<void> _openDestination(String path,
+      {bool reveal = false, bool isExport = false}) async {
+    try {
+      if (isExport && widget.exportFileOverride != null) {
+        await widget.exportFileOverride!(path);
+        return;
+      }
+      if (!reveal && !isExport && widget.openFileOverride != null) {
+        await widget.openFileOverride!(path);
+        return;
+      }
       if (reveal) {
         await showFileInFolder(path);
       } else {
