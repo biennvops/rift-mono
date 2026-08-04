@@ -2,10 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
-import '../src/platform/android_shell.dart';
-import '../src/platform/macos_notifications.dart';
-import '../src/platform/notification_route.dart';
-import '../src/platform/windows_shell.dart';
 import 'dart:async';
 
 class PairingScreen extends StatefulWidget {
@@ -210,34 +206,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Future<void> _handlePairingCompleted() async {
     if (!mounted || _isClosingAfterCompletion) return;
     _isClosingAfterCompletion = true;
-    if (_isRecipientFlow) {
-      await _showRecipientPairingSuccessNotice();
-      if (!mounted) return;
-    }
-    if (!mounted) return;
     _closeScreen();
-  }
-
-  Future<void> _showRecipientPairingSuccessNotice() async {
-    final label = _displayName ?? _deviceId ?? 'device';
-    final message = 'Paired successfully with $label';
-    if (AndroidShell.isSupported) {
-      await AndroidShell.showToast(message);
-      return;
-    }
-    if (WindowsShell.isSupported) {
-      await WindowsShell.showNotification(
-        title: 'Pairing completed',
-        body: message,
-        route: NotificationRoute.devices,
-      );
-      return;
-    }
-    await MacOSNotifications.show(
-      title: 'Pairing completed',
-      body: message,
-      route: NotificationRoute.devices,
-    );
   }
 
   void _startCountdown(int? expiresInMs) {

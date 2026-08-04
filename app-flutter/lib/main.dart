@@ -1348,12 +1348,34 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       }
     });
 
-    _pairingCompleteSub = client.onPairingComplete.listen((event) {
-      final deviceId = event['deviceId']?.toString() ?? 'trusted device';
-      final displayName = event['displayName']?.toString();
-      final label = (displayName != null && displayName.isNotEmpty)
-          ? displayName
-          : deviceId;
+    _pairingCompleteSub = client.onPairingComplete.listen((event) async {
+      final deviceId = event['deviceId']?.toString();
+      final eventName = event['displayName']?.toString();
+      String label = (eventName != null && eventName.isNotEmpty) ? eventName : '';
+
+      if (label.isEmpty && deviceId != null && deviceId.isNotEmpty) {
+        try {
+          final result = await client.listTrustedPeers();
+          final peers = List<dynamic>.from((result as Map)['peers'] ?? const []);
+          for (final candidate in peers) {
+            if (candidate is! Map) continue;
+            if (candidate['deviceId']?.toString() == deviceId) {
+              final peerName = candidate['displayName']?.toString();
+              if (peerName != null && peerName.isNotEmpty) {
+                label = peerName;
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (label.isEmpty) {
+        label = (deviceId != null && deviceId.length > 16)
+            ? '${deviceId.substring(0, 16)}...'
+            : (deviceId ?? 'trusted device');
+      }
+
       _maybeNotifyWithRoute(
         title: 'Pairing completed',
         body: 'Connected to $label.',
