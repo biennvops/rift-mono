@@ -762,6 +762,44 @@ class _PairingScreenState extends State<PairingScreen> {
                                     color: theme.colorScheme.outline,
                                   )),
                             );
+                      if (!_canApproveLocally) {
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: theme.colorScheme.primaryContainer,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      'Waiting for peer...',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w400,
+                                        height: 20 / 14,
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (canReject) rejectBtn,
+                          ],
+                        );
+                      }
+
                       if (isMobile) {
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -772,13 +810,15 @@ class _PairingScreenState extends State<PairingScreen> {
                           ],
                         );
                       }
-                      return Wrap(
-                        alignment: WrapAlignment.end,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 16,
-                        runSpacing: 12,
+
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          if (canReject) rejectBtn,
+                          if (canReject) ...[
+                            rejectBtn,
+                            const SizedBox(width: 12),
+                          ],
                           approveBtn,
                         ],
                       );
@@ -1104,6 +1144,45 @@ class _PairingScreenState extends State<PairingScreen> {
                                       color: theme.colorScheme.outline,
                                     )),
                               );
+                        if (!_canApproveLocally) {
+                          return Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color:
+                                            theme.colorScheme.primaryContainer,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        'Waiting for peer...',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w400,
+                                          height: 20 / 14,
+                                          color: theme
+                                              .colorScheme.onSurfaceVariant,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (_isRecipientFlow || canReject) rejectBtn,
+                            ],
+                          );
+                        }
+
                         if (isMobile) {
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1114,13 +1193,15 @@ class _PairingScreenState extends State<PairingScreen> {
                             ],
                           );
                         }
-                        return Wrap(
-                          alignment: WrapAlignment.end,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 16,
-                          runSpacing: 12,
+
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            if (_isRecipientFlow || canReject) rejectBtn,
+                            if (_isRecipientFlow || canReject) ...[
+                              rejectBtn,
+                              const SizedBox(width: 12),
+                            ],
                             approveBtn,
                           ],
                         );
