@@ -469,9 +469,14 @@ class SessionManager {
     );
     await waiter.future.timeout(
       timeout,
-      onTimeout: () => throw SessionException(
-        'Timed out waiting for session establishment with $peerDeviceId',
-      ),
+      onTimeout: () {
+        if (identical(_establishmentWaiters[peerDeviceId], waiter)) {
+          disconnectPeer(peerDeviceId);
+        }
+        throw SessionException(
+          'Timed out waiting for session establishment with $peerDeviceId',
+        );
+      },
     );
 
     final refreshed = _sessions[peerDeviceId];
@@ -1119,6 +1124,23 @@ class SessionManager {
     _transport.disconnect(peerDeviceId);
   }
 
+  @visibleForTesting
+  static bool shouldRejectCapabilityNegotiationTimeout({
+    required SessionContext? activeContext,
+    required SessionContext timedContext,
+  }) =>
+      identical(activeContext, timedContext) &&
+      !timedContext.capabilityNegotiated;
+
+  @visibleForTesting
+  static bool isCurrentEstablishedContext({
+    required SessionContext? activeContext,
+    required SessionContext candidateContext,
+  }) =>
+      identical(activeContext, candidateContext) &&
+      candidateContext.handshakeState == HandshakeState.established &&
+      candidateContext.capabilityNegotiated;
+
   Future<void> _startCapabilityNegotiation(SessionContext ctx) async {
     ctx.localAdvertisedCapabilities = _defaultCapabilities;
     RiftLog.debug(
@@ -1127,7 +1149,10 @@ class SessionManager {
 
     ctx.capabilityNegotiationTimer?.cancel();
     ctx.capabilityNegotiationTimer = Timer(const Duration(seconds: 5), () {
-      if (ctx.negotiatedCapabilities.isEmpty) {
+      if (shouldRejectCapabilityNegotiationTimeout(
+        activeContext: _sessions[ctx.peerDeviceId],
+        timedContext: ctx,
+      )) {
         unawaited(
           _rejectSession(
             ctx.peerDeviceId,
@@ -1393,7 +1418,9 @@ class SessionManager {
       ctx.heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
         unawaited(
           _sendHeartbeat(ctx).catchError((Object error, StackTrace stackTrace) {
-            _transport.disconnect(ctx.peerDeviceId);
+            if (identical(_sessions[ctx.peerDeviceId], ctx)) {
+              _transport.disconnect(ctx.peerDeviceId);
+            }
           }),
         );
       });
@@ -1401,7 +1428,9 @@ class SessionManager {
       _resetOfflineTimeout(ctx);
       unawaited(
         _sendHeartbeat(ctx).catchError((Object error, StackTrace stackTrace) {
-          _transport.disconnect(ctx.peerDeviceId);
+          if (identical(_sessions[ctx.peerDeviceId], ctx)) {
+            _transport.disconnect(ctx.peerDeviceId);
+          }
         }),
       );
     }
@@ -1410,6 +1439,9 @@ class SessionManager {
   void _resetOfflineTimeout(SessionContext ctx) {
     ctx.offlineTimeoutTimer?.cancel();
     ctx.offlineTimeoutTimer = Timer(const Duration(seconds: 45), () {
+      if (!identical(_sessions[ctx.peerDeviceId], ctx)) {
+        return;
+      }
       ctx.currentPresenceStatus = 'offline';
       _presenceUpdateController.add(ctx);
       _transport.disconnect(ctx.peerDeviceId);
@@ -1439,6 +1471,13 @@ class SessionManager {
       _sendPresence(ctx, 'online');
 
   Future<void> _sendPresence(SessionContext ctx, String status) async {
+    if (!isCurrentEstablishedContext(
+      activeContext: _sessions[ctx.peerDeviceId],
+      candidateContext: ctx,
+    )) {
+      return;
+    }
+
     final payload = {
       'rift': '0.1-draft',
       'id': const Uuid().v4(),

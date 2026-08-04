@@ -1,6 +1,7 @@
 package com.example.app_flutter
 
 import android.util.Base64
+import android.util.Log
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.net.InetSocketAddress
@@ -20,6 +21,10 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 
 class AndroidTlsBridge {
+    companion object {
+        private const val tag = "RiftTlsBridge"
+    }
+
     private val executor = Executors.newCachedThreadPool()
     // Bumped whenever the owning daemon isolate tears down the server. Replies
     // guarded by an older generation are dropped instead of being posted to a
@@ -135,8 +140,9 @@ class AndroidTlsBridge {
                     return
                 }
                 callback?.success(response)
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 if (listener.isClosed) return
+                Log.e(tag, "Inbound TLS connection failed", error)
             }
         }
     }

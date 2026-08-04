@@ -36,7 +36,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
   Future<AndroidRootDiscoveryBridge>? _discoveryBridgeFuture;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
-  StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _discoveryRetrySub;
   int _nextSyntheticId = 1000000;
   int _nextBootstrapRequestId = -1;
   String? _daemonDeviceId;
@@ -237,7 +237,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     await _discoveryAddedSub?.cancel();
     await _discoveryLostSub?.cancel();
-    await _reverseTcpPingSub?.cancel();
+    await _discoveryRetrySub?.cancel();
 
     _discoveryAddedSub = bridge.onPeerDiscovered.listen((peer) {
       _incoming?.add(jsonEncode({
@@ -259,18 +259,13 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       _syncDiscoverySnapshotToDaemon();
     });
 
-    _reverseTcpPingSub = bridge.onReverseTcpPingRequested.listen((peer) {
+    _discoveryRetrySub = bridge.onReverseTcpPingRequested.listen((peer) {
       final port = _rpcPort;
-      if (port == null) return;
-      // Send a ping command to the daemon isolate to establish a TCP connection
-      // with the Linux machine. This completely bypasses the Hotspot UDP block!
+      final deviceId = peer.deviceIdHint;
+      if (port == null || deviceId == null) return;
       port.send({
-        'jsonrpc': '2.0',
-        'method': 'rift.pingEndpoint',
-        'params': {
-          'address': peer.address,
-          'port': peer.port,
-        },
+        'internal': 'android.prefetchPeer',
+        'deviceId': deviceId,
       });
     });
 

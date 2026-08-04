@@ -859,6 +859,20 @@ class RiftDaemon {
     return playback.toJson();
   }
 
+  @visibleForTesting
+  static Map<String, dynamic> buildNotificationReplayMessage({
+    required String localDeviceId,
+    required String peerDeviceId,
+    required Map<String, dynamic> record,
+  }) => {
+    'rift': '0.1-draft',
+    'messageId': const Uuid().v4(),
+    'type': 'notification.updated',
+    'sourceDeviceId': localDeviceId,
+    'destinationDeviceId': peerDeviceId,
+    'payload': record,
+  };
+
   Future<void> _replayActiveSyncState(String peerDeviceId) async {
     final sessionManager = _sessionManager;
     final identityManager = _identityManager;
@@ -881,14 +895,14 @@ class RiftDaemon {
           continue;
         }
         try {
-          await sessionManager.sendMessage(peerDeviceId, {
-            'rift': '0.1-draft',
-            'messageId': const Uuid().v4(),
-            'type': 'notification.posted',
-            'sourceDeviceId': localDeviceId,
-            'destinationDeviceId': peerDeviceId,
-            'payload': record,
-          });
+          await sessionManager.sendMessage(
+            peerDeviceId,
+            buildNotificationReplayMessage(
+              localDeviceId: localDeviceId,
+              peerDeviceId: peerDeviceId,
+              record: record,
+            ),
+          );
         } catch (error) {
           RiftLog.warn(
             '[NotificationSync] Failed to replay active state to $peerDeviceId: $error',
@@ -3362,6 +3376,13 @@ class RiftDaemon {
     return null;
   }
 
+  @visibleForTesting
+  static bool hasActivePairingSession(
+    SessionContext? context,
+    PeerSocketEndpoint? endpoint,
+  ) =>
+      context != null && endpoint != null;
+
   Future<String> _ensureSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager;
     final transport = _transport;
@@ -3372,10 +3393,18 @@ class RiftDaemon {
     }
 
     final ctx = sessionManager.getContext(peerDeviceId);
-    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+    final activeEndpoint = transport.getPeerSocketEndpoint(peerDeviceId);
+    if (ctx != null && !hasActivePairingSession(ctx, activeEndpoint)) {
+      RiftLog.warn(
+        '[Pairing] Session context for peerDeviceId=$peerDeviceId had no active '
+        'transport socket. Restarting session prefetch.',
+      );
+      sessionManager.disconnectPeer(peerDeviceId);
+    } else if (ctx != null &&
+        ctx.handshakeState == HandshakeState.established) {
       return peerDeviceId;
-    }
-    if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
+    } else if (ctx != null &&
+        ctx.handshakeState == HandshakeState.handshaking) {
       RiftLog.debug(
         '[Pairing] Reusing in-flight handshake for peerDeviceId=$peerDeviceId',
       );
@@ -3857,6 +3886,14 @@ class RiftDaemon {
                       : const <Map<String, dynamic>>[],
                   isDiscovering: message['isDiscovering'] == true,
                 );
+                return;
+              }
+
+              if (message['internal'] == 'android.prefetchPeer') {
+                final deviceId = message['deviceId'];
+                if (deviceId is String) {
+                  unawaited(daemon.prefetchSessionForDiscoveredPeer(deviceId));
+                }
                 return;
               }
 
