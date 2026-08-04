@@ -156,8 +156,6 @@ class AppShellState extends State<AppShell> {
     );
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -286,7 +284,7 @@ class AppShellState extends State<AppShell> {
             // Main Content
             Expanded(
               child: Align(
-                alignment: Alignment.topCenter,
+                alignment: Alignment.topLeft,
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(
                     maxWidth: RiftDesign.contentMaxWidth,
@@ -522,5 +520,3 @@ class _ResizableDialogContainerState extends State<_ResizableDialogContainer> {
     );
   }
 }
-
-

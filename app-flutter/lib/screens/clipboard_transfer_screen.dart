@@ -7,6 +7,7 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/ios_clipboard.dart';
 import '../src/platform/notification_route.dart';
+import '../src/ui/theme.dart';
 import 'views/clipboard_history_view.dart';
 import 'views/file_send_view.dart';
 import 'views/incoming_offers_view.dart';
@@ -158,6 +159,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         ? 'Activity — ${widget.displayName}'
         : 'Activity';
 
+    final isDesktop =
+        MediaQuery.of(context).size.width >= RiftDesign.compactBreakpoint;
+    final screenPadding =
+        isDesktop ? RiftDesign.padScreenDesktop : RiftDesign.padScreenMobile;
+
     return GestureDetector(
       key: const ValueKey('activity-section-swipe-area'),
       behavior: HitTestBehavior.translucent,
@@ -172,7 +178,12 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+              padding: EdgeInsets.fromLTRB(
+                screenPadding.left,
+                screenPadding.top,
+                screenPadding.right,
+                RiftDesign.spaceMd,
+              ),
               child: Text(
                 title,
                 style: theme.textTheme.headlineMedium?.copyWith(
@@ -198,6 +209,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   }
 
   Widget _buildRiftSectionTabBar(ThemeData theme) {
+    final isDesktop =
+        MediaQuery.of(context).size.width >= RiftDesign.compactBreakpoint;
+    final horizontalPad = isDesktop ? RiftDesign.spaceLg : RiftDesign.spaceMd;
     final sendQueue = context.watch<SendQueueController?>();
     final activeQueueCount = sendQueue?.items
             .where((e) =>
@@ -218,7 +232,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: EdgeInsets.symmetric(horizontal: horizontalPad),
         child: Row(
           children: [
             _buildRiftSectionChip(

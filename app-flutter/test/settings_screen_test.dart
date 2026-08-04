@@ -178,7 +178,7 @@ void main() {
 
   testWidgets('mobile settings menu uses tinted square icon containers',
       (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 800));
+    await tester.binding.setSurfaceSize(const Size(500, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(

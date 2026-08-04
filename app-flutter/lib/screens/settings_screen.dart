@@ -509,7 +509,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 borderRadius: BorderRadius.circular(4),
                 child: Container(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                   decoration: isActive
                       ? BoxDecoration(
                           borderRadius: BorderRadius.circular(4),
@@ -548,7 +548,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final tab = tabs[index];
         return ListTile(
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           leading: Container(
             width: 36,
             height: 36,
@@ -722,7 +722,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildGroupLabel(ThemeData theme, String label, {Widget? badge}) {
     return Padding(
-      padding: EdgeInsets.only(bottom: RiftDesign.spaceSm, top: RiftDesign.spaceMd),
+      padding:
+          EdgeInsets.only(bottom: RiftDesign.spaceSm, top: RiftDesign.spaceMd),
       child: Row(
         children: [
           // label-md: 14px / 600 / 0.05em / 16px line-height
@@ -1414,86 +1415,108 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     }
 
+    final isEmbeddedInShell = widget.onClose == null;
+
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-      appBar: AppBar(
-        backgroundColor: theme.colorScheme.surface,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        automaticallyImplyLeading: widget.onClose == null,
-        iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
-        titleSpacing: widget.onClose != null ? 16 : null,
-        title: Text(
-          'Settings',
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w600,
-            letterSpacing: -0.01,
-            height: 32 / 24,
-            color: theme.colorScheme.onSurface,
-          ),
-        ),
-        actions: [
-          if (widget.onClose != null) ...[
-            IconButton(
-              onPressed: widget.onClose,
-              icon: const Icon(Icons.close, size: 20),
-              tooltip: 'Close Settings',
-            ),
-            const SizedBox(width: 8),
-          ],
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Divider(
-              height: 1,
-              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5)),
-        ),
-      ),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildTabRail(theme),
-          MouseRegion(
-            cursor: SystemMouseCursors.resizeColumn,
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onPanUpdate: (details) {
-                setState(() {
-                  _sidebarWidth =
-                      (_sidebarWidth + details.delta.dx).clamp(160.0, 400.0);
-                });
-              },
-              child: Container(
-                width: 8,
-                color: Colors.transparent,
-                child: Center(
-                  child: Container(
-                    width: 2,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.outlineVariant
-                          .withValues(alpha: 0.5),
-                      borderRadius: BorderRadius.circular(1),
-                    ),
-                  ),
+      appBar: isEmbeddedInShell
+          ? null
+          : AppBar(
+              backgroundColor: theme.colorScheme.surface,
+              elevation: 0,
+              scrolledUnderElevation: 0,
+              automaticallyImplyLeading: true,
+              iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+              title: Text(
+                'Settings',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                  letterSpacing: -0.5,
                 ),
               ),
+              actions: [
+                IconButton(
+                  onPressed: widget.onClose,
+                  icon: const Icon(Icons.close, size: 20),
+                  tooltip: 'Close Settings',
+                ),
+                const SizedBox(width: 8),
+              ],
+              bottom: PreferredSize(
+                preferredSize: const Size.fromHeight(1),
+                child: Divider(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant
+                        .withValues(alpha: 0.5)),
+              ),
             ),
-          ),
-          Expanded(
-            child: _buildActivePanel(
-              theme,
-              displayName,
-              deviceId,
-              fingerprint,
-              implementationId,
-              protocolVersion,
-              localNetworkSubtitle,
-              backgroundExecSubtitle,
+      body: Padding(
+        padding:
+            isEmbeddedInShell ? RiftDesign.padScreenDesktop : EdgeInsets.zero,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isEmbeddedInShell) ...[
+              Text(
+                'Settings',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onSurface,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: RiftDesign.spaceMd),
+            ],
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildTabRail(theme),
+                  MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onPanUpdate: (details) {
+                        setState(() {
+                          _sidebarWidth = (_sidebarWidth + details.delta.dx)
+                              .clamp(160.0, 400.0);
+                        });
+                      },
+                      child: Container(
+                        width: 8,
+                        color: Colors.transparent,
+                        child: Center(
+                          child: Container(
+                            width: 2,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.outlineVariant
+                                  .withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(1),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: _buildActivePanel(
+                      theme,
+                      displayName,
+                      deviceId,
+                      fingerprint,
+                      implementationId,
+                      protocolVersion,
+                      localNetworkSubtitle,
+                      backgroundExecSubtitle,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
