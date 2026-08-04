@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'pairing_screen.dart';
-import 'pair_device_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
 import '../src/ui/app_shell.dart';
@@ -34,6 +33,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   bool _isLoadingData = false;
   bool _reloadQueued = false;
   bool _autoDiscoveryAttempted = false;
+  bool _discoveryExplicitlyDisabled = false;
+  bool _showManualConnection = false;
+  bool _highlightNearbySection = false;
+  bool _isNearbyVisible = false;
+  bool _nearbyVisibilityCheckScheduled = false;
+  final GlobalKey _nearbySectionKey = GlobalKey();
+  final FocusNode _nearbySectionFocusNode = FocusNode();
+  final FocusNode _manualInputFocusNode = FocusNode();
+  final TextEditingController _manualInputController = TextEditingController();
+  final ScrollController _mobileScrollController = ScrollController();
 
   StreamSubscription? _discoverySub;
   StreamSubscription? _peerLostSub;
@@ -43,6 +52,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
   Timer? _presenceRefreshTimer;
+  Timer? _nearbyHighlightTimer;
   late final AnimationController _pulseController;
   late final AnimationController _bubbleController;
   late final AnimationController _spinController;
@@ -61,6 +71,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         AnimationController(vsync: this, duration: const Duration(seconds: 6));
     _spinController =
         AnimationController(vsync: this, duration: const Duration(seconds: 2));
+    _mobileScrollController.addListener(_scheduleNearbyVisibilityCheck);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
@@ -76,6 +87,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _reloadDebounce?.cancel();
     _fullReloadThrottle?.cancel();
     _presenceRefreshTimer?.cancel();
+    _nearbyHighlightTimer?.cancel();
+    _nearbySectionFocusNode.dispose();
+    _manualInputFocusNode.dispose();
+    _manualInputController.dispose();
+    _mobileScrollController.dispose();
     _discoverySub?.cancel();
     _peerLostSub?.cancel();
     _trustSub?.cancel();
@@ -388,7 +404,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   Future<void> _ensureTrustedPeerDiscovery(JsonRpcRiftClient client) async {
-    if (_autoDiscoveryAttempted || _isDiscovering) {
+    if (_autoDiscoveryAttempted ||
+        _isDiscovering ||
+        _discoveryExplicitlyDisabled) {
       return;
     }
 
@@ -419,6 +437,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       if (mounted) {
         setState(() {
           _isDiscovering = value;
+          _discoveryExplicitlyDisabled = !value;
           _error = null;
         });
         _syncPulseAnimation();
@@ -934,7 +953,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               titleText: titleText,
             ),
             icon: const Icon(Icons.link, size: 18),
-            label: const Text('Verify'),
+            label: const Text('Pair'),
             style: FilledButton.styleFrom(
               backgroundColor: theme.colorScheme.primaryContainer,
               foregroundColor: theme.colorScheme.onPrimaryContainer,
@@ -1269,24 +1288,113 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
-  void _showAddDeviceDialog(BuildContext context) {
-    if (MediaQuery.of(context).size.width < 1024) {
-      showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        useSafeArea: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => const PairDeviceScreen(),
-      );
-      return;
+  void _scheduleNearbyVisibilityCheck() {
+    if (_nearbyVisibilityCheckScheduled || !mounted) return;
+    _nearbyVisibilityCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _nearbyVisibilityCheckScheduled = false;
+      if (!mounted) return;
+      _updateNearbyVisibility();
+    });
+  }
+
+  void _updateNearbyVisibility() {
+    if (MediaQuery.sizeOf(context).width >= 1024) return;
+    final nearbyContext = _nearbySectionKey.currentContext;
+    final sectionBox = nearbyContext?.findRenderObject();
+    final viewportBox = context.findRenderObject();
+    if (sectionBox is! RenderBox || viewportBox is! RenderBox) return;
+
+    final sectionTop = sectionBox.localToGlobal(Offset.zero).dy;
+    final sectionBottom = sectionTop + sectionBox.size.height;
+    final viewportTop = viewportBox.localToGlobal(Offset.zero).dy;
+    final viewportBottom = viewportTop + viewportBox.size.height;
+    final visibleTop = sectionTop > viewportTop ? sectionTop : viewportTop;
+    final visibleBottom =
+        sectionBottom < viewportBottom ? sectionBottom : viewportBottom;
+    final visibleExtent = visibleBottom - visibleTop;
+    final visibilityThreshold =
+        sectionBox.size.height < 56 ? sectionBox.size.height : 56.0;
+    final isVisible = visibleExtent >= visibilityThreshold;
+
+    if (_isNearbyVisible != isVisible) {
+      setState(() {
+        _isNearbyVisible = isVisible;
+      });
     }
-    showDialog(
-      context: context,
-      builder: (_) => const Dialog(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        child: PairDeviceScreen(),
-      ),
+  }
+
+  void _showNearbyDevices() {
+    if (!_isDiscovering) {
+      unawaited(_toggleDiscovery(true));
+    }
+
+    _nearbyHighlightTimer?.cancel();
+    setState(() {
+      _highlightNearbySection = true;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final nearbyContext = _nearbySectionKey.currentContext;
+      if (nearbyContext != null) {
+        Scrollable.ensureVisible(
+          nearbyContext,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOut,
+          alignment: 0.1,
+        );
+      }
+      _nearbySectionFocusNode.requestFocus();
+    });
+    _nearbyHighlightTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (!mounted) return;
+      setState(() {
+        _highlightNearbySection = false;
+      });
+    });
+  }
+
+  void _toggleManualConnection() {
+    setState(() {
+      _showManualConnection = !_showManualConnection;
+    });
+    if (_showManualConnection) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _manualInputFocusNode.requestFocus();
+      });
+    }
+  }
+
+  Future<void> _pairManually() async {
+    final input = _manualInputController.text.trim();
+    if (input.isEmpty) return;
+
+    String address = input;
+    int port = 11112;
+
+    if (input.startsWith('[')) {
+      final closingIndex = input.indexOf(']');
+      if (closingIndex > 0) {
+        address = input.substring(1, closingIndex);
+        final suffix = input.substring(closingIndex + 1);
+        if (suffix.startsWith(':')) {
+          port = int.tryParse(suffix.substring(1)) ?? 11112;
+        }
+      }
+    } else {
+      final lastColon = input.lastIndexOf(':');
+      if (lastColon > 0 && input.indexOf(':') == lastColon) {
+        address = input.substring(0, lastColon);
+        port = int.tryParse(input.substring(lastColon + 1)) ?? 11112;
+      }
+    }
+
+    _manualInputFocusNode.unfocus();
+    await _handlePeerAction(
+      peer: {'address': address, 'port': port},
+      isTrusted: false,
+      trustState: 'discovered',
+      titleText: address,
     );
   }
 
@@ -1309,20 +1417,39 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             letterSpacing: -0.5,
           ),
         ),
-        FilledButton.icon(
-          onPressed: () => _showAddDeviceDialog(context),
-          icon: const Icon(Icons.add_circle_outline, size: 18),
-          label: const Text('Add Device'),
-        ),
+        if (isDesktop)
+          FilledButton.icon(
+            key: const ValueKey('find-device-header-action'),
+            onPressed: _showNearbyDevices,
+            icon: const Icon(Icons.radar, size: 18),
+            label: const Text('Find Device'),
+          ),
       ],
     );
 
     if (!isDesktop) {
+      _scheduleNearbyVisibilityCheck();
+      final showFindDeviceAction = !_isNearbyVisible && !_showManualConnection;
       return Scaffold(
         backgroundColor: theme.colorScheme.surface,
+        floatingActionButton: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: showFindDeviceAction
+              ? FloatingActionButton.extended(
+                  key: const ValueKey('find-device-floating-action'),
+                  heroTag: 'find-device-mobile',
+                  onPressed: _showNearbyDevices,
+                  icon: const Icon(Icons.radar),
+                  label: const Text('Find Device'),
+                )
+              : const SizedBox.shrink(
+                  key: ValueKey('find-device-floating-action-hidden'),
+                ),
+        ),
         body: RefreshIndicator(
           onRefresh: _loadData,
           child: SingleChildScrollView(
+            controller: _mobileScrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
@@ -1460,109 +1587,203 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   Widget _buildDiscoveredSection(ThemeData theme) {
     final bubbleColor = theme.colorScheme.primary;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Expanded(
-              child: Text(
-                'Nearby Devices',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w700,
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_isDiscovering) _buildDiscoveryStatusChip(theme),
-                const SizedBox(width: 8),
-                Transform.scale(
-                  scale: 0.8,
-                  child: Switch.adaptive(
-                    value: _isDiscovering,
-                    onChanged: (value) => _toggleDiscovery(value),
-                    activeTrackColor: theme.colorScheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            key: const ValueKey('nearby-devices-list'),
-            width: double.infinity,
-            constraints: const BoxConstraints(minHeight: 80),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: theme.colorScheme.outlineVariant),
-            ),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: AnimatedBuilder(
-                    animation: _bubbleController,
-                    builder: (context, child) {
-                      return BubbleBackground(
-                        progress: _bubbleController.value,
-                        color: bubbleColor,
-                      );
-                    },
-                  ),
-                ),
-                if (_discoveredPeers.isEmpty)
-                  SizedBox(
-                    height: 78,
-                    child: _isDiscovering
-                        ? const SizedBox.expand()
-                        : Padding(
-                            padding: const EdgeInsets.all(10),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.wifi_off,
-                                  size: 24,
-                                  color: theme.colorScheme.outlineVariant,
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Text(
-                                    'Discovery disabled.',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: _discoveredPeers
-                          .map((p) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: _buildDiscoveredCardHtml(
-                                  p as Map<String, dynamic>, theme)))
-                          .toList(),
-                    ),
-                  ),
-              ],
-            ),
+    return Focus(
+      focusNode: _nearbySectionFocusNode,
+      child: AnimatedContainer(
+        key: _nearbySectionKey,
+        duration: const Duration(milliseconds: 250),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: _highlightNearbySection
+                ? theme.colorScheme.primary
+                : Colors.transparent,
+            width: 2,
           ),
         ),
-      ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Nearby Devices',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isDiscovering) _buildDiscoveryStatusChip(theme),
+                    const SizedBox(width: 8),
+                    Transform.scale(
+                      scale: 0.8,
+                      child: Switch.adaptive(
+                        value: _isDiscovering,
+                        onChanged: (value) => _toggleDiscovery(value),
+                        activeTrackColor: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                key: const ValueKey('nearby-devices-list'),
+                width: double.infinity,
+                constraints: const BoxConstraints(minHeight: 80),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: AnimatedBuilder(
+                        animation: _bubbleController,
+                        builder: (context, child) {
+                          return BubbleBackground(
+                            progress: _bubbleController.value,
+                            color: bubbleColor,
+                          );
+                        },
+                      ),
+                    ),
+                    if (_discoveredPeers.isEmpty)
+                      SizedBox(
+                        height: 78,
+                        child: Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _isDiscovering
+                                    ? Icons.wifi_find
+                                    : Icons.wifi_off,
+                                size: 24,
+                                color: _isDiscovering
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.outlineVariant,
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Text(
+                                  _isDiscovering
+                                      ? 'Looking for devices on your local network…'
+                                      : 'Discovery disabled.',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          children: _discoveredPeers
+                              .map((p) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: _buildDiscoveredCardHtml(
+                                      p as Map<String, dynamic>, theme)))
+                              .toList(),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              key: const ValueKey('manual-connect-toggle'),
+              onPressed: _toggleManualConnection,
+              icon: Icon(
+                _showManualConnection ? Icons.expand_less : Icons.edit_note,
+                size: 18,
+              ),
+              label: const Text("Can't find your device? Connect manually"),
+            ),
+            if (_showManualConnection) ...[
+              const SizedBox(height: 4),
+              Container(
+                key: const ValueKey('manual-connect-panel'),
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Enter an IP address or hostname. You will still verify the device before trusting it.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final input = TextField(
+                          key: const ValueKey('manual-device-address'),
+                          controller: _manualInputController,
+                          focusNode: _manualInputFocusNode,
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _pairManually(),
+                          decoration: const InputDecoration(
+                            labelText: 'IP address or hostname',
+                            hintText: '192.168.1.50 or device.local',
+                          ),
+                        );
+                        final connectButton = FilledButton(
+                          key: const ValueKey('manual-connect-button'),
+                          onPressed: _pairManually,
+                          child: const Text('Connect'),
+                        );
+
+                        if (constraints.maxWidth < 520) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              input,
+                              const SizedBox(height: 12),
+                              connectButton,
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(child: input),
+                            const SizedBox(width: 12),
+                            connectButton,
+                          ],
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

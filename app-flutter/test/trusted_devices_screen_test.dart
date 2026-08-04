@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:app_flutter/screens/pair_device_screen.dart';
 import 'package:app_flutter/screens/trusted_devices_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'test_utils/fake_transport.dart';
@@ -329,78 +328,188 @@ void main() {
           .height,
       greaterThanOrEqualTo(80),
     );
-    expect(find.text('Searching...'), findsNothing);
-    expect(find.byIcon(Icons.wifi_find), findsNothing);
+    expect(
+      find.text('Looking for devices on your local network…'),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.wifi_find), findsOneWidget);
   });
 
-  testWidgets('Pair device dialog stays compact on a short mobile screen',
+  testWidgets(
+      'mobile Find Device action appears only while Nearby is offscreen',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.binding.setSurfaceSize(const Size(390, 600));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = List<Map<String, dynamic>>.generate(
+        8,
+        (index) => {
+          'deviceId': 'rift-trusted-$index',
+          'displayName': 'Trusted Device $index',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': <String>[],
+        },
+      )
+      ..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final nearby = find.text('Nearby Devices');
+    expect(tester.getTopLeft(nearby).dy, greaterThan(600));
+
+    final findDeviceAction =
+        find.byKey(const ValueKey('find-device-floating-action'));
+    expect(findDeviceAction, findsOneWidget);
+
+    await tester.tap(findDeviceAction);
+    await tester.pumpAndSettle();
+
+    expect(tester.getTopLeft(nearby).dy, lessThan(600));
+    expect(
+      find.byKey(const ValueKey('find-device-floating-action')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('mobile Find Device action stays hidden while Nearby is visible',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = const []
+      ..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Nearby Devices'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('find-device-floating-action')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('desktop keeps Find Device in the header',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1200, 800)),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('find-device-header-action')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('find-device-floating-action')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('explicitly disabled discovery stays off until Find Device',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final client = FakeJsonRpcRiftClient()..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1200, 800)),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final discoverySwitch = find.byType(Switch).first;
+    await tester.ensureVisible(discoverySwitch);
+    await tester.tap(discoverySwitch);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(client.stopDiscoveryCallCount, 1);
+    expect(client.startDiscoveryCallCount, 0);
+
+    final findDeviceAction =
+        find.byKey(const ValueKey('find-device-header-action'));
+    await tester.ensureVisible(findDeviceAction);
+    await tester.tap(findDeviceAction);
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(client.startDiscoveryCallCount, 1);
+  });
+
+  testWidgets('manual connection expands inline and starts secure pairing',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(390, 700));
     final client = FakeJsonRpcRiftClient()..discoveredPeers = const [];
 
     await tester.pumpWidget(
       MaterialApp(
         home: Provider<JsonRpcRiftClient>.value(
           value: client,
-          child: const PairDeviceScreen(),
+          child: const TrustedDevicesScreen(),
         ),
       ),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    expect(find.text('Pair securely on your local network.'), findsOneWidget);
-    expect(find.text('Enter an IP address or hostname.'), findsOneWidget);
-    expect(find.byIcon(Icons.shield), findsNothing);
-    expect(find.text('Cancel'), findsNothing);
+    final toggle = find.byKey(const ValueKey('manual-connect-toggle'));
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('manual-connect-panel')), findsOneWidget);
     expect(
-      tester.getSize(find.byKey(const ValueKey('pair-device-dialog'))).width,
-      lessThanOrEqualTo(366),
+      find.textContaining('still verify the device before trusting it'),
+      findsOneWidget,
     );
-    expect(tester.takeException(), isNull);
 
-    await tester.pumpWidget(const SizedBox());
-    await tester.pump();
-  });
-
-  testWidgets('Pair device dialog hides already trusted devices',
-      (WidgetTester tester) async {
-    final client = FakeJsonRpcRiftClient()
-      ..trustedPeers = [
-        {
-          'deviceId': 'rift-trusted',
-          'displayName': 'Trusted Laptop',
-          'platform': 'linux',
-          'trustState': 'trusted',
-        },
-      ]
-      ..discoveredPeers = [
-        {
-          'deviceId': 'rift-trusted',
-          'displayName': 'Trusted Laptop',
-          'platform': 'linux',
-          'trustState': 'discovered',
-        },
-        {
-          'deviceId': 'rift-new',
-          'displayName': 'New Phone',
-          'platform': 'android',
-          'trustState': 'discovered',
-        },
-      ];
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: const PairDeviceScreen(),
-        ),
-      ),
+    await tester.enterText(
+      find.byKey(const ValueKey('manual-device-address')),
+      '192.168.1.50:12000',
     );
+    final connectButton = find.byKey(const ValueKey('manual-connect-button'));
+    await tester.ensureVisible(connectButton);
+    await tester.tap(connectButton);
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Trusted Laptop'), findsNothing);
-    expect(find.text('New Phone'), findsOneWidget);
+    expect(client.manualPairAddress, '192.168.1.50');
+    expect(client.manualPairPort, 12000);
   });
 
   testWidgets('TrustedDevicesScreen does not show revoked peers in device list',
@@ -502,7 +611,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Linux Box'), findsOneWidget);
-    expect(find.text('Verify'), findsNothing);
+    expect(find.text('Pair'), findsNothing);
     expect(find.text('Pending Box'), findsNothing);
   });
 
@@ -533,7 +642,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Phone'), findsOneWidget);
-    expect(find.text('Verify'), findsOneWidget);
+    expect(find.text('Pair'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -559,7 +668,7 @@ void main() {
     expect(find.text('Phone'), findsOneWidget);
     expect(find.text('TRUSTED'), findsOneWidget);
     expect(find.text('ONLINE'), findsOneWidget);
-    expect(find.text('Verify'), findsNothing);
+    expect(find.text('Pair'), findsNothing);
   });
 
   testWidgets(
