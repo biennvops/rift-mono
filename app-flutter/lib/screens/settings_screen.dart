@@ -12,6 +12,7 @@ import 'blocked_peers_screen.dart';
 import 'clipboard_debug_screen.dart';
 import 'event_log_screen.dart';
 import 'notifications_and_media_screen.dart';
+import 'onboarding_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
@@ -453,6 +454,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ('system', 'System Checks', Icons.check_box_outlined),
       ('filetransfer', 'File Transfer', Icons.folder_shared_outlined),
       ('trust', 'Trust Store', Icons.shield_outlined),
+      ('experimental', 'Experimental', Icons.science_outlined),
       ('about', 'About', Icons.info_outline),
     ];
 
@@ -536,6 +538,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ('system', 'System Checks', Icons.check_box_outlined),
       ('filetransfer', 'File Transfer', Icons.folder_shared_outlined),
       ('trust', 'Trust Store', Icons.shield_outlined),
+      ('experimental', 'Experimental', Icons.science_outlined),
       ('about', 'About', Icons.info_outline),
     ];
 
@@ -1063,29 +1066,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.only(top: 16),
-          child: Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              if (AndroidShell.isSupported)
-                _buildSecondaryButton(
-                  theme: theme,
-                  onPressed: _showTestNotification,
-                  label: 'Test notification',
-                  icon: Icons.notifications_active_outlined,
-                ),
-              if (_isDesktopPlatform)
-                _buildSecondaryButton(
-                  theme: theme,
-                  onPressed: _showDesktopTestNotification,
-                  label: 'Test desktop sync',
-                  icon: Icons.desktop_windows_outlined,
-                ),
-            ],
+        if (AndroidShell.isSupported)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: _buildSecondaryButton(
+              theme: theme,
+              onPressed: _showTestNotification,
+              label: 'Test notification',
+              icon: Icons.notifications_active_outlined,
+            ),
           ),
-        ),
       ],
     );
   }
@@ -1189,6 +1179,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // ── Panel: Experimental ────────────────────────────────────────
+
+  Widget _buildExperimentalPanel(ThemeData theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPanelHeader(
+          theme,
+          'Experimental',
+          'Features and diagnostic tools in testing.',
+        ),
+        if (_isDesktopPlatform)
+          _buildRow(
+            theme: theme,
+            title: 'Test desktop sync',
+            subtitle: 'Send a desktop test notification',
+            trailing: _buildSecondaryButton(
+              theme: theme,
+              onPressed: _showDesktopTestNotification,
+              label: 'TEST',
+              icon: Icons.desktop_windows_outlined,
+            ),
+            onTap: _showDesktopTestNotification,
+          ),
+        _buildRow(
+          theme: theme,
+          title: 'Restart onboarding',
+          subtitle: 'Reopen setup as if the app was just installed',
+          trailing: _buildSecondaryButton(
+            theme: theme,
+            onPressed: _restartOnboarding,
+            label: 'RESTART',
+            icon: Icons.refresh_outlined,
+          ),
+          onTap: _restartOnboarding,
+        ),
+      ],
+    );
+  }
+
+  Future<void> _restartOnboarding() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('has_completed_onboarding', false);
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute<void>(builder: (_) => const OnboardingScreen()),
+      (route) => false,
+    );
+  }
+
   // ── Panel: About ───────────────────────────────────────────────
 
   Widget _buildAboutPanel(
@@ -1264,6 +1304,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         break;
       case 'trust':
         content = _buildTrustPanel(theme);
+        break;
+      case 'experimental':
+        content = _buildExperimentalPanel(theme);
         break;
       case 'about':
         content = _buildAboutPanel(theme, implementationId, protocolVersion);
@@ -1539,6 +1582,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'File Transfer';
       case 'trust':
         return 'Trust Store';
+      case 'experimental':
+        return 'Experimental';
       case 'about':
         return 'About';
       default:

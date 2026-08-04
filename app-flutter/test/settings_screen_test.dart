@@ -7,6 +7,7 @@ import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:app_flutter/screens/settings_screen.dart';
+import 'package:app_flutter/screens/onboarding_screen.dart';
 import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
@@ -462,7 +463,7 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.tap(find.text('Permissions'));
+    await tester.tap(find.text('Experimental'));
     await pumpLoaded(tester);
 
     final testBtn = find.textContaining('Test desktop sync');
@@ -488,7 +489,7 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.tap(find.text('Permissions'));
+    await tester.tap(find.text('Experimental'));
     await pumpLoaded(tester);
 
     final testBtn = find.textContaining('Test desktop sync');
@@ -496,5 +497,35 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('trusted peers'), findsNothing);
+  });
+
+  testWidgets(
+      'SettingsScreen restart onboarding navigates to OnboardingScreen and resets flag',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'has_completed_onboarding': true});
+
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Experimental'));
+    await pumpLoaded(tester);
+
+    final restartBtn = find.textContaining('Restart onboarding');
+    expect(restartBtn, findsWidgets);
+
+    await tester.tap(restartBtn.first);
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('has_completed_onboarding'), isFalse);
+    expect(find.byType(OnboardingScreen), findsOneWidget);
   });
 }
