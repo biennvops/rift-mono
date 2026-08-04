@@ -9,6 +9,7 @@ internal sealed class MacOSNetworkMonitor : IHostedService, IDisposable
 {
     private readonly IDiscoveryService _discoveryService;
     private readonly ILogger<MacOSNetworkMonitor> _logger;
+    private readonly object _lifecycleGate = new();
 
     public MacOSNetworkMonitor(
         IDiscoveryService discoveryService,
@@ -32,38 +33,41 @@ internal sealed class MacOSNetworkMonitor : IHostedService, IDisposable
             return Task.CompletedTask;
         }
 
-        try
+        lock (_lifecycleGate)
         {
-            _selfHandle = GCHandle.Alloc(this);
-            var result = NativeMethods.Start(_callback, GCHandle.ToIntPtr(_selfHandle));
-            if (result != 0)
+            try
             {
-                _selfHandle.Free();
-                _logger.LogWarning("macOS network path monitor could not be started (status {Status}).", result);
-                return Task.CompletedTask;
-            }
+                _selfHandle = GCHandle.Alloc(this);
+                var result = NativeMethods.Start(_callback, GCHandle.ToIntPtr(_selfHandle));
+                if (result != 0)
+                {
+                    _selfHandle.Free();
+                    _logger.LogWarning("macOS network path monitor could not be started (status {Status}).", result);
+                    return Task.CompletedTask;
+                }
 
-            _started = true;
-            _logger.LogInformation("Started macOS Network.framework path monitor.");
-        }
-        catch (DllNotFoundException)
-        {
-            if (_selfHandle.IsAllocated)
+                _started = true;
+                _logger.LogInformation("Started macOS Network.framework path monitor.");
+            }
+            catch (DllNotFoundException)
             {
-                _selfHandle.Free();
-            }
+                if (_selfHandle.IsAllocated)
+                {
+                    _selfHandle.Free();
+                }
 
-            _logger.LogWarning(
-                "macOS network path monitor native helper is unavailable; discovery will use its existing refresh behavior.");
-        }
-        catch (EntryPointNotFoundException)
-        {
-            if (_selfHandle.IsAllocated)
+                _logger.LogWarning(
+                    "macOS network path monitor native helper is unavailable; discovery will use its existing refresh behavior.");
+            }
+            catch (EntryPointNotFoundException)
             {
-                _selfHandle.Free();
-            }
+                if (_selfHandle.IsAllocated)
+                {
+                    _selfHandle.Free();
+                }
 
-            _logger.LogWarning("macOS network path monitor native helper has no compatible entry points.");
+                _logger.LogWarning("macOS network path monitor native helper has no compatible entry points.");
+            }
         }
 
         return Task.CompletedTask;
@@ -82,15 +86,18 @@ internal sealed class MacOSNetworkMonitor : IHostedService, IDisposable
 
     private void StopNativeMonitor()
     {
-        if (_started)
+        lock (_lifecycleGate)
         {
-            NativeMethods.Stop();
-            _started = false;
-        }
+            if (_started)
+            {
+                NativeMethods.Stop();
+                _started = false;
+            }
 
-        if (_selfHandle.IsAllocated)
-        {
-            _selfHandle.Free();
+            if (_selfHandle.IsAllocated)
+            {
+                _selfHandle.Free();
+            }
         }
     }
 
