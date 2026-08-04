@@ -86,6 +86,20 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
     {
         if (args.IsOnline)
         {
+            MediaPlaybackRecord[] localPlaybacks;
+            lock (_gate)
+            {
+                var localDeviceId = _identityManager.GetDeviceId();
+                localPlaybacks = _playbacks.Values
+                    .Where(playback => string.Equals(playback.SourceDeviceId, localDeviceId, StringComparison.Ordinal))
+                    .Select(CloneRecord)
+                    .ToArray();
+            }
+
+            if (localPlaybacks.Length > 0)
+            {
+                _ = ReplayLocalPlaybacksAsync(args.PeerDeviceId, localPlaybacks);
+            }
             return;
         }
 
@@ -105,6 +119,21 @@ public sealed class MediaPlaybackSyncService : IMediaPlaybackSyncService
         if (removed.Length > 0)
         {
             _ = NotifyPeerPlaybackRemovalAsync(args.PeerDeviceId, removed);
+        }
+    }
+
+    private async Task ReplayLocalPlaybacksAsync(string peerDeviceId, IReadOnlyList<MediaPlaybackRecord> playbacks)
+    {
+        foreach (var playback in playbacks)
+        {
+            try
+            {
+                await PublishLocalPlaybackToPeerAsync(peerDeviceId, playback, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to replay media playback to {PeerDeviceId}.", peerDeviceId);
+            }
         }
     }
 

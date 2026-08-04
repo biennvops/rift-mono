@@ -260,6 +260,25 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PeerSessionOnline_ReplaysLocalPlayback()
+    {
+        var service = CreateService();
+        await service.HandleMediaPlaybackPostedAsync(
+            CreatePlayback(_identityManager.GetDeviceId(), "playback-1", "Track"),
+            CancellationToken.None);
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: true,
+            selectedCapabilities: ["media.playback"],
+            allowsProtectedTraffic: true));
+
+        var sent = Assert.Single(_transport.SentMessages);
+        Assert.Equal("rift-peer", sent.PeerDeviceId);
+        Assert.Equal("media.playbackPosted", sent.Type);
+    }
+
+    [Fact]
     public async Task PeerSessionOffline_RemovesRemotePlaybackRecords()
     {
         var service = CreateService();
