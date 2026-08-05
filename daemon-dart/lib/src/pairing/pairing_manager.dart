@@ -18,7 +18,6 @@ import '../core/rpc_utils.dart';
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
   static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
-
   final TrustStore trustStore;
   final SessionManager sessionManager;
   final IdentityManager identityManager;
@@ -159,10 +158,7 @@ class PairingManager {
         'type': 'pairing.start',
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
-        'payload': {
-          'expiresInMs': _pairingTimeoutSeconds * 1000,
-          'displayName': identityManager.displayName,
-        },
+        'payload': {'expiresInMs': _pairingTimeoutSeconds * 1000},
       });
       RiftLog.debug('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
@@ -520,9 +516,6 @@ class PairingManager {
           timeout: Duration(milliseconds: clampedExpiry),
         );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final displayName =
-            payload['displayName'] as String? ?? 'Unknown Device';
-
         // Emit event to UI to show popup
         onIpcEvent({
           'jsonrpc': '2.0',
@@ -530,7 +523,7 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
-            'displayName': displayName,
+            'displayName': record.displayName ?? peerDeviceId,
             'expiresInMs': clampedExpiry,
           },
         });
@@ -714,7 +707,6 @@ class PairingManager {
     if (record == null) {
       record = PeerRecord(
         deviceId: peerDeviceId,
-        displayName: 'Rift Device',
         certDer: certDer,
         state: TrustState.discovered,
         updatedAt: DateTime.now().toUtc(),
@@ -733,6 +725,7 @@ class PairingManager {
         final replacement = PeerRecord(
           deviceId: peerDeviceId,
           displayName: record.displayName,
+          platform: record.platform,
           certDer: certDer,
           state: TrustState.discovered,
           pairedAt: null,
@@ -747,6 +740,7 @@ class PairingManager {
       final updatedRecord = PeerRecord(
         deviceId: record.deviceId,
         displayName: record.displayName,
+        platform: record.platform,
         certDer: certDer,
         state: record.state,
         pairedAt: record.pairedAt,

@@ -75,7 +75,9 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-start");
 
         Assert.Contains(_transport.ConnectionAttempts, attempt => attempt.Host == "192.168.1.50" && attempt.Port == 9140);
-        Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
+        var pairingStart = Assert.Single(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
+        Assert.False(pairingStart.Payload.TryGetProperty("displayName", out _));
+        Assert.False(pairingStart.Payload.TryGetProperty("platform", out _));
     }
 
     [Fact]
@@ -704,7 +706,43 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         var peer = _trustStore.GetPeer("rift-peer-inbound-display");
         Assert.Equal(TrustState.PairingPending, peer!.State);
-        Assert.Equal("Pixel 9 Pro", peer.DisplayName);
+        Assert.Null(peer.DisplayName);
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal("rift-peer-inbound-display", notification.Parameters["displayName"]);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_PairingStart_DoesNotOverwriteVerifiedSessionMetadata()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-authoritative-metadata",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            DisplayName = "Verified Device",
+            Platform = "ios",
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            "rift-peer-authoritative-metadata",
+            CreateEnvelope("rift-peer-authoritative-metadata", "pairing.start", new
+            {
+                expiresInMs = 120000,
+                displayName = "  Compatibility Name\n",
+                platform = "android"
+            }),
+            CancellationToken.None);
+
+        var peer = _trustStore.GetPeer("rift-peer-authoritative-metadata");
+        Assert.Equal("Verified Device", peer!.DisplayName);
+        Assert.Equal("ios", peer.Platform);
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal("Verified Device", notification.Parameters["displayName"]);
     }
 
     [Fact]
@@ -759,11 +797,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             _notificationService.Notifications,
             evt => evt.Method == "rift.onPairingRequest");
         Assert.Equal("rift-peer-pending-notify", notification.Parameters["deviceId"]);
-        Assert.Equal("Pixel 9", notification.Parameters["displayName"]);
+        Assert.Equal("rift-peer-pending-notify", notification.Parameters["displayName"]);
     }
 
     [Fact]
-    public async Task HandleMessageAsync_PairingStart_TruncatesOversizedRemoteDisplayName()
+    public async Task HandleMessageAsync_PairingStart_IgnoresCompatibilityDisplayName()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -786,14 +824,12 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         var storedPeer = _trustStore.GetPeer("rift-peer-long-name");
         Assert.NotNull(storedPeer);
-        Assert.NotNull(storedPeer!.DisplayName);
-        Assert.Equal(128, storedPeer.DisplayName!.Length);
-        Assert.Equal(oversizedDisplayName[..128], storedPeer.DisplayName);
+        Assert.Null(storedPeer!.DisplayName);
 
         var notification = Assert.Single(
             _notificationService.Notifications,
             evt => evt.Method == "rift.onPairingRequest");
-        Assert.Equal(oversizedDisplayName[..128], notification.Parameters["displayName"]);
+        Assert.Equal("rift-peer-long-name", notification.Parameters["displayName"]);
     }
 
     [Fact]

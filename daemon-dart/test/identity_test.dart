@@ -28,6 +28,42 @@ void main() {
       expect(manager.deviceId.length, equals(5 + 32)); // 'rift-' + 32 chars
     });
 
+    test('Should use normalized platform display name', () async {
+      final manager = IdentityManagerImpl(
+        tempDir.path,
+        platformDisplayName: '  Alice\nPhone  ',
+      );
+
+      await manager.initialize();
+
+      expect(manager.displayName, 'AlicePhone');
+    });
+
+    test('Should fall back when platform display name is unavailable', () async {
+      final manager = IdentityManagerImpl(
+        tempDir.path,
+        platformDisplayName: ' \t ',
+      );
+
+      await manager.initialize();
+
+      expect(
+        manager.displayName,
+        matches(RegExp(r'^(Android|iOS|Windows|macOS|Linux|Unknown) (Phone|Desktop) \d{2}$')),
+      );
+    });
+
+    test('Should truncate platform display name', () async {
+      final manager = IdentityManagerImpl(
+        tempDir.path,
+        platformDisplayName: List.filled(129, 'A').join(),
+      );
+
+      await manager.initialize();
+
+      expect(manager.displayName, List.filled(128, 'A').join());
+    });
+
     test('Should use injected private key without writing plaintext', () async {
       final seed = Uint8List.fromList(List<int>.generate(32, (i) => i));
       var providerCalls = 0;

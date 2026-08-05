@@ -216,7 +216,11 @@ void main() {
       () async {
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.start',
-          'payload': {'expiresInMs': 120000, 'displayName': 'Peer Device'},
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Peer Device',
+            'platform': 'ios',
+          },
         });
 
         // Wait for microtask for stream to process
@@ -224,14 +228,49 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.pairingPending);
+        expect(peer.displayName, isNull);
+        expect(peer.platform, isNull);
 
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
         expect(ipcEvents[0]['params']['fingerprint'], testFingerprint);
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
 
         expect(ipcEvents[0]['params']['expiresInMs'], 120000);
         // Because FakeAsync is not used, skip waiting for the actual timer and
         // verify the surfaced expiry instead.
+      },
+    );
+
+    test(
+      'Process pairing.start preserves verified session metadata',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-peer',
+            displayName: 'Verified Device',
+            platform: 'ios',
+            certDer: testCertDer,
+            state: TrustState.discovered,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Compatibility Name',
+            'platform': 'android',
+          },
+        });
+
+        await Future.delayed(Duration.zero);
+
+        final peer = await trustStore.getPeer('rift-peer');
+        expect(peer!.displayName, 'Verified Device');
+        expect(peer.platform, 'ios');
+        expect(ipcEvents.single['params']['displayName'], 'Verified Device');
       },
     );
 
@@ -258,7 +297,7 @@ void main() {
         expect(peer!.state, TrustState.pairingPending);
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
-        expect(ipcEvents[0]['params']['displayName'], 'Peer Device');
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
       },
     );
 
@@ -483,6 +522,11 @@ void main() {
           'method': 'rift.startPairing',
           'params': {'deviceId': 'rift-peer'},
         });
+
+        final pairingStart = sessionManager.sentMessages.single;
+        expect(pairingStart['type'], 'pairing.start');
+        expect(pairingStart['payload'].containsKey('displayName'), isFalse);
+        expect(pairingStart['payload'].containsKey('platform'), isFalse);
 
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.approve',

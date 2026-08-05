@@ -72,6 +72,10 @@ public sealed class PairingInteropTests : IDisposable
             () => _initiator.Transport.HasProtectedSession(_responder.DeviceId) &&
                   _responder.Transport.HasProtectedSession(_initiator.DeviceId),
             token);
+        await WaitForConditionAsync(
+            () => _initiator.TrustStore.GetPeer(_responder.DeviceId)?.DisplayName == _responder.DisplayName &&
+                  _responder.TrustStore.GetPeer(_initiator.DeviceId)?.DisplayName == _initiator.DisplayName,
+            token);
 
         // 3. Trusted reconnect: a fresh session is authorized immediately.
         var responderOffline = _initiator.WaitForSessionOffline(_responder.DeviceId);
@@ -130,7 +134,10 @@ public sealed class PairingInteropTests : IDisposable
             var databaseContext = new DatabaseContext(_databasePath);
             databaseContext.Initialize();
             TrustStore = new SqliteTrustStore(databaseContext);
-            Identity = new IdentityManager(new SqliteLocalIdentityStore(databaseContext));
+            DisplayName = $"{name} workstation";
+            Identity = new IdentityManager(
+                new SqliteLocalIdentityStore(databaseContext),
+                displayNameProvider: () => DisplayName);
             Identity.EnsureIdentityInitialized();
             Transport = new TlsTransport(
                 NullLogger<TlsTransport>.Instance,
@@ -157,6 +164,8 @@ public sealed class PairingInteropTests : IDisposable
         public PairingProtocolCoordinator Pairing { get; }
 
         public string DeviceId => Identity.GetDeviceId();
+
+        public string DisplayName { get; }
 
         public Task<SessionStateChangedEventArgs> WaitForSessionOnline(string peerDeviceId) =>
             WaitForSessionState(peerDeviceId, online: true);

@@ -200,6 +200,7 @@ class MainActivity: FlutterActivity() {
                             )
                         }
                     }
+                    "getDeviceInfo" -> result.success(AndroidDeviceInfo.asMap(this))
                     else -> result.notImplemented()
                 }
             }

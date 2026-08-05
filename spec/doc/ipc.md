@@ -8,7 +8,7 @@ The IPC API is the only interface through which a client application interacts w
 
 ## 1. Transport Independence
 
-The IPC contract is defined independently of transport. In v0.1-draft, four transport bindings exist:
+The IPC contract is defined independently of transport. In v0.1-draft, five transport bindings exist:
 
 | Platform | Transport                | Notes                                                        |
 | -------- | ------------------------ | ------------------------------------------------------------ |
@@ -16,8 +16,7 @@ The IPC contract is defined independently of transport. In v0.1-draft, four tran
 | macOS    | Unix domain socket       | Flutter client connects to the `daemon-cs` macOS host        |
 | Linux    | Unix domain socket       | Flutter client connects to the `daemon-cs` Linux host        |
 | Android  | `SendPort`/`ReceivePort` | Flutter UI isolate connects to the daemon background isolate |
-
-Future transports such as in-process channels on iOS require only a new transport binding, not changes to this contract.
+| iOS      | In-process channel       | Flutter UI connects to the in-process Dart daemon            |
 
 All transports carry JSON-RPC 2.0 messages. Each message is a single JSON object. Framing (length-prefix, newline-delimited, or transport-native) is transport-specific and outside this specification.
 
@@ -108,11 +107,14 @@ Returns the local device's identity information.
 }
 ```
 
-`displayName` is daemon-generated and stable for the local identity. In v0.1-draft
-it is derived from the current platform, a coarse device type, and a stable
-two-digit identifier, for example `Windows Desktop 07` or `Android Phone 12`.
-`platform` is a canonical lowercase OS identifier: `android`, `windows`,
-`macos`, `linux`, or `unknown`. `identityProtectionBackend` is an OPTIONAL
+`displayName` is resolved from the platform's current user-visible device or
+machine name when available. Implementations fall back to a stable
+identity-derived name, for example `Windows Desktop 07` or `Android Phone 12`,
+when the platform returns no usable name. A platform rename may therefore be
+reflected after the daemon restarts and reconnects. `displayName` is presentation
+metadata only and is never an identity or authorization input. `platform` is a
+canonical lowercase OS identifier: `android`, `ios`, `windows`, `macos`,
+`linux`, or `unknown`. `identityProtectionBackend` is an OPTIONAL
 implementation diagnostic naming the active local identity protection backend,
 for example `dpapi`, `keychain`, `secret-service`, or `file`. It MUST NOT expose
 key identifiers or other secret material.
@@ -780,7 +782,7 @@ Updates the local notification-sync policy. In v1, the default policy is enabled
 
 Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers, including desktop and Android sinks.
 
-`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
+`posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
 
 #### `rift.listMediaPlayback`
 
@@ -812,7 +814,7 @@ Reports the outcome of an action previously delivered through `rift.onMediaPlayb
 
 Submits a locally observed or locally generated media playback event into the daemon so it can update the local playback cache and mirror the event to trusted peers.
 
-`posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `windows`, `macos`, or `linux`.
+`posted` / `updated` require `playbackId`, `appId`, `appName`, `playbackState`, `positionMs`, `updatedAt`, and the five `can*` booleans. `removed` requires `playbackId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
 
 ### 4.8 Presence
 

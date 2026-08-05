@@ -129,7 +129,7 @@ public sealed class DaemonInfoService(
         return "unknown";
     }
 
-    private static string GetLocalPlatform()
+    internal static string GetLocalPlatform()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -169,6 +169,11 @@ public sealed class DaemonInfoService(
         if (displayName.StartsWith("Windows ", StringComparison.OrdinalIgnoreCase))
         {
             return "windows";
+        }
+
+        if (displayName.StartsWith("iOS ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ios";
         }
 
         if (displayName.StartsWith("macOS ", StringComparison.OrdinalIgnoreCase))

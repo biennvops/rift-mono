@@ -45,6 +45,19 @@ Windows notes:
   build. On Windows 11, the action may appear under **Show more options** in
   Explorer's context menu.
 
+iOS sideload build:
+
+```bash
+RIFT_DEV_BACKGROUND_LOCATION=1 \
+RIFT_DEV_REMOTE_MEDIA_SESSION=1 \
+RIFT_DEV_PRIVATE_DEVICE_NAME=1 \
+tool/build_unsigned_ios_ipa.sh
+```
+
+The script creates `build/ios/ipa/Runner-unsigned-release.ipa` for signing and
+installation with Sideloadly. `RIFT_DEV_PRIVATE_DEVICE_NAME=1` compiles the
+unsupported MobileGestalt lookup; normal builds exclude that code.
+
 macOS notes:
 
 - send-file picking uses the shared Flutter `file_picker` flow with

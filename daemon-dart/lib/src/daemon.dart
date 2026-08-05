@@ -477,6 +477,7 @@ class RiftDaemon {
 
   final String storagePath;
   final Future<Uint8List> Function()? identityPrivateKeyProvider;
+  final String? localDisplayName;
   final int port;
   final bool enableTransport;
   final Transport? peerTransport;
@@ -488,6 +489,7 @@ class RiftDaemon {
   RiftDaemon({
     required this.storagePath,
     this.identityPrivateKeyProvider,
+    this.localDisplayName,
     this.port = 11112,
     this.enableTransport = true,
     this.peerTransport,
@@ -501,6 +503,7 @@ class RiftDaemon {
     _identityManager = IdentityManagerImpl(
       storagePath,
       privateKeyProvider: identityPrivateKeyProvider,
+      platformDisplayName: localDisplayName,
     );
     await _identityManager!.initialize();
 
@@ -2133,7 +2136,7 @@ class RiftDaemon {
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
-        'platform': _platformFromDisplayName(peer.displayName),
+        'platform': peer.platform ?? _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -2162,7 +2165,7 @@ class RiftDaemon {
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
-        'platform': _platformFromDisplayName(peer.displayName),
+        'platform': peer.platform ?? _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -2202,7 +2205,8 @@ class RiftDaemon {
         'deviceId': hintedDeviceId,
         if (knownPeer?.displayName != null)
           'displayName': knownPeer!.displayName,
-        'platform': _platformFromDisplayName(knownPeer?.displayName),
+        'platform':
+            knownPeer?.platform ?? _platformFromDisplayName(knownPeer?.displayName),
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
@@ -3313,6 +3317,7 @@ class RiftDaemon {
       PeerRecord(
         deviceId: record.deviceId,
         displayName: record.displayName,
+        platform: record.platform,
         certDer: record.certDer,
         state: record.state,
         pairedAt: record.pairedAt,
@@ -3860,6 +3865,7 @@ class RiftDaemon {
     // Identity seed loaded by the host (e.g. from a platform keystore) before
     // spawning; the daemon isolate itself cannot use platform channels.
     final identityKey = args['identityKey'];
+    final localDisplayName = args['localDisplayName'] as String?;
 
     final daemon = RiftDaemon(
       storagePath: storagePath,
@@ -3870,6 +3876,7 @@ class RiftDaemon {
       identityPrivateKeyProvider: identityKey is Uint8List
           ? () async => identityKey
           : null,
+      localDisplayName: localDisplayName,
       onIpcEvent: (event) => sendPort?.send(event),
     );
 

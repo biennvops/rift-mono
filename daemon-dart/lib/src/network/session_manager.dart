@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
@@ -144,6 +145,15 @@ class SessionManager {
 
   final Future<bool> Function(String)? peerAllowanceResolver;
 
+  static const Set<String> _validPlatforms = {
+    'android',
+    'ios',
+    'windows',
+    'macos',
+    'linux',
+    'unknown',
+  };
+
   static const Set<String> _validBindingTypes = {
     'tls-exporter',
     'tls-unique',
@@ -182,6 +192,40 @@ class SessionManager {
       return null;
     }
     return bindingType;
+  }
+
+  String _localPlatform() {
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isMacOS) return 'macos';
+    if (Platform.isLinux) return 'linux';
+    return 'unknown';
+  }
+
+  Future<void> _persistTrustedDeviceMetadata(
+    String peerDeviceId,
+    String displayName,
+    String platform,
+  ) async {
+    final existing = await _trustStore.getPeer(peerDeviceId);
+    if (existing?.state != TrustState.trusted) {
+      return;
+    }
+
+    await _trustStore.upsertPeer(
+      PeerRecord(
+        deviceId: existing!.deviceId,
+        displayName: displayName,
+        platform: platform,
+        certDer: existing.certDer,
+        state: existing.state,
+        pairedAt: existing.pairedAt,
+        updatedAt: DateTime.now().toUtc(),
+        lastSeenAt: existing.lastSeenAt,
+        trustedEndpoints: existing.trustedEndpoints,
+      ),
+    );
   }
 
   final Set<String> _requiredCapabilityNames = const {
@@ -619,6 +663,8 @@ class SessionManager {
           'Capability negotiation not complete',
         );
         return;
+      } else if (type == 'device.metadata') {
+        await _handleDeviceMetadata(ctx, jsonMap);
       } else if (type == 'presence.update') {
         await _handlePresenceUpdate(ctx, msg, jsonMap);
       } else {
@@ -1193,6 +1239,108 @@ class SessionManager {
     );
   }
 
+  Future<void> _sendTrustedDeviceMetadata(
+    SessionContext ctx, {
+    bool requestPeerMetadata = true,
+  }) async {
+    if (!isCurrentEstablishedContext(
+          activeContext: _sessions[ctx.peerDeviceId],
+          candidateContext: ctx,
+        ) ||
+        ctx.trustState != TrustState.trusted ||
+        (await _trustStore.getPeer(ctx.peerDeviceId))?.state !=
+            TrustState.trusted) {
+      return;
+    }
+
+    final message = {
+      'rift': '0.1-draft',
+      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
+      'type': 'device.metadata',
+      'sourceDeviceId': _identityManager.deviceId,
+      'destinationDeviceId': ctx.peerDeviceId,
+      'payload': {
+        'displayName': _identityManager.displayName,
+        'platform': _localPlatform(),
+        'requestPeerMetadata': requestPeerMetadata,
+      },
+    };
+    await _transport.sendMessage(
+      ctx.peerDeviceId,
+      Uint8List.fromList(utf8.encode(json.encode(message))),
+    );
+  }
+
+  Future<void> _handleDeviceMetadata(
+    SessionContext ctx,
+    Map<String, dynamic> jsonMap,
+  ) async {
+    final payload = jsonMap['payload'];
+    if (payload is! Map<String, dynamic>) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'MalformedMessage',
+        'Missing device.metadata payload',
+      );
+      return;
+    }
+
+    final rawDisplayName = payload['displayName'];
+    final platform = payload['platform'];
+    final requestPeerMetadata = payload['requestPeerMetadata'] ?? false;
+    if (rawDisplayName is! String ||
+        platform is! String ||
+        requestPeerMetadata is! bool ||
+        !_validPlatforms.contains(platform)) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'ProtocolError',
+        'Invalid device.metadata payload',
+      );
+      return;
+    }
+
+    final displayName = rawDisplayName.trim();
+    if (displayName.isEmpty ||
+        displayName.length > 128 ||
+        RegExp(r'[\x00-\x1F\x7F]').hasMatch(displayName)) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'ProtocolError',
+        'Invalid device.metadata displayName',
+      );
+      return;
+    }
+
+    if (ctx.trustState != TrustState.trusted) {
+      return;
+    }
+
+    await _persistTrustedDeviceMetadata(
+      ctx.peerDeviceId,
+      displayName,
+      platform,
+    );
+    if (requestPeerMetadata) {
+      await _sendTrustedDeviceMetadata(ctx, requestPeerMetadata: false);
+    }
+  }
+
+  Future<void> _syncTrustedDeviceMetadata(SessionContext ctx) =>
+      _sendTrustedDeviceMetadata(ctx);
+
+  void _scheduleTrustedDeviceMetadataSync(SessionContext ctx) {
+    unawaited(
+      _syncTrustedDeviceMetadata(ctx).catchError((Object error) {
+        RiftLog.warn(
+          '[Session] Trusted device metadata sync failed for '
+          '${ctx.peerDeviceId}: $error',
+        );
+      }),
+    );
+  }
+
   Future<void> _handleCapabilityAdvertise(
     SessionContext ctx,
     TransportMessage msg,
@@ -1392,6 +1540,9 @@ class SessionManager {
       return;
     }
     ctx.capabilityNegotiated = true;
+    if (ctx.trustState == TrustState.trusted) {
+      _scheduleTrustedDeviceMetadataSync(ctx);
+    }
     final waiter = _establishmentWaiters.remove(ctx.peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
       RiftLog.info(
@@ -1458,6 +1609,7 @@ class SessionManager {
         // Otherwise, _startHeartbeatIfTrusted will be called at the end of negotiation.
         if (ctx.capabilityNegotiated) {
           _startHeartbeatIfTrusted(ctx);
+          _scheduleTrustedDeviceMetadataSync(ctx);
         }
       } else if (wasTrusted && newState != TrustState.trusted) {
         ctx.heartbeatTimer?.cancel();

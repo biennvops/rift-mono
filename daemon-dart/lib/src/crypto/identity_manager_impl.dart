@@ -12,8 +12,11 @@ import 'base32_utils.dart';
 import 'pop_manager.dart';
 
 class IdentityManagerImpl implements IdentityManager {
+  static const int _maxDisplayNameLength = 128;
+
   final String storagePath;
   final Future<Uint8List> Function()? privateKeyProvider;
+  final String? platformDisplayName;
   Uint8List? _privateKey;
   Uint8List? _publicKey;
   String _deviceId = '';
@@ -25,7 +28,11 @@ class IdentityManagerImpl implements IdentityManager {
   String _tlsPrivateKeyPem = '';
   Uint8List? _tlsCertificateDer;
 
-  IdentityManagerImpl(this.storagePath, {this.privateKeyProvider});
+  IdentityManagerImpl(
+    this.storagePath, {
+    this.privateKeyProvider,
+    this.platformDisplayName,
+  });
 
   @override
   Future<void> initialize() async {
@@ -87,7 +94,9 @@ class IdentityManagerImpl implements IdentityManager {
     // Device ID: 'rift-' + first 32 chars of lowercase Base32(SHA-256(pubkey))
     final base32Str = Base32Utils.encode(_fingerprintBytes!).toLowerCase();
     _deviceId = 'rift-${base32Str.substring(0, 32)}';
-    _displayName = _deriveDisplayName(_fingerprintBytes!);
+    _displayName =
+        _normalizeDisplayName(platformDisplayName) ??
+        _deriveDisplayName(_fingerprintBytes!);
   }
 
   @override
@@ -170,6 +179,23 @@ class IdentityManagerImpl implements IdentityManager {
     _tlsCertificatePem = '';
     _tlsPrivateKeyPem = '';
     _cachedKeyPair = null;
+  }
+
+  static String? _normalizeDisplayName(String? displayName) {
+    if (displayName == null) {
+      return null;
+    }
+
+    final normalized = displayName
+        .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
+        .trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    return normalized.length <= _maxDisplayNameLength
+        ? normalized
+        : normalized.substring(0, _maxDisplayNameLength);
   }
 
   static String _deriveDisplayName(Uint8List fingerprintBytes) {

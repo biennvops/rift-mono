@@ -14,7 +14,6 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     , IDisposable
 {
     private const int PairingExpiryMs = 120000;
-    private const int MaxRemoteDisplayNameLength = 128;
     // Android's Dart SecureServerSocket cannot provisionally accept arbitrary
     // self-signed client certificates on inbound TLS, so when pairing against
     // Android we prefer to wait longer for a peer-initiated authenticated
@@ -183,8 +182,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
 
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
-                expiresInMs = PairingExpiryMs,
-                displayName = _identityManager.GetDisplayName()
+                expiresInMs = PairingExpiryMs
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
@@ -588,20 +586,10 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 ? expiresElement.GetInt32()
                 : PairingExpiryMs;
             expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
-            var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
-                ? NormalizeRemoteDisplayName(displayNameElement.GetString())
-                : null;
-            if (!string.IsNullOrWhiteSpace(displayName))
-            {
-                peer.DisplayName = displayName;
-                peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
-                _trustStore.SavePeer(peer);
-            }
-
             await NotifyPairingRequestAsync(
                 peerDeviceId,
                 IdentityManager.DeriveFingerprint(peer.Ed25519PublicKey),
-                displayName ?? peerDeviceId,
+                peer.DisplayName ?? peerDeviceId,
                 expiresInMs,
                 cancellationToken);
         }
@@ -634,18 +622,6 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         {
             await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
         }
-    }
-
-    private static string? NormalizeRemoteDisplayName(string? displayName)
-    {
-        if (string.IsNullOrWhiteSpace(displayName))
-        {
-            return displayName;
-        }
-
-        return displayName.Length <= MaxRemoteDisplayNameLength
-            ? displayName
-            : displayName[..MaxRemoteDisplayNameLength];
     }
 
     private async Task HandlePairingCompleteAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
@@ -862,8 +838,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
-        _transport.RefreshSessionAuthorization(peerDeviceId);
         PersistTrustedEndpointIfAvailable(peerDeviceId, source: "pairing-session");
+        _transport.RefreshSessionAuthorization(peerDeviceId);
         await LogEventAsync(SecurityEventTypes.PairingCompleted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
         await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "trusted", "Pairing completed.", cancellationToken);
         if (peer.Ed25519PublicKey is not null)
