@@ -31,7 +31,7 @@ class DeviceDetailScreen extends StatefulWidget {
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   late Map<String, dynamic> peer;
   late bool isOnline;
-  late final String _deviceId;
+  String get _deviceId => peer['deviceId']?.toString() ?? '';
   bool _wasRemoved = false;
   bool _isRefreshing = false;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
@@ -43,7 +43,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     super.initState();
     peer = widget.peer;
     isOnline = widget.isOnline;
-    _deviceId = widget.peer['deviceId']?.toString() ?? '';
     if (!widget.isSelf) {
       _subscribeToPeerUpdates();
     }
@@ -58,7 +57,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       setState(() {
         peer = widget.peer;
         isOnline = widget.isOnline;
-        _deviceId = widget.peer['deviceId']?.toString() ?? '';
       });
     }
   }
@@ -437,7 +435,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final theme = Theme.of(context);
-        final isMobile = constraints.maxWidth < 768;
+        final isEmbedded = widget.onClose != null;
+        final isMobile = isEmbedded || constraints.maxWidth < 768;
 
         final deviceId = peer['deviceId']?.toString() ?? 'Unknown ID';
         final displayName = peer['displayName']?.toString() ?? deviceId;
