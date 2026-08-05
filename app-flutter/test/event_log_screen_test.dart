@@ -277,7 +277,7 @@ void main() {
     );
   });
 
-  test('LocalEventsNotifier reconciles direct live events with history',
+  test('LocalEventsNotifier keeps direct events with subjectless history',
       () async {
     final client = DirectActivityClient()
       ..events = [
@@ -323,10 +323,56 @@ void main() {
     await client.emitConnectionChanged(true);
     await Future<void>.delayed(Duration.zero);
 
-    expect(notifier.events, hasLength(3));
+    expect(notifier.events, hasLength(4));
     expect(
       notifier.events.where((event) => event.title == 'Clipboard received'),
-      hasLength(2),
+      hasLength(3),
+    );
+  });
+
+  test('LocalEventsNotifier reconciles matching subjects one to one', () async {
+    final client = DirectActivityClient()
+      ..events = [
+        {
+          'eventId': 'evt-existing-subject',
+          'eventType': 'connection.established',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-existing',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    await Future<void>.delayed(Duration.zero);
+    client.clipboardOffer.add({
+      'offerId': 'offer-matching',
+      'sourceDeviceId': 'rift-peer-subject',
+      'contentType': 'text/plain',
+    });
+    await Future<void>.delayed(Duration.zero);
+    client.events = [
+      ...client.events,
+      {
+        'eventId': 'evt-matching-subject',
+        'eventType': 'clipboard.offered',
+        'severity': 'info',
+        'peerDeviceId': 'rift-peer-subject',
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+        'outcome': 'success',
+        'details': {'offerId': 'offer-matching'},
+      },
+    ];
+    await client.emitConnectionChanged(false);
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(2));
+    expect(
+      notifier.events.where((event) => event.title == 'Clipboard received'),
+      hasLength(1),
     );
   });
 

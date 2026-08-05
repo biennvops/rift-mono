@@ -190,8 +190,8 @@ class LocalEventsNotifier extends ChangeNotifier {
       if (candidate.reconciliationKey != target.reconciliationKey) continue;
       final candidateSubject = candidate.reconciliationSubject;
       final targetSubject = target.reconciliationSubject;
-      if (candidateSubject != null &&
-          targetSubject != null &&
+      if (candidateSubject == null ||
+          targetSubject == null ||
           candidateSubject != targetSubject) {
         continue;
       }
