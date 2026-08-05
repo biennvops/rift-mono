@@ -212,8 +212,6 @@ public class SessionBootstrap
                 supportedVersions = new[] { "0.1-draft" },
                 deviceId = myDeviceId,
                 implementationId = "riftd-cs/0.1.0",
-                displayName = _identityManager.GetDisplayName(),
-                platform = DaemonInfoService.GetLocalPlatform(),
                 capabilities,
                 bindingType,
                 sessionNonce = nonceBase64,

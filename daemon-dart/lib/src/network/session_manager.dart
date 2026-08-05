@@ -496,8 +496,6 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'supportedVersions': ['0.1-draft'],
         'implementationId': 'riftd-dart/0.1.0',
-        'displayName': _identityManager.displayName,
-        'platform': _localPlatform(),
         'capabilities': _defaultCapabilities.map((c) => c.toJson()).toList(),
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
@@ -948,17 +946,6 @@ class SessionManager {
       throw SessionException(
         'SecurityError: Identity Misbinding / Invalid PoP Signature',
       );
-    }
-
-    try {
-      await _persistVerifiedDeviceMetadata(
-        peerDeviceId,
-        payload,
-        msg.peerCertDer!,
-      );
-    } on FormatException catch (error) {
-      await _rejectSession(peerDeviceId, 'ProtocolError', error.message);
-      return;
     }
 
     RiftLog.debug(

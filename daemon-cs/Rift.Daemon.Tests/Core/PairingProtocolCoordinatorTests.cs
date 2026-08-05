@@ -712,6 +712,38 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleMessageAsync_PairingStart_DoesNotOverwriteVerifiedSessionMetadata()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-authoritative-metadata",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Discovered,
+            DisplayName = "Verified Device",
+            Platform = "ios",
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _coordinator.HandleMessageAsync(
+            "rift-peer-authoritative-metadata",
+            CreateEnvelope("rift-peer-authoritative-metadata", "pairing.start", new
+            {
+                expiresInMs = 120000,
+                displayName = "  Compatibility Name\n",
+                platform = "android"
+            }),
+            CancellationToken.None);
+
+        var peer = _trustStore.GetPeer("rift-peer-authoritative-metadata");
+        Assert.Equal("Verified Device", peer!.DisplayName);
+        Assert.Equal("ios", peer.Platform);
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal("Verified Device", notification.Parameters["displayName"]);
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PairingStart_ThenLocalApprove_SendsPairingComplete()
     {
         _transport.ActiveSessions.Add("rift-peer-a-initiator");

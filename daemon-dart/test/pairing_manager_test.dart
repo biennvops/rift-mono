@@ -242,6 +242,38 @@ void main() {
     );
 
     test(
+      'Process pairing.start preserves verified session metadata',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-peer',
+            displayName: 'Verified Device',
+            platform: 'ios',
+            certDer: testCertDer,
+            state: TrustState.discovered,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Compatibility Name',
+            'platform': 'android',
+          },
+        });
+
+        await Future.delayed(Duration.zero);
+
+        final peer = await trustStore.getPeer('rift-peer');
+        expect(peer!.displayName, 'Verified Device');
+        expect(peer.platform, 'ios');
+        expect(ipcEvents.single['params']['displayName'], 'Verified Device');
+      },
+    );
+
+    test(
       'Process pairing.start still notifies UI when peer is already pairingPending',
       () async {
         await trustStore.upsertPeer(

@@ -258,8 +258,8 @@ void main() {
       expect(helloMsg['messageId'], isNotNull);
       expect(helloMsg['payload']['bindingType'], 'app-nonce');
       expect(helloMsg['payload']['implementationId'], 'riftd-dart/0.1.0');
-      expect(helloMsg['payload']['displayName'], 'Device One');
-      expect(helloMsg['payload']['platform'], isA<String>());
+      expect(helloMsg['payload'].containsKey('displayName'), isFalse);
+      expect(helloMsg['payload'].containsKey('platform'), isFalse);
       expect(helloMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(helloMsg['payload']['sessionNonce'] as String),
@@ -282,7 +282,7 @@ void main() {
         hasLength(32),
       );
       
-      expect((await trustStore2.getPeer('rift-device1'))?.displayName, 'Device One');
+      expect((await trustStore2.getPeer('rift-device1'))?.displayName, isNull);
 
       transport1.simulateIncomingMessage(
         'rift-device2',

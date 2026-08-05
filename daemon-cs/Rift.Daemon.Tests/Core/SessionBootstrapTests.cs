@@ -182,10 +182,8 @@ public class SessionBootstrapTests
         var sessionNonce = Convert.FromBase64String(messagePayload.GetProperty("sessionNonce").GetString()!);
         Assert.Equal(32, sessionNonce.Length);
         Assert.Equal("riftd-cs/0.1.0", messagePayload.GetProperty("implementationId").GetString());
-        Assert.Equal("Office Desktop", messagePayload.GetProperty("displayName").GetString());
-        Assert.Contains(
-            messagePayload.GetProperty("platform").GetString(),
-            new[] { "windows", "macos", "linux", "unknown" });
+        Assert.False(messagePayload.TryGetProperty("displayName", out _));
+        Assert.False(messagePayload.TryGetProperty("platform", out _));
         Assert.Contains(
             messagePayload.GetProperty("supportedVersions").EnumerateArray().Select(element => element.GetString()),
             version => version == "0.1-draft");

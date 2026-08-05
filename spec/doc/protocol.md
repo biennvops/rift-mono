@@ -246,7 +246,7 @@ Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` 
 
 Any device ID field inside a message payload (e.g., `sourceDeviceId` in `clipboard.offer`, `requestingDeviceId` in `clipboard.fetchRequest`) MUST be validated against the authenticated `sourceDeviceId` from the envelope. If a payload identity field does not match the envelope's authenticated identity, the message MUST be rejected with `Unauthorized` and a `critical` security event MUST be logged. Implementations MUST use only the envelope's authenticated `sourceDeviceId` for all business logic, state updates, and audit logging — never an unverified payload field.
 
-Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). It MUST NOT include real user-assigned or platform-derived presentation metadata before the peer's Proof of Possession has been verified. The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
 
 Each TLS connection MUST process at most one `session.hello` message in each direction. If a peer sends a second `session.hello` on the same connection, the receiver MUST reject it with `ProtocolError` and terminate the session. This prevents application-layer state confusion from replayed or duplicated session initiation messages.
 
@@ -263,8 +263,6 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "supportedVersions": ["0.1-draft"],
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
-  "displayName": "Windows Desktop 07",
-  "platform": "windows",
   "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
   "bindingType": "app-nonce",
   "sessionNonce": "base64-encoded-32-bytes",
@@ -278,7 +276,7 @@ The `bindingType` field is REQUIRED. It MUST be one of `"tls-exporter"`, `"tls-u
 
 The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUST be absent otherwise. It contains a base64-encoded 32-byte cryptographically random nonce used in the Tier 3 channel binding computation.
 
-`displayName` and `platform` are OPTIONAL authenticated presentation metadata in both `session.hello` and `session.accept`. `displayName` MUST NOT exceed 128 characters after trimming and MUST NOT contain control characters. `platform` MUST be one of `android`, `ios`, `windows`, `macos`, `linux`, or `unknown`. A receiver MUST consume these fields only after the message's Ed25519 Proof of Possession and device identity have been verified. A verified value MAY update the corresponding trust-store record without changing its trust state. Display names and platform values MUST NOT be used as identity, authorization, or trust inputs.
+`displayName` and `platform` are OPTIONAL authenticated presentation metadata in `session.accept`. They MUST NOT appear in `session.hello` in a new implementation. `displayName` MUST NOT exceed 128 characters after trimming and MUST NOT contain control characters. `platform` MUST be one of `android`, `ios`, `windows`, `macos`, `linux`, or `unknown`. A receiver MUST consume these fields only after the message's Ed25519 Proof of Possession and device identity have been verified. A verified value MAY update the corresponding trust-store record without changing its trust state. Display names and platform values MUST NOT be used as identity, authorization, or trust inputs.
 
 `session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, optional `displayName` string, optional `platform` string, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
@@ -294,7 +292,7 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.3 Pairing Messages
 
-`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string, optional `platform` string. These fields are retained for compatibility with pairing-only metadata exchange; verified session metadata is authoritative for trust-store presentation updates.
+`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string, optional `platform` string. These fields are retained for compatibility with pairing-only metadata exchange and MAY fill presentation fields not provided by verified `session.accept` metadata; they MUST NOT overwrite verified session metadata.
 
 `pairing.approve` payload fields: `approvedAt` RFC 3339 timestamp.
 

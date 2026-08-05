@@ -589,16 +589,19 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 ? expiresElement.GetInt32()
                 : PairingExpiryMs;
             expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
-            var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
+            var pairingDisplayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
                 ? NormalizeRemoteDisplayName(displayNameElement.GetString())
                 : null;
-            var platform = payload.TryGetProperty("platform", out var platformElement) && platformElement.ValueKind == JsonValueKind.String
+            var pairingPlatform = payload.TryGetProperty("platform", out var platformElement) && platformElement.ValueKind == JsonValueKind.String
                 ? NormalizeRemotePlatform(platformElement.GetString())
                 : null;
-            if (!string.IsNullOrWhiteSpace(displayName) || platform is not null)
+            var displayName = peer.DisplayName ?? pairingDisplayName;
+            var platform = peer.Platform != "unknown" ? peer.Platform : pairingPlatform ?? peer.Platform;
+            if (!string.Equals(displayName, peer.DisplayName, StringComparison.Ordinal) ||
+                !string.Equals(platform, peer.Platform, StringComparison.Ordinal))
             {
-                peer.DisplayName = displayName ?? peer.DisplayName;
-                peer.Platform = platform ?? DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+                peer.DisplayName = displayName;
+                peer.Platform = platform;
                 _trustStore.SavePeer(peer);
             }
 

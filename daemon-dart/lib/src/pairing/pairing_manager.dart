@@ -529,14 +529,18 @@ class PairingManager {
           timeout: Duration(milliseconds: clampedExpiry),
         );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final displayName = _normalizeDisplayName(payload['displayName']);
-        final platform = _normalizePlatform(payload['platform']);
-        if (displayName != null || platform != null) {
+        final pairingDisplayName = _normalizeDisplayName(
+          payload['displayName'],
+        );
+        final pairingPlatform = _normalizePlatform(payload['platform']);
+        final displayName = record.displayName ?? pairingDisplayName;
+        final platform = record.platform ?? pairingPlatform;
+        if (displayName != record.displayName || platform != record.platform) {
           await trustStore.upsertPeer(
             PeerRecord(
               deviceId: record.deviceId,
-              displayName: displayName ?? record.displayName,
-              platform: platform ?? record.platform,
+              displayName: displayName,
+              platform: platform,
               certDer: record.certDer,
               state: record.state,
               pairedAt: record.pairedAt,
@@ -554,7 +558,7 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
-            'displayName': displayName ?? record.displayName ?? 'Unknown Device',
+            'displayName': displayName ?? 'Unknown Device',
             'expiresInMs': clampedExpiry,
           },
         });
@@ -759,7 +763,6 @@ class PairingManager {
     if (record == null) {
       record = PeerRecord(
         deviceId: peerDeviceId,
-        displayName: 'Rift Device',
         certDer: certDer,
         state: TrustState.discovered,
         updatedAt: DateTime.now().toUtc(),

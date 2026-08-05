@@ -91,6 +91,43 @@ public class TlsTransportTests
         await listenerTask;
     }
 
+    [Fact]
+    public async Task CSharpPeers_FirstSessionPersistsVerifiedMetadataForNewPeers()
+    {
+        var serverIdentity = new IdentityManager(displayNameProvider: () => "Server Workstation");
+        var clientIdentity = new IdentityManager(displayNameProvider: () => "Client Laptop");
+        serverIdentity.EnsureIdentityInitialized();
+        clientIdentity.EnsureIdentityInitialized();
+        var serverTrust = new InMemoryTrustStore();
+        var clientTrust = new InMemoryTrustStore();
+        using var server = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            serverIdentity,
+            serverTrust,
+            listenPort: 0);
+        using var client = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            clientIdentity,
+            clientTrust);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        var serverOnline = OnlineSession(server, clientIdentity.GetDeviceId());
+        var clientOnline = OnlineSession(client, serverIdentity.GetDeviceId());
+        var listenerTask = server.StartListeningAsync(cancellation.Token);
+        var port = await WaitForListeningPortAsync(server, cancellation.Token);
+
+        await client.ConnectToPeerWithIdentityAsync("127.0.0.1", port, cancellation.Token);
+        await Task.WhenAll(serverOnline, clientOnline).WaitAsync(cancellation.Token);
+
+        Assert.Equal("Client Laptop", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
+        Assert.Equal("Server Workstation", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.DisplayName);
+        Assert.NotEqual("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
+        Assert.NotEqual("unknown", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.Platform);
+
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
     private static InMemoryTrustStore CreateTrustStoreWithTrustedPeer(IdentityManager peerIdentity)
     {
         var trustStore = new InMemoryTrustStore();
