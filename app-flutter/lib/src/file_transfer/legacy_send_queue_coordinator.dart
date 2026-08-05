@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import 'package:app_flutter/src/file_transfer/send_queue_entry.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_panel.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/file_transfer/send_queue_entry.dart';
+import 'package:rift/src/file_transfer/send_queue_panel.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 
 class LegacySendQueueCoordinator {
   const LegacySendQueueCoordinator();

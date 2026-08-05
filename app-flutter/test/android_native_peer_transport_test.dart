@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:app_flutter/src/ipc/android_native_peer_transport.dart';
+import 'package:rift/src/ipc/android_native_peer_transport.dart';
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:flutter_test/flutter_test.dart';
 

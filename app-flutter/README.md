@@ -41,7 +41,7 @@ Windows notes:
   powershell -ExecutionPolicy Bypass -File windows\tools\unregister_send_with_rift.ps1
   ```
 
-  Pass `-ExecutablePath C:\path\to\app_flutter.exe` to the registration script
+  Pass `-ExecutablePath C:\path\to\Rift.exe` to the registration script
   when registering an installed build instead of the default local release
   build. On Windows 11, the action may appear under **Show more options** in
   Explorer's context menu.
@@ -55,7 +55,7 @@ RIFT_DEV_PRIVATE_DEVICE_NAME=1 \
 tool/build_unsigned_ios_ipa.sh
 ```
 
-The script creates `build/ios/ipa/Runner-unsigned-release.ipa` for signing and
+The script creates `build/ios/ipa/Rift-unsigned-release.ipa` for signing and
 installation with Sideloadly. `RIFT_DEV_PRIVATE_DEVICE_NAME=1` compiles the
 unsupported MobileGestalt lookup; normal builds exclude that code.
 

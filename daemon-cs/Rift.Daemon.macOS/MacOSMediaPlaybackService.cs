@@ -279,7 +279,7 @@ internal sealed class MacOSMediaPlaybackService(
 
     internal static bool IsRiftRemotePlayback(string? bundleIdentifier, string? contentItemIdentifier) =>
         contentItemIdentifier?.StartsWith(RiftRemotePlaybackPrefix, StringComparison.Ordinal) == true ||
-        string.Equals(bundleIdentifier, "com.example.appFlutter", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(bundleIdentifier, "dev.rift.app", StringComparison.OrdinalIgnoreCase) ||
         bundleIdentifier?.StartsWith("com.rift.", StringComparison.OrdinalIgnoreCase) == true;
 
     internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>

@@ -161,7 +161,7 @@ internal sealed class MacOSNotificationSyncObserver(
             cancellationToken);
 
     private static bool ShouldIgnore(string packageName) =>
-        string.Equals(packageName, "com.example.appFlutter", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(packageName, "dev.rift.app", StringComparison.OrdinalIgnoreCase) ||
         packageName.StartsWith("com.rift.", StringComparison.OrdinalIgnoreCase);
 
     private static string CreateFingerprint(MacOSExtractedNotification notification) => string.Join(

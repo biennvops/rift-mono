@@ -4,15 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/platform/ios_notifications.dart';
-import 'package:app_flutter/src/platform/notification_route.dart';
-import 'package:app_flutter/src/platform/windows_shell.dart';
-import 'package:app_flutter/src/ui/local_events_notifier.dart';
-import 'package:app_flutter/src/ui/app_shell.dart';
-import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
+import 'package:rift/constants.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/platform/ios_notifications.dart';
+import 'package:rift/src/platform/notification_route.dart';
+import 'package:rift/src/platform/windows_shell.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
+import 'package:rift/src/ui/app_shell.dart';
+import 'package:rift/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
 

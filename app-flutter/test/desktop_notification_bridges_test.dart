@@ -1,6 +1,6 @@
-import 'package:app_flutter/src/platform/linux_notifications.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
-import 'package:app_flutter/src/platform/windows_shell.dart';
+import 'package:rift/src/platform/linux_notifications.dart';
+import 'package:rift/src/platform/macos_notifications.dart';
+import 'package:rift/src/platform/windows_shell.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -1,4 +1,4 @@
-import 'package:app_flutter/src/platform/macos_send_files.dart';
+import 'package:rift/src/platform/macos_send_files.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

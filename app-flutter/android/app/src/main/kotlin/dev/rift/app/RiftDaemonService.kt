@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -26,8 +26,8 @@ class RiftDaemonService : Service() {
         private const val channelId = "rift.daemon"
         private const val channelName = "Rift background sync"
         private const val notificationId = 4108
-        private const val actionStart = "com.example.app_flutter.action.START_DAEMON_SERVICE"
-        private const val actionStop = "com.example.app_flutter.action.STOP_DAEMON_SERVICE"
+        private const val actionStart = "dev.rift.app.action.START_DAEMON_SERVICE"
+        private const val actionStop = "dev.rift.app.action.STOP_DAEMON_SERVICE"
         internal const val preferencesName = "rift_background_sync"
         internal const val backgroundEnabledKey = "enabled"
 

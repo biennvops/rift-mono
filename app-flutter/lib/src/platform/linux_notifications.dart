@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
+import 'package:rift/src/platform/macos_notifications.dart';
 
 class LinuxNotifications {
   static const MethodChannel _channel =

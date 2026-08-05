@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:app_flutter/screens/security_dashboard_screen.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/screens/security_dashboard_screen.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';

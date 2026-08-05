@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.content.Context
 import android.content.Intent
@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object NotificationSyncRelay {
-    const val broadcastAction = "com.example.app_flutter.NOTIFICATION_SYNC_EVENT"
+    const val broadcastAction = "dev.rift.app.NOTIFICATION_SYNC_EVENT"
 
     private const val prefsName = "rift_notification_sync"
     private const val pendingEventsKey = "pending_events"

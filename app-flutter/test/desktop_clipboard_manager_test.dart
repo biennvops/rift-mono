@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/clipboard/desktop_clipboard_manager.dart';
+import 'package:rift/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';

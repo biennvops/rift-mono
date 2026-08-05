@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:app_flutter/src/ipc/in_process_daemon_transport.dart';
+import 'package:rift/src/ipc/in_process_daemon_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeDaemon implements InProcessDaemon {

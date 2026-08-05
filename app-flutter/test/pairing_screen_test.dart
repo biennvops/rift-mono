@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:app_flutter/screens/pairing_screen.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
+import 'package:rift/screens/pairing_screen.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/macos_notifications.dart';
 import 'test_utils/fake_transport.dart';
 
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {

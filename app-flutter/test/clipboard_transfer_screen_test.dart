@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/ios_clipboard.dart';
-import 'package:app_flutter/src/platform/notification_route.dart';
+import 'package:rift/screens/clipboard_transfer_screen.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/ios_clipboard.dart';
+import 'package:rift/src/platform/notification_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
