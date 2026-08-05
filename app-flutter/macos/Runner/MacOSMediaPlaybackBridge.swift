@@ -169,8 +169,8 @@ final class MacOSMediaPlaybackBridge: NSObject, FlutterStreamHandler {
     if ownsNowPlayingEntry {
       infoCenter.nowPlayingInfo = nil
       infoCenter.playbackState = .stopped
+      updateRemoteCommandAvailability([:])
     }
-    updateRemoteCommandAvailability([:])
   }
 
   private func reassertRemotePlaybackState() {
