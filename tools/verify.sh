@@ -8,7 +8,7 @@ mkdir -p "$log_dir"
 usage() {
   printf '%s\n' \
     "Usage: tools/verify.sh <target>" \
-    "Targets: daemon-cs daemon-dart app-flutter tests-conformance tests-interop all"
+    "Targets: daemon-cs daemon-dart app-flutter tests-conformance tests-interop changed all"
 }
 
 run_step() {
@@ -105,6 +105,102 @@ run_interop_tests() {
   flutter test --no-pub
 }
 
+run_tools_checks() {
+  bash -n "$repo_root/tools/verify.sh"
+}
+
+run_changed() {
+  local base_ref="${RIFT_VERIFY_BASE:-origin/main}"
+  local merge_base
+  local changed_files
+  local path
+  local failed=0
+  local tools_changed=0
+  local daemon_cs_changed=0
+  local daemon_dart_changed=0
+  local app_flutter_changed=0
+  local conformance_changed=0
+  local interop_changed=0
+
+  if ! merge_base="$(git -C "$repo_root" merge-base HEAD "$base_ref" 2>/dev/null)"; then
+    printf 'FAIL changed (base not found: %s)\n' "$base_ref"
+    return 2
+  fi
+
+  changed_files="$(
+    {
+      git -C "$repo_root" diff --name-only "$merge_base" --
+      git -C "$repo_root" ls-files --others --exclude-standard
+    } | sort -u
+  )"
+
+  if [[ -z "$changed_files" ]]; then
+    printf '%s\n' 'PASS changed (no files)'
+    return 0
+  fi
+
+  while IFS= read -r path; do
+    case "$path" in
+      spec/*)
+        daemon_cs_changed=1
+        daemon_dart_changed=1
+        conformance_changed=1
+        interop_changed=1
+        ;;
+      *.md|docs/*|.wiki/*|.gitignore|tools/*)
+        tools_changed=1
+        ;;
+      daemon-cs/*)
+        daemon_cs_changed=1
+        ;;
+      daemon-dart/*)
+        daemon_dart_changed=1
+        app_flutter_changed=1
+        conformance_changed=1
+        interop_changed=1
+        ;;
+      app-flutter/*)
+        app_flutter_changed=1
+        interop_changed=1
+        ;;
+      tests-conformance/*)
+        conformance_changed=1
+        ;;
+      tests-interop/*)
+        interop_changed=1
+        ;;
+      *)
+        daemon_cs_changed=1
+        daemon_dart_changed=1
+        app_flutter_changed=1
+        conformance_changed=1
+        interop_changed=1
+        ;;
+    esac
+  done <<< "$changed_files"
+
+  if [[ "$tools_changed" -eq 1 ]]; then
+    run_step tools-shell run_tools_checks || failed=1
+  fi
+  if [[ "$daemon_cs_changed" -eq 1 ]]; then
+    run_target daemon-cs || failed=1
+  fi
+  if [[ "$daemon_dart_changed" -eq 1 ]]; then
+    run_target daemon-dart || failed=1
+  fi
+  if [[ "$app_flutter_changed" -eq 1 ]]; then
+    run_target app-flutter || failed=1
+  fi
+  if [[ "$conformance_changed" -eq 1 ]]; then
+    run_target tests-conformance || failed=1
+  fi
+  if [[ "$interop_changed" -eq 1 ]]; then
+    run_target tests-interop || failed=1
+  fi
+
+  return "$failed"
+}
+
 run_target() {
   local target="$1"
   local failed=0
@@ -146,6 +242,9 @@ run_target() {
         return 1
       }
       run_step tests-interop run_interop_tests || failed=1
+      ;;
+    changed)
+      run_changed || failed=1
       ;;
     all)
       for target in daemon-cs daemon-dart app-flutter tests-conformance tests-interop; do

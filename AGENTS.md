@@ -6,8 +6,8 @@
 - If verification commands are unclear, ask before proceeding.
 - Transform tasks into verifiable goals. 'Fix the bug' becomes 'write a test that reproduces it, then make it pass.' 'Refactor X' becomes 'ensure tests pass before and after.'
 
-- For routine verification, run `tools/verify.sh <daemon-cs|daemon-dart|app-flutter|tests-conformance|tests-interop|all>` from the repository root.
-- It prints concise status/errors; complete logs overwrite `logs/agent/<step>.log`. Set `RIFT_AGENT_LOG_DIR` to change the local log directory.
+- For routine verification, run `tools/verify.sh <daemon-cs|daemon-dart|app-flutter|tests-conformance|tests-interop|changed|all>` from the repository root.
+- It prints concise status/errors; complete logs overwrite `logs/agent/<step>.log`. `changed` uses the `origin/main` merge base; override with `RIFT_VERIFY_BASE`. Set `RIFT_AGENT_LOG_DIR` to change the local log directory.
 - Inspect logs with focused `rg` or `tail` commands; never dump an entire log into the agent conversation.
 
 ## Boundaries
