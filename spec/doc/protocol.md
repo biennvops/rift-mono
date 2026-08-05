@@ -263,6 +263,8 @@ All schemas below are the `payload` shape inside the envelope in Section 6. UUID
   "supportedVersions": ["0.1-draft"],
   "deviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "implementationId": "riftd-cs/0.1.0",
+  "displayName": "Windows Desktop 07",
+  "platform": "windows",
   "capabilities": [{ "name": "clipboard.offer_fetch", "version": 1 }],
   "bindingType": "app-nonce",
   "sessionNonce": "base64-encoded-32-bytes",
@@ -276,7 +278,9 @@ The `bindingType` field is REQUIRED. It MUST be one of `"tls-exporter"`, `"tls-u
 
 The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUST be absent otherwise. It contains a base64-encoded 32-byte cryptographically random nonce used in the Tier 3 channel binding computation.
 
-`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
+`displayName` and `platform` are OPTIONAL authenticated presentation metadata in both `session.hello` and `session.accept`. `displayName` MUST NOT exceed 128 characters after trimming and MUST NOT contain control characters. `platform` MUST be one of `android`, `ios`, `windows`, `macos`, `linux`, or `unknown`. A receiver MUST consume these fields only after the message's Ed25519 Proof of Possession and device identity have been verified. A verified value MAY update the corresponding trust-store record without changing its trust state. Display names and platform values MUST NOT be used as identity, authorization, or trust inputs.
+
+`session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, optional `displayName` string, optional `platform` string, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
 `session.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
@@ -290,7 +294,7 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.3 Pairing Messages
 
-`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string.
+`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string, optional `platform` string. These fields are retained for compatibility with pairing-only metadata exchange; verified session metadata is authoritative for trust-store presentation updates.
 
 `pairing.approve` payload fields: `approvedAt` RFC 3339 timestamp.
 
@@ -324,7 +328,7 @@ The v1 notification record fields are:
 | ----------------- | -------- | ------------------- | --------------------------------------------------------------------- |
 | `notificationId`  | Yes      | string              | Stable Android-origin identifier scoped to `sourceDeviceId`           |
 | `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                        |
-| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `windows`, `macos`, `linux`   |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `ios`, `windows`, `macos`, `linux` |
 | `packageName`     | Yes      | string              | Stable source application identifier                                  |
 | `appName`         | Yes      | string              | Human-readable app label                                              |
 | `title`           | No       | string              | Mirrored title preview only                                           |
@@ -354,7 +358,7 @@ The v1 playback record fields are:
 | ----------------- | -------- | ------------------- | ------------------------------------------------------------------- |
 | `playbackId`      | Yes      | string              | Stable per-source playback session identifier                       |
 | `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                      |
-| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `windows`, `macos`, `linux` |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `ios`, `windows`, `macos`, `linux` |
 | `appId`           | Yes      | string              | Stable source application identifier                                |
 | `appName`         | Yes      | string              | Human-readable app label                                            |
 | `title`           | No       | string              | Current media title                                                 |
