@@ -173,6 +173,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   void injectConnectionForTesting({
     required String peerDeviceId,
     required int connectionId,
+    StreamSubscription<Map<String, dynamic>>? frameSubscription,
   }) {
     _peers[peerDeviceId] = _NativePeerConnection(
       connectionId: connectionId,
@@ -182,7 +183,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       remoteAddress: '127.0.0.1',
       remotePort: 0,
       isServer: false,
-    );
+    )..frameSubscription = frameSubscription;
   }
 
   @visibleForTesting
@@ -216,8 +217,14 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
           ),
         );
       },
-      onError: (_) => _handleConnectionClosed(peer),
-      onDone: () => _handleConnectionClosed(peer),
+      onError: (_) => _handleConnectionClosed(
+        peer,
+        fromFrameSubscription: true,
+      ),
+      onDone: () => _handleConnectionClosed(
+        peer,
+        fromFrameSubscription: true,
+      ),
       cancelOnError: true,
     );
     unawaited(_readLoop(peer));
@@ -240,23 +247,37 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     await _handleConnectionClosed(peer);
   }
 
-  Future<void> _handleConnectionClosed(_NativePeerConnection peer) async {
+  Future<void> _handleConnectionClosed(
+    _NativePeerConnection peer, {
+    bool fromFrameSubscription = false,
+  }) async {
     if (_peers[peer.peerDeviceId] != peer) return;
     _peers.remove(peer.peerDeviceId);
     _authenticatedPeers.remove(peer.peerDeviceId);
-    await _closeConnection(peer, notify: true);
+    await _closeConnection(
+      peer,
+      notify: true,
+      cancelFrameSubscription: !fromFrameSubscription,
+    );
   }
 
   Future<void> _closeConnection(
     _NativePeerConnection peer, {
     required bool notify,
+    bool cancelFrameSubscription = true,
   }) async {
+    if (peer.isClosing) {
+      return;
+    }
+    peer.isClosing = true;
     peer.authenticationTimeout?.cancel();
-    await peer.frameSubscription?.cancel();
-    await peer.chunkController?.close();
     try {
       await _tls.close(peer.connectionId);
     } catch (_) {}
+    if (cancelFrameSubscription) {
+      await peer.frameSubscription?.cancel();
+    }
+    await peer.chunkController?.close();
     if (notify && !_disconnects.isClosed) {
       _disconnects.add(peer.peerDeviceId);
     }
@@ -373,4 +394,5 @@ class _NativePeerConnection {
   StreamController<List<int>>? chunkController;
   StreamSubscription<Map<String, dynamic>>? frameSubscription;
   Timer? authenticationTimeout;
+  bool isClosing = false;
 }
