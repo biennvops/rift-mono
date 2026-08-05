@@ -824,7 +824,7 @@ public sealed class ClipboardServiceTests : IDisposable
             throw new InvalidOperationException($"No fake peer configured for endpoint {host}:{port}");
         }
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-test-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)

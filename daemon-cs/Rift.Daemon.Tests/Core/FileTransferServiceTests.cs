@@ -1690,7 +1690,7 @@ public sealed class FileTransferServiceTests : IDisposable
             HasProtectedSessionValue = true;
         }
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)

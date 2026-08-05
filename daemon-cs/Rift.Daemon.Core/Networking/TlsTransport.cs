@@ -35,7 +35,7 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
     private int _nextBackgroundTaskId;
-    
+
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
     public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
@@ -90,9 +90,9 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             var stream = client.GetStream();
             var sslStream = new SslStream(stream, false, RemoteCertificateValidationCallback);
-            
+
             var serverCert = _identityManager.GetTlsCertificate();
-            
+
             // Spec §5.1: Mutual TLS with TLS 1.3 preferred.
             await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
             {
@@ -131,7 +131,11 @@ public sealed class TlsTransport : ITransport, IDisposable
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) =>
         ConnectToPeerWithIdentityAsync(host, port, cancellationToken);
 
-    public async Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
+    public async Task<string> ConnectToPeerWithIdentityAsync(
+        string host,
+        int port,
+        CancellationToken cancellationToken,
+        string? expectedDeviceId = null)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
@@ -160,6 +164,12 @@ public sealed class TlsTransport : ITransport, IDisposable
             var remoteCert = sslStream.RemoteCertificate as X509Certificate2 ??
                 X509CertificateLoader.LoadCertificate(sslStream.RemoteCertificate!.GetRawCertData());
             var deviceId = ExtractDeviceIdFromCertificate(remoteCert);
+            if (expectedDeviceId is not null &&
+                !string.Equals(deviceId, expectedDeviceId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Endpoint {host}:{port} authenticated unexpected peer {deviceId} instead of {expectedDeviceId}.");
+            }
             await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
@@ -919,7 +929,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             int maxFrameSize = GetMaxOutboundFrameSize(session.IsAuthenticated);
             if (frameBody.Length > maxFrameSize)
                 throw new InvalidOperationException("PayloadTooLarge");
-                 
+
             var frame = RiftFrame.Encode(frameBody.Span);
             await session.WriteGate.RunAsync(
                 writeCancellationToken => session.Stream.WriteAsync(frame, writeCancellationToken).AsTask(),

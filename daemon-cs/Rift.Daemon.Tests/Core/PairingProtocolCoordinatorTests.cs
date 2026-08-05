@@ -1560,7 +1560,7 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public async Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
+        public async Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null)
         {
             await ConnectToPeerAsync(host, port, cancellationToken);
             return ActiveSessions.FirstOrDefault() ?? "rift-manual-peer";

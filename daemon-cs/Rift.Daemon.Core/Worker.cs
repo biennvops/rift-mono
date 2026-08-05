@@ -385,7 +385,8 @@ public class Worker(
                 var connectedDeviceId = await transport.ConnectToPeerWithIdentityAsync(
                     endpoint.Address,
                     endpoint.Port,
-                    timeoutCts.Token);
+                    timeoutCts.Token,
+                    peer.DeviceId);
                 return (endpoint, connectedDeviceId);
             }
         }

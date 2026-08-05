@@ -144,6 +144,42 @@ public class TlsTransportTests
         await listenerTask;
     }
 
+    [Fact]
+    public async Task ConnectToPeerWithIdentityAsync_RejectsUnexpectedExpectedDeviceBeforeRegistration()
+    {
+        var serverIdentity = new IdentityManager();
+        var clientIdentity = new IdentityManager();
+        serverIdentity.EnsureIdentityInitialized();
+        clientIdentity.EnsureIdentityInitialized();
+
+        var serverTrust = CreateTrustStoreWithTrustedPeer(clientIdentity);
+        var clientTrust = CreateTrustStoreWithTrustedPeer(serverIdentity);
+        using var server = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            serverIdentity,
+            serverTrust,
+            listenPort: 0);
+        using var client = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            clientIdentity,
+            clientTrust);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var listenerTask = server.StartListeningAsync(cancellation.Token);
+        var port = await WaitForListeningPortAsync(server, cancellation.Token);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ConnectToPeerWithIdentityAsync(
+                "127.0.0.1",
+                port,
+                cancellation.Token,
+                expectedDeviceId: "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"));
+
+        Assert.Contains(serverIdentity.GetDeviceId(), exception.Message, StringComparison.Ordinal);
+        Assert.False(client.HasActiveSession(serverIdentity.GetDeviceId()));
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
     private static InMemoryTrustStore CreateTrustStoreWithTrustedPeer(IdentityManager peerIdentity)
     {
         var trustStore = new InMemoryTrustStore();
