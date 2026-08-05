@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:app_flutter/screens/onboarding_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:app_flutter/src/platform/macos_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -67,6 +68,7 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     AndroidShell.debugIsAndroidOverride = true;
+    MacOSNotifications.debugIsMacOSOverride = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, (call) async {
       switch (call.method) {
@@ -83,6 +85,7 @@ void main() {
 
   tearDown(() {
     AndroidShell.debugIsAndroidOverride = null;
+    MacOSNotifications.debugIsMacOSOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
   });

@@ -235,8 +235,7 @@ void main() {
 
       final path = await storage.buildIncomingFilePath('report.txt');
 
-      expect(path,
-          File(directory.path + Platform.pathSeparator + 'report.txt').path);
+      expect(path, storage.joinPlatformPath(directory.path, 'report.txt'));
       expect(File(path!).parent.path, directory.path);
     });
   });
