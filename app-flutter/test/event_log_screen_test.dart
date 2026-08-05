@@ -13,6 +13,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());
 
   bool connected = true;
+  int queryEventLogCallCount = 0;
   final _connectionChangedController = StreamController<bool>.broadcast();
   final _securityEventController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -64,6 +65,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     int limit = 100,
     int offset = 0,
   }) async {
+    queryEventLogCallCount += 1;
     Iterable<Map<String, dynamic>> filtered = events;
     if (severities != null && severities.isNotEmpty) {
       filtered = filtered.where(
@@ -127,6 +129,53 @@ void main() {
     expect(notifier.events.single.title, 'Clipboard received');
   });
 
+  test('LocalEventsNotifier replaces history after reconnecting', () async {
+    final client = FakeJsonRpcRiftClient()
+      ..events = [
+        {
+          'eventId': 'evt-before-outage',
+          'eventType': 'connection.established',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-before',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client._connectionChangedController.close);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.events, hasLength(1));
+    expect(client.queryEventLogCallCount, 1);
+
+    client.events = [
+      ...client.events,
+      {
+        'eventId': 'evt-during-outage',
+        'eventType': 'connection.lost',
+        'severity': 'warning',
+        'peerDeviceId': 'rift-peer-during',
+        'timestamp': '2026-06-23T12:01:00Z',
+        'outcome': 'failure',
+      },
+    ];
+    await client.emitConnectionChanged(false);
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(2));
+    expect(notifier.events.first.title, 'Device disconnected');
+    expect(client.queryEventLogCallCount, 2);
+
+    await client.emitConnectionChanged(false);
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(2));
+    expect(client.queryEventLogCallCount, 3);
+  });
+
   testWidgets('EventLogScreen shows queried events',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -149,6 +198,57 @@ void main() {
     final appBar = tester.widget<AppBar>(find.byType(AppBar));
     expect(appBar.scrolledUnderElevation, 0);
     expect(appBar.surfaceTintColor, Colors.transparent);
+  });
+
+  testWidgets('EventLogScreen uses canonical event descriptions and details',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..events = [
+        {
+          'eventId': 'evt-pairing-attempted',
+          'eventType': 'pairing.attempted',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-pairing',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+          'details': {'direction': 'incoming'},
+        },
+        {
+          'eventId': 'evt-connection-established',
+          'eventType': 'connection.established',
+          'severity': 'warning',
+          'peerDeviceId': 'rift-peer-session',
+          'timestamp': '2026-06-23T12:01:00Z',
+          'outcome': 'success',
+          'details': {'bindingTier': 'app-nonce'},
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const EventLogScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Pairing flow initiated with rift-peer-pairing'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('direction: incoming'), findsOneWidget);
+    expect(find.textContaining('bindingTier: app-nonce'), findsOneWidget);
+    expect(find.textContaining('Trust established'), findsNothing);
+    expect(find.textContaining('AES-256-GCM'), findsNothing);
+    expect(find.textContaining('version: 0.1.0'), findsNothing);
+
+    await tester.tap(find.text('Session'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('connection.established'), findsOneWidget);
+    expect(find.text('pairing.attempted'), findsNothing);
   });
 
   testWidgets('EventLogScreen filters by severity',

@@ -190,6 +190,26 @@ void main() {
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
   });
 
+  testWidgets('Android download location is read-only',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    await tester.tap(find.text('File Transfer'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Downloads (managed by Android)'), findsOneWidget);
+    expect(find.byTooltip('Choose folder'), findsNothing);
+  });
+
   testWidgets('Pair by IP opens the canonical PairingScreen',
       (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1000, 800));

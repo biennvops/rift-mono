@@ -1152,15 +1152,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         _buildPanelHeader(
             theme, 'File Transfer', 'Where received files are saved.'),
-        _buildRow(
-          theme: theme,
-          title: 'Default Download Location',
-          subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
-          isMonoSubtitle: true,
-          trailing: _buildIconButton(theme, Icons.folder_open, 'Choose folder',
-              _pickDefaultDownloadPath),
-          onTap: _pickDefaultDownloadPath,
-        ),
+        if (AndroidShell.isSupported)
+          _buildRow(
+            theme: theme,
+            title: 'Default Download Location',
+            subtitle: 'Downloads (managed by Android)',
+            isMonoSubtitle: true,
+          )
+        else
+          _buildRow(
+            theme: theme,
+            title: 'Default Download Location',
+            subtitle: _defaultDownloadPath ?? 'Downloads/Rift (System Default)',
+            isMonoSubtitle: true,
+            trailing: _buildIconButton(theme, Icons.folder_open,
+                'Choose folder', _pickDefaultDownloadPath),
+            onTap: _pickDefaultDownloadPath,
+          ),
       ],
     );
   }

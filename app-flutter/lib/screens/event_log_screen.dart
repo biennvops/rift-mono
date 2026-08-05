@@ -80,6 +80,11 @@ class _EventLogScreenState extends State<EventLogScreen> {
     return severity == 'error' || outcome == 'failure' || outcome == 'denied';
   }
 
+  bool _isConnectionEvent(Map event) {
+    final type = event['eventType']?.toString() ?? '';
+    return type.startsWith('connection.');
+  }
+
   List<dynamic> _applyFilter(List<dynamic> events) {
     if (_activeFilter == 'All') return events;
     return events.where((event) {
@@ -92,7 +97,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
         case 'Pairing':
           return type.startsWith('pairing');
         case 'Session':
-          return type.startsWith('session');
+          return _isConnectionEvent(event);
         case 'Clipboard':
           return type.startsWith('clipboard');
         case 'Errors':
@@ -234,9 +239,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
         final type = e['eventType']?.toString() ?? '';
         return type.startsWith('clipboard') || type.startsWith('file');
       }
-      if (filterLabel == 'Session') {
-        return e['eventType']?.toString().startsWith('session') == true;
-      }
+      if (filterLabel == 'Session') return _isConnectionEvent(e as Map);
       if (filterLabel == 'Pairing') {
         final type = e['eventType']?.toString() ?? '';
         return type.startsWith('pairing');
@@ -245,63 +248,94 @@ class _EventLogScreenState extends State<EventLogScreen> {
     }).toList();
   }
 
+  String _descriptionForEvent(
+    String eventType,
+    String? peer,
+    Map<String, dynamic> details,
+  ) {
+    final message = details['message']?.toString();
+    if (message != null && message.isNotEmpty) return message;
+    final peerSuffix = peer == null || peer.isEmpty ? '' : ' with $peer';
+
+    return switch (eventType) {
+      'pairing.attempted' => 'Pairing flow initiated$peerSuffix',
+      'pairing.completed' => 'Pairing completed$peerSuffix',
+      'pairing.rejected' => 'Pairing rejected$peerSuffix',
+      'trust.transitioned' => 'Trust state changed$peerSuffix',
+      'trust.removed' => 'Trust removed$peerSuffix',
+      'auth.failed' => 'Authentication failed$peerSuffix',
+      'auth.identity_proof_failed' =>
+        'Identity proof verification failed$peerSuffix',
+      'connection.established' => 'Connection established$peerSuffix',
+      'connection.rejected' => 'Connection rejected$peerSuffix',
+      'connection.lost' => 'Connection lost$peerSuffix',
+      'certificate.rotated' => 'Certificate rotated$peerSuffix',
+      'capability.negotiated' => 'Capabilities negotiated$peerSuffix',
+      'operation.transitioned' => 'Operation state changed$peerSuffix',
+      'clipboard.offered' => 'Clipboard offer recorded$peerSuffix',
+      'clipboard.fetched' => 'Clipboard content fetched$peerSuffix',
+      'clipboard.expired' => 'Clipboard offer expired$peerSuffix',
+      'clipboard.offer_replay' => 'Clipboard offer replay rejected$peerSuffix',
+      'notification.synced' => 'Notification synchronized$peerSuffix',
+      'notification.removed' => 'Notification removed$peerSuffix',
+      'notification.actioned' => 'Notification action processed$peerSuffix',
+      'message.malformed' => 'Malformed message rejected$peerSuffix',
+      'certificate.malformed' => 'Malformed certificate rejected$peerSuffix',
+      'policy.denied' => 'Action denied by local policy$peerSuffix',
+      _ => 'Event recorded: $eventType',
+    };
+  }
+
+  String _formatEventMeta(
+    Map<String, dynamic> event,
+    Map<String, dynamic> details,
+  ) {
+    final parts = <String>[];
+    final peer = event['peerDeviceId']?.toString();
+    final outcome = event['outcome']?.toString();
+    final operationId = event['operationId']?.toString();
+    final failureReason = event['failureReason']?.toString();
+
+    if (peer != null && peer.isNotEmpty) {
+      parts.add('peer: ${peer.length > 8 ? peer.substring(0, 8) : peer}');
+    }
+    if (outcome != null && outcome.isNotEmpty) parts.add('outcome: $outcome');
+    if (operationId != null && operationId.isNotEmpty) {
+      parts.add('operationId: $operationId');
+    }
+    if (failureReason != null && failureReason.isNotEmpty) {
+      parts.add('failureReason: $failureReason');
+    }
+    for (final entry in details.entries) {
+      parts.add('${entry.key}: ${entry.value}');
+    }
+    return parts.join(' · ');
+  }
+
   Widget _buildEventCard(
       Map<String, dynamic> event, bool isLast, ThemeData theme) {
     final eventType = event['eventType']?.toString() ?? 'unknown';
-    final outcome = event['outcome']?.toString() ?? 'unknown';
     final timestamp = _formatTimeOnly(event['timestamp']?.toString());
     final peer = event['peerDeviceId']?.toString();
     final reason = event['failureReason']?.toString();
+    final details = event['details'] is Map
+        ? Map<String, dynamic>.from(event['details'] as Map)
+        : <String, dynamic>{};
 
-    Color dotColor = theme.colorScheme.outline;
-    String description = '';
-    String meta = '';
-
+    Color dotColor = theme.colorScheme.outlineVariant;
     if (_isErrorEvent(event)) {
       dotColor = theme.colorScheme.error;
-      description = reason ?? 'Operation failed';
-      meta =
-          'severity: error · peer: ${peer != null ? (peer.length > 8 ? peer.substring(0, 8) : peer) : 'local'}';
-    } else if (_isSecurityEvent(event)) {
+    } else if (_isSecurityEvent(event) || _isConnectionEvent(event)) {
       dotColor = const Color(0xFF10B981);
-      if (eventType.startsWith('auth')) {
-        description = reason ?? 'Authentication check successful';
-      } else if (reason != null && reason.isNotEmpty) {
-        description = reason;
-      } else if (eventType.startsWith('trust')) {
-        description = 'Trust state changed for ${peer ?? 'peer'}';
-      } else {
-        description = 'Trust established with ${peer ?? 'peer'}';
-        if (outcome != 'success') description = 'Pairing $outcome';
-      }
-      meta =
-          'peer: ${peer != null ? (peer.length > 8 ? peer.substring(0, 8) : peer) : 'local'} · outcome: $outcome';
     } else if (eventType.startsWith('clipboard') ||
         eventType.startsWith('file')) {
       dotColor = theme.colorScheme.primary;
-      description = eventType.contains('offer')
-          ? 'Incoming offer from ${peer ?? 'peer'}'
-          : 'Transfer event recorded';
-      if (reason != null && reason.isNotEmpty) description = reason;
-
-      final transferId = event['transferId']?.toString();
-      if (transferId != null) {
-        meta =
-            'peer: ${peer != null ? (peer.length > 8 ? peer.substring(0, 8) : peer) : 'local'} · transferId: tf-${transferId.length > 4 ? transferId.substring(0, 4) : transferId}...';
-      } else {
-        meta =
-            'peer: ${peer != null ? (peer.length > 8 ? peer.substring(0, 8) : peer) : 'local'} · type: payload';
-      }
-    } else if (eventType.startsWith('session')) {
-      dotColor = const Color(0xFF10B981);
-      description = 'Secure channel opened with ${peer ?? 'peer'}';
-      meta =
-          'peer: ${peer != null ? (peer.length > 8 ? peer.substring(0, 8) : peer) : 'local'} · cipher: AES-256-GCM';
-    } else {
-      dotColor = theme.colorScheme.outlineVariant;
-      description = 'System event recorded';
-      meta = 'version: 0.1.0 · scope: daemon';
     }
+
+    final description = reason != null && reason.isNotEmpty
+        ? reason
+        : _descriptionForEvent(eventType, peer, details);
+    final meta = _formatEventMeta(event, details);
 
     return IntrinsicHeight(
       child: Row(

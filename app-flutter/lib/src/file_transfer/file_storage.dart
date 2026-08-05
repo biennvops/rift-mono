@@ -134,7 +134,9 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
 Future<String?> buildIncomingFilePath(String fileName) async {
   final prefs = await SharedPreferences.getInstance();
   final preferredPath = prefs.getString(AppPrefs.defaultDownloadPath)?.trim();
-  if (preferredPath != null && preferredPath.isNotEmpty) {
+  if (!Platform.isAndroid &&
+      preferredPath != null &&
+      preferredPath.isNotEmpty) {
     return _buildAvailableIncomingFilePath(Directory(preferredPath), fileName);
   }
 

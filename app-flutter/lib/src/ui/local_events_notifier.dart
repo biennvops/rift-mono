@@ -36,8 +36,8 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   final JsonRpcRiftClient _client;
   final List<LocalEvent> _events = [];
+  final Set<LocalEvent> _historyEvents = {};
   final List<StreamSubscription<dynamic>> _subs = [];
-  bool _historyLoaded = false;
   bool _historyLoading = false;
 
   LocalEventsNotifier(this._client) {
@@ -72,7 +72,7 @@ class LocalEventsNotifier extends ChangeNotifier {
   }
 
   Future<void> _loadHistory() async {
-    if (!_client.isConnected || _historyLoaded || _historyLoading) return;
+    if (!_client.isConnected || _historyLoading) return;
     _historyLoading = true;
     try {
       final result = await _client.queryEventLog(
@@ -91,11 +91,21 @@ class LocalEventsNotifier extends ChangeNotifier {
         (result['events'] as List? ?? const <dynamic>[])
             .map((event) => Map<String, dynamic>.from(event as Map)),
       );
-      for (final record in records.reversed) {
-        final event = _fromSecurityEvent(record);
-        if (event != null) _add(event, unread: false);
+      final historyEvents = records
+          .map(_fromSecurityEvent)
+          .whereType<LocalEvent>()
+          .toList(growable: false);
+      _events.removeWhere(_historyEvents.contains);
+      _historyEvents
+        ..clear()
+        ..addAll(historyEvents);
+      _events
+        ..addAll(historyEvents)
+        ..sort((a, b) => b.time.compareTo(a.time));
+      if (_events.length > _maxEvents) {
+        _events.removeRange(_maxEvents, _events.length);
       }
-      _historyLoaded = true;
+      notifyListeners();
     } catch (_) {
       // The live feed remains available when event history is unsupported.
     } finally {
