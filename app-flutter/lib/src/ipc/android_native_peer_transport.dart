@@ -20,6 +20,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   final int _requestedPort;
   final Map<String, _NativePeerConnection> _peers = {};
   final Set<String> _authenticatedPeers = {};
+  final Map<String, Future<void>> _peerWriteTails = {};
   final StreamController<TransportMessage> _messages =
       StreamController<TransportMessage>.broadcast();
   final StreamController<String> _disconnects =
@@ -158,8 +159,30 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       }
       await _closeConnection(existing, notify: false);
     }
+    peer.authenticationTimeout = Timer(const Duration(seconds: 10), () {
+      if (identical(_peers[peerDeviceId], peer) &&
+          !_authenticatedPeers.contains(peerDeviceId)) {
+        disconnect(peerDeviceId);
+      }
+    });
     _startReadLoop(peer);
     return peerDeviceId;
+  }
+
+  @visibleForTesting
+  void injectConnectionForTesting({
+    required String peerDeviceId,
+    required int connectionId,
+  }) {
+    _peers[peerDeviceId] = _NativePeerConnection(
+      connectionId: connectionId,
+      peerDeviceId: peerDeviceId,
+      peerCertificateDer: Uint8List(0),
+      peerEd25519Key: Uint8List(0),
+      remoteAddress: '127.0.0.1',
+      remotePort: 0,
+      isServer: false,
+    );
   }
 
   @visibleForTesting
@@ -228,6 +251,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     _NativePeerConnection peer, {
     required bool notify,
   }) async {
+    peer.authenticationTimeout?.cancel();
     await peer.frameSubscription?.cancel();
     await peer.chunkController?.close();
     try {
@@ -245,7 +269,24 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       throw StateError('Peer $deviceId is not connected');
     }
     final frame = RiftFrameCodec.encodeBytes(message);
-    await _tls.write(peer.connectionId, base64.encode(frame));
+    final previous = _peerWriteTails[deviceId] ?? Future<void>.value();
+    final next = previous.then((_) async {
+      final currentPeer = _peers[deviceId];
+      if (!identical(currentPeer, peer)) {
+        throw StateError(
+          'Peer $deviceId is no longer connected on this socket',
+        );
+      }
+      await _tls.write(peer.connectionId, base64.encode(frame));
+    });
+    late final Future<void> tail;
+    tail = next.catchError((_) {}).whenComplete(() {
+      if (identical(_peerWriteTails[deviceId], tail)) {
+        _peerWriteTails.remove(deviceId);
+      }
+    });
+    _peerWriteTails[deviceId] = tail;
+    await next;
   }
 
   @override
@@ -259,7 +300,9 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
 
   @override
   void setPeerAuthenticated(String peerDeviceId) {
-    if (_peers.containsKey(peerDeviceId)) {
+    final peer = _peers[peerDeviceId];
+    if (peer != null) {
+      peer.authenticationTimeout?.cancel();
       _authenticatedPeers.add(peerDeviceId);
     }
   }
@@ -289,6 +332,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       await _closeConnection(peer, notify: false);
     }
     await _tls.stopServer();
+    _peerWriteTails.clear();
     await _messages.close();
     await _disconnects.close();
   }
@@ -328,4 +372,5 @@ class _NativePeerConnection {
   final bool isServer;
   StreamController<List<int>>? chunkController;
   StreamSubscription<Map<String, dynamic>>? frameSubscription;
+  Timer? authenticationTimeout;
 }

@@ -407,6 +407,36 @@ void main() {
       },
     );
 
+    test('clears remote playback when its peer session disconnects', () async {
+      const peerDeviceId = 'rift-peer-device';
+      configureMediaPlaybackPeer(peerDeviceId);
+      await daemon.handleMediaPlaybackProtocolMessageForTesting(peerDeviceId, {
+        'type': 'media.playbackPosted',
+        'payload': {
+          'playbackId': 'shared-playback',
+          'sourceDeviceId': peerDeviceId,
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00.000Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      });
+
+      daemon.sessionManagerForTesting.disconnectPeer(peerDeviceId);
+      await Future<void>.delayed(Duration.zero);
+
+      final listed = await daemon.handleJsonRpcRequest({
+        'method': 'rift.listMediaPlayback',
+      });
+      expect(listed['playbacks'], isEmpty);
+    });
+
     test('drops malformed peer playback messages without throwing', () async {
       const peerDeviceId = 'rift-peer-device';
       configureMediaPlaybackPeer(peerDeviceId);

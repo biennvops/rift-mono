@@ -11,6 +11,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
   final JsonRpcRiftClient _client;
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  Future<void> _nativeSyncTail = Future<void>.value();
   String? _localDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _postedSub;
@@ -29,6 +30,9 @@ class AndroidRemoteMediaPlaybackCoordinator {
     _connectionSub = _client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(refresh());
+      } else {
+        _playbacksByKey.clear();
+        unawaited(_queueNativeStateSync().catchError((_) {}));
       }
     });
     await refresh();
@@ -97,7 +101,7 @@ class AndroidRemoteMediaPlaybackCoordinator {
         ..addEntries(playbacks
             .where(_isRemotePlayback)
             .map((playback) => MapEntry(_keyFor(playback), playback)));
-      await _syncNativeState();
+      await _queueNativeStateSync();
     } catch (error) {
       debugPrint(
           '[Media Playback] Failed to refresh mirrored playbacks: $error');
@@ -129,12 +133,19 @@ class AndroidRemoteMediaPlaybackCoordinator {
       return;
     }
     _playbacksByKey[_keyFor(playback)] = Map<String, dynamic>.from(playback);
-    unawaited(_syncNativeState());
+    unawaited(_queueNativeStateSync().catchError((_) {}));
   }
 
   void _removePlayback(Map<String, dynamic> playback) {
     _playbacksByKey.remove(_keyFor(playback));
-    unawaited(_syncNativeState());
+    unawaited(_queueNativeStateSync().catchError((_) {}));
+  }
+
+  Future<void> _queueNativeStateSync() {
+    late final Future<void> next;
+    next = _nativeSyncTail.catchError((_) {}).then((_) => _syncNativeState());
+    _nativeSyncTail = next.catchError((_) {});
+    return next;
   }
 
   Future<void> _syncNativeState() async {

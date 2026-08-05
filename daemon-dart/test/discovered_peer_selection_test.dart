@@ -2,6 +2,22 @@ import 'package:daemon_dart/src/daemon.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
 import 'package:test/test.dart';
 
+class _RecordingPrefetchDaemon extends RiftDaemon {
+  _RecordingPrefetchDaemon()
+    : super(
+        storagePath: '/tmp/rift-daemon-test',
+        enableDiscovery: false,
+        enableTransport: false,
+      );
+
+  final List<String> prefetchedPeerIds = [];
+
+  @override
+  Future<void> prefetchSessionForDiscoveredPeer(String peerDeviceId) async {
+    prefetchedPeerIds.add(peerDeviceId);
+  }
+}
+
 void main() {
   group('RiftDaemon discovered peer selection', () {
     test(
@@ -129,6 +145,26 @@ void main() {
         expect(observedEndpoints.last['address'], '10.10.0.20');
       },
     );
+
+    test('repeated discovery snapshots throttle session prefetch', () async {
+      final daemon = _RecordingPrefetchDaemon();
+      final snapshot = [
+        {
+          'instanceId': 'bridge-peer',
+          'address': '192.168.1.77',
+          'port': 11112,
+          'minVersion': '0.1-draft',
+          'maxVersion': '0.1-draft',
+          'deviceIdHint': 'rift-bridge-peer',
+        },
+      ];
+
+      daemon.replaceExternalDiscoveredPeers(snapshot, isDiscovering: true);
+      daemon.replaceExternalDiscoveredPeers(snapshot, isDiscovering: true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(daemon.prefetchedPeerIds, ['rift-bridge-peer']);
+    });
 
     test(
       'replaceExternalDiscoveredPeers expands observedEndpoints into alternates',

@@ -65,6 +65,19 @@ class MediaPlaybackManager {
     return {'playbackId': record.playbackId, 'broadcastTo': <String>[]};
   }
 
+  void removePlaybacksFromSource(String sourceDeviceId) {
+    final playbackIds = _playbacks.values
+        .where(
+          (playback) =>
+              playback.sourceDeviceId == sourceDeviceId && !playback.isRemoved,
+        )
+        .map((playback) => playback.playbackId)
+        .toList(growable: false);
+    for (final playbackId in playbackIds) {
+      removePlayback(sourceDeviceId, playbackId);
+    }
+  }
+
   Map<String, dynamic> removePlayback(
     String sourceDeviceId,
     String playbackId, {

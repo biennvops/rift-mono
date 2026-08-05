@@ -11,6 +11,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.KeyManagerFactory
@@ -23,9 +25,18 @@ import javax.net.ssl.X509TrustManager
 class AndroidTlsBridge {
     companion object {
         private const val tag = "RiftTlsBridge"
+        private const val maxQueuedAcceptedConnections = 8
+        private const val queuedConnectionTimeoutSeconds = 10L
     }
 
+    private data class QueuedConnection(
+        val response: Map<String, Any>,
+        val connectionId: Int,
+        var expiry: ScheduledFuture<*>? = null,
+    )
+
     private val executor = Executors.newCachedThreadPool()
+    private val expiryExecutor = Executors.newSingleThreadScheduledExecutor()
     // Bumped whenever the owning daemon isolate tears down the server. Replies
     // guarded by an older generation are dropped instead of being posted to a
     // dead isolate port, which is a fatal engine check (did_send).
@@ -34,7 +45,7 @@ class AndroidTlsBridge {
     private val connections = ConcurrentHashMap<Int, SSLSocket>()
     private var server: SSLServerSocket? = null
     private var pendingAccept: MethodChannel.Result? = null
-    private val acceptedConnections = ArrayDeque<Map<String, Any>>()
+    private val acceptedConnections = ArrayDeque<QueuedConnection>()
 
     fun handle(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -52,6 +63,7 @@ class AndroidTlsBridge {
     fun dispose() {
         stopServerInternal()
         executor.shutdownNow()
+        expiryExecutor.shutdownNow()
     }
 
     private fun startServer(arguments: Map<*, *>?, result: MethodChannel.Result) {
@@ -83,7 +95,9 @@ class AndroidTlsBridge {
         }
         synchronized(this) {
             if (acceptedConnections.isNotEmpty()) {
-                result.success(acceptedConnections.removeFirst())
+                val queued = acceptedConnections.removeFirst()
+                queued.expiry?.cancel(false)
+                result.success(queued.response)
                 return
             }
             if (pendingAccept != null) {
@@ -97,15 +111,19 @@ class AndroidTlsBridge {
     private fun acceptLoop(listener: SSLServerSocket) {
         val gen = generation.get()
         while (!listener.isClosed && generation.get() == gen) {
+            var socket: SSLSocket? = null
+            var id: Int? = null
             try {
-                val socket = listener.accept() as SSLSocket
+                socket = listener.accept() as SSLSocket
                 socket.useClientMode = false
+                socket.soTimeout = 10_000
                 socket.startHandshake()
+                socket.soTimeout = 0
                 if (generation.get() != gen || listener.isClosed) {
                     socket.close()
                     return
                 }
-                val id = register(socket)
+                id = register(socket)
                 val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate
                 val response = mapOf(
                     "connectionId" to id,
@@ -121,6 +139,7 @@ class AndroidTlsBridge {
                     socket.close()
                     return
                 }
+                var closeBecauseQueueFull = false
                 val callback = synchronized(this) {
                     if (generation.get() != gen || listener.isClosed) {
                         null
@@ -128,8 +147,18 @@ class AndroidTlsBridge {
                         val current = pendingAccept
                         if (current != null) {
                             pendingAccept = null
+                        } else if (acceptedConnections.size >= maxQueuedAcceptedConnections) {
+                            closeBecauseQueueFull = true
+                            null
                         } else {
-                            acceptedConnections.addLast(response)
+                            val queued = QueuedConnection(response, id)
+                            acceptedConnections.addLast(queued)
+                            queued.expiry = expiryExecutor.schedule(
+                                { expireQueuedConnection(id) },
+                                queuedConnectionTimeoutSeconds,
+                                TimeUnit.SECONDS,
+                            )
+                            null
                         }
                         current
                     }
@@ -139,8 +168,16 @@ class AndroidTlsBridge {
                     socket.close()
                     return
                 }
+                if (closeBecauseQueueFull) {
+                    connections.remove(id)
+                    runCatching { socket.close() }
+                    Log.w(tag, "Closing accepted TLS connection because the Dart accept queue is full")
+                    continue
+                }
                 callback?.success(response)
             } catch (error: Throwable) {
+                id?.let(connections::remove)
+                runCatching { socket?.close() }
                 if (listener.isClosed) return
                 Log.e(tag, "Inbound TLS connection failed", error)
             }
@@ -151,6 +188,8 @@ class AndroidTlsBridge {
         val gen = generation.get()
         executor.execute {
             if (generation.get() != gen) return@execute
+            var socket: SSLSocket? = null
+            var id: Int? = null
             try {
                 val host = arguments?.get("host") as? String
                     ?: throw IllegalArgumentException("host is required")
@@ -161,25 +200,27 @@ class AndroidTlsBridge {
                 val privateKeyPem = arguments["privateKeyPem"] as? String
                     ?: throw IllegalArgumentException("privateKeyPem is required")
                 val context = buildContext(certPem, privateKeyPem)
-                val socket = context.socketFactory.createSocket() as SSLSocket
+                socket = context.socketFactory.createSocket() as SSLSocket
                 socket.useClientMode = true
+                socket.soTimeout = 10_000
                 socket.connect(InetSocketAddress(host, port), 10_000)
                 socket.startHandshake()
+                socket.soTimeout = 0
                 if (generation.get() != gen) {
                     socket.close()
                     return@execute
                 }
-                val id = register(socket)
+                id = register(socket)
                 val certificate = socket.session.peerCertificates.firstOrNull() as? X509Certificate
                 val response = mapOf(
-                        "connectionId" to id,
-                        "peerCertificateBase64" to Base64.encodeToString(
-                            certificate?.encoded ?: ByteArray(0),
-                            Base64.NO_WRAP,
-                        ),
-                        "remoteAddress" to socket.inetAddress.hostAddress,
-                        "remotePort" to socket.port,
-                    )
+                    "connectionId" to id,
+                    "peerCertificateBase64" to Base64.encodeToString(
+                        certificate?.encoded ?: ByteArray(0),
+                        Base64.NO_WRAP,
+                    ),
+                    "remoteAddress" to socket.inetAddress.hostAddress,
+                    "remotePort" to socket.port,
+                )
                 if (generation.get() != gen) {
                     connections.remove(id)
                     socket.close()
@@ -187,6 +228,8 @@ class AndroidTlsBridge {
                 }
                 result.success(response)
             } catch (error: Throwable) {
+                id?.let(connections::remove)
+                runCatching { socket?.close() }
                 if (generation.get() == gen) {
                     result.error("connect_failed", error.message, null)
                 }
@@ -274,12 +317,27 @@ class AndroidTlsBridge {
             // port is a fatal engine check (did_send). The stale Dart future
             // is owned by the old isolate and simply goes away with it.
             pendingAccept = null
+            acceptedConnections.forEach { it.expiry?.cancel(false) }
             acceptedConnections.clear()
         }
         server?.close()
         server = null
         connections.values.forEach { socket -> runCatching { socket.close() } }
         connections.clear()
+    }
+
+    private fun expireQueuedConnection(connectionId: Int) {
+        val removed = synchronized(this) {
+            val queued = acceptedConnections.firstOrNull { it.connectionId == connectionId }
+            if (queued != null) {
+                acceptedConnections.remove(queued)
+            }
+            queued
+        }
+        if (removed != null) {
+            connections.remove(connectionId)?.let { socket -> runCatching { socket.close() } }
+            Log.w(tag, "Expired queued TLS connection before Dart accepted it")
+        }
     }
 
     private fun register(socket: SSLSocket): Int {
