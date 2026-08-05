@@ -142,6 +142,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           historyEvent,
           excluded: matchedLiveEvents,
           latestCandidateTime: loadStartedAt,
+          allowSubjectless: true,
         );
         if (reconciliationMatch >= 0) {
           matchedLiveEvents.add(liveEvents[reconciliationMatch]);
@@ -173,6 +174,7 @@ class LocalEventsNotifier extends ChangeNotifier {
     Set<LocalEvent> excluded = const {},
     DateTime? latestCandidateTime,
     bool requireSecuritySourceDifference = false,
+    bool allowSubjectless = false,
   }) {
     var closestIndex = -1;
     Duration? closestDifference;
@@ -190,9 +192,13 @@ class LocalEventsNotifier extends ChangeNotifier {
       if (candidate.reconciliationKey != target.reconciliationKey) continue;
       final candidateSubject = candidate.reconciliationSubject;
       final targetSubject = target.reconciliationSubject;
-      if (candidateSubject == null ||
-          targetSubject == null ||
+      if (candidateSubject != null &&
+          targetSubject != null &&
           candidateSubject != targetSubject) {
+        continue;
+      }
+      if (!allowSubjectless &&
+          (candidateSubject == null || targetSubject == null)) {
         continue;
       }
       final difference = candidate.time.difference(target.time).abs();
