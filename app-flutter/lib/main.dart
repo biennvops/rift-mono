@@ -1619,7 +1619,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
     }
 
-    final destinationPath = await buildDefaultIncomingFilePath(fileName);
+    final destinationPath = await buildIncomingFilePath(fileName);
     if (destinationPath == null || destinationPath.isEmpty) {
       return null;
     }

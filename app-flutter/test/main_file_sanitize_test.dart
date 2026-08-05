@@ -1,10 +1,12 @@
 import 'dart:io';
 
+import 'package:app_flutter/constants.dart';
 import 'package:app_flutter/src/file_transfer/file_storage.dart' as storage;
 import 'package:crypto/crypto.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -219,6 +221,23 @@ void main() {
         File('${destination.path}.rift-transfer-3.part').existsSync(),
         isFalse,
       );
+    });
+  });
+
+  group('incoming file destination', () {
+    test('uses the saved default download path', () async {
+      final directory =
+          await Directory.systemTemp.createTemp('rift-downloads-');
+      addTearDown(() => directory.delete(recursive: true));
+      SharedPreferences.setMockInitialValues({
+        AppPrefs.defaultDownloadPath: directory.path,
+      });
+
+      final path = await storage.buildIncomingFilePath('report.txt');
+
+      expect(path,
+          File(directory.path + Platform.pathSeparator + 'report.txt').path);
+      expect(File(path!).parent.path, directory.path);
     });
   });
 

@@ -288,6 +288,32 @@ void main() {
     expect(find.text('Unknown Device'), findsOneWidget);
   });
 
+  testWidgets('SettingsScreen reloads after the daemon connects',
+      (WidgetTester tester) async {
+    isConnected = false;
+    when(() => mockClient.getDeviceInfo()).thenAnswer((_) async {
+      if (!isConnected) throw StateError('Not connected to daemon');
+      return mockDeviceInfo;
+    });
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+    expect(find.text('Unknown Device'), findsOneWidget);
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await pumpLoaded(tester);
+
+    expect(find.text('Test Device'), findsOneWidget);
+    expect(find.text('Unknown Device'), findsNothing);
+    verify(() => mockClient.getDeviceInfo()).called(2);
+  });
+
   testWidgets('SettingsScreen shows loading spinner while waiting',
       (WidgetTester tester) async {
     when(() => mockClient.getDeviceInfo()).thenAnswer((_) =>

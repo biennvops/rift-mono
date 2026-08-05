@@ -37,6 +37,8 @@ class LocalEventsNotifier extends ChangeNotifier {
   final JsonRpcRiftClient _client;
   final List<LocalEvent> _events = [];
   final List<StreamSubscription<dynamic>> _subs = [];
+  bool _historyLoaded = false;
+  bool _historyLoading = false;
 
   LocalEventsNotifier(this._client) {
     _subs.addAll([
@@ -46,6 +48,9 @@ class LocalEventsNotifier extends ChangeNotifier {
       _client.onClipboardExpired.listen(_onClipboardExpired),
       _client.onFileTransferCompleted.listen(_onFileCompleted),
       _client.onFileTransferFailed.listen(_onFileFailed),
+      _client.onConnectionChanged.listen((isConnected) {
+        if (isConnected) unawaited(_loadHistory());
+      }),
     ]);
     unawaited(_loadHistory());
   }
@@ -67,7 +72,8 @@ class LocalEventsNotifier extends ChangeNotifier {
   }
 
   Future<void> _loadHistory() async {
-    if (!_client.isConnected) return;
+    if (!_client.isConnected || _historyLoaded || _historyLoading) return;
+    _historyLoading = true;
     try {
       final result = await _client.queryEventLog(
         eventTypes: const [
@@ -89,8 +95,11 @@ class LocalEventsNotifier extends ChangeNotifier {
         final event = _fromSecurityEvent(record);
         if (event != null) _add(event, unread: false);
       }
+      _historyLoaded = true;
     } catch (_) {
       // The live feed remains available when event history is unsupported.
+    } finally {
+      _historyLoading = false;
     }
   }
 

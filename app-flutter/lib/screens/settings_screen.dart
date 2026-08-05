@@ -58,6 +58,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final TextEditingController _notificationBlacklistController =
       TextEditingController();
   Timer? _notificationPolicyDebounceTimer;
+  StreamSubscription<bool>? _connectionSubscription;
   String? _defaultDownloadPath;
   double _sidebarWidth = 220.0;
 
@@ -69,11 +70,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
-    _fetchDeviceInfo();
+    final client = context.read<JsonRpcRiftClient>();
+    _connectionSubscription = client.onConnectionChanged.listen((isConnected) {
+      if (isConnected) unawaited(_fetchDeviceInfo());
+    });
+    unawaited(_fetchDeviceInfo());
   }
 
   @override
   void dispose() {
+    _connectionSubscription?.cancel();
     _notificationPolicyDebounceTimer?.cancel();
     _notificationBlacklistController.dispose();
     super.dispose();

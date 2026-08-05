@@ -13,8 +13,12 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());
 
   bool connected = true;
+  final _connectionChangedController = StreamController<bool>.broadcast();
   final _securityEventController =
       StreamController<Map<String, dynamic>>.broadcast();
+
+  @override
+  Stream<bool> get onConnectionChanged => _connectionChangedController.stream;
   List<Map<String, dynamic>> events = [
     {
       'eventId': 'evt-1',
@@ -41,6 +45,11 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onSecurityEvent =>
       _securityEventController.stream;
+
+  Future<void> emitConnectionChanged(bool value) async {
+    connected = value;
+    _connectionChangedController.add(value);
+  }
 
   Future<void> emitSecurityEvent(Map<String, dynamic> event) async {
     _securityEventController.add(event);
@@ -83,12 +92,39 @@ void main() {
       ];
     final notifier = LocalEventsNotifier(client);
     addTearDown(notifier.dispose);
+    addTearDown(client._connectionChangedController.close);
 
     await Future<void>.delayed(Duration.zero);
 
     expect(notifier.events, hasLength(1));
     expect(notifier.events.single.title, 'Clipboard received');
     expect(notifier.unreadCount, 0);
+  });
+
+  test('LocalEventsNotifier retries history after connecting', () async {
+    final client = FakeJsonRpcRiftClient()
+      ..connected = false
+      ..events = [
+        {
+          'eventId': 'evt-delayed',
+          'eventType': 'clipboard.offered',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-delayed',
+          'timestamp': '2026-06-23T12:00:00Z',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client._connectionChangedController.close);
+
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.events, isEmpty);
+
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(1));
+    expect(notifier.events.single.title, 'Clipboard received');
   });
 
   testWidgets('EventLogScreen shows queried events',

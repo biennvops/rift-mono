@@ -84,9 +84,9 @@ class _IncomingOffersViewState extends State<IncomingOffersView> {
     final fileName = offer['fileName']?.toString() ?? 'incoming.bin';
     if (transferId.isEmpty) return;
     final client = context.read<JsonRpcRiftClient>();
-    final destinationPath = await (widget.buildDestinationPathOverride ??
-            buildDefaultIncomingFilePath)
-        .call(fileName);
+    final destinationPath =
+        await (widget.buildDestinationPathOverride ?? buildIncomingFilePath)
+            .call(fileName);
     if (destinationPath == null) {
       if (mounted) {
         RiftSnackbar.show(

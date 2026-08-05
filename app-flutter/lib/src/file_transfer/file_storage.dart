@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../constants.dart';
 
 const MethodChannel _androidShellChannel = MethodChannel('rift/android/shell');
 const MethodChannel _iosDocumentsChannel = MethodChannel('rift/ios/documents');
@@ -128,15 +131,32 @@ Future<Directory?> resolveIncomingDownloadsDirectory() async {
   }
 }
 
+Future<String?> buildIncomingFilePath(String fileName) async {
+  final prefs = await SharedPreferences.getInstance();
+  final preferredPath = prefs.getString(AppPrefs.defaultDownloadPath)?.trim();
+  if (preferredPath != null && preferredPath.isNotEmpty) {
+    return _buildAvailableIncomingFilePath(Directory(preferredPath), fileName);
+  }
+
+  return buildDefaultIncomingFilePath(fileName);
+}
+
 Future<String?> buildDefaultIncomingFilePath(String fileName) async {
   final downloadsDir = await resolveIncomingDownloadsDirectory();
   if (downloadsDir == null) {
     return null;
   }
 
-  await downloadsDir.create(recursive: true);
+  return _buildAvailableIncomingFilePath(downloadsDir, fileName);
+}
+
+Future<String> _buildAvailableIncomingFilePath(
+  Directory directory,
+  String fileName,
+) async {
+  await directory.create(recursive: true);
   final sanitizedFileName = sanitizeIncomingFileName(fileName);
-  var candidate = File(joinPlatformPath(downloadsDir.path, sanitizedFileName));
+  var candidate = File(joinPlatformPath(directory.path, sanitizedFileName));
   if (!candidate.existsSync()) {
     return candidate.path;
   }
@@ -149,8 +169,7 @@ Future<String?> buildDefaultIncomingFilePath(String fileName) async {
   final extension = hasExtension ? sanitizedFileName.substring(dotIndex) : '';
 
   for (var i = 1; i <= 999; i += 1) {
-    candidate =
-        File(joinPlatformPath(downloadsDir.path, '$stem ($i)$extension'));
+    candidate = File(joinPlatformPath(directory.path, '$stem ($i)$extension'));
     if (!candidate.existsSync()) {
       return candidate.path;
     }
