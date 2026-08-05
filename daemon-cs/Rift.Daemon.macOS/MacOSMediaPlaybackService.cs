@@ -8,6 +8,7 @@ internal sealed class MacOSMediaPlaybackService(
     IServiceProvider serviceProvider,
     ILogger<MacOSMediaPlaybackService> logger) : ILocalMediaPlaybackActionHandler
 {
+    private const string RiftRemotePlaybackPrefix = "rift.remote:";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan AdapterCommandTimeout = TimeSpan.FromSeconds(5);
@@ -79,8 +80,10 @@ internal sealed class MacOSMediaPlaybackService(
         {
             try
             {
-                var snapshot = await TryGetSnapshotAsync(stoppingToken).ConfigureAwait(false);
-                await PublishIfChangedAsync(snapshot, stoppingToken).ConfigureAwait(false);
+                var pollResult = await TryGetSnapshotAsync(stoppingToken).ConfigureAwait(false);
+                await PublishIfChangedAsync(
+                    pollResult.IsRiftRemotePlayback ? null : pollResult.Snapshot,
+                    stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -210,7 +213,7 @@ internal sealed class MacOSMediaPlaybackService(
             cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<MacOSNowPlayingSnapshot?> TryGetSnapshotAsync(CancellationToken cancellationToken)
+    private async Task<SnapshotPollResult> TryGetSnapshotAsync(CancellationToken cancellationToken)
     {
         var output = await RunAdapterAsync(CreateGetCommand(), cancellationToken).ConfigureAwait(false);
         if (output.ExitCode != 0)
@@ -219,18 +222,26 @@ internal sealed class MacOSMediaPlaybackService(
             {
                 logger.LogDebug("MediaRemote adapter get failed: {Error}", output.StandardError);
             }
-            return null;
+            return SnapshotPollResult.Empty;
         }
 
         if (string.IsNullOrWhiteSpace(output.StandardOutput) || string.Equals(output.StandardOutput, "null", StringComparison.Ordinal))
         {
-            return null;
+            return SnapshotPollResult.Empty;
         }
 
         var payload = JsonSerializer.Deserialize<AdapterNowPlayingPayload>(output.StandardOutput, JsonOptions);
-        if (payload is null || string.IsNullOrWhiteSpace(payload.Title))
+        if (payload is null)
         {
-            return null;
+            return SnapshotPollResult.Empty;
+        }
+        if (IsRiftRemotePlayback(payload.BundleIdentifier, payload.ContentItemIdentifier))
+        {
+            return SnapshotPollResult.RiftRemotePlayback;
+        }
+        if (string.IsNullOrWhiteSpace(payload.Title))
+        {
+            return SnapshotPollResult.Empty;
         }
 
         var appId = !string.IsNullOrWhiteSpace(payload.BundleIdentifier)
@@ -247,7 +258,7 @@ internal sealed class MacOSMediaPlaybackService(
         var positionMs = GetPositionMs(payload.ElapsedTimeNow, payload.ElapsedTime);
         var canSkip = payload.ProhibitsSkip != true;
 
-        return new MacOSNowPlayingSnapshot(
+        return new SnapshotPollResult(new MacOSNowPlayingSnapshot(
             PlaybackId: playbackId,
             AppId: appId,
             AppName: appName,
@@ -263,8 +274,13 @@ internal sealed class MacOSMediaPlaybackService(
             CanSkipNext: canSkip,
             CanSkipPrevious: canSkip,
             CanSeek: durationMs is > 0,
-            UpdatedAt: DateTimeOffset.UtcNow.ToString("O"));
+            UpdatedAt: DateTimeOffset.UtcNow.ToString("O")), IsRiftRemotePlayback: false);
     }
+
+    internal static bool IsRiftRemotePlayback(string? bundleIdentifier, string? contentItemIdentifier) =>
+        contentItemIdentifier?.StartsWith(RiftRemotePlaybackPrefix, StringComparison.Ordinal) == true ||
+        string.Equals(bundleIdentifier, "com.example.appFlutter", StringComparison.OrdinalIgnoreCase) ||
+        bundleIdentifier?.StartsWith("com.rift.", StringComparison.OrdinalIgnoreCase) == true;
 
     internal static long GetPositionMs(double? elapsedTimeNow, double? elapsedTime) =>
         Math.Max(0L, (long)Math.Round((elapsedTimeNow ?? elapsedTime ?? 0d) * 1000d));
@@ -377,6 +393,12 @@ internal sealed class MacOSMediaPlaybackService(
     }
 
     private sealed record SnapshotState(MacOSNowPlayingSnapshot Snapshot, string Fingerprint);
+
+    private sealed record SnapshotPollResult(MacOSNowPlayingSnapshot? Snapshot, bool IsRiftRemotePlayback)
+    {
+        public static SnapshotPollResult Empty { get; } = new(null, IsRiftRemotePlayback: false);
+        public static SnapshotPollResult RiftRemotePlayback { get; } = new(null, IsRiftRemotePlayback: true);
+    }
 
     private sealed record AdapterCommandResult(int ExitCode, string StandardOutput, string StandardError, bool MissingArtifacts)
     {

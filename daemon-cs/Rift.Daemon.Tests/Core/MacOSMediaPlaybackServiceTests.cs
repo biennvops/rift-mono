@@ -102,6 +102,25 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
             MacOSMediaPlaybackService.CreatePlaybackId("com.example.browser"));
     }
 
+    [Theory]
+    [InlineData("com.example.appFlutter", null)]
+    [InlineData("com.rift.desktop", null)]
+    [InlineData("com.example.other", "rift.remote:rift-peer:playback-1")]
+    public void IsRiftRemotePlayback_RecognizesMirroredNowPlayingMetadata(
+        string? bundleIdentifier,
+        string? contentItemIdentifier)
+    {
+        Assert.True(MacOSMediaPlaybackService.IsRiftRemotePlayback(bundleIdentifier, contentItemIdentifier));
+    }
+
+    [Fact]
+    public void IsRiftRemotePlayback_AllowsOtherApplications()
+    {
+        Assert.False(MacOSMediaPlaybackService.IsRiftRemotePlayback(
+            "com.apple.Music",
+            "music:track-1"));
+    }
+
     private async Task<string> CreateSuccessfulAdapterScriptAsync()
     {
         var scriptPath = Path.Combine(_tempDirectory, "mediaremote-adapter.pl");

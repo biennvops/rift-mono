@@ -198,6 +198,24 @@ class RiftDaemonService : Service() {
                 }
             }
             "clearMediaPlayback" -> result.success(remoteMediaPlaybackManager?.clear() ?: false)
+            "performMediaPlaybackAction" -> {
+                val args = arguments as? Map<*, *>
+                val playbackId = args?.get("playbackId") as? String
+                val action = args?.get("action") as? String
+                if (playbackId == null || action == null) {
+                    result.error("invalid_args", "playbackId and action are required", null)
+                } else {
+                    val positionMs = (args["positionMs"] as? Number)?.toLong()
+                    result.success(
+                        mediaObserver?.performAction(playbackId, action, positionMs)
+                            ?: mapOf(
+                                "success" to false,
+                                "failureReason" to "CapabilityUnavailable",
+                                "message" to "Android media observer is unavailable.",
+                            ),
+                    )
+                }
+            }
             else -> result.notImplemented()
         }
     }

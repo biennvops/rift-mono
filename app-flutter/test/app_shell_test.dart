@@ -253,6 +253,14 @@ void main() {
         .thenAnswer((_) => notificationRemovedController.stream);
     when(() => mockClient.onNotificationActionResult)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackPosted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackRemoved)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackActionResult)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
@@ -282,6 +290,8 @@ void main() {
         .thenAnswer((_) async => {'items': []});
     when(() => mockClient.listPendingFileCommits())
         .thenAnswer((_) async => {'commits': []});
+    when(() => mockClient.listMediaPlayback())
+        .thenAnswer((_) async => {'playbacks': []});
     when(() => mockClient.confirmFileCommit(
           transferId: any(named: 'transferId'),
           destinationPath: any(named: 'destinationPath'),
@@ -341,6 +351,11 @@ void main() {
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
+      const MethodChannel('rift/macos/media_playback'),
+      (_) async => true,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
       (call) async {
         macOsCalls.add(call);
@@ -377,6 +392,11 @@ void main() {
     IOSNotifications.debugIsIOSOverride = null;
     WindowsMediaPlayback.debugIsWindowsOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/macos/media_playback'),
+      null,
+    );
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift.permissions'),
