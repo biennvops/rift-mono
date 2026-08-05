@@ -67,6 +67,20 @@ public sealed class LinuxMediaPlaybackServiceTests
         Assert.Equal(expected, LinuxMprisRemotePlayer.ToMprisPlaybackStatus(state));
     }
 
+    [Theory]
+    [InlineData("playing", false, true)]
+    [InlineData("buffering", false, true)]
+    [InlineData("paused", false, false)]
+    [InlineData("paused", true, true)]
+    public void CanMprisPlay_AllowsSelectionOfActivePlayback(
+        string state,
+        bool canPlay,
+        bool expected)
+    {
+        Assert.Equal(expected, LinuxMprisRemotePlayer.CanMprisPlay(
+            CreateRecord("rift-peer", "playback", state, "2026-08-06T00:00:00Z", canPlay)));
+    }
+
     [Fact]
     public void CreateTrackPath_IsStableAndSourceScoped()
     {
@@ -305,7 +319,8 @@ public sealed class LinuxMediaPlaybackServiceTests
         string sourceDeviceId,
         string playbackId,
         string state,
-        string updatedAt) => new()
+        string updatedAt,
+        bool canPlay = true) => new()
         {
             SourceDeviceId = sourceDeviceId,
             PlaybackId = playbackId,
@@ -314,7 +329,7 @@ public sealed class LinuxMediaPlaybackServiceTests
             PlaybackState = state,
             PositionMs = 1_000,
             DurationMs = 30_000,
-            CanPlay = true,
+            CanPlay = canPlay,
             CanPause = true,
             CanSkipNext = true,
             CanSkipPrevious = true,

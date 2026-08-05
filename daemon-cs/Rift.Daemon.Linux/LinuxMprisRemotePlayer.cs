@@ -343,7 +343,7 @@ internal sealed class LinuxMprisRemotePlayer(
         }
         if (old.CanSkipNext != playback.CanSkipNext) changed.Add("CanGoNext");
         if (old.CanSkipPrevious != playback.CanSkipPrevious) changed.Add("CanGoPrevious");
-        if (old.CanPlay != playback.CanPlay) changed.Add("CanPlay");
+        if (CanMprisPlay(old) != CanMprisPlay(playback)) changed.Add("CanPlay");
         if (old.CanPause != playback.CanPause) changed.Add("CanPause");
         if (old.CanSeek != playback.CanSeek) changed.Add("CanSeek");
         if (CanControl(old) != CanControl(playback)) changed.Add("CanControl");
@@ -545,6 +545,12 @@ internal sealed class LinuxMprisRemotePlayer(
             return;
         }
 
+        if (action == "play" && IsActivelyPlaying(playback.PlaybackState))
+        {
+            ReplyEmpty(context);
+            return;
+        }
+
         try
         {
             await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>()
@@ -616,7 +622,7 @@ internal sealed class LinuxMprisRemotePlayer(
             ["MaximumRate"] = 1d,
             ["CanGoNext"] = playback?.CanSkipNext == true,
             ["CanGoPrevious"] = playback?.CanSkipPrevious == true,
-            ["CanPlay"] = playback?.CanPlay == true,
+            ["CanPlay"] = playback is not null && CanMprisPlay(playback),
             ["CanPause"] = playback?.CanPause == true,
             ["CanSeek"] = playback?.CanSeek == true,
             ["CanControl"] = playback is not null && CanControl(playback)
@@ -629,6 +635,12 @@ internal sealed class LinuxMprisRemotePlayer(
         "paused" => "Paused",
         _ => "Stopped"
     };
+
+    internal static bool CanMprisPlay(MediaPlaybackRecord playback) =>
+        playback.CanPlay || IsActivelyPlaying(playback.PlaybackState);
+
+    private static bool IsActivelyPlaying(string? playbackState) =>
+        playbackState is "playing" or "buffering";
 
     private long GetPositionMsLocked()
     {
