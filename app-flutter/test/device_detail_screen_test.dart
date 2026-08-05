@@ -92,6 +92,36 @@ void main() {
     );
   }
 
+  testWidgets('DeviceDetailScreen does not overflow at narrow desktop width',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(420, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-abcdefghijklmnopqrstuvwxyz234567',
+          'displayName': 'Pixel 9 Pro Connected Device',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'lastSeenAt': '2026-07-29T00:00:00Z',
+          'capabilities': ['presence.basic'],
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Online'), findsOneWidget);
+    expect(find.text('Revoke Trust'), findsOneWidget);
+    expect(find.textContaining('Block Device'), findsNothing);
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
       'DeviceDetailScreen shows removed state when trusted peer disappears',
       (WidgetTester tester) async {
@@ -101,7 +131,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Pixel 9'), findsWidgets);
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     client.trustedPeers = const [];
     await client.emitTrustChanged({
@@ -112,7 +142,6 @@ void main() {
     });
     await tester.pumpAndSettle();
 
-    expect(find.text('Device unavailable'), findsOneWidget);
     expect(find.text('Pixel 9 is no longer available'), findsOneWidget);
     expect(find.text('Back to home'), findsOneWidget);
   });
@@ -125,12 +154,43 @@ void main() {
     await tester.pumpWidget(buildTestApp(client));
     await tester.pumpAndSettle();
 
-    expect(find.text('ONLINE'), findsOneWidget);
+    expect(find.text('Online'), findsOneWidget);
 
     await client.emitPeerLost({'deviceId': 'rift-phone'});
     await tester.pumpAndSettle();
 
-    expect(find.text('OFFLINE'), findsOneWidget);
+    expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Device unavailable'), findsNothing);
+  });
+
+  testWidgets(
+      'DeviceDetailScreen renders self device details and copy actions when isSelf is true',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: DeviceDetailScreen(
+            peer: <String, dynamic>{
+              'deviceId': 'rift-local-device-12345678',
+              'displayName': 'My Laptop',
+              'platform': 'macos',
+              'fingerprint': '1234-5678-90AB-CDEF',
+            },
+            isOnline: true,
+            isSelf: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('My Laptop'), findsWidgets);
+    expect(find.text('This Device'), findsWidgets);
+    expect(find.text('Copy Device ID'), findsOneWidget);
+    expect(find.text('Copy Fingerprint'), findsOneWidget);
+    expect(find.text('Revoke Trust'), findsNothing);
   });
 }

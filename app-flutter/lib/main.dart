@@ -9,15 +9,11 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'constants.dart';
-import 'package:app_flutter/screens/security_dashboard_screen.dart';
-import 'package:app_flutter/screens/operations_screen.dart';
+import 'src/ui/app_shell.dart' as rift_ui;
+import 'src/ui/theme.dart';
 import 'screens/pairing_screen.dart';
-import 'screens/trusted_devices_screen.dart';
-import 'screens/clipboard_transfer_screen.dart';
-import 'screens/settings_screen.dart';
 import 'screens/onboarding_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -28,6 +24,7 @@ import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
+import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
@@ -127,6 +124,13 @@ DesktopClipboardManager _createDesktopClipboardManager(
     );
   }
 
+  if (Platform.isAndroid) {
+    return DesktopClipboardManager(
+      client,
+      autoApplyIncomingOffers: false,
+    );
+  }
+
   return DesktopClipboardManager(client);
 }
 
@@ -174,12 +178,18 @@ void main(List<String> arguments) async {
   runApp(
     MultiProvider(
       providers: [
-        Provider<DesktopClipboardManager?>.value(value: clipboardManager),
+        ChangeNotifierProvider<DesktopClipboardManager?>.value(
+          value: clipboardManager,
+        ),
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (context) => SendQueueController(
             context.read<JsonRpcRiftClient>(),
           ),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (context) =>
+              LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
         ),
       ],
       child: RiftApp(hasCompletedOnboarding: hasCompletedOnboarding),
@@ -200,7 +210,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       Duration(seconds: 2);
 
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  final GlobalKey<_AppShellState> _appShellKey = GlobalKey<_AppShellState>();
+  final GlobalKey<rift_ui.AppShellState> _appShellKey =
+      GlobalKey<rift_ui.AppShellState>();
   final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
       GlobalKey<ScaffoldMessengerState>();
   StreamSubscription<Map<String, dynamic>>? _pairingRequestSub;
@@ -946,13 +957,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   void _openIncomingPairingRequest(Map<String, dynamic> payload) {
-    final navigator = _navigatorKey.currentState;
-    if (navigator == null) {
+    final navContext = _navigatorKey.currentContext;
+    if (navContext == null) {
       return;
     }
 
     final deviceId = payload['deviceId']?.toString();
-    if (deviceId == null || deviceId.isEmpty) {
+    final fingerprint = payload['fingerprint']?.toString();
+    if (deviceId == null ||
+        deviceId.isEmpty ||
+        fingerprint == null ||
+        fingerprint.isEmpty) {
       return;
     }
     if (_activePairingDeviceId == deviceId) {
@@ -960,20 +975,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     _activePairingDeviceId = deviceId;
-    navigator
-        .push(
-      MaterialPageRoute<void>(
-        builder: (_) => PairingScreen(
-          initialDeviceId: deviceId,
-          initialDisplayName: payload['displayName']?.toString(),
-          initialPeerFingerprint: payload['fingerprint']?.toString(),
-          initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
-          initialCanApproveLocally: true,
-          initialStatus: 'Incoming pairing request',
-        ),
+    showDialog<void>(
+      context: navContext,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.4),
+      builder: (_) => PairingScreen.incoming(
+        deviceId: deviceId,
+        displayName: payload['displayName']?.toString(),
+        fingerprint: fingerprint,
+        expiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
       ),
-    )
-        .whenComplete(() {
+    ).whenComplete(() {
       if (mounted && _activePairingDeviceId == deviceId) {
         _activePairingDeviceId = null;
       }
@@ -1327,16 +1339,45 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _trustChangedSub = client.onTrustChanged.listen((event) {
       final deviceId = event['deviceId']?.toString() ?? 'unknown device';
       final newState = event['newState']?.toString();
-      if (newState == null || newState.isEmpty) return;
-      _maybeNotify('Trust updated', '$deviceId is now $newState.');
+      final reason = event['reason']?.toString() ?? '';
+      if (newState == 'revoked' && reason.contains('remote')) {
+        final displayName = event['displayName']?.toString() ?? deviceId;
+        _maybeNotifyWithRoute(
+          title: 'Trust revoked',
+          body: '$displayName revoked trust with this device.',
+          route: NotificationRoute.devices,
+        );
+      }
     });
 
-    _pairingCompleteSub = client.onPairingComplete.listen((event) {
-      final deviceId = event['deviceId']?.toString() ?? 'trusted device';
-      final displayName = event['displayName']?.toString();
-      final label = (displayName != null && displayName.isNotEmpty)
-          ? displayName
-          : deviceId;
+    _pairingCompleteSub = client.onPairingComplete.listen((event) async {
+      final deviceId = event['deviceId']?.toString();
+      final eventName = event['displayName']?.toString();
+      String label = (eventName != null && eventName.isNotEmpty) ? eventName : '';
+
+      if (label.isEmpty && deviceId != null && deviceId.isNotEmpty) {
+        try {
+          final result = await client.listTrustedPeers();
+          final peers = List<dynamic>.from((result as Map)['peers'] ?? const []);
+          for (final candidate in peers) {
+            if (candidate is! Map) continue;
+            if (candidate['deviceId']?.toString() == deviceId) {
+              final peerName = candidate['displayName']?.toString();
+              if (peerName != null && peerName.isNotEmpty) {
+                label = peerName;
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (label.isEmpty) {
+        label = (deviceId != null && deviceId.length > 16)
+            ? '${deviceId.substring(0, 16)}...'
+            : (deviceId ?? 'trusted device');
+      }
+
       _maybeNotifyWithRoute(
         title: 'Pairing completed',
         body: 'Connected to $label.',
@@ -1578,7 +1619,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
     }
 
-    final destinationPath = await buildDefaultIncomingFilePath(fileName);
+    final destinationPath = await buildIncomingFilePath(fileName);
     if (destinationPath == null || destinationPath.isEmpty) {
       return null;
     }
@@ -1728,9 +1769,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       scaffoldMessengerKey: _scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       title: AppStrings.appTitle,
-      theme: _buildRiftTheme(),
+      theme: buildRiftTheme(),
       home: widget.hasCompletedOnboarding
-          ? AppShell(
+          ? rift_ui.AppShell(
               key: _appShellKey,
               historyRouteNotifier: _historyRouteNotifier,
               sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
@@ -1748,196 +1789,4 @@ class _IncomingFileDestination {
 
   final String transferPath;
   final String displayPath;
-}
-
-ThemeData _buildRiftTheme() {
-  const colorScheme = ColorScheme(
-    brightness: Brightness.light,
-    primary: Color(0xFF00328a),
-    onPrimary: Color(0xFFffffff),
-    primaryContainer: Color(0xFF0047bb),
-    onPrimaryContainer: Color(0xFFafc1ff),
-    secondary: Color(0xFF006e06),
-    onSecondary: Color(0xFFffffff),
-    secondaryContainer: Color(0xFF91f77e),
-    onSecondaryContainer: Color(0xFF007306),
-    tertiary: Color(0xFF701a00),
-    onTertiary: Color(0xFFffffff),
-    tertiaryContainer: Color(0xFF982700),
-    onTertiaryContainer: Color(0xFFffb09a),
-    error: Color(0xFFba1a1a),
-    onError: Color(0xFFffffff),
-    errorContainer: Color(0xFFffdad6),
-    onErrorContainer: Color(0xFF93000a),
-    surface: Color(0xFFfdf8f6),
-    onSurface: Color(0xFF1c1b1a),
-    surfaceContainerHighest: Color(0xFFe6e2df),
-    onSurfaceVariant: Color(0xFF434653),
-    outline: Color(0xFF737685),
-    outlineVariant: Color(0xFFc3c6d6),
-  );
-
-  final inter = GoogleFonts.interTextTheme();
-  final jetBrainsStyle = GoogleFonts.jetBrainsMono();
-
-  return ThemeData(
-    useMaterial3: true,
-    colorScheme: colorScheme,
-    scaffoldBackgroundColor: colorScheme.surface,
-    textTheme: inter.copyWith(
-      headlineLarge: inter.headlineLarge?.copyWith(
-          fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.02),
-      headlineMedium: inter.headlineMedium?.copyWith(
-          fontSize: 24, fontWeight: FontWeight.w600, height: 32 / 24),
-      headlineSmall: inter.headlineSmall?.copyWith(
-          fontSize: 20, fontWeight: FontWeight.w600, height: 28 / 20),
-      bodyLarge: inter.bodyLarge?.copyWith(
-          fontSize: 16, fontWeight: FontWeight.w400, height: 24 / 16),
-      bodyMedium: inter.bodyMedium?.copyWith(
-          fontSize: 14, fontWeight: FontWeight.w400, height: 20 / 14),
-      labelMedium: jetBrainsStyle.copyWith(
-          fontSize: 13,
-          fontWeight: FontWeight.w500,
-          letterSpacing: 0.05,
-          height: 16 / 13),
-      labelSmall: jetBrainsStyle.copyWith(
-          fontSize: 11, fontWeight: FontWeight.w400, height: 14 / 11),
-    ),
-    navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: colorScheme.surface,
-      indicatorColor: colorScheme.secondaryContainer,
-      labelTextStyle: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.selected)) {
-          return jetBrainsStyle.copyWith(
-              fontSize: 11,
-              color: colorScheme.onSurface,
-              fontWeight: FontWeight.w600);
-        }
-        return jetBrainsStyle.copyWith(
-            fontSize: 11, color: colorScheme.onSurfaceVariant);
-      }),
-      iconTheme: WidgetStateProperty.resolveWith((states) {
-        if (states.contains(WidgetState.selected)) {
-          return IconThemeData(color: colorScheme.onSecondaryContainer);
-        }
-        return IconThemeData(color: colorScheme.onSurfaceVariant);
-      }),
-    ),
-  );
-}
-
-class AppShell extends StatefulWidget {
-  final ValueNotifier<String?>? historyRouteNotifier;
-  final ValueNotifier<String?>? sharedClipboardTextNotifier;
-
-  const AppShell({
-    super.key,
-    this.historyRouteNotifier,
-    this.sharedClipboardTextNotifier,
-  });
-
-  @override
-  State<AppShell> createState() => _AppShellState();
-}
-
-class _AppShellState extends State<AppShell> {
-  late int _currentIndex;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.historyRouteNotifier?.value == null ? 0 : 1;
-  }
-
-  late final List<Widget> _screens = [
-    const TrustedDevicesScreen(),
-    ClipboardTransferScreen(
-      routeNotifier: widget.historyRouteNotifier,
-      sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
-    ),
-    const SecurityDashboardScreen(),
-    const OperationsScreen(),
-  ];
-
-  void showHistoryRoute(String route) {
-    setState(() {
-      _currentIndex = 1;
-    });
-    widget.historyRouteNotifier?.value = route;
-  }
-
-  void showRoute(String route) {
-    if (route == NotificationRoute.devices) {
-      setState(() {
-        _currentIndex = 0;
-      });
-      return;
-    }
-    showHistoryRoute(route);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(Icons.shield, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
-            Text('RIFT',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary)),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              );
-            },
-          ),
-        ],
-      ),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.devices),
-            selectedIcon: Icon(Icons.devices),
-            label: 'Devices',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.history),
-            selectedIcon: Icon(Icons.history),
-            label: 'History',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.security),
-            selectedIcon: Icon(Icons.security),
-            label: 'Events',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.terminal_outlined),
-            selectedIcon: Icon(Icons.terminal),
-            label: 'Ops',
-          ),
-        ],
-      ),
-    );
-  }
 }
