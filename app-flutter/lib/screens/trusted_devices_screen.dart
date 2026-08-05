@@ -25,6 +25,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       !Platform.environment.containsKey('FLUTTER_TEST');
 
   String? _localDeviceId;
+  String? _selectedDeviceId;
   Widget? _selectedPeerWidget;
   Map<String, dynamic>? _localDeviceInfo;
   bool _isDiscovering = false;
@@ -298,6 +299,45 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _discoveredPeers = discoveredPeers;
           _isDiscovering = isDiscovering;
           _error = null;
+
+          if (_selectedDeviceId != null) {
+            if (_selectedDeviceId == 'self' ||
+                _selectedDeviceId == localDeviceId) {
+              _selectedPeerWidget = DeviceDetailScreen(
+                key: ValueKey(_selectedDeviceId!),
+                peer: Map<String, dynamic>.from(deviceInfo),
+                isOnline: true,
+                isSelf: true,
+                onClose: () {
+                  setState(() {
+                    _selectedDeviceId = null;
+                    _selectedPeerWidget = null;
+                  });
+                  _loadData();
+                },
+              );
+            } else {
+              final foundPeer = trustedPeers.firstWhere(
+                (p) =>
+                    p is Map && p['deviceId']?.toString() == _selectedDeviceId,
+                orElse: () => null,
+              );
+              if (foundPeer != null && foundPeer is Map<String, dynamic>) {
+                _selectedPeerWidget = DeviceDetailScreen(
+                  key: ValueKey(_selectedDeviceId!),
+                  peer: foundPeer,
+                  isOnline: foundPeer['presence'] == 'online',
+                  onClose: () {
+                    setState(() {
+                      _selectedDeviceId = null;
+                      _selectedPeerWidget = null;
+                    });
+                    _loadData();
+                  },
+                );
+              }
+            }
+          }
         });
         _syncPulseAnimation();
       }
@@ -509,11 +549,23 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         ? displayName
         : (deviceId.isNotEmpty ? deviceId : 'This Device');
 
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final selfId = deviceId.isNotEmpty ? deviceId : 'self';
+    final isSelected = isDesktop &&
+        (_selectedDeviceId == 'self' || _selectedDeviceId == selfId);
+
     return Material(
-      color: Colors.white,
+      color: isSelected
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
+          : Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: theme.colorScheme.outlineVariant),
+        side: BorderSide(
+          color: isSelected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.outlineVariant,
+          width: isSelected ? 1.5 : 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -649,13 +701,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     Map<String, dynamic> deviceInfo,
   ) async {
     final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final selfDeviceId = deviceInfo['deviceId']?.toString() ?? 'self';
     final detailScreen = DeviceDetailScreen(
+      key: ValueKey(selfDeviceId),
       peer: deviceInfo,
       isOnline: true,
       isSelf: true,
       onClose: isDesktop
           ? () {
               setState(() {
+                _selectedDeviceId = null;
                 _selectedPeerWidget = null;
               });
               _loadData();
@@ -665,6 +720,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
     if (isDesktop) {
       setState(() {
+        _selectedDeviceId = selfDeviceId;
         _selectedPeerWidget = detailScreen;
       });
     } else {
@@ -698,6 +754,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
     final bool isPending = trustState == 'pairing_pending';
 
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final isSelected =
+        isDesktop && deviceIdStr.isNotEmpty && _selectedDeviceId == deviceIdStr;
+
     return InkWell(
       key: ValueKey('trusted-peer-card-$deviceIdStr'),
       onTap: () => _handlePeerAction(
@@ -709,9 +769,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isSelected
+              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
+              : Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: theme.colorScheme.outlineVariant),
+          border: Border.all(
+            color: isSelected
+                ? theme.colorScheme.primary
+                : theme.colorScheme.outlineVariant,
+            width: isSelected ? 1.5 : 1,
+          ),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -775,41 +842,31 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               ),
             ),
             const SizedBox(width: 8),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isPending
-                        ? theme.colorScheme.tertiaryContainer
-                            .withValues(alpha: 0.1)
-                        : const Color(0xFF10B981).withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(4),
+            if (isPending)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.tertiaryContainer
+                          .withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.hourglass_empty,
+                            size: 14, color: theme.colorScheme.tertiary),
+                        const SizedBox(width: 4),
+                        Text('PENDING',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                                color: theme.colorScheme.tertiary)),
+                      ],
+                    ),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                          isPending
-                              ? Icons.hourglass_empty
-                              : Icons.shield_outlined,
-                          size: 14,
-                          color: isPending
-                              ? theme.colorScheme.tertiary
-                              : const Color(0xFF10B981)),
-                      const SizedBox(width: 4),
-                      Text(isPending ? 'PENDING' : 'TRUSTED',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                              color: isPending
-                                  ? theme.colorScheme.tertiary
-                                  : const Color(0xFF10B981))),
-                    ],
-                  ),
-                ),
-                if (isPending) ...[
                   const SizedBox(height: 2),
                   TextButton(
                     onPressed: () => _handlePeerAction(
@@ -828,8 +885,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     child: const Text('Cancel'),
                   ),
                 ],
-              ],
-            ),
+              )
+            else
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: isSelected
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+              ),
           ],
         ),
       ),
@@ -845,13 +909,23 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final String titleText = rawDisplayName.isNotEmpty
         ? rawDisplayName
         : (shortId.isNotEmpty ? shortId : 'Unknown Device');
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final isSelected =
+        isDesktop && deviceIdStr.isNotEmpty && _selectedDeviceId == deviceIdStr;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isSelected
+            ? theme.colorScheme.primaryContainer.withValues(alpha: 0.12)
+            : Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        border: Border.all(
+          color: isSelected
+              ? theme.colorScheme.primary
+              : theme.colorScheme.outlineVariant,
+          width: isSelected ? 1.5 : 1,
+        ),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -1018,7 +1092,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           return;
         }
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
+        final targetId = deviceId ?? address ?? titleText;
         final pairingScreen = PairingScreen(
+          key: ValueKey('pairing-$targetId'),
           initialDeviceId: deviceId,
           initialEndpointAddress: deviceId == null ? address : null,
           initialEndpointPort: deviceId == null ? port : null,
@@ -1027,6 +1103,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           onClose: isDesktop
               ? () {
                   setState(() {
+                    _selectedDeviceId = null;
                     _selectedPeerWidget = null;
                   });
                   _loadData();
@@ -1036,6 +1113,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
         if (isDesktop) {
           setState(() {
+            _selectedDeviceId = targetId;
             _selectedPeerWidget = Provider<JsonRpcRiftClient>.value(
               value: client,
               child: pairingScreen,
@@ -1080,12 +1158,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       } else {
         final isOnline = peer['presence'] == 'online';
         final isDesktop = MediaQuery.of(context).size.width >= 1024;
+        final targetId = deviceId ?? titleText;
         final detailScreen = DeviceDetailScreen(
+          key: ValueKey(targetId),
           peer: peer,
           isOnline: isOnline,
           onClose: isDesktop
               ? () {
                   setState(() {
+                    _selectedDeviceId = null;
                     _selectedPeerWidget = null;
                   });
                   _loadData();
@@ -1095,6 +1176,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
         if (isDesktop) {
           setState(() {
+            _selectedDeviceId = targetId;
             _selectedPeerWidget = detailScreen;
           });
         } else {

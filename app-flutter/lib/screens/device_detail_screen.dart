@@ -50,6 +50,20 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   }
 
   @override
+  void didUpdateWidget(DeviceDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.peer != widget.peer ||
+        oldWidget.isOnline != widget.isOnline ||
+        oldWidget.isSelf != widget.isSelf) {
+      setState(() {
+        peer = widget.peer;
+        isOnline = widget.isOnline;
+        _deviceId = widget.peer['deviceId']?.toString() ?? '';
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _trustChangedSub?.cancel();
     _peerLostSub?.cancel();
@@ -445,158 +459,70 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         Widget mainContent = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              margin: const EdgeInsets.only(bottom: 24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      height: 4,
-                      child: Container(color: _kSuccessColor),
-                    ),
-                    Padding(
-                      padding: EdgeInsets.all(isMobile ? 16 : 24),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      widget.isSelf
-                                          ? 'Device details'
-                                          : 'Trust Status',
-                                      style: TextStyle(
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: -0.01,
-                                        height: 32 / 24,
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      widget.isSelf
-                                          ? 'This local device is active and running the Rift client & daemon.'
-                                          : 'This device is currently authorized to sync data.',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w400,
-                                        height: 24 / 16,
-                                        color:
-                                            theme.colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Icon(Icons.verified_user,
-                                  color: _kSuccessColor, size: 32),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                  color: theme.colorScheme.outlineVariant),
-                            ),
-                            child: Column(
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      'Status',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        height: 20 / 14,
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Text(
-                                        widget.isSelf
-                                            ? 'This Device'
-                                            : 'Trusted Peer',
-                                        textAlign: TextAlign.right,
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          height: 24 / 16,
-                                          color: _kSuccessColor,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 8.0),
-                                  child: Divider(
-                                      height: 1,
-                                      color: theme.colorScheme.outlineVariant),
-                                ),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(
-                                      widget.isSelf
-                                          ? 'Local Device'
-                                          : 'Trust Established',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        height: 20 / 14,
-                                        color: theme.colorScheme.onSurface,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 16),
-                                    Expanded(
-                                      child: Text(
-                                        widget.isSelf ? 'Self' : pairedAt,
-                                        textAlign: TextAlign.right,
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w400,
-                                          height: 24 / 16,
-                                          color: theme
-                                              .colorScheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+            if (!widget.isSelf)
+              Container(
+                margin: const EdgeInsets.only(bottom: 24),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: 4,
+                        child: Container(color: _kSuccessColor),
                       ),
-                    ),
-                  ],
+                      Padding(
+                        padding: EdgeInsets.all(isMobile ? 16 : 20),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: const BoxDecoration(
+                                color: _kSuccessBgColor,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.verified_user,
+                                  color: _kSuccessColor, size: 22),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Authorized Trusted Peer',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Trust established $pairedAt',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
             Container(
               margin: const EdgeInsets.only(bottom: 24),
               decoration: BoxDecoration(
@@ -609,7 +535,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Identity',
+                    widget.isSelf ? 'Device details' : 'Identity',
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w600,
@@ -633,45 +559,46 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ],
               ),
             ),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: theme.colorScheme.outlineVariant),
-              ),
-              padding: EdgeInsets.all(isMobile ? 16 : 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Capabilities',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -0.01,
-                      height: 32 / 24,
-                      color: theme.colorScheme.onSurface,
+            if (!widget.isSelf)
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: theme.colorScheme.outlineVariant),
+                ),
+                padding: EdgeInsets.all(isMobile ? 16 : 24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Capabilities',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.01,
+                        height: 32 / 24,
+                        color: theme.colorScheme.onSurface,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Manage what data can be synchronized with this device.',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w400,
-                      height: 24 / 16,
-                      color: theme.colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 4),
+                    Text(
+                      'Manage what data can be synchronized with this device.',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w400,
+                        height: 24 / 16,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  _buildCapabilityToggle(theme, Icons.content_paste,
-                      'Clipboard Sync', 'Allow shared clipboard access', true),
-                  const SizedBox(height: 12),
-                  _buildCapabilityToggle(theme, Icons.chevron_right,
-                      'File Transfer', 'Allow secure file dropping', true),
-                ],
+                    const SizedBox(height: 16),
+                    _buildCapabilityToggle(theme, Icons.content_paste,
+                        'Clipboard Sync', 'Allow shared clipboard access', true),
+                    const SizedBox(height: 12),
+                    _buildCapabilityToggle(theme, Icons.chevron_right,
+                        'File Transfer', 'Allow secure file dropping', true),
+                  ],
+                ),
               ),
-            ),
           ],
         );
 
@@ -811,20 +738,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                         ),
                         child: Row(
                           children: [
-                            IconButton(
-                              icon: widget.onClose != null
-                                  ? const Icon(Icons.close)
-                                  : const Icon(Icons.arrow_back),
-                              color: theme.colorScheme.onSurfaceVariant,
-                              onPressed: () {
-                                if (widget.onClose != null) {
-                                  widget.onClose!();
-                                } else {
-                                  Navigator.of(context).pop();
-                                }
-                              },
-                            ),
-                            const SizedBox(width: 8),
+                            if (widget.onClose == null) ...[
+                              IconButton(
+                                icon: const Icon(Icons.arrow_back),
+                                color: theme.colorScheme.onSurfaceVariant,
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             Container(
                               width: 48,
                               height: 48,

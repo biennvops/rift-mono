@@ -666,7 +666,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.text('Phone'), findsOneWidget);
-    expect(find.text('TRUSTED'), findsOneWidget);
+    expect(find.text('TRUSTED'), findsNothing);
     expect(find.text('ONLINE'), findsOneWidget);
     expect(find.text('Pair'), findsNothing);
   });
@@ -859,5 +859,62 @@ void main() {
     expect(find.byIcon(Icons.computer), findsAtLeastNWidgets(1));
     expect(find.text('Mystery Box'), findsOneWidget);
     expect(find.byIcon(Icons.devices), findsOneWidget);
+  });
+
+  testWidgets('desktop split view switches focus between device cards',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final client = FakeJsonRpcRiftClient();
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-peer-1',
+        'displayName': 'Peer One',
+        'platform': 'android',
+        'trustState': 'trusted',
+        'presence': 'online',
+      },
+      {
+        'deviceId': 'rift-peer-2',
+        'displayName': 'Peer Two',
+        'platform': 'linux',
+        'trustState': 'trusted',
+        'presence': 'online',
+      },
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Initially shows placeholder
+    expect(
+        find.text('Select a device to view details or pair.'), findsOneWidget);
+
+    // Tap Peer One
+    await tester.tap(find.text('Peer One'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Peer One'), findsWidgets);
+    expect(
+        find.text('Select a device to view details or pair.'), findsNothing);
+
+    // Tap Peer Two to switch focus
+    await tester.tap(find.text('Peer Two'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Peer Two'), findsWidgets);
+    expect(find.text('Authorized Trusted Peer'), findsOneWidget);
   });
 }
