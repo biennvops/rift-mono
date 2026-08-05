@@ -83,12 +83,12 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
     setState(() {
       _unblockingPeers.add(deviceId);
     });
-    
+
     final client = context.read<JsonRpcRiftClient>();
     try {
       // Unblock functionality in daemon.
       await client.unblockPeer(deviceId);
-      
+
       if (mounted) {
         setState(() {
           _blockedPeers.removeWhere((p) => p['deviceId'] == deviceId);
@@ -287,7 +287,7 @@ class _BlockedPeersScreenState extends State<BlockedPeersScreen> {
                               style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.secondary),
                             ),
                           ),
-                          
+
                           if (_blockedPeers.isEmpty)
                             Center(
                               child: Padding(

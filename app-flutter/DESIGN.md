@@ -129,7 +129,7 @@ The palette is dominated by a deep, authoritative primary blue derived from the 
 - **Primary Container Blue (#0047AB):** Used for active navigation states and critical branding elements.
 - **Secondary Slate (#213145):** Used for sidebar backgrounds and high-contrast UI components.
 - **Neutral Scale:** A series of cool grays (from #F8FAFC to #64748B) defines the UI scaffolding and borders.
-- **Semantic Status:** 
+- **Semantic Status:**
   - **Success:** Emerald green for completed syncs and verified security.
   - **Warning:** Amber for storage limits or sync conflicts.
   - **Error:** High-intensity red for security breaches or failed connections.
@@ -159,7 +159,7 @@ Depth in this design system is expressed through **Tonal Layers** and **Low-Cont
 4. **Elevation Shadows:** Only used for floating elements like dropdowns or modals. These should be "Ambient Shadows": extra-diffused (20px-40px blur), low opacity (10%), with a slight tint of the primary blue to maintain color harmony.
 
 ## Shapes
-The shape language is **Soft (0.25rem)**. This provides a professional edge while feeling modern. 
+The shape language is **Soft (0.25rem)**. This provides a professional edge while feeling modern.
 
 - **Standard Elements:** Buttons, inputs, and small chips use `rounded` (0.25rem).
 - **Containers:** Large cards and modals use `rounded-lg` (0.5rem) to differentiate them as structural containers.
@@ -168,8 +168,8 @@ The shape language is **Soft (0.25rem)**. This provides a professional edge whil
 ## Components
 Consistent component styling reinforces the trust-based identity of the application.
 
-- **Buttons:** 
-  - *Primary:* Solid Primary Blue with white text. 
+- **Buttons:**
+  - *Primary:* Solid Primary Blue with white text.
   - *Secondary:* Transparent with a 1px Primary Blue border.
   - *Destructive:* Solid Error Red with white text. These actions should always trigger a confirmation modal with high-contrast warning visuals.
 - **Status Chips:** Small, subtle backgrounds (10% opacity of the status color) with high-contrast text. For example, a "Secure" chip uses a light green background with dark green text.
