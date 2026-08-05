@@ -9,6 +9,7 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import io.flutter.plugin.common.EventChannel
@@ -31,6 +32,7 @@ class AndroidMediaSessionObserver(
     companion object {
         private const val tag = "RiftMediaObserver"
         private const val artworkMaxDimension = 256
+        private const val missingSessionGraceMs = 4_000L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -58,6 +60,7 @@ class AndroidMediaSessionObserver(
     private val controllersById = LinkedHashMap<String, MediaController>()
     private val callbacksById = HashMap<String, MediaController.Callback>()
     private val postedIds = HashSet<String>()
+    private val missingSinceById = HashMap<String, Long>()
 
     fun setEventSink(sink: EventChannel.EventSink?) {
         eventSink = sink
@@ -99,7 +102,8 @@ class AndroidMediaSessionObserver(
         sessionsListener?.let { sessionManager?.removeOnActiveSessionsChangedListener(it) }
         sessionsListener = null
         sessionManager = null
-        syncControllers(emptyList())
+        controllersById.keys.toList().forEach { removeController(it) }
+        missingSinceById.clear()
     }
 
     fun performAction(playbackId: String, action: String, positionMs: Long?): Map<String, Any?> {
@@ -114,8 +118,15 @@ class AndroidMediaSessionObserver(
             when (action) {
                 "play" -> transport.play()
                 "pause" -> transport.pause()
-                "skipNext" -> transport.skipToNext()
-                "skipPrevious" -> transport.skipToPrevious()
+                "togglePlayPause" -> {
+                    if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                        transport.pause()
+                    } else {
+                        transport.play()
+                    }
+                }
+                "next" -> transport.skipToNext()
+                "previous" -> transport.skipToPrevious()
                 "seek" -> {
                     if (positionMs == null) {
                         return mapOf(
@@ -164,6 +175,7 @@ class AndroidMediaSessionObserver(
             }
             val id = playbackIdFor(controller)
             nextIds.add(id)
+            missingSinceById.remove(id)
             if (!controllersById.containsKey(id)) {
                 val callback = object : MediaController.Callback() {
                     override fun onPlaybackStateChanged(state: PlaybackState?) {
@@ -185,13 +197,22 @@ class AndroidMediaSessionObserver(
             emitSnapshot(id, forcePosted = forceReplay)
         }
 
+        val now = SystemClock.elapsedRealtime()
         val removed = controllersById.keys.filter { it !in nextIds }
         for (id in removed) {
-            removeController(id)
+            val missingSince = missingSinceById.getOrPut(id) {
+                Log.d(tag, "Deferring media session removal during active-session transition: $id")
+                now
+            }
+            if (now - missingSince >= missingSessionGraceMs) {
+                missingSinceById.remove(id)
+                removeController(id)
+            }
         }
     }
 
     private fun removeController(id: String) {
+        missingSinceById.remove(id)
         val controller = controllersById.remove(id) ?: return
         callbacksById.remove(id)?.let { controller.unregisterCallback(it) }
         if (postedIds.remove(id)) {
