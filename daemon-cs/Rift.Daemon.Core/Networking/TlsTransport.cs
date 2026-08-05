@@ -167,6 +167,18 @@ public sealed class TlsTransport : ITransport, IDisposable
             if (expectedDeviceId is not null &&
                 !string.Equals(deviceId, expectedDeviceId, StringComparison.Ordinal))
             {
+                await LogSecurityEventAsync(
+                    SecurityEventTypes.AuthFailed,
+                    deviceId,
+                    SecurityEventSeverity.Critical,
+                    SecurityEventOutcome.Failure,
+                    "AuthenticationFailed",
+                    new Dictionary<string, object>
+                    {
+                        ["expectedDeviceId"] = expectedDeviceId,
+                        ["authenticatedDeviceId"] = deviceId,
+                        ["endpoint"] = $"{host}:{port}"
+                    }).ConfigureAwait(false);
                 throw new InvalidOperationException(
                     $"Endpoint {host}:{port} authenticated unexpected peer {deviceId} instead of {expectedDeviceId}.");
             }
@@ -798,7 +810,8 @@ public sealed class TlsTransport : ITransport, IDisposable
         string peerDeviceId,
         SecurityEventSeverity severity,
         SecurityEventOutcome outcome,
-        string? failureReason)
+        string? failureReason,
+        IDictionary<string, object>? details = null)
     {
         if (_securityEventLog is null)
         {
@@ -812,7 +825,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             LocalDeviceId = _identityManager.GetDeviceId(),
             PeerDeviceId = peerDeviceId,
             Outcome = outcome,
-            FailureReason = failureReason
+            FailureReason = failureReason,
+            Details = details
         });
     }
 

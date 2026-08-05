@@ -50,14 +50,8 @@ internal sealed class LinuxMprisRemotePlayer(
           <method name="OpenUri"><arg name="Uri" type="s" direction="in"/></method>
           <signal name="Seeked"><arg name="Position" type="x"/></signal>
           <property name="PlaybackStatus" type="s" access="read"/>
-          <property name="LoopStatus" type="s" access="readwrite"/>
-          <property name="Rate" type="d" access="readwrite"/>
-          <property name="Shuffle" type="b" access="readwrite"/>
           <property name="Metadata" type="a{sv}" access="read"/>
-          <property name="Volume" type="d" access="readwrite"/>
           <property name="Position" type="x" access="read"/>
-          <property name="MinimumRate" type="d" access="read"/>
-          <property name="MaximumRate" type="d" access="read"/>
           <property name="CanGoNext" type="b" access="read"/>
           <property name="CanGoPrevious" type="b" access="read"/>
           <property name="CanPlay" type="b" access="read"/>
@@ -293,6 +287,7 @@ internal sealed class LinuxMprisRemotePlayer(
                               old.PositionMs != playback.PositionMs ||
                               old.PlaybackState != playback.PlaybackState ||
                               keyChanged;
+        var artworkChanged = ShouldMaterializeArtwork(old, playback, keyChanged);
         _playback = playback;
         _trackPath = keyChanged ? CreateTrackPath(playback.SourceDeviceId, playback.PlaybackId) : _trackPath;
         if (positionChanged)
@@ -301,25 +296,28 @@ internal sealed class LinuxMprisRemotePlayer(
             _positionBaseTimestamp = Stopwatch.GetTimestamp();
         }
 
-        if (playback.Artwork is not null &&
-            playback.Artwork.TryGetValue("dataBase64", out var artworkValue) &&
-            artworkValue is string dataBase64 &&
-            playback.Artwork.TryGetValue("mediaType", out var mediaTypeValue) &&
-            mediaTypeValue is string mediaType)
+        if (artworkChanged)
         {
-            try
+            if (playback.Artwork is not null &&
+                playback.Artwork.TryGetValue("dataBase64", out var artworkValue) &&
+                artworkValue is string dataBase64 &&
+                playback.Artwork.TryGetValue("mediaType", out var mediaTypeValue) &&
+                mediaTypeValue is string mediaType)
             {
-                WriteArtwork(dataBase64, mediaType, cancellationToken);
+                try
+                {
+                    WriteArtwork(dataBase64, mediaType, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    logger.LogDebug(ex, "Failed to materialize remote MPRIS artwork.");
+                    CleanupArtwork();
+                }
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            else
             {
-                logger.LogDebug(ex, "Failed to materialize remote MPRIS artwork.");
                 CleanupArtwork();
             }
-        }
-        else
-        {
-            CleanupArtwork();
         }
 
         if (old is null || keyChanged)
@@ -337,7 +335,7 @@ internal sealed class LinuxMprisRemotePlayer(
             old.Artist != playback.Artist ||
             old.Album != playback.Album ||
             old.DurationMs != playback.DurationMs ||
-            !ArtworkEquals(old.Artwork, playback.Artwork))
+            artworkChanged)
         {
             changed.Add("Metadata");
         }
@@ -356,6 +354,14 @@ internal sealed class LinuxMprisRemotePlayer(
         playback.CanSkipNext ||
         playback.CanSkipPrevious ||
         playback.CanSeek;
+
+    internal static bool ShouldMaterializeArtwork(
+        MediaPlaybackRecord? previous,
+        MediaPlaybackRecord playback,
+        bool playbackKeyChanged) =>
+        previous is null ||
+        playbackKeyChanged ||
+        !ArtworkEquals(previous.Artwork, playback.Artwork);
 
     private static bool ArtworkEquals(
         IReadOnlyDictionary<string, object?>? left,
@@ -612,14 +618,8 @@ internal sealed class LinuxMprisRemotePlayer(
         return new Dictionary<string, VariantValue>(StringComparer.Ordinal)
         {
             ["PlaybackStatus"] = ToMprisPlaybackStatus(playback?.PlaybackState),
-            ["LoopStatus"] = "None",
-            ["Rate"] = 1d,
-            ["Shuffle"] = false,
             ["Metadata"] = CreateMetadata(playback, trackPath, artworkPath),
-            ["Volume"] = 1d,
             ["Position"] = positionMs * 1000L,
-            ["MinimumRate"] = 1d,
-            ["MaximumRate"] = 1d,
             ["CanGoNext"] = playback?.CanSkipNext == true,
             ["CanGoPrevious"] = playback?.CanSkipPrevious == true,
             ["CanPlay"] = playback is not null && CanMprisPlay(playback),

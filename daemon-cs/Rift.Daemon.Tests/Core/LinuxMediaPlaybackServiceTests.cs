@@ -82,6 +82,40 @@ public sealed class LinuxMediaPlaybackServiceTests
     }
 
     [Fact]
+    public void ShouldMaterializeArtwork_SkipsUnchangedPayloads()
+    {
+        var firstArtwork = new Dictionary<string, object?>
+        {
+            ["dataBase64"] = "cG5n",
+            ["mediaType"] = "image/png"
+        };
+        var sameArtwork = new Dictionary<string, object?>(firstArtwork);
+        var changedArtwork = new Dictionary<string, object?>(firstArtwork)
+        {
+            ["dataBase64"] = "anBn"
+        };
+        var previous = CreateRecord(
+            "rift-peer",
+            "playback",
+            "playing",
+            "2026-08-06T00:00:00Z",
+            artwork: firstArtwork);
+
+        Assert.False(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: sameArtwork),
+            playbackKeyChanged: false));
+        Assert.True(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: sameArtwork),
+            playbackKeyChanged: true));
+        Assert.True(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: changedArtwork),
+            playbackKeyChanged: false));
+    }
+
+    [Fact]
     public void CreateTrackPath_IsStableAndSourceScoped()
     {
         var first = LinuxMprisRemotePlayer.CreateTrackPath("rift-peer-a", "playback-1");
@@ -320,7 +354,8 @@ public sealed class LinuxMediaPlaybackServiceTests
         string playbackId,
         string state,
         string updatedAt,
-        bool canPlay = true) => new()
+        bool canPlay = true,
+        IReadOnlyDictionary<string, object?>? artwork = null) => new()
         {
             SourceDeviceId = sourceDeviceId,
             PlaybackId = playbackId,
@@ -329,6 +364,7 @@ public sealed class LinuxMediaPlaybackServiceTests
             PlaybackState = state,
             PositionMs = 1_000,
             DurationMs = 30_000,
+            Artwork = artwork,
             CanPlay = canPlay,
             CanPause = true,
             CanSkipNext = true,
