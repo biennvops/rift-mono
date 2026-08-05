@@ -428,7 +428,12 @@ internal sealed class LinuxMprisRemotePlayer(
                 context.ReplyError("org.freedesktop.DBus.Error.UnknownProperty", property);
                 return;
             }
-            Reply(context, "v", writer => writer.WriteVariant(value));
+            if (!context.NoReplyExpected)
+            {
+                using var writer = context.CreateReplyWriter("v");
+                writer.WriteVariant(value);
+                context.Reply(writer.CreateMessage());
+            }
             return;
         }
 
@@ -436,7 +441,12 @@ internal sealed class LinuxMprisRemotePlayer(
         {
             var @interface = reader.ReadString();
             var values = GetProperties(@interface);
-            Reply(context, "a{sv}", writer => writer.WriteDictionary(values));
+            if (!context.NoReplyExpected)
+            {
+                using var writer = context.CreateReplyWriter("a{sv}");
+                writer.WriteDictionary(values);
+                context.Reply(writer.CreateMessage());
+            }
             return;
         }
 
@@ -701,20 +711,6 @@ internal sealed class LinuxMprisRemotePlayer(
             using var writer = context.CreateReplyWriter(null!);
             context.Reply(writer.CreateMessage());
         }
-    }
-
-    private static void Reply(
-        MethodContext context,
-        string signature,
-        Action<MessageWriter> write)
-    {
-        if (context.NoReplyExpected)
-        {
-            return;
-        }
-        using var writer = context.CreateReplyWriter(signature);
-        write(writer);
-        context.Reply(writer.CreateMessage());
     }
 
     private static void ReplyFailure(MethodContext context, string message) =>
