@@ -18,7 +18,7 @@ Rift is a security-first, local-first, cross-platform device continuity platform
 ## Repository Map
 
 - `daemon-cs/` — shared C#/.NET daemon core, desktop platform hosts, tests, and tools.
-- `daemon-dart/` — Dart daemon used by Android and shared mobile flows.
+- `daemon-dart/` — shared Dart mobile daemon used by Android isolate and iOS in-process hosting.
 - `app-flutter/` — cross-platform Flutter client consuming daemon JSON-RPC IPC.
 - `tests-conformance/` — protocol conformance harness.
 - `tests-interop/` — cross-platform interoperability harness and procedures.
@@ -26,7 +26,7 @@ Rift is a security-first, local-first, cross-platform device continuity platform
 
 ## Architecture Constraints
 
-- Keep the C# desktop daemon family and Dart Android daemon as independent implementations of the same protocol.
+- Keep the C# desktop daemon family and Dart mobile daemon as independent implementations of the same protocol.
 - Keep Flutter daemon access transport-agnostic; UI code must not branch on named pipes, Unix sockets, or mobile in-process transports.
 - On Windows, the service owns background core behavior while the user-session process owns clipboard, tray, and notification integration.
 - Use "Operation" for cross-device protocol actions; avoid unqualified "Intent" because of Android terminology.
