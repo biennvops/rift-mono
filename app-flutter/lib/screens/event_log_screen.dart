@@ -85,27 +85,23 @@ class _EventLogScreenState extends State<EventLogScreen> {
     return type.startsWith('connection.');
   }
 
+  bool _matchesFilter(Map event, String filterLabel) {
+    final type = event['eventType']?.toString() ?? '';
+    return switch (filterLabel) {
+      'Security' => _isSecurityEvent(event),
+      'Pairing' => type.startsWith('pairing.'),
+      'Session' => _isConnectionEvent(event),
+      'Clipboard' => type.startsWith('clipboard.'),
+      'Errors' => _isErrorEvent(event),
+      _ => true,
+    };
+  }
+
   List<dynamic> _applyFilter(List<dynamic> events) {
     if (_activeFilter == 'All') return events;
-    return events.where((event) {
-      if (event is! Map) return false;
-      final type = event['eventType']?.toString() ?? '';
-
-      switch (_activeFilter) {
-        case 'Security':
-          return _isSecurityEvent(event);
-        case 'Pairing':
-          return type.startsWith('pairing');
-        case 'Session':
-          return _isConnectionEvent(event);
-        case 'Clipboard':
-          return type.startsWith('clipboard');
-        case 'Errors':
-          return _isErrorEvent(event);
-        default:
-          return true;
-      }
-    }).toList();
+    return events
+        .where((event) => event is Map && _matchesFilter(event, _activeFilter))
+        .toList();
   }
 
   Future<void> _loadEvents() async {
@@ -232,20 +228,9 @@ class _EventLogScreenState extends State<EventLogScreen> {
 
   List<dynamic> _applyFilterForLabel(List<dynamic> events, String filterLabel) {
     if (filterLabel == 'All') return events;
-    return events.where((e) {
-      if (filterLabel == 'Errors') return _isErrorEvent(e);
-      if (filterLabel == 'Security') return _isSecurityEvent(e);
-      if (filterLabel == 'Clipboard' || filterLabel == 'Transfer') {
-        final type = e['eventType']?.toString() ?? '';
-        return type.startsWith('clipboard') || type.startsWith('file');
-      }
-      if (filterLabel == 'Session') return _isConnectionEvent(e as Map);
-      if (filterLabel == 'Pairing') {
-        final type = e['eventType']?.toString() ?? '';
-        return type.startsWith('pairing');
-      }
-      return false;
-    }).toList();
+    return events
+        .where((event) => event is Map && _matchesFilter(event, filterLabel))
+        .toList();
   }
 
   String _descriptionForEvent(

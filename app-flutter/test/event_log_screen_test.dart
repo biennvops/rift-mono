@@ -149,6 +149,10 @@ void main() {
     expect(notifier.events, hasLength(1));
     expect(client.queryEventLogCallCount, 1);
 
+    await client.emitSecurityEvent(client.events.single);
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.events, hasLength(1));
+
     client.events = [
       ...client.events,
       {
@@ -222,6 +226,23 @@ void main() {
           'outcome': 'success',
           'details': {'bindingTier': 'app-nonce'},
         },
+        {
+          'eventId': 'evt-clipboard',
+          'eventType': 'clipboard.offered',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-clipboard',
+          'timestamp': '2026-06-23T12:02:00Z',
+          'outcome': 'success',
+        },
+        {
+          'eventId': 'evt-file',
+          'eventType': 'file_transfer.rejected',
+          'severity': 'warning',
+          'peerDeviceId': 'rift-peer-file',
+          'timestamp': '2026-06-23T12:03:00Z',
+          'outcome': 'denied',
+          'failureReason': 'PolicyDenied',
+        },
       ];
 
     await tester.pumpWidget(
@@ -249,6 +270,25 @@ void main() {
 
     expect(find.text('connection.established'), findsOneWidget);
     expect(find.text('pairing.attempted'), findsNothing);
+
+    await tester.tap(find.text('Clipboard'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('clipboard.offered'), findsOneWidget);
+    expect(find.text('file_transfer.rejected'), findsNothing);
+
+    await client.emitSecurityEvent({
+      'eventId': 'evt-file-live',
+      'eventType': 'file_transfer.rejected',
+      'severity': 'warning',
+      'peerDeviceId': 'rift-peer-live-file',
+      'timestamp': '2026-06-23T12:04:00Z',
+      'outcome': 'denied',
+      'failureReason': 'PolicyDenied',
+    });
+    await tester.pump();
+
+    expect(find.text('file_transfer.rejected'), findsNothing);
   });
 
   testWidgets('EventLogScreen filters by severity',

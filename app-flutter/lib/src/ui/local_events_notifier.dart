@@ -21,6 +21,8 @@ class LocalEvent {
     required this.title,
     required this.subtitle,
     required this.time,
+    required this.identityKey,
+    this.eventId,
     this.peerDeviceId,
   });
 
@@ -28,6 +30,8 @@ class LocalEvent {
   final String title;
   final String subtitle;
   final DateTime time;
+  final String identityKey;
+  final String? eventId;
   final String? peerDeviceId;
 }
 
@@ -42,12 +46,8 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   LocalEventsNotifier(this._client) {
     _subs.addAll([
-      _client.onTrustChanged.listen(_onTrustChanged),
-      _client.onPairingRequest.listen(_onPairingRequest),
-      _client.onClipboardOffer.listen(_onClipboardOffer),
-      _client.onClipboardExpired.listen(_onClipboardExpired),
+      _client.onSecurityEvent.listen(_onSecurityEvent),
       _client.onFileTransferCompleted.listen(_onFileCompleted),
-      _client.onFileTransferFailed.listen(_onFileFailed),
       _client.onConnectionChanged.listen((isConnected) {
         if (isConnected) unawaited(_loadHistory());
       }),
@@ -65,6 +65,9 @@ class LocalEventsNotifier extends ChangeNotifier {
   }
 
   void _add(LocalEvent event, {bool unread = true}) {
+    _events.removeWhere(
+      (existing) => existing.identityKey == event.identityKey,
+    );
     _events.insert(0, event);
     if (_events.length > _maxEvents) _events.removeLast();
     if (unread) _unreadCount++;
@@ -95,7 +98,12 @@ class LocalEventsNotifier extends ChangeNotifier {
           .map(_fromSecurityEvent)
           .whereType<LocalEvent>()
           .toList(growable: false);
-      _events.removeWhere(_historyEvents.contains);
+      final historyKeys = historyEvents.map((event) => event.identityKey);
+      _events.removeWhere(
+        (event) =>
+            _historyEvents.contains(event) ||
+            historyKeys.contains(event.identityKey),
+      );
       _historyEvents
         ..clear()
         ..addAll(historyEvents);
@@ -115,11 +123,18 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   LocalEvent? _fromSecurityEvent(Map<String, dynamic> record) {
     final type = record['eventType']?.toString() ?? '';
+    final eventId = record['eventId']?.toString();
     final peerDeviceId = record['peerDeviceId']?.toString();
     final peer = _shortId(peerDeviceId ?? '');
     final time =
         DateTime.tryParse(record['timestamp']?.toString() ?? '')?.toLocal() ??
             DateTime.now();
+    final identityKey = _buildIdentityKey(
+      eventId: eventId,
+      eventType: type,
+      peerDeviceId: peerDeviceId,
+      subject: record['details']?.toString(),
+    );
 
     return switch (type) {
       'connection.established' => LocalEvent(
@@ -127,6 +142,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Device connected',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'connection.lost' => LocalEvent(
@@ -134,6 +151,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Device disconnected',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'trust.transitioned' => LocalEvent(
@@ -141,6 +160,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Trust updated',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'pairing.attempted' => LocalEvent(
@@ -148,6 +169,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Pairing activity',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'clipboard.offered' => LocalEvent(
@@ -155,6 +178,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Clipboard received',
           subtitle: peer.isEmpty ? 'Incoming clipboard offer' : 'From $peer',
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'clipboard.expired' => LocalEvent(
@@ -162,6 +187,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'Clipboard offer expired',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       'file_transfer.rejected' => LocalEvent(
@@ -169,99 +196,50 @@ class LocalEventsNotifier extends ChangeNotifier {
           title: 'File transfer rejected',
           subtitle: peer,
           time: time,
+          identityKey: identityKey,
+          eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
       _ => null,
     };
   }
 
-  void _onTrustChanged(Map<String, dynamic> e) {
-    final deviceId = e['deviceId']?.toString() ?? '';
-    final newState = e['newState']?.toString() ?? '';
-    final name = e['displayName']?.toString() ?? _shortId(deviceId);
-
-    switch (newState) {
-      case 'trusted':
-        _add(LocalEvent(
-          kind: LocalEventKind.deviceTrusted,
-          title: 'Device trusted',
-          subtitle: name,
-          time: DateTime.now(),
-          peerDeviceId: deviceId,
-        ));
-      case 'discovered':
-        _add(LocalEvent(
-          kind: LocalEventKind.deviceConnected,
-          title: 'Device discovered',
-          subtitle: name,
-          time: DateTime.now(),
-          peerDeviceId: deviceId,
-        ));
-      case 'blocked':
-        _add(LocalEvent(
-          kind: LocalEventKind.deviceDisconnected,
-          title: 'Device blocked',
-          subtitle: name,
-          time: DateTime.now(),
-          peerDeviceId: deviceId,
-        ));
-    }
-  }
-
-  void _onPairingRequest(Map<String, dynamic> e) {
-    final deviceId = e['deviceId']?.toString() ?? '';
-    final name = e['displayName']?.toString() ?? _shortId(deviceId);
-    _add(LocalEvent(
-      kind: LocalEventKind.devicePairingRequest,
-      title: 'Pairing request',
-      subtitle: name,
-      time: DateTime.now(),
-      peerDeviceId: deviceId,
-    ));
-  }
-
-  void _onClipboardOffer(Map<String, dynamic> e) {
-    final deviceId = e['sourceDeviceId']?.toString() ?? '';
-    final contentType = e['contentType']?.toString() ?? 'content';
-    final label = contentType.startsWith('text/') ? 'Text' : 'File';
-    _add(LocalEvent(
-      kind: LocalEventKind.clipboardReceived,
-      title: 'Clipboard received',
-      subtitle: '$label from ${_shortId(deviceId)}',
-      time: DateTime.now(),
-      peerDeviceId: deviceId,
-    ));
-  }
-
-  void _onClipboardExpired(Map<String, dynamic> e) {
-    _add(LocalEvent(
-      kind: LocalEventKind.clipboardExpired,
-      title: 'Clipboard offer expired',
-      subtitle: 'Offer ID: ${_shortId(e['offerId']?.toString() ?? '')}',
-      time: DateTime.now(),
-    ));
+  void _onSecurityEvent(Map<String, dynamic> record) {
+    final event = _fromSecurityEvent(record);
+    if (event != null) _add(event);
   }
 
   void _onFileCompleted(Map<String, dynamic> e) {
     final fileName = e['fileName']?.toString() ?? 'file';
     final peerDeviceId = e['peerDeviceId']?.toString() ?? '';
+    final eventId = e['eventId']?.toString();
     _add(LocalEvent(
       kind: LocalEventKind.fileReceived,
       title: 'File received',
       subtitle: fileName,
       time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'file_transfer.completed',
+        peerDeviceId: peerDeviceId,
+        subject: e['transferId']?.toString() ?? fileName,
+      ),
+      eventId: eventId,
       peerDeviceId: peerDeviceId,
     ));
   }
 
-  void _onFileFailed(Map<String, dynamic> e) {
-    final fileName = e['fileName']?.toString() ?? 'file';
-    _add(LocalEvent(
-      kind: LocalEventKind.fileFailed,
-      title: 'File transfer failed',
-      subtitle: fileName,
-      time: DateTime.now(),
-    ));
+  String _buildIdentityKey({
+    String? eventId,
+    required String eventType,
+    String? peerDeviceId,
+    String? subject,
+  }) {
+    final normalizedEventId = eventId?.trim();
+    if (normalizedEventId != null && normalizedEventId.isNotEmpty) {
+      return 'event:$normalizedEventId';
+    }
+    return '$eventType|${peerDeviceId ?? ''}|${subject ?? ''}';
   }
 
   String _shortId(String id) {

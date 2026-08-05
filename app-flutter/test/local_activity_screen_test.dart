@@ -12,20 +12,20 @@ import 'test_utils/fake_transport.dart';
 class ActivityClient extends JsonRpcRiftClient {
   ActivityClient() : super(FakeTransport());
 
-  final clipboard = StreamController<Map<String, dynamic>>.broadcast();
+  final securityEvent = StreamController<Map<String, dynamic>>.broadcast();
   final notification = StreamController<Map<String, dynamic>>.broadcast();
 
   @override
   bool get isConnected => false;
 
   @override
-  Stream<Map<String, dynamic>> get onClipboardOffer => clipboard.stream;
+  Stream<Map<String, dynamic>> get onSecurityEvent => securityEvent.stream;
 
   @override
   Stream<Map<String, dynamic>> get onNotificationPosted => notification.stream;
 
   Future<void> closeControllers() async {
-    await clipboard.close();
+    await securityEvent.close();
     await notification.close();
   }
 }
@@ -60,9 +60,11 @@ void main() {
     expect(constraints.constraints.maxWidth, 560);
     expect(constraints.constraints.maxHeight, 640);
 
-    client.clipboard.add({
-      'sourceDeviceId': 'rift-peer-1',
-      'contentType': 'text/plain',
+    client.securityEvent.add({
+      'eventId': 'event-clipboard-1',
+      'eventType': 'clipboard.offered',
+      'peerDeviceId': 'rift-peer-1',
+      'outcome': 'success',
     });
     client.notification.add({
       'notificationId': 'notification-1',
