@@ -1,8 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
-import 'dart:async';
+import '../src/ui/theme.dart';
 
 class PairingScreen extends StatefulWidget {
   final String? initialDeviceId;
@@ -29,6 +31,54 @@ class PairingScreen extends StatefulWidget {
     this.autoStart = false,
     this.onClose,
   });
+
+  const PairingScreen.forDiscoveredPeer({
+    super.key,
+    required String deviceId,
+    String? displayName,
+    this.onClose,
+  })  : initialDeviceId = deviceId,
+        initialEndpointAddress = null,
+        initialEndpointPort = null,
+        initialDisplayName = displayName,
+        initialPeerFingerprint = null,
+        initialExpiresInMs = null,
+        initialCanApproveLocally = false,
+        initialStatus = null,
+        autoStart = true;
+
+  const PairingScreen.forEndpoint({
+    super.key,
+    required String address,
+    required int port,
+    String? displayName,
+    this.onClose,
+  })  : initialDeviceId = null,
+        initialEndpointAddress = address,
+        initialEndpointPort = port,
+        initialDisplayName = displayName,
+        initialPeerFingerprint = null,
+        initialExpiresInMs = null,
+        initialCanApproveLocally = false,
+        initialStatus = null,
+        autoStart = true;
+
+  const PairingScreen.incoming({
+    super.key,
+    required String deviceId,
+    required String fingerprint,
+    String? displayName,
+    int? expiresInMs,
+    this.onClose,
+  })  : initialDeviceId = deviceId,
+        initialEndpointAddress = null,
+        initialEndpointPort = null,
+        initialDisplayName = displayName,
+        initialPeerFingerprint = fingerprint,
+        initialExpiresInMs = expiresInMs,
+        initialCanApproveLocally = true,
+        initialStatus = 'Incoming pairing request',
+        autoStart = false;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -157,8 +207,11 @@ class _PairingScreenState extends State<PairingScreen> {
     final client = context.read<JsonRpcRiftClient>();
     _requestSub = client.onPairingRequest.listen((event) {
       if (!mounted) return;
+      final eventDeviceId = event['deviceId']?.toString();
+      if (eventDeviceId == null || eventDeviceId.isEmpty) return;
+      if (_deviceId != null && eventDeviceId != _deviceId) return;
       setState(() {
-        _deviceId = event['deviceId']?.toString();
+        _deviceId = eventDeviceId;
         _displayName = event['displayName']?.toString() ?? _deviceId;
         _peerFingerprint = event['fingerprint']?.toString();
         _expiresInMs = (event['expiresInMs'] as num?)?.toInt();
@@ -406,63 +459,36 @@ class _PairingScreenState extends State<PairingScreen> {
     return formatted;
   }
 
-  Widget _buildFingerprintText(
-    ThemeData theme,
-    String? fp, {
-    TextStyle? textStyle,
-    Color? dividerColor,
-    double letterSpacing = 4,
-  }) {
-    final defaultStyle = TextStyle(
+  Widget _buildFingerprintText(ThemeData theme, String? fingerprint) {
+    final style = TextStyle(
       fontSize: 24,
       fontWeight: FontWeight.w600,
-      letterSpacing: letterSpacing,
+      letterSpacing: RiftDesign.space2Xs,
       height: 32 / 24,
       color: theme.colorScheme.primaryContainer,
     );
-    final effectiveStyle = textStyle ?? defaultStyle;
 
-    if (fp == null) {
-      return Text('WAITING...', style: effectiveStyle);
+    if (fingerprint == null) {
+      return Text('WAITING...', style: style);
     }
 
-    final clean = fp.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
+    final clean =
+        fingerprint.replaceAll(RegExp(r'[^A-Za-z0-9]'), '').toUpperCase();
     if (clean.isEmpty) {
-      return Text(fp, style: effectiveStyle);
+      return Text(fingerprint, style: style);
     }
-
-    final limit = clean.length > 16 ? 16 : clean.length;
-    final truncated = clean.substring(0, limit);
 
     final chunks = <String>[];
-    for (int i = 0; i < truncated.length; i += 4) {
-      chunks.add(truncated.substring(
-          i, (i + 4) > truncated.length ? truncated.length : i + 4));
-    }
-
-    final widgets = <Widget>[];
-    for (int i = 0; i < chunks.length; i++) {
-      widgets.add(Text(chunks[i], style: effectiveStyle));
-      if (i < chunks.length - 1) {
-        widgets.add(Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Text(
-            '|',
-            style: effectiveStyle.copyWith(
-              fontWeight: FontWeight.w400,
-              color: dividerColor ?? theme.colorScheme.outlineVariant,
-            ),
-          ),
-        ));
-      }
+    for (int i = 0; i < clean.length; i += 4) {
+      chunks.add(clean.substring(
+        i,
+        (i + 4) > clean.length ? clean.length : i + 4,
+      ));
     }
 
     return FittedBox(
       fit: BoxFit.scaleDown,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: widgets,
-      ),
+      child: Text(chunks.join('-'), style: style),
     );
   }
 
@@ -487,13 +513,13 @@ class _PairingScreenState extends State<PairingScreen> {
     final approveEnabled = canApprove && _canApproveDelay;
     final deviceName = _displayName ?? _deviceId ?? 'Unknown';
     final isMobile = MediaQuery.of(context).size.width < 600;
+    final displayedFingerprint = _peerFingerprint ?? _localFingerprint;
+    const fingerprintLabel = 'Security Fingerprint';
 
-    final title = (_isRecipientFlow && _hasActivePairingFlow)
-        ? 'Pairing Request'
-        : 'Verify Connection';
-    final subtitlePrefix = (_isRecipientFlow && _hasActivePairingFlow)
-        ? 'Incoming pairing request from '
-        : 'Pairing request sent to ';
+    const title = 'Pairing Request';
+    final subtitlePrefix = _isRecipientFlow
+        ? 'Incoming request from '
+        : 'Outgoing request to ';
 
     final route = ModalRoute.of(context);
     final isDialogOrEmbedded = route is PopupRoute || widget.onClose != null;
@@ -648,7 +674,7 @@ class _PairingScreenState extends State<PairingScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 Text(
-                                  'Compare the security fingerprint below with the one displayed on the destination device. They must match exactly.',
+                                  'Compare the security fingerprint below with the one displayed on the peer device. They must match exactly.',
                                   style: TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w400,
@@ -659,7 +685,7 @@ class _PairingScreenState extends State<PairingScreen> {
                                 ),
                                 const SizedBox(height: 24),
                                 Text(
-                                  "This device's fingerprint",
+                                  fingerprintLabel,
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w400,
@@ -669,8 +695,10 @@ class _PairingScreenState extends State<PairingScreen> {
                                 ),
                                 const SizedBox(height: 12),
                                 ShimmerPulseContainer(
-                                  child: _buildFingerprintText(theme,
-                                      _peerFingerprint ?? _localFingerprint),
+                                  child: _buildFingerprintText(
+                                    theme,
+                                    displayedFingerprint,
+                                  ),
                                 ),
                                 const SizedBox(height: 24),
                                 Container(
@@ -721,10 +749,13 @@ class _PairingScreenState extends State<PairingScreen> {
                             bottom: Radius.circular(12)),
                       ),
                       child: Builder(builder: (context) {
+                        final rejectBtnLabel =
+                            _isRecipientFlow ? 'Reject' : 'Cancel';
                         final rejectBtn = OutlinedButton(
                           onPressed: canReject ? _rejectPairing : null,
                           style: OutlinedButton.styleFrom(
-                            foregroundColor: theme.colorScheme.primaryContainer,
+                            foregroundColor:
+                                theme.colorScheme.primaryContainer,
                             side: BorderSide(
                                 color: theme.colorScheme.primaryContainer),
                             padding: const EdgeInsets.symmetric(
@@ -732,8 +763,8 @@ class _PairingScreenState extends State<PairingScreen> {
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(4)),
                           ),
-                          child: const Text('Reject',
-                              style: TextStyle(
+                          child: Text(rejectBtnLabel,
+                              style: const TextStyle(
                                   fontSize: 14, fontWeight: FontWeight.w600)),
                         );
                         final approveBtn = _canApproveLocally

@@ -963,7 +963,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }
 
     final deviceId = payload['deviceId']?.toString();
-    if (deviceId == null || deviceId.isEmpty) {
+    final fingerprint = payload['fingerprint']?.toString();
+    if (deviceId == null ||
+        deviceId.isEmpty ||
+        fingerprint == null ||
+        fingerprint.isEmpty) {
       return;
     }
     if (_activePairingDeviceId == deviceId) {
@@ -975,13 +979,11 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       context: navContext,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.4),
-      builder: (_) => PairingScreen(
-        initialDeviceId: deviceId,
-        initialDisplayName: payload['displayName']?.toString(),
-        initialPeerFingerprint: payload['fingerprint']?.toString(),
-        initialExpiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
-        initialCanApproveLocally: true,
-        initialStatus: 'Incoming pairing request',
+      builder: (_) => PairingScreen.incoming(
+        deviceId: deviceId,
+        displayName: payload['displayName']?.toString(),
+        fingerprint: fingerprint,
+        expiresInMs: (payload['expiresInMs'] as num?)?.toInt(),
       ),
     ).whenComplete(() {
       if (mounted && _activePairingDeviceId == deviceId) {

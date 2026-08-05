@@ -498,7 +498,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Linux Laptop'), findsOneWidget);
+    expect(
+      find.textContaining('Linux Laptop', findRichText: true),
+      findsOneWidget,
+    );
     expect(find.text('Approve'), findsOneWidget);
 
     final approveButton = tester.widget<FilledButton>(

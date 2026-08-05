@@ -921,11 +921,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: () {
-                  Navigator.of(context).pop({
-                    'action': 'removed',
-                    'deviceId': _deviceId,
-                    'displayName': displayName,
-                  });
+                  if (widget.onClose != null) {
+                    widget.onClose!();
+                  } else {
+                    Navigator.of(context).pop({
+                      'action': 'removed',
+                      'deviceId': _deviceId,
+                      'displayName': displayName,
+                    });
+                  }
                 },
                 style: FilledButton.styleFrom(
                   backgroundColor: theme.colorScheme.primaryContainer,

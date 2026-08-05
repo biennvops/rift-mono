@@ -323,18 +323,22 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 orElse: () => null,
               );
               if (foundPeer != null && foundPeer is Map<String, dynamic>) {
-                _selectedPeerWidget = DeviceDetailScreen(
-                  key: ValueKey(_selectedDeviceId!),
-                  peer: foundPeer,
-                  isOnline: foundPeer['presence'] == 'online',
-                  onClose: () {
-                    setState(() {
-                      _selectedDeviceId = null;
-                      _selectedPeerWidget = null;
-                    });
-                    _loadData();
-                  },
-                );
+                final trustState =
+                    foundPeer['trustState']?.toString() ?? 'trusted';
+                if (trustState == 'trusted') {
+                  _selectedPeerWidget = DeviceDetailScreen(
+                    key: ValueKey(_selectedDeviceId!),
+                    peer: foundPeer,
+                    isOnline: foundPeer['presence'] == 'online',
+                    onClose: () {
+                      setState(() {
+                        _selectedDeviceId = null;
+                        _selectedPeerWidget = null;
+                      });
+                      _loadData();
+                    },
+                  );
+                }
               }
             }
           }
@@ -1091,56 +1095,40 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         if (deviceId == null && (address == null || port == null)) {
           return;
         }
-        final isDesktop = MediaQuery.of(context).size.width >= 1024;
         final targetId = deviceId ?? address ?? titleText;
-        final pairingScreen = PairingScreen(
-          key: ValueKey('pairing-$targetId'),
-          initialDeviceId: deviceId,
-          initialEndpointAddress: deviceId == null ? address : null,
-          initialEndpointPort: deviceId == null ? port : null,
-          initialDisplayName: titleText,
-          autoStart: true,
-          onClose: isDesktop
-              ? () {
-                  setState(() {
-                    _selectedDeviceId = null;
-                    _selectedPeerWidget = null;
-                  });
-                  _loadData();
-                }
-              : null,
-        );
+        final pairingScreen = deviceId != null
+            ? PairingScreen.forDiscoveredPeer(
+                key: ValueKey('pairing-$targetId'),
+                deviceId: deviceId,
+                displayName: titleText,
+              )
+            : PairingScreen.forEndpoint(
+                key: ValueKey('pairing-$targetId'),
+                address: address!,
+                port: port!,
+                displayName: titleText,
+              );
 
-        if (isDesktop) {
-          setState(() {
-            _selectedDeviceId = targetId;
-            _selectedPeerWidget = Provider<JsonRpcRiftClient>.value(
-              value: client,
-              child: pairingScreen,
-            );
-          });
-        } else {
-          final result = await showDialog<dynamic>(
-            context: context,
-            barrierDismissible: false,
-            barrierColor: Colors.black.withValues(alpha: 0.3),
-            builder: (_) => Provider<JsonRpcRiftClient>.value(
-              value: client,
-              child: pairingScreen,
-            ),
-          );
-          await _loadData();
-          if (mounted) {
-            if (result == 'history') {
-              final appShellState =
-                  context.findAncestorStateOfType<AppShellState>();
-              appShellState
-                  ?.showHistoryRoute(NotificationRoute.historyClipboard);
-            } else if (result == 'devices') {
-              final appShellState =
-                  context.findAncestorStateOfType<AppShellState>();
-              appShellState?.showRoute(NotificationRoute.devices);
-            }
+        final result = await showDialog<dynamic>(
+          context: context,
+          barrierDismissible: false,
+          barrierColor: Colors.black.withValues(alpha: 0.4),
+          builder: (_) => Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: pairingScreen,
+          ),
+        );
+        await _loadData();
+        if (mounted) {
+          if (result == 'history') {
+            final appShellState =
+                context.findAncestorStateOfType<AppShellState>();
+            appShellState
+                ?.showHistoryRoute(NotificationRoute.historyClipboard);
+          } else if (result == 'devices') {
+            final appShellState =
+                context.findAncestorStateOfType<AppShellState>();
+            appShellState?.showRoute(NotificationRoute.devices);
           }
         }
         return;

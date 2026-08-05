@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:app_flutter/screens/device_detail_screen.dart';
 import 'package:app_flutter/screens/trusted_devices_screen.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'test_utils/fake_transport.dart';
@@ -154,6 +155,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     _pairingCompleteController.add(event);
   }
 }
+
 
 void main() {
   testWidgets('TrustedDevicesScreen shows title', (WidgetTester tester) async {
@@ -859,6 +861,102 @@ void main() {
     expect(find.byIcon(Icons.computer), findsAtLeastNWidgets(1));
     expect(find.text('Mystery Box'), findsOneWidget);
     expect(find.byIcon(Icons.devices), findsOneWidget);
+  });
+
+  testWidgets(
+      'pairing action opens standard PairingRequest dialog on desktop',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = FakeJsonRpcRiftClient()
+      ..discoveredPeers = [
+        {
+          'deviceId': 'rift-discovered-peer',
+          'displayName': 'Discovered Laptop',
+          'platform': 'linux',
+          'presence': 'online',
+          'trustState': 'discovered',
+        }
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    final pairButton = find.widgetWithText(FilledButton, 'Pair');
+    expect(pairButton, findsOneWidget);
+    await tester.tap(pairButton);
+    await tester.pump();
+
+    expect(find.text('Pairing Request'), findsOneWidget);
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-discovered-peer',
+        'displayName': 'Discovered Laptop',
+        'platform': 'linux',
+        'presence': 'online',
+        'trustState': 'pairing_pending',
+      }
+    ];
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-discovered-peer',
+      'newState': 'pairing_pending',
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.text('Pairing Request'), findsOneWidget);
+  });
+
+  testWidgets(
+      'DeviceDetailScreen removed state invokes onClose when embedded on desktop',
+      (WidgetTester tester) async {
+    bool onCloseCalled = false;
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: DeviceDetailScreen(
+            peer: const {
+              'deviceId': 'rift-peer-removed',
+              'displayName': 'Removed Device',
+              'trustState': 'revoked',
+            },
+            isOnline: false,
+            onClose: () {
+              onCloseCalled = true;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer-removed',
+      'newState': 'revoked',
+    });
+    await tester.pump();
+
+    expect(find.text('Back to home'), findsOneWidget);
+    await tester.tap(find.text('Back to home'));
+    await tester.pump();
+
+    expect(onCloseCalled, isTrue);
   });
 
   testWidgets('desktop split view switches focus between device cards',

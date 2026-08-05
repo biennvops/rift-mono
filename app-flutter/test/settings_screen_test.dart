@@ -103,6 +103,19 @@ void main() {
         .thenAnswer((_) => connectionChangedController.stream);
     when(() => mockClient.onTrustChanged)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPairingRequest)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPairingComplete)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.startPairingByEndpoint(any(), any())).thenAnswer(
+      (_) async => <String, dynamic>{
+        'deviceId': 'rift-manual-peer',
+        'displayName': 'Manual Peer',
+        'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+        'peerFingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+        'expiresInMs': 120000,
+      },
+    );
     when(() => mockClient.listTrustedPeers())
         .thenAnswer((_) async => <String, dynamic>{'peers': <dynamic>[]});
   });
@@ -175,6 +188,36 @@ void main() {
 
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
+  });
+
+  testWidgets('Pair by IP opens the canonical PairingScreen',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    await tester.tap(find.text('Pair by IP'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '10.53.38.174:9140');
+    await tester.tap(find.text('PAIR'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    verify(() => mockClient.startPairingByEndpoint('10.53.38.174', 9140))
+        .called(1);
+    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Confirm Pairing'), findsNothing);
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('mobile settings menu uses tinted square icon containers',

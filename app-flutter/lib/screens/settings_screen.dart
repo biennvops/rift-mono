@@ -13,6 +13,7 @@ import 'clipboard_debug_screen.dart';
 import 'event_log_screen.dart';
 import 'notifications_and_media_screen.dart';
 import 'onboarding_screen.dart';
+import 'pairing_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
 import '../src/platform/android_shell.dart';
@@ -1647,7 +1648,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
             final address = parts[0];
             final port = int.tryParse(parts[1]);
-            if (port == null) {
+            if (port == null || port < 1 || port > 65535) {
               RiftSnackbar.show(
                 context: context,
                 message: 'Invalid port number.',
@@ -1665,77 +1666,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _performManualPair(String address, int port) async {
-    final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
-    try {
-      final result = await client.startPairingByEndpoint(address, port);
-      if (!mounted) return;
-
-      final confirm = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          final dialogTheme = Theme.of(dialogContext);
-          return AlertDialog(
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            title: const Text('Confirm Pairing'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Device ID: ${result['deviceId']}'),
-                const SizedBox(height: 8),
-                const Text('Does this fingerprint match the other device?'),
-                const SizedBox(height: 8),
-                Text(
-                  '${result['peerFingerprint']}',
-                  style: const TextStyle(
-                    fontFamily: 'JetBrains Mono',
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext, false),
-                style: TextButton.styleFrom(
-                  foregroundColor: dialogTheme.colorScheme.onSurfaceVariant,
-                ),
-                child: const Text('REJECT'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(dialogContext, true),
-                style: FilledButton.styleFrom(elevation: 0),
-                child: const Text('MATCH'),
-              ),
-            ],
-          );
-        },
-      );
-
-      if (confirm == true) {
-        await client.approvePairing(
-          result['deviceId'] as String,
-          result['peerFingerprint'] as String,
-        );
-        if (!mounted) return;
-        RiftSnackbar.show(
-          context: context,
-          message: 'Pairing successful!',
-          type: RiftSnackbarType.success,
-        );
-      } else {
-        await client.rejectPairing(result['deviceId'] as String);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      RiftSnackbar.show(
-        context: context,
-        message:
-            'Manual pairing failed: ${JsonRpcRiftClient.formatDisplayError(e)}',
-        type: RiftSnackbarType.error,
-      );
-    }
+    final client = context.read<JsonRpcRiftClient>();
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.3),
+      builder: (_) => Provider<JsonRpcRiftClient>.value(
+        value: client,
+        child: PairingScreen.forEndpoint(
+          address: address,
+          port: port,
+          displayName: '$address:$port',
+        ),
+      ),
+    );
   }
 }

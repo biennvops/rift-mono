@@ -161,6 +161,98 @@ void main() {
     expect(find.text('WAITING...'), findsNothing);
   });
 
+  testWidgets('PairingScreen outgoing flow shows the full fingerprint',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..startPairingResultOverride = {
+        'deviceId': 'rift-peer',
+        'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+        'peerFingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+        'expiresInMs': 120000,
+      };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('PairingScreen incoming flow shows the full peer fingerprint',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(),
+        ),
+      ),
+    );
+
+    await client.emitPairingRequest({
+      'deviceId': 'rift-peer',
+      'displayName': 'Windows Laptop',
+      'fingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+      'expiresInMs': 120000,
+    });
+    await tester.pump();
+
+    expect(
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
+      findsOneWidget,
+    );
+    expect(find.text('Security Fingerprint'), findsOneWidget);
+  });
+
+  testWidgets('PairingScreen ignores unrelated incoming pairing requests',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await client.emitPairingRequest({
+      'deviceId': 'rift-other',
+      'displayName': 'Unrelated Laptop',
+      'fingerprint': 'OTHER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    });
+    await tester.pump();
+
+    expect(find.textContaining('Pixel 9', findRichText: true), findsOneWidget);
+    expect(
+      find.textContaining('Unrelated Laptop', findRichText: true),
+      findsNothing,
+    );
+  });
+
   testWidgets('PairingScreen auto-start populates fingerprints',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -180,7 +272,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('Compare fingerprints'), findsOneWidget);
-    expect(find.text("This device's fingerprint"), findsOneWidget);
+    expect(find.text('Security Fingerprint'), findsOneWidget);
     expect(find.textContaining('fingerprint'), findsWidgets);
     expect(find.text('Waiting for peer...'), findsOneWidget);
   });
@@ -385,7 +477,7 @@ void main() {
     );
 
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(find.text('Reject'));
+    await tester.tap(find.text('Cancel'));
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(client.rejectedDeviceId, 'rift-peer');
