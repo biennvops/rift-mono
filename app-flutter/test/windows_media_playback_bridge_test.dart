@@ -26,7 +26,8 @@ void main() {
 
   test('WindowsMediaPlayback forwards mirrored playback payload unchanged',
       () async {
-    final shown = await WindowsMediaPlayback.show(playback: const <String, Object?>{
+    final shown =
+        await WindowsMediaPlayback.show(playback: const <String, Object?>{
       'sourceDeviceId': 'rift-peer',
       'playbackId': 'playback-1',
       'title': 'Test Song',

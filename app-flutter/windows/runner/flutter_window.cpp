@@ -19,6 +19,7 @@ using std::min;
 #include <gdiplus.h>
 #pragma warning(pop)
 #include <limits>
+#include <future>
 #include <objidl.h>
 #include <optional>
 #include <shellapi.h>
@@ -41,6 +42,10 @@ namespace {
 
 constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
 constexpr UINT kRiftMediaPlaybackActionMessage = WM_APP + 2;
+
+struct PostedMediaPlaybackAction {
+  flutter::EncodableMap payload;
+};
 // tray_manager owns icon 1 and WM_USER + 1. Native balloons temporarily
 // borrow that icon so Rift has only one notification-area entry.
 constexpr UINT kTrayManagerNotifyMessage = WM_USER + 1;
@@ -365,24 +370,40 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
   }
   const std::string* media_type = FindString(*artwork, "mediaType");
   const std::string* data_base64 = FindString(*artwork, "dataBase64");
-  if (media_type == nullptr || data_base64 == nullptr || *media_type != "image/png" ||
-      data_base64->empty()) {
+  if (media_type == nullptr || data_base64 == nullptr || data_base64->empty()) {
+    return nullptr;
+  }
+  if (*media_type != "image/png" && *media_type != "image/jpeg" &&
+      *media_type != "image/gif" && *media_type != "image/webp") {
     return nullptr;
   }
 
   try {
-    auto stream = winrt::Windows::Storage::Streams::InMemoryRandomAccessStream();
-    auto buffer =
-        winrt::Windows::Security::Cryptography::CryptographicBuffer::
-            DecodeFromBase64String(Utf16FromUtf8(*data_base64));
-    auto writer = winrt::Windows::Storage::Streams::DataWriter(stream);
-    writer.WriteBuffer(buffer);
-    writer.StoreAsync().get();
-    writer.FlushAsync().get();
-    writer.DetachStream();
-    stream.Seek(0);
-    return winrt::Windows::Storage::Streams::RandomAccessStreamReference::
-        CreateFromStream(stream);
+    const std::wstring data_base64_utf16 = Utf16FromUtf8(*data_base64);
+    if (data_base64_utf16.empty()) {
+      return nullptr;
+    }
+
+    return std::async(std::launch::async, [data_base64_utf16]() {
+      try {
+        winrt::init_apartment();
+      } catch (...) {
+      }
+
+      auto stream =
+          winrt::Windows::Storage::Streams::InMemoryRandomAccessStream();
+      auto buffer =
+          winrt::Windows::Security::Cryptography::CryptographicBuffer::
+              DecodeFromBase64String(data_base64_utf16);
+      auto writer = winrt::Windows::Storage::Streams::DataWriter(stream);
+      writer.WriteBuffer(buffer);
+      writer.StoreAsync().get();
+      writer.FlushAsync().get();
+      writer.DetachStream();
+      stream.Seek(0);
+      return winrt::Windows::Storage::Streams::RandomAccessStreamReference::
+          CreateFromStream(stream);
+    }).get();
   } catch (...) {
     return nullptr;
   }
@@ -442,9 +463,6 @@ void FlutterWindow::OnDestroy() {
   windows_shell_method_channel_.reset();
   windows_media_playback_method_channel_.reset();
   ClearWindowsMediaPlayback();
-  current_media_playback_source_device_id_.clear();
-  current_media_playback_playback_id_.clear();
-  pending_media_playback_actions_.clear();
   send_files_method_channel_.reset();
   send_files_channel_ready_ = false;
   if (flutter_controller_) {
@@ -475,7 +493,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       }
       return 0;
     case kRiftMediaPlaybackActionMessage:
-      DispatchPendingWindowsMediaPlaybackActions();
+      DispatchPostedWindowsMediaPlaybackAction(wparam);
       return 0;
     case kRiftShellNotifyMessage: {
       const UINT notification_event = LOWORD(lparam);
@@ -958,7 +976,10 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
       controls.PlaybackStatus(MediaPlaybackStatus::Stopped);
     }
 
+    const bool can_seek = IsTrue(playback, "canSeek");
+
     auto display_updater = controls.DisplayUpdater();
+    display_updater.ClearAll();
     display_updater.Type(winrt::Windows::Media::MediaPlaybackType::Music);
     const std::string* app_name = FindString(playback, "appName");
     const std::string* title = FindString(playback, "title");
@@ -984,18 +1005,21 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
 
     winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties
         timeline_properties;
-    timeline_properties.StartTime(std::chrono::milliseconds(0));
-    const int64_t position_ms = FindInt64(playback, "positionMs").value_or(0);
-    timeline_properties.Position(std::chrono::milliseconds(position_ms));
-    const auto duration_ms = FindInt64(playback, "durationMs");
-    if (duration_ms.has_value() && duration_ms.value() > 0) {
-      timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
-      timeline_properties.MaxSeekTime(
-          std::chrono::milliseconds(duration_ms.value()));
-      timeline_properties.EndTime(std::chrono::milliseconds(duration_ms.value()));
+    if (can_seek) {
+      timeline_properties.StartTime(std::chrono::milliseconds(0));
+      const int64_t position_ms = FindInt64(playback, "positionMs").value_or(0);
+      timeline_properties.Position(std::chrono::milliseconds(position_ms));
+      const auto duration_ms = FindInt64(playback, "durationMs");
+      if (duration_ms.has_value() && duration_ms.value() > 0) {
+        timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
+        timeline_properties.MaxSeekTime(
+            std::chrono::milliseconds(duration_ms.value()));
+        timeline_properties.EndTime(std::chrono::milliseconds(duration_ms.value()));
+      }
     }
     controls.UpdateTimelineProperties(timeline_properties);
 
+    std::lock_guard<std::mutex> callback_lock(media_playback_callback_mutex_);
     if (media_playback_button_pressed_token_.value != 0) {
       controls.ButtonPressed(media_playback_button_pressed_token_);
       media_playback_button_pressed_token_ = {};
@@ -1007,7 +1031,9 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
     }
 
     media_playback_button_pressed_token_ = controls.ButtonPressed(
-        [this](auto&&, auto&& args) {
+        [this, source_device_id_value = *source_device_id,
+         playback_id_value = *playback_id](auto&&, auto&& args) {
+          std::lock_guard<std::mutex> lock(media_playback_callback_mutex_);
           using winrt::Windows::Media::SystemMediaTransportControlsButton;
           std::optional<std::string> action;
           switch (args.Button()) {
@@ -1027,20 +1053,25 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
               break;
           }
           if (action.has_value()) {
-            QueueWindowsMediaPlaybackAction(action.value());
+            PostWindowsMediaPlaybackAction(source_device_id_value,
+                                           playback_id_value, action.value());
           }
         });
-    media_playback_position_change_token_ =
-        controls.PlaybackPositionChangeRequested([this](auto&&, auto&& args) {
-          const auto position_ms = static_cast<int64_t>(
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  args.RequestedPlaybackPosition())
-                  .count());
-          QueueWindowsMediaPlaybackAction("seek", position_ms);
-        });
-
-    current_media_playback_source_device_id_ = *source_device_id;
-    current_media_playback_playback_id_ = *playback_id;
+    if (can_seek) {
+      media_playback_position_change_token_ =
+          controls.PlaybackPositionChangeRequested(
+              [this, source_device_id_value = *source_device_id,
+               playback_id_value = *playback_id](auto&&, auto&& args) {
+                std::lock_guard<std::mutex> lock(media_playback_callback_mutex_);
+                const auto position_ms = static_cast<int64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        args.RequestedPlaybackPosition())
+                        .count());
+                PostWindowsMediaPlaybackAction(source_device_id_value,
+                                               playback_id_value, "seek",
+                                               position_ms);
+              });
+    }
     return true;
   } catch (...) {
     return false;
@@ -1048,15 +1079,12 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
 }
 
 bool FlutterWindow::ClearWindowsMediaPlayback() {
-  current_media_playback_source_device_id_.clear();
-  current_media_playback_playback_id_.clear();
-  pending_media_playback_actions_.clear();
-
   try {
     if (!media_playback_player_) {
       return true;
     }
     auto controls = media_playback_player_.SystemMediaTransportControls();
+    std::lock_guard<std::mutex> callback_lock(media_playback_callback_mutex_);
     controls.IsEnabled(false);
     controls.IsPlayEnabled(false);
     controls.IsPauseEnabled(false);
@@ -1086,43 +1114,45 @@ bool FlutterWindow::ClearWindowsMediaPlayback() {
   return true;
 }
 
-void FlutterWindow::QueueWindowsMediaPlaybackAction(
+void FlutterWindow::PostWindowsMediaPlaybackAction(
+    const std::string& source_device_id,
+    const std::string& playback_id,
     const std::string& action,
     std::optional<int64_t> position_ms) {
-  if (current_media_playback_source_device_id_.empty() ||
-      current_media_playback_playback_id_.empty()) {
+  if (source_device_id.empty() || playback_id.empty() || action.empty() ||
+      GetHandle() == nullptr) {
     return;
   }
 
-  flutter::EncodableMap payload = {
+  auto posted_action = std::make_unique<PostedMediaPlaybackAction>();
+  posted_action->payload = {
       {flutter::EncodableValue("sourceDeviceId"),
-       flutter::EncodableValue(current_media_playback_source_device_id_)},
+       flutter::EncodableValue(source_device_id)},
       {flutter::EncodableValue("playbackId"),
-       flutter::EncodableValue(current_media_playback_playback_id_)},
+       flutter::EncodableValue(playback_id)},
       {flutter::EncodableValue("action"), flutter::EncodableValue(action)}};
   if (position_ms.has_value()) {
-    payload[flutter::EncodableValue("positionMs")] =
+    posted_action->payload[flutter::EncodableValue("positionMs")] =
         flutter::EncodableValue(position_ms.value());
   }
-  pending_media_playback_actions_.push_back(flutter::EncodableValue(payload));
-  if (GetHandle() != nullptr) {
-    PostMessageW(GetHandle(), kRiftMediaPlaybackActionMessage, 0, 0);
+
+  auto* raw_posted_action = posted_action.release();
+  if (!PostMessageW(GetHandle(), kRiftMediaPlaybackActionMessage,
+                    reinterpret_cast<WPARAM>(raw_posted_action), 0)) {
+    delete raw_posted_action;
   }
 }
 
-void FlutterWindow::DispatchPendingWindowsMediaPlaybackActions() {
-  if (!windows_media_playback_method_channel_ ||
-      pending_media_playback_actions_.empty()) {
+void FlutterWindow::DispatchPostedWindowsMediaPlaybackAction(WPARAM wparam) {
+  std::unique_ptr<PostedMediaPlaybackAction> posted_action(
+      reinterpret_cast<PostedMediaPlaybackAction*>(wparam));
+  if (!windows_media_playback_method_channel_ || posted_action == nullptr) {
     return;
   }
 
-  auto pending = std::move(pending_media_playback_actions_);
-  pending_media_playback_actions_.clear();
-  for (auto& payload : pending) {
-    windows_media_playback_method_channel_->InvokeMethod(
-        "mediaPlaybackAction",
-        std::make_unique<flutter::EncodableValue>(std::move(payload)));
-  }
+  windows_media_playback_method_channel_->InvokeMethod(
+      "mediaPlaybackAction",
+      std::make_unique<flutter::EncodableValue>(std::move(posted_action->payload)));
 }
 
 void FlutterWindow::QueueSendFiles(const std::vector<std::wstring>& paths) {

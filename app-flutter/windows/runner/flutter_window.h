@@ -11,6 +11,7 @@
 #include <winrt/Windows.Media.Playback.h>
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -44,10 +45,12 @@ class FlutterWindow : public Win32Window {
   void DispatchQueuedSendFiles();
   bool ShowWindowsMediaPlayback(const flutter::EncodableMap& playback);
   bool ClearWindowsMediaPlayback();
-  void QueueWindowsMediaPlaybackAction(
+  void PostWindowsMediaPlaybackAction(
+      const std::string& source_device_id,
+      const std::string& playback_id,
       const std::string& action,
       std::optional<int64_t> position_ms = std::nullopt);
-  void DispatchPendingWindowsMediaPlaybackActions();
+  void DispatchPostedWindowsMediaPlaybackAction(WPARAM wparam);
   void InitializeShellNotificationIcon();
   void CleanupShellNotificationIcon();
   bool ShowTransferNotification(
@@ -86,9 +89,7 @@ class FlutterWindow : public Win32Window {
   winrt::Windows::Media::Playback::MediaPlayer media_playback_player_{nullptr};
   winrt::event_token media_playback_button_pressed_token_{};
   winrt::event_token media_playback_position_change_token_{};
-  std::string current_media_playback_source_device_id_;
-  std::string current_media_playback_playback_id_;
-  std::vector<flutter::EncodableValue> pending_media_playback_actions_;
+  std::mutex media_playback_callback_mutex_;
   std::wstring pending_notification_destination_path_;
   std::string pending_notification_route_;
   flutter::EncodableMap pending_notification_payload_;
