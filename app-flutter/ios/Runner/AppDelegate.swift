@@ -6,6 +6,11 @@ import QuickLook
 import Security
 import UIKit
 import UserNotifications
+#if RIFT_PRIVATE_API
+import Darwin
+
+private typealias MobileGestaltCopyAnswer = @convention(c) (CFString) -> Unmanaged<CFTypeRef>?
+#endif
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, CLLocationManagerDelegate, FlutterImplicitEngineDelegate, QLPreviewControllerDataSource {
@@ -36,7 +41,7 @@ import UserNotifications
       application,
       didFinishLaunchingWithOptions: launchOptions
     )
-    if Bundle.main.object(forInfoDictionaryKey: "RiftDevBackgroundLocationEnabled") as? Bool == true {
+    if Self.isDevelopmentFeatureEnabled("RiftDevBackgroundLocationEnabled") {
       backgroundLocationActivationObserver = NotificationCenter.default.addObserver(
         forName: UIApplication.didBecomeActiveNotification,
         object: nil,
@@ -186,9 +191,9 @@ import UserNotifications
   }
 
   private func startDevelopmentRemoteMediaSession() -> Bool {
-    guard Bundle.main.object(
-      forInfoDictionaryKey: "RiftDevRemoteMediaSessionEnabled"
-    ) as? Bool == true else {
+    guard Self.isDevelopmentFeatureEnabled(
+      "RiftDevRemoteMediaSessionEnabled"
+    ) else {
       return false
     }
     if remoteMediaAudioPlayer != nil {
@@ -423,9 +428,11 @@ import UserNotifications
         }
       case "getDeviceInfo":
         var info = ["platform": "ios"]
-        if let displayName = Self.currentDeviceDisplayName() {
+        let resolvedName = Self.currentDeviceDisplayName()
+        if let displayName = resolvedName.name {
           info["displayName"] = displayName
         }
+        info["displayNameSource"] = resolvedName.source
         result(info)
       default:
         result(FlutterMethodNotImplemented)
@@ -692,8 +699,43 @@ import UserNotifications
   private static let identityService = "dev.rift.identity.ed25519"
   private static let identityAccount = "device-seed"
 
-  private static func currentDeviceDisplayName() -> String? {
-    let normalized = UIDevice.current.name
+  private static func isDevelopmentFeatureEnabled(_ key: String) -> Bool {
+    switch Bundle.main.object(forInfoDictionaryKey: key) {
+    case let enabled as Bool:
+      return enabled
+    case let value as String:
+      return ["1", "true", "yes"].contains(value.lowercased())
+    default:
+      return false
+    }
+  }
+
+  private static func currentDeviceDisplayName() -> (name: String?, source: String) {
+#if RIFT_PRIVATE_API
+    if isDevelopmentFeatureEnabled("RiftDevPrivateDeviceNameEnabled"),
+       let privateName = privateUserAssignedDeviceName() {
+      NSLog("Rift iOS device name source: MobileGestalt")
+      return (privateName, "mobilegestalt")
+    }
+#endif
+
+    let normalized = normalizeDeviceDisplayName(UIDevice.current.name)
+    let genericNames = ["iPhone", "iPad", "iPod touch", UIDevice.current.model]
+    if let normalized,
+       !genericNames.contains(where: {
+         $0.caseInsensitiveCompare(normalized) == .orderedSame
+       }) {
+      NSLog("Rift iOS device name source: UIDevice")
+      return (normalized, "uid_device")
+    }
+
+    NSLog("Rift iOS device name source: generated fallback")
+    return (nil, "fallback")
+  }
+
+  private static func normalizeDeviceDisplayName(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let normalized = value
       .filter { character in
         !character.unicodeScalars.contains {
           CharacterSet.controlCharacters.contains($0)
@@ -701,15 +743,31 @@ import UserNotifications
       }
       .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !normalized.isEmpty else { return nil }
-
-    let genericNames = ["iPhone", "iPad", "iPod touch", UIDevice.current.model]
-    guard !genericNames.contains(where: {
-      $0.caseInsensitiveCompare(normalized) == .orderedSame
-    }) else {
-      return nil
-    }
     return String(normalized.prefix(128))
   }
+
+#if RIFT_PRIVATE_API
+  private static func privateUserAssignedDeviceName() -> String? {
+    guard let handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY | RTLD_LOCAL) else {
+      NSLog("Rift MobileGestalt library unavailable")
+      return nil
+    }
+    defer { dlclose(handle) }
+
+    guard let symbol = dlsym(handle, "MGCopyAnswer") else {
+      NSLog("Rift MGCopyAnswer unavailable")
+      return nil
+    }
+
+    let copyAnswer = unsafeBitCast(symbol, to: MobileGestaltCopyAnswer.self)
+    guard let unmanagedValue = copyAnswer("UserAssignedDeviceName" as CFString) else {
+      return nil
+    }
+
+    let value = unmanagedValue.takeRetainedValue()
+    return normalizeDeviceDisplayName(value as? String)
+  }
+#endif
 
   private static func loadOrCreateIdentityKey(legacyPath: String?) throws -> Data {
     let query: [String: Any] = [
