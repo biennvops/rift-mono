@@ -70,17 +70,17 @@ run_daemon_dart_tests() {
   flutter test --no-pub
 }
 
-run_app_flutter_restore() {
+run_rift_app_restore() {
   cd "$repo_root/app-flutter"
   flutter pub get
 }
 
-run_app_flutter_analyze() {
+run_rift_app_analyze() {
   cd "$repo_root/app-flutter"
   flutter analyze --no-pub
 }
 
-run_app_flutter_tests() {
+run_rift_app_tests() {
   cd "$repo_root/app-flutter"
   flutter test --no-pub
 }
@@ -118,7 +118,7 @@ run_changed() {
   local tools_changed=0
   local daemon_cs_changed=0
   local daemon_dart_changed=0
-  local app_flutter_changed=0
+  local rift_app_changed=0
   local conformance_changed=0
   local interop_changed=0
 
@@ -155,12 +155,12 @@ run_changed() {
         ;;
       daemon-dart/*)
         daemon_dart_changed=1
-        app_flutter_changed=1
+        rift_app_changed=1
         conformance_changed=1
         interop_changed=1
         ;;
       app-flutter/*)
-        app_flutter_changed=1
+        rift_app_changed=1
         interop_changed=1
         ;;
       tests-conformance/*)
@@ -172,7 +172,7 @@ run_changed() {
       *)
         daemon_cs_changed=1
         daemon_dart_changed=1
-        app_flutter_changed=1
+        rift_app_changed=1
         conformance_changed=1
         interop_changed=1
         ;;
@@ -188,7 +188,7 @@ run_changed() {
   if [[ "$daemon_dart_changed" -eq 1 ]]; then
     run_target daemon-dart || failed=1
   fi
-  if [[ "$app_flutter_changed" -eq 1 ]]; then
+  if [[ "$rift_app_changed" -eq 1 ]]; then
     run_target app-flutter || failed=1
   fi
   if [[ "$conformance_changed" -eq 1 ]]; then
@@ -222,12 +222,12 @@ run_target() {
       run_step daemon-dart-tests run_daemon_dart_tests || failed=1
       ;;
     app-flutter)
-      run_step app-flutter-restore run_app_flutter_restore || {
+      run_step app-flutter-restore run_rift_app_restore || {
         printf '%s\n' 'SKIP app-flutter-analyze, app-flutter-tests (restore failed)'
         return 1
       }
-      run_step app-flutter-analyze run_app_flutter_analyze || failed=1
-      run_step app-flutter-tests run_app_flutter_tests || failed=1
+      run_step app-flutter-analyze run_rift_app_analyze || failed=1
+      run_step app-flutter-tests run_rift_app_tests || failed=1
       ;;
     tests-conformance)
       run_step tests-conformance-restore run_conformance_restore || {

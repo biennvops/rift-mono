@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/screens/event_log_screen.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/ui/local_events_notifier.dart';
+import 'package:rift/constants.dart';
+import 'package:rift/screens/event_log_screen.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';

@@ -1,9 +1,9 @@
 import 'dart:io';
 
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/file_transfer/file_storage.dart' as storage;
+import 'package:rift/constants.dart';
+import 'package:rift/src/file_transfer/file_storage.dart' as storage;
 import 'package:crypto/crypto.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:rift/src/platform/android_shell.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// The single source of truth for the App Group identifier and the pending
 /// payload key lives here so the two targets cannot drift.
 enum SharedTransferInbox {
-  static let appGroupIdentifier = "group.com.example.appFlutter"
+  static let appGroupIdentifier = "group.dev.rift.app"
   private static let pendingPayloadKey = "rift.pendingSharePayload"
   private static let sharedDirectoryName = "SharedInbox"
 

@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.app.Activity
 import android.content.ClipboardManager
@@ -54,7 +54,7 @@ class ClipboardSenderActivity : Activity() {
 
         if (payload != null) {
             if (MainActivity.isClipboardRelayReady) {
-                val intent = Intent("com.example.app_flutter.CLIPBOARD_CHANGED")
+                val intent = Intent("dev.rift.app.CLIPBOARD_CHANGED")
                 intent.setPackage(packageName)
                 payload.forEach { (key, value) -> intent.putExtra(key, value) }
                 sendBroadcast(intent)

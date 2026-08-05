@@ -44,7 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _activeTab = '';
   static const Duration _notificationPolicyDebounce =
       Duration(milliseconds: 300);
-  static const _androidTestNotificationPackage = 'com.example.app_flutter';
+  static const _androidTestNotificationPackage = 'dev.rift.app';
   static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
   static const _desktopTestNotificationAppName = 'Rift Desktop';

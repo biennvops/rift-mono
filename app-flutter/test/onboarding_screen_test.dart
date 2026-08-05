@@ -1,9 +1,9 @@
 import 'dart:async';
 
-import 'package:app_flutter/screens/onboarding_screen.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
-import 'package:app_flutter/src/platform/macos_notifications.dart';
+import 'package:rift/screens/onboarding_screen.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/android_shell.dart';
+import 'package:rift/src/platform/macos_notifications.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';

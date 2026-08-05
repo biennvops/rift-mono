@@ -76,7 +76,7 @@ public sealed class MacOSNotificationSyncObserverTests
     }
 
     [Theory]
-    [InlineData("com.example.appFlutter")]
+    [InlineData("dev.rift.app")]
     [InlineData("com.rift.app")]
     [InlineData("com.rift.notification-extractor")]
     public async Task ProcessIncrementalAsync_IgnoresRiftOwnedNotifications(string packageName)

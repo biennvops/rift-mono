@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec

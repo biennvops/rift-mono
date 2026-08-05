@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.content.ClipData
 import android.content.ClipboardManager

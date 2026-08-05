@@ -6,12 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:app_flutter/screens/settings_screen.dart';
-import 'package:app_flutter/screens/onboarding_screen.dart';
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
-import 'package:app_flutter/src/platform/linux_notifications.dart';
+import 'package:rift/screens/settings_screen.dart';
+import 'package:rift/screens/onboarding_screen.dart';
+import 'package:rift/constants.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/android_shell.dart';
+import 'package:rift/src/platform/linux_notifications.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 
@@ -93,7 +93,7 @@ void main() {
       ),
     ).thenAnswer(
       (_) async => {
-        'notificationId': 'android:com.example.app_flutter:test:1',
+        'notificationId': 'android:dev.rift.app:test:1',
         'broadcastTo': ['rift-peer'],
         'suppressed': false,
       },
@@ -523,9 +523,9 @@ void main() {
     ).captured.single as Map<String, Object?>;
     expect(
       captured['notificationId'] as String,
-      startsWith('android:com.example.app_flutter:test:'),
+      startsWith('android:dev.rift.app:test:'),
     );
-    expect(captured['packageName'], 'com.example.app_flutter');
+    expect(captured['packageName'], 'dev.rift.app');
     expect(captured['appName'], 'Rift');
     expect(captured['title'], 'Rift test notification');
     expect(

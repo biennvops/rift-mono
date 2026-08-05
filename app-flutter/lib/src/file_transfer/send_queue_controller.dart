@@ -2,12 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_entry.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_panel.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_summary.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_targeting.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/constants.dart';
+import 'package:rift/src/file_transfer/send_queue_entry.dart';
+import 'package:rift/src/file_transfer/send_queue_panel.dart';
+import 'package:rift/src/file_transfer/send_queue_summary.dart';
+import 'package:rift/src/file_transfer/send_queue_targeting.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

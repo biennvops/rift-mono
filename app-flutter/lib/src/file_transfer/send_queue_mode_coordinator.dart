@@ -1,7 +1,7 @@
-import 'package:app_flutter/src/file_transfer/legacy_send_queue_coordinator.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_entry.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/file_transfer/legacy_send_queue_coordinator.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/file_transfer/send_queue_entry.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 
 enum SendQueueRuntimeMode {
   daemonBacked,

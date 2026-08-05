@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:app_flutter/src/ipc/streamjsonrpc_framer.dart';
+import 'package:rift/src/ipc/streamjsonrpc_framer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

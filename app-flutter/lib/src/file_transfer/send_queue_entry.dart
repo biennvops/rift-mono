@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:app_flutter/src/file_transfer/send_queue_panel.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_persistence.dart';
+import 'package:rift/src/file_transfer/send_queue_panel.dart';
+import 'package:rift/src/file_transfer/send_queue_persistence.dart';
 
 class SendQueueEntry {
   SendQueueEntry({

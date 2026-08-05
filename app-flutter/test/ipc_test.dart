@@ -3,14 +3,14 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:fake_async/fake_async.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
-import 'package:app_flutter/src/media_playback/ios_remote_media_playback_coordinator.dart';
-import 'package:app_flutter/src/media_playback/macos_remote_media_playback_coordinator.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
-import 'package:app_flutter/src/platform/ios_media_playback.dart';
-import 'package:app_flutter/src/platform/macos_media_playback.dart';
+import 'package:rift/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'package:rift/src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'package:rift/src/media_playback/macos_remote_media_playback_coordinator.dart';
+import 'package:rift/src/platform/android_shell.dart';
+import 'package:rift/src/platform/ios_media_playback.dart';
+import 'package:rift/src/platform/macos_media_playback.dart';
 import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
