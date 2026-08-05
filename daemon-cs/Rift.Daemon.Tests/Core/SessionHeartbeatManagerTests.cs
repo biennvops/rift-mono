@@ -44,6 +44,26 @@ public sealed class SessionHeartbeatManagerTests
         Assert.Equal("offline", presenceService.GetPeerPresence(session.PeerDeviceId)?.Status);
     }
 
+    [Fact]
+    public void TimeoutTransition_DoesNotOverwriteNewAuthenticatedTraffic()
+    {
+        var tracked = new SessionHeartbeatManager.TrackedSession(
+            [SessionHeartbeatManager.PresenceBasicCapability],
+            now: 1_000);
+        var observedLastHeardTick = tracked.ReadLastHeardTick();
+        var markedOffline = false;
+
+        tracked.MarkHeard(2_000);
+        var timedOut = tracked.TryMarkTimedOut(
+            observedLastHeardTick,
+            () => markedOffline = true);
+
+        Assert.False(timedOut);
+        Assert.False(markedOffline);
+        Assert.False(tracked.IsTimedOut);
+        Assert.Equal(2_000, tracked.ReadLastHeardTick());
+    }
+
     private sealed class FakeIdentityManager : IIdentityManager
     {
         public void EnsureIdentityInitialized() { }

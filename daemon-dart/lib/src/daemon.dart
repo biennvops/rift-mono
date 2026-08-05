@@ -3508,19 +3508,22 @@ class RiftDaemon {
 
   Future<void> _attemptTrustedReconnect(
     String peerDeviceId,
-    int attempt,
-  ) async {
+    int attempt, {
+    Future<PeerRecord?> Function()? loadPeer,
+    void Function()? scheduleRetry,
+  }) async {
     if (_isStopping) {
       return;
     }
 
-    final record = await _trustStore?.getPeer(peerDeviceId);
-    if (record == null || record.state != TrustState.trusted) {
-      _trustedReconnectAttempts.remove(peerDeviceId);
-      return;
-    }
-
     try {
+      final lookup = loadPeer?.call() ?? _trustStore?.getPeer(peerDeviceId);
+      final record = lookup == null ? null : await lookup;
+      if (record == null || record.state != TrustState.trusted) {
+        _trustedReconnectAttempts.remove(peerDeviceId);
+        return;
+      }
+
       await _ensureTrustedSessionForPeer(peerDeviceId);
       _trustedReconnectAttempts.remove(peerDeviceId);
     } catch (error) {
@@ -3532,9 +3535,26 @@ class RiftDaemon {
         '[Reconnect] Scheduled trusted reconnect failed for '
         'peerDeviceId=$peerDeviceId attempt=${attempt + 1} error=$error',
       );
-      _scheduleTrustedReconnect(peerDeviceId);
+      if (scheduleRetry != null) {
+        scheduleRetry();
+      } else {
+        _scheduleTrustedReconnect(peerDeviceId);
+      }
     }
   }
+
+  @visibleForTesting
+  Future<void> attemptTrustedReconnectForTesting({
+    required String peerDeviceId,
+    required int attempt,
+    required Future<PeerRecord?> Function() loadPeer,
+    required void Function() scheduleRetry,
+  }) => _attemptTrustedReconnect(
+    peerDeviceId,
+    attempt,
+    loadPeer: loadPeer,
+    scheduleRetry: scheduleRetry,
+  );
 
   Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
     final trustStore = _trustStore;

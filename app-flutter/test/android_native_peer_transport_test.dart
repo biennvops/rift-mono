@@ -111,7 +111,7 @@ void main() {
       expect(disconnectedPeer, 'rift-peer');
     });
 
-    test('closes the native socket before blocked stream teardown', () async {
+    test('closes and notifies before blocked stream teardown', () async {
       final tls = _RecordingNativeTlsApi();
       final cancellation = Completer<void>();
       final frameController = StreamController<Map<String, dynamic>>(
@@ -127,11 +127,13 @@ void main() {
         connectionId: 42,
         frameSubscription: frameController.stream.listen((_) {}),
       );
+      final disconnected = transport.onPeerDisconnected.first;
 
       transport.disconnect('rift-peer');
       await Future<void>.delayed(Duration.zero);
 
       expect(tls.closedConnectionIds, [42]);
+      await expectLater(disconnected, completion('rift-peer'));
       cancellation.complete();
       await Future<void>.delayed(Duration.zero);
       await transport.stopServer();

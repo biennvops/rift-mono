@@ -274,13 +274,13 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     try {
       await _tls.close(peer.connectionId);
     } catch (_) {}
+    if (notify && !_disconnects.isClosed) {
+      _disconnects.add(peer.peerDeviceId);
+    }
     if (cancelFrameSubscription) {
       await peer.frameSubscription?.cancel();
     }
     await peer.chunkController?.close();
-    if (notify && !_disconnects.isClosed) {
-      _disconnects.add(peer.peerDeviceId);
-    }
   }
 
   @override

@@ -172,15 +172,15 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         var now = _tickProvider();
         foreach (var entry in _sessions)
         {
-            if (now - entry.Value.ReadLastHeardTick() < OfflineThreshold.TotalMilliseconds)
+            var lastHeardTick = entry.Value.ReadLastHeardTick();
+            if (now - lastHeardTick < OfflineThreshold.TotalMilliseconds)
             {
                 continue;
             }
 
-            if (entry.Value.TryMarkTimedOut())
-            {
-                _presenceService.MarkPeerOffline(entry.Key);
-            }
+            entry.Value.TryMarkTimedOut(
+                lastHeardTick,
+                () => _presenceService.MarkPeerOffline(entry.Key));
         }
     }
 
@@ -219,11 +219,12 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         return args.AllowsProtectedTraffic && args.SelectedCapabilities.Contains(PresenceBasicCapability, StringComparer.Ordinal);
     }
 
-    private sealed class TrackedSession
+    internal sealed class TrackedSession
     {
         private long _lastSentTick;
         private long _lastHeardTick;
         private int _timedOut;
+        private readonly Lock _sync = new();
 
         public TrackedSession(IReadOnlyList<string> selectedCapabilities, long now)
         {
@@ -244,10 +245,27 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
 
         public void MarkHeard(long value)
         {
-            Interlocked.Exchange(ref _lastHeardTick, value);
-            Interlocked.Exchange(ref _timedOut, 0);
+            lock (_sync)
+            {
+                Interlocked.Exchange(ref _lastHeardTick, value);
+                Interlocked.Exchange(ref _timedOut, 0);
+            }
         }
 
-        public bool TryMarkTimedOut() => Interlocked.Exchange(ref _timedOut, 1) == 0;
+        public bool TryMarkTimedOut(long observedLastHeardTick, Action onTimedOut)
+        {
+            lock (_sync)
+            {
+                if (Interlocked.Read(ref _lastHeardTick) != observedLastHeardTick ||
+                    Volatile.Read(ref _timedOut) != 0)
+                {
+                    return false;
+                }
+
+                Interlocked.Exchange(ref _timedOut, 1);
+                onTimedOut();
+                return true;
+            }
+        }
     }
 }
