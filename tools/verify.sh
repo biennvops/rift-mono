@@ -23,7 +23,7 @@ run_step() {
   fi
 
   if "$@" >"$log_path" 2>&1; then
-    printf 'PASS %s (log: %s)\n' "$name" "$display_path"
+    printf 'PASS %s\n' "$name"
     return 0
   else
     status=$?
@@ -67,7 +67,7 @@ run_daemon_dart_analyze() {
 
 run_daemon_dart_tests() {
   cd "$repo_root/daemon-dart"
-  flutter test
+  flutter test --no-pub
 }
 
 run_app_flutter_restore() {
@@ -77,12 +77,12 @@ run_app_flutter_restore() {
 
 run_app_flutter_analyze() {
   cd "$repo_root/app-flutter"
-  flutter analyze
+  flutter analyze --no-pub
 }
 
 run_app_flutter_tests() {
   cd "$repo_root/app-flutter"
-  flutter test
+  flutter test --no-pub
 }
 
 run_conformance_restore() {
@@ -102,7 +102,7 @@ run_interop_restore() {
 
 run_interop_tests() {
   cd "$repo_root/tests-interop"
-  flutter test
+  flutter test --no-pub
 }
 
 run_target() {
@@ -111,25 +111,40 @@ run_target() {
 
   case "$target" in
     daemon-cs)
-      run_step daemon-cs-build run_daemon_cs_build || failed=1
+      run_step daemon-cs-build run_daemon_cs_build || {
+        printf '%s\n' 'SKIP daemon-cs-tests (build failed)'
+        return 1
+      }
       run_step daemon-cs-tests run_daemon_cs_tests || failed=1
       ;;
     daemon-dart)
-      run_step daemon-dart-restore run_daemon_dart_restore || failed=1
+      run_step daemon-dart-restore run_daemon_dart_restore || {
+        printf '%s\n' 'SKIP daemon-dart-analyze, daemon-dart-tests (restore failed)'
+        return 1
+      }
       run_step daemon-dart-analyze run_daemon_dart_analyze || failed=1
       run_step daemon-dart-tests run_daemon_dart_tests || failed=1
       ;;
     app-flutter)
-      run_step app-flutter-restore run_app_flutter_restore || failed=1
+      run_step app-flutter-restore run_app_flutter_restore || {
+        printf '%s\n' 'SKIP app-flutter-analyze, app-flutter-tests (restore failed)'
+        return 1
+      }
       run_step app-flutter-analyze run_app_flutter_analyze || failed=1
       run_step app-flutter-tests run_app_flutter_tests || failed=1
       ;;
     tests-conformance)
-      run_step tests-conformance-restore run_conformance_restore || failed=1
+      run_step tests-conformance-restore run_conformance_restore || {
+        printf '%s\n' 'SKIP tests-conformance (restore failed)'
+        return 1
+      }
       run_step tests-conformance run_conformance_tests || failed=1
       ;;
     tests-interop)
-      run_step tests-interop-restore run_interop_restore || failed=1
+      run_step tests-interop-restore run_interop_restore || {
+        printf '%s\n' 'SKIP tests-interop (restore failed)'
+        return 1
+      }
       run_step tests-interop run_interop_tests || failed=1
       ;;
     all)
