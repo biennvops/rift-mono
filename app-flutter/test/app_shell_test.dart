@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,7 @@ import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
 import 'package:app_flutter/src/platform/ios_notifications.dart';
 import 'package:app_flutter/src/platform/notification_route.dart';
+import 'package:app_flutter/src/platform/windows_media_playback.dart';
 import 'package:app_flutter/src/platform/windows_shell.dart';
 import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
@@ -152,6 +154,7 @@ void main() {
   late StreamController<Map<String, dynamic>> fileReadyToCommitController;
   late bool isConnected;
   final macOsCalls = <MethodCall>[];
+  final windowsCalls = <MethodCall>[];
 
   Future<void> dispatchPlatformMethodCall(
       String channel, MethodCall call) async {
@@ -200,6 +203,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     setMacOSNotificationBridgeOverride(true);
     IOSNotifications.debugIsIOSOverride = false;
+    WindowsMediaPlayback.debugIsWindowsOverride = false;
     WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
@@ -213,6 +217,7 @@ void main() {
         StreamController<Map<String, dynamic>>.broadcast();
     isConnected = true;
     macOsCalls.clear();
+    windowsCalls.clear();
 
     // Default mock behavior
     when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
@@ -352,6 +357,14 @@ void main() {
         return null;
       },
     );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/windows/shell'),
+      (call) async {
+        windowsCalls.add(call);
+        return true;
+      },
+    );
   });
 
   tearDown(() {
@@ -362,6 +375,7 @@ void main() {
     fileReadyToCommitController.close();
     setMacOSNotificationBridgeOverride(null);
     IOSNotifications.debugIsIOSOverride = null;
+    WindowsMediaPlayback.debugIsWindowsOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
@@ -371,6 +385,11 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('rift/ios/notifications'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/windows/shell'),
       null,
     );
   });
@@ -589,8 +608,9 @@ void main() {
     });
     await tester.pump();
 
-    final showCall =
-        macOsCalls.lastWhere((call) => call.method == 'notification.show');
+    final showCall = Platform.isWindows
+        ? windowsCalls.lastWhere((call) => call.method == 'showNotification')
+        : macOsCalls.lastWhere((call) => call.method == 'notification.show');
     final arguments = Map<String, Object?>.from(
       showCall.arguments as Map<Object?, Object?>,
     );
@@ -605,10 +625,14 @@ void main() {
       'isOpenable': true,
       'isDismissible': true,
     });
-    expect(arguments['actions'], <Map<String, String>>[
-      <String, String>{'id': 'open', 'title': 'Open'},
-      <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
-    ]);
+    if (Platform.isWindows) {
+      expect(arguments.containsKey('actions'), isFalse);
+    } else {
+      expect(arguments['actions'], <Map<String, String>>[
+        <String, String>{'id': 'open', 'title': 'Open'},
+        <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
+      ]);
+    }
   });
 
   testWidgets('iOS consumes launch actions without requesting permission',
@@ -736,8 +760,9 @@ void main() {
       'title': 'Posted',
     });
     await tester.pump();
-    final showCountAfterPost =
-        macOsCalls.where((call) => call.method == 'notification.show').length;
+    final showCountAfterPost = Platform.isWindows
+        ? windowsCalls.where((call) => call.method == 'showNotification').length
+        : macOsCalls.where((call) => call.method == 'notification.show').length;
 
     notificationUpdatedController.add(<String, dynamic>{
       'notificationId': 'notif-dup',
@@ -748,8 +773,9 @@ void main() {
     });
     await tester.pump();
 
-    final showCountFinal =
-        macOsCalls.where((call) => call.method == 'notification.show').length;
+    final showCountFinal = Platform.isWindows
+        ? windowsCalls.where((call) => call.method == 'showNotification').length
+        : macOsCalls.where((call) => call.method == 'notification.show').length;
     expect(showCountAfterPost, 1);
     expect(showCountFinal, 1);
   });

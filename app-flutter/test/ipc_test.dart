@@ -7,8 +7,10 @@ import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'package:app_flutter/src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/media_playback/windows_remote_media_playback_coordinator.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:app_flutter/src/platform/ios_media_playback.dart';
+import 'package:app_flutter/src/platform/windows_media_playback.dart';
 import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
@@ -1317,6 +1319,121 @@ void main() {
       } finally {
         await coordinator.dispose();
         IOSMediaPlayback.debugIsIOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(nativeCalls.map((call) => call.method), contains('clear'));
+    });
+
+    test('Windows mirrors playback state and routes native transport actions',
+        () async {
+      const mediaPlaybackChannel = MethodChannel('rift/windows/media_playback');
+      final nativeCalls = <MethodCall>[];
+      WindowsMediaPlayback.debugIsWindowsOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-win-1',
+            'sourceDeviceId': 'rift-mac',
+            'sourcePlatform': 'macos',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Test Song',
+            'artist': 'Test Artist',
+            'album': 'Test Album',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          }
+        ],
+      };
+      await client.connect();
+      final coordinator = WindowsRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'show',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-mac');
+        expect(playback['playbackId'], 'playback-win-1');
+        expect(playback['title'], 'Test Song');
+        expect(playback['positionMs'], 1500);
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-win-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-win-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+
+        transport.listMediaPlaybackResult = {
+          'playbacks': [
+            {
+              ...Map<String, dynamic>.from(
+                (transport.listMediaPlaybackResult['playbacks'] as List).single
+                    as Map,
+              ),
+              'playbackState': 'paused',
+              'positionMs': 42000,
+              'canPlay': true,
+              'canPause': false,
+              'updatedAt': '2026-07-19T17:30:01Z',
+            }
+          ],
+        };
+        transport.emitNotification('rift.onMediaPlaybackActionResult', {
+          'playbackId': 'playback-win-1',
+          'sourceDeviceId': 'rift-mac',
+          'action': 'seek',
+          'operationId': 'operation-media-1',
+          'state': 'Done',
+          'success': true,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final confirmedPlayback = Map<String, dynamic>.from(
+          (nativeCalls.lastWhere((call) => call.method == 'show').arguments
+              as Map)['playback'] as Map,
+        );
+        expect(confirmedPlayback['playbackState'], 'paused');
+        expect(confirmedPlayback['positionMs'], 42000);
+      } finally {
+        await coordinator.dispose();
+        WindowsMediaPlayback.debugIsWindowsOverride = null;
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(mediaPlaybackChannel, null);
       }

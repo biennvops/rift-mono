@@ -7,8 +7,11 @@
 #include <flutter/event_sink.h>
 #include <flutter/flutter_view_controller.h>
 #include <flutter/method_channel.h>
+#include <winrt/Windows.Media.h>
+#include <winrt/Windows.Media.Playback.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,8 +39,15 @@ class FlutterWindow : public Win32Window {
   void RegisterClipboardEventChannel();
   void RegisterClipboardMethodChannel();
   void RegisterWindowsShellMethodChannel();
+  void RegisterWindowsMediaPlaybackMethodChannel();
   void RegisterSendFilesMethodChannel();
   void DispatchQueuedSendFiles();
+  bool ShowWindowsMediaPlayback(const flutter::EncodableMap& playback);
+  bool ClearWindowsMediaPlayback();
+  void QueueWindowsMediaPlaybackAction(
+      const std::string& action,
+      std::optional<int64_t> position_ms = std::nullopt);
+  void DispatchPendingWindowsMediaPlaybackActions();
   void InitializeShellNotificationIcon();
   void CleanupShellNotificationIcon();
   bool ShowTransferNotification(
@@ -66,11 +76,19 @@ class FlutterWindow : public Win32Window {
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       windows_shell_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      windows_media_playback_method_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       send_files_method_channel_;
   flutter::EncodableList pending_send_files_;
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
+  winrt::Windows::Media::Playback::MediaPlayer media_playback_player_{nullptr};
+  winrt::event_token media_playback_button_pressed_token_{};
+  winrt::event_token media_playback_position_change_token_{};
+  std::string current_media_playback_source_device_id_;
+  std::string current_media_playback_playback_id_;
+  std::vector<flutter::EncodableValue> pending_media_playback_actions_;
   std::wstring pending_notification_destination_path_;
   std::string pending_notification_route_;
   flutter::EncodableMap pending_notification_payload_;
