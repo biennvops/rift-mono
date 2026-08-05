@@ -6,6 +6,17 @@
 - If verification commands are unclear, ask before proceeding.
 - Transform tasks into verifiable goals. 'Fix the bug' becomes 'write a test that reproduces it, then make it pass.' 'Refactor X' becomes 'ensure tests pass before and after.'
 
+For routine agent verification, use `tools/verify.sh <target>` from the repository root:
+
+- `daemon-cs` — platform-appropriate .NET build plus daemon tests
+- `daemon-dart` — dependency restore, analysis, and Dart tests
+- `app-flutter` — dependency restore, Flutter analysis, and Flutter tests
+- `tests-conformance` — dependency restore and the Dart conformance runner
+- `tests-interop` — dependency restore and Flutter interop tests
+- `all` — run every target above
+
+The script writes each command's complete stdout and stderr to a deterministic file under `logs/agent/`, replacing that step's previous log, then prints only a pass/fail summary and concise failure lines. The directory is ignored by Git. Inspect a specific log with focused commands such as `rg -n -i 'error|failed|exception' logs/agent/<log-file>` or `tail -80 logs/agent/<log-file>` instead of dumping the entire file into the agent conversation. Set `RIFT_AGENT_LOG_DIR` when a different local log directory is needed.
+
 ## Boundaries
 - Ask before any of: destructive shell commands (rm -rf, git push --force, db drops), adding new dependencies, modifying CI/infrastructure, touching .env or secrets.
 - Before destructive actions, ensure changes are committed to git first - git is the backup. If git isn't appropriate, ask before proceeding.
