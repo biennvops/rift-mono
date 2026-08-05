@@ -88,9 +88,10 @@ class DirectActivityClient extends FakeJsonRpcRiftClient {
   final clipboardOffer = StreamController<Map<String, dynamic>>.broadcast();
   final clipboardExpired = StreamController<Map<String, dynamic>>.broadcast();
   final fileTransferFailed = StreamController<Map<String, dynamic>>.broadcast();
+  final securityEvent = StreamController<Map<String, dynamic>>.broadcast();
 
   @override
-  Stream<Map<String, dynamic>> get onSecurityEvent => const Stream.empty();
+  Stream<Map<String, dynamic>> get onSecurityEvent => securityEvent.stream;
 
   @override
   Stream<Map<String, dynamic>> get onTrustChanged => trustChanged.stream;
@@ -119,6 +120,7 @@ class DirectActivityClient extends FakeJsonRpcRiftClient {
     await clipboardOffer.close();
     await clipboardExpired.close();
     await fileTransferFailed.close();
+    await securityEvent.close();
     await _connectionChangedController.close();
   }
 }
@@ -192,6 +194,35 @@ void main() {
 
     expect(notifier.events, hasLength(1));
     expect(notifier.events.single.title, 'Clipboard received');
+  });
+
+  test('LocalEventsNotifier ignores duplicate security Activity events',
+      () async {
+    final client = DirectActivityClient()..connected = false;
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    client.pairingComplete.add({
+      'deviceId': 'rift-peer-complete',
+      'displayName': 'Complete Peer',
+      'fingerprint': 'fingerprint-complete',
+      'persistedAt': '2026-06-23T12:00:00Z',
+    });
+    client.securityEvent.add({
+      'eventId': 'evt-pairing-complete',
+      'eventType': 'pairing.completed',
+      'severity': 'info',
+      'peerDeviceId': 'rift-peer-complete',
+      'timestamp': DateTime.now().toUtc().toIso8601String(),
+      'outcome': 'success',
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      notifier.events.where((event) => event.title == 'Pairing completed'),
+      hasLength(1),
+    );
   });
 
   test('LocalEventsNotifier handles C# direct live notifications', () async {

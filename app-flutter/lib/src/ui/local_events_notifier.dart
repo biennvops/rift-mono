@@ -328,6 +328,11 @@ class LocalEventsNotifier extends ChangeNotifier {
   }
 
   void _onSecurityEvent(Map<String, dynamic> record) {
+    final eventType = record['eventType']?.toString();
+    if (eventType != 'connection.established' &&
+        eventType != 'connection.lost') {
+      return;
+    }
     final event = _fromSecurityEvent(record);
     if (event != null) _add(event);
   }
