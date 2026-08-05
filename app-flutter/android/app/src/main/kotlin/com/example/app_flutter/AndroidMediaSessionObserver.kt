@@ -114,8 +114,15 @@ class AndroidMediaSessionObserver(
             when (action) {
                 "play" -> transport.play()
                 "pause" -> transport.pause()
-                "skipNext" -> transport.skipToNext()
-                "skipPrevious" -> transport.skipToPrevious()
+                "togglePlayPause" -> {
+                    if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                        transport.pause()
+                    } else {
+                        transport.play()
+                    }
+                }
+                "next" -> transport.skipToNext()
+                "previous" -> transport.skipToPrevious()
                 "seek" -> {
                     if (positionMs == null) {
                         return mapOf(

@@ -53,7 +53,14 @@ object RiftBackgroundHost {
                         }
                         result.success(true)
                     }
-                    else -> result.notImplemented()
+                    else -> {
+                        val handler = nativeCommandHandler
+                        if (handler == null) {
+                            result.error("service_unavailable", "Rift background service is not ready", null)
+                        } else {
+                            handler(call.method, call.arguments, result)
+                        }
+                    }
                 }
             }
         }

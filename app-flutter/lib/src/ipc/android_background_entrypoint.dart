@@ -69,6 +69,64 @@ Future<void> runAndroidBackgroundMain() async {
     }
   }
 
+  Future<void> handleIncomingMediaPlaybackAction(
+    Map<String, dynamic> request,
+  ) async {
+    final requestId = request['requestId']?.toString();
+    final playbackId = request['playbackId']?.toString();
+    final action = request['action']?.toString();
+    if (requestId == null ||
+        requestId.isEmpty ||
+        playbackId == null ||
+        playbackId.isEmpty ||
+        action == null ||
+        action.isEmpty) {
+      return;
+    }
+
+    var success = false;
+    String? failureReason;
+    String? message;
+    try {
+      final result = await _backgroundBridgeChannel.invokeMethod<Object?>(
+        'performMediaPlaybackAction',
+        {
+          'playbackId': playbackId,
+          'action': action,
+          if (request['positionMs'] is num)
+            'positionMs': (request['positionMs'] as num).toInt(),
+        },
+      );
+      if (result is Map) {
+        final payload = Map<String, dynamic>.from(result);
+        success = payload['success'] == true;
+        failureReason = payload['failureReason']?.toString();
+        message = payload['message']?.toString();
+      } else {
+        failureReason = 'CapabilityUnavailable';
+        message = 'The Android media observer is unavailable.';
+      }
+    } catch (error) {
+      failureReason = 'PeerRejected';
+      message = error.toString();
+    }
+
+    try {
+      await client.reportLocalMediaPlaybackActionHandled(
+        requestId: requestId,
+        success: success,
+        failureReason: failureReason,
+        message: message,
+      );
+    } catch (_) {
+      // The daemon will expire the request if the session has already gone away.
+    }
+  }
+
+  client.onMediaPlaybackActionRequest.listen((request) {
+    unawaited(handleIncomingMediaPlaybackAction(request));
+  });
+
   _backgroundBridgeChannel.setMethodCallHandler((call) async {
     switch (call.method) {
       case 'uiRequest':
