@@ -14,6 +14,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 
   bool connected = true;
   int queryEventLogCallCount = 0;
+  Completer<void>? queryBlock;
   final _connectionChangedController = StreamController<bool>.broadcast();
   final _securityEventController =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -66,6 +67,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     int offset = 0,
   }) async {
     queryEventLogCallCount += 1;
+    await queryBlock?.future;
     Iterable<Map<String, dynamic>> filtered = events;
     if (severities != null && severities.isNotEmpty) {
       filtered = filtered.where(
@@ -237,6 +239,44 @@ void main() {
     );
   });
 
+  test('LocalEventsNotifier keeps distinct same-peer live events', () async {
+    final client = DirectActivityClient()..connected = false;
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    for (final offerId in ['offer-1', 'offer-2']) {
+      client.clipboardOffer.add({
+        'offerId': offerId,
+        'sourceDeviceId': 'rift-peer-shared',
+        'contentType': 'text/plain',
+      });
+      client.clipboardExpired.add({'offerId': offerId});
+    }
+    for (final transferId in ['transfer-1', 'transfer-2']) {
+      client.fileTransferFailed.add({
+        'transferId': transferId,
+        'peerDeviceId': 'rift-peer-shared',
+        'fileName': '$transferId.txt',
+      });
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      notifier.events.where((event) => event.title == 'Clipboard received'),
+      hasLength(2),
+    );
+    expect(
+      notifier.events
+          .where((event) => event.title == 'Clipboard offer expired'),
+      hasLength(2),
+    );
+    expect(
+      notifier.events.where((event) => event.title == 'File transfer failed'),
+      hasLength(2),
+    );
+  });
+
   test('LocalEventsNotifier reconciles direct live events with history',
       () async {
     final client = DirectActivityClient()
@@ -256,12 +296,17 @@ void main() {
 
     await Future<void>.delayed(Duration.zero);
     client.clipboardOffer.add({
-      'offerId': 'offer-reconnect',
+      'offerId': 'offer-reconnect-1',
+      'sourceDeviceId': 'rift-peer-clipboard',
+      'contentType': 'text/plain',
+    });
+    client.clipboardOffer.add({
+      'offerId': 'offer-reconnect-2',
       'sourceDeviceId': 'rift-peer-clipboard',
       'contentType': 'text/plain',
     });
     await Future<void>.delayed(Duration.zero);
-    expect(notifier.events, hasLength(2));
+    expect(notifier.events, hasLength(3));
 
     client.events = [
       ...client.events,
@@ -270,7 +315,7 @@ void main() {
         'eventType': 'clipboard.offered',
         'severity': 'info',
         'peerDeviceId': 'rift-peer-clipboard',
-        'timestamp': '2026-06-23T12:01:00Z',
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
         'outcome': 'success',
       },
     ];
@@ -278,10 +323,46 @@ void main() {
     await client.emitConnectionChanged(true);
     await Future<void>.delayed(Duration.zero);
 
-    expect(notifier.events, hasLength(2));
+    expect(notifier.events, hasLength(3));
     expect(
       notifier.events.where((event) => event.title == 'Clipboard received'),
-      hasLength(1),
+      hasLength(2),
+    );
+  });
+
+  test('LocalEventsNotifier preserves events arriving during history load',
+      () async {
+    final client = DirectActivityClient()
+      ..connected = false
+      ..queryBlock = Completer<void>()
+      ..events = [
+        {
+          'eventId': 'evt-history-other-offer',
+          'eventType': 'clipboard.offered',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-clipboard',
+          'timestamp': DateTime.now().toUtc().toIso8601String(),
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+    client.clipboardOffer.add({
+      'offerId': 'offer-during-query',
+      'sourceDeviceId': 'rift-peer-clipboard',
+      'contentType': 'text/plain',
+    });
+    await Future<void>.delayed(Duration.zero);
+    client.queryBlock!.complete();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      notifier.events.where((event) => event.title == 'Clipboard received'),
+      hasLength(2),
     );
   });
 

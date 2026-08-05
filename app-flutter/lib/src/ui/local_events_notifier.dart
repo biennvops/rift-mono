@@ -23,6 +23,8 @@ class LocalEvent {
     required this.time,
     required this.identityKey,
     required this.reconciliationKey,
+    this.reconciliationSubject,
+    this.isSecurityNotification = false,
     this.eventId,
     this.peerDeviceId,
   });
@@ -33,12 +35,15 @@ class LocalEvent {
   final DateTime time;
   final String identityKey;
   final String reconciliationKey;
+  final String? reconciliationSubject;
+  final bool isSecurityNotification;
   final String? eventId;
   final String? peerDeviceId;
 }
 
 class LocalEventsNotifier extends ChangeNotifier {
   static const _maxEvents = 50;
+  static const _reconciliationWindow = Duration(seconds: 30);
 
   final JsonRpcRiftClient _client;
   final List<LocalEvent> _events = [];
@@ -73,13 +78,19 @@ class LocalEventsNotifier extends ChangeNotifier {
   }
 
   void _add(LocalEvent event, {bool unread = true}) {
-    _events.removeWhere(
-      (existing) =>
-          existing.identityKey == event.identityKey ||
-          (existing.reconciliationKey == event.reconciliationKey &&
-              existing.time.difference(event.time).abs() <=
-                  const Duration(seconds: 5)),
-    );
+    final exactIndex = _events
+        .indexWhere((existing) => existing.identityKey == event.identityKey);
+    if (exactIndex >= 0) {
+      _events.removeAt(exactIndex);
+    } else {
+      final reconciliationIndex = _closestReconciliationMatch(
+        _events,
+        event,
+        excluded: _historyEvents,
+        requireSecuritySourceDifference: true,
+      );
+      if (reconciliationIndex >= 0) _events.removeAt(reconciliationIndex);
+    }
     _events.insert(0, event);
     if (_events.length > _maxEvents) _events.removeLast();
     if (unread) _unreadCount++;
@@ -89,6 +100,7 @@ class LocalEventsNotifier extends ChangeNotifier {
   Future<void> _loadHistory() async {
     if (!_client.isConnected || _historyLoading) return;
     _historyLoading = true;
+    final loadStartedAt = DateTime.now();
     try {
       final result = await _client.queryEventLog(
         eventTypes: const [
@@ -111,19 +123,37 @@ class LocalEventsNotifier extends ChangeNotifier {
           .map(_fromSecurityEvent)
           .whereType<LocalEvent>()
           .toList(growable: false);
-      final historyKeys = historyEvents.map((event) => event.identityKey);
-      final historyReconciliationKeys =
-          historyEvents.map((event) => event.reconciliationKey).toSet();
-      _events.removeWhere(
-        (event) =>
-            _historyEvents.contains(event) ||
-            historyKeys.contains(event.identityKey) ||
-            historyReconciliationKeys.contains(event.reconciliationKey),
-      );
+      final liveEvents = _events
+          .where((event) => !_historyEvents.contains(event))
+          .toList(growable: true);
+      final matchedLiveEvents = <LocalEvent>{};
+      for (final historyEvent in historyEvents) {
+        final exactMatch = liveEvents.indexWhere(
+          (event) =>
+              !matchedLiveEvents.contains(event) &&
+              event.identityKey == historyEvent.identityKey,
+        );
+        if (exactMatch >= 0) {
+          matchedLiveEvents.add(liveEvents[exactMatch]);
+          continue;
+        }
+        final reconciliationMatch = _closestReconciliationMatch(
+          liveEvents,
+          historyEvent,
+          excluded: matchedLiveEvents,
+          latestCandidateTime: loadStartedAt,
+        );
+        if (reconciliationMatch >= 0) {
+          matchedLiveEvents.add(liveEvents[reconciliationMatch]);
+        }
+      }
       _historyEvents
         ..clear()
         ..addAll(historyEvents);
       _events
+        ..clear()
+        ..addAll(
+            liveEvents.where((event) => !matchedLiveEvents.contains(event)))
         ..addAll(historyEvents)
         ..sort((a, b) => b.time.compareTo(a.time));
       if (_events.length > _maxEvents) {
@@ -135,6 +165,44 @@ class LocalEventsNotifier extends ChangeNotifier {
     } finally {
       _historyLoading = false;
     }
+  }
+
+  int _closestReconciliationMatch(
+    List<LocalEvent> candidates,
+    LocalEvent target, {
+    Set<LocalEvent> excluded = const {},
+    DateTime? latestCandidateTime,
+    bool requireSecuritySourceDifference = false,
+  }) {
+    var closestIndex = -1;
+    Duration? closestDifference;
+    for (var index = 0; index < candidates.length; index += 1) {
+      final candidate = candidates[index];
+      if (excluded.contains(candidate)) continue;
+      if (latestCandidateTime != null &&
+          !candidate.time.isBefore(latestCandidateTime)) {
+        continue;
+      }
+      if (requireSecuritySourceDifference &&
+          candidate.isSecurityNotification == target.isSecurityNotification) {
+        continue;
+      }
+      if (candidate.reconciliationKey != target.reconciliationKey) continue;
+      final candidateSubject = candidate.reconciliationSubject;
+      final targetSubject = target.reconciliationSubject;
+      if (candidateSubject != null &&
+          targetSubject != null &&
+          candidateSubject != targetSubject) {
+        continue;
+      }
+      final difference = candidate.time.difference(target.time).abs();
+      if (difference > _reconciliationWindow) continue;
+      if (closestDifference == null || difference < closestDifference) {
+        closestIndex = index;
+        closestDifference = difference;
+      }
+    }
+    return closestIndex;
   }
 
   LocalEvent? _fromSecurityEvent(Map<String, dynamic> record) {
@@ -153,6 +221,10 @@ class LocalEventsNotifier extends ChangeNotifier {
       timestamp: record['timestamp']?.toString(),
     );
     final reconciliationKey = _buildReconciliationKey(type, peerDeviceId);
+    final reconciliationSubject = _eventSubject(
+      type,
+      record['details'],
+    );
 
     return switch (type) {
       'connection.established' => LocalEvent(
@@ -162,6 +234,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -172,6 +246,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -182,6 +258,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -192,6 +270,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -202,6 +282,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -212,6 +294,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -222,6 +306,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -232,6 +318,8 @@ class LocalEventsNotifier extends ChangeNotifier {
           time: time,
           identityKey: identityKey,
           reconciliationKey: reconciliationKey,
+          reconciliationSubject: reconciliationSubject,
+          isSecurityNotification: true,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -246,9 +334,12 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   void _onTrustChanged(Map<String, dynamic> e) {
     final deviceId = e['deviceId']?.toString() ?? '';
+    final previousState = e['previousState']?.toString() ?? '';
     final newState = e['newState']?.toString() ?? '';
+    final transition = '$previousState>$newState';
     final name = e['displayName']?.toString() ?? _shortId(deviceId);
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     late final LocalEventKind kind;
     late final String title;
     switch (newState) {
@@ -268,17 +359,19 @@ class LocalEventsNotifier extends ChangeNotifier {
       kind: kind,
       title: title,
       subtitle: name,
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'trust.transitioned',
         peerDeviceId: deviceId,
-        subject: newState,
+        subject: transition,
+        timestamp: time.toIso8601String(),
       ),
       reconciliationKey: _buildReconciliationKey(
         'trust.transitioned',
         deviceId,
       ),
+      reconciliationSubject: transition,
       eventId: eventId,
       peerDeviceId: deviceId,
     ));
@@ -286,22 +379,26 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   void _onPairingRequest(Map<String, dynamic> e) {
     final deviceId = e['deviceId']?.toString() ?? '';
+    final fingerprint = e['fingerprint']?.toString();
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.devicePairingRequest,
       title: 'Pairing request',
       subtitle: e['displayName']?.toString() ?? _shortId(deviceId),
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'pairing.attempted',
         peerDeviceId: deviceId,
-        subject: e['fingerprint']?.toString(),
+        subject: fingerprint,
+        timestamp: time.toIso8601String(),
       ),
       reconciliationKey: _buildReconciliationKey(
         'pairing.attempted',
         deviceId,
       ),
+      reconciliationSubject: fingerprint,
       eventId: eventId,
       peerDeviceId: deviceId,
     ));
@@ -309,21 +406,27 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   void _onPairingComplete(Map<String, dynamic> e) {
     final deviceId = e['deviceId']?.toString() ?? '';
+    final subject =
+        e['persistedAt']?.toString() ?? e['fingerprint']?.toString();
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.deviceTrusted,
       title: 'Pairing completed',
       subtitle: e['displayName']?.toString() ?? _shortId(deviceId),
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'pairing.completed',
         peerDeviceId: deviceId,
+        subject: subject,
+        timestamp: subject == null ? time.toIso8601String() : null,
       ),
       reconciliationKey: _buildReconciliationKey(
         'pairing.completed',
         deviceId,
       ),
+      reconciliationSubject: subject,
       eventId: eventId,
       peerDeviceId: deviceId,
     ));
@@ -333,22 +436,26 @@ class LocalEventsNotifier extends ChangeNotifier {
     final deviceId = e['sourceDeviceId']?.toString() ?? '';
     final contentType = e['contentType']?.toString() ?? 'content';
     final label = contentType.startsWith('text/') ? 'Text' : 'File';
+    final offerId = e['offerId']?.toString();
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.clipboardReceived,
       title: 'Clipboard received',
       subtitle: '$label from ${_shortId(deviceId)}',
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'clipboard.offered',
         peerDeviceId: deviceId,
-        subject: e['offerId']?.toString() ?? contentType,
+        subject: offerId ?? contentType,
+        timestamp: offerId == null ? time.toIso8601String() : null,
       ),
       reconciliationKey: _buildReconciliationKey(
         'clipboard.offered',
         deviceId,
       ),
+      reconciliationSubject: offerId,
       eventId: eventId,
       peerDeviceId: deviceId,
     ));
@@ -357,17 +464,20 @@ class LocalEventsNotifier extends ChangeNotifier {
   void _onClipboardExpired(Map<String, dynamic> e) {
     final offerId = e['offerId']?.toString() ?? '';
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.clipboardExpired,
       title: 'Clipboard offer expired',
       subtitle: 'Offer ID: ${_shortId(offerId)}',
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'clipboard.expired',
         subject: offerId,
+        timestamp: offerId.isEmpty ? time.toIso8601String() : null,
       ),
       reconciliationKey: _buildReconciliationKey('clipboard.expired', null),
+      reconciliationSubject: offerId.isEmpty ? null : offerId,
       eventId: eventId,
     ));
   }
@@ -375,22 +485,26 @@ class LocalEventsNotifier extends ChangeNotifier {
   void _onFileCompleted(Map<String, dynamic> e) {
     final fileName = e['fileName']?.toString() ?? 'file';
     final peerDeviceId = e['peerDeviceId']?.toString() ?? '';
+    final transferId = e['transferId']?.toString();
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.fileReceived,
       title: 'File received',
       subtitle: fileName,
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'file_transfer.completed',
         peerDeviceId: peerDeviceId,
-        subject: e['transferId']?.toString() ?? fileName,
+        subject: transferId ?? fileName,
+        timestamp: transferId == null ? time.toIso8601String() : null,
       ),
       reconciliationKey: _buildReconciliationKey(
         'file_transfer.completed',
         peerDeviceId,
       ),
+      reconciliationSubject: transferId,
       eventId: eventId,
       peerDeviceId: peerDeviceId,
     ));
@@ -399,25 +513,51 @@ class LocalEventsNotifier extends ChangeNotifier {
   void _onFileFailed(Map<String, dynamic> e) {
     final fileName = e['fileName']?.toString() ?? 'file';
     final peerDeviceId = e['peerDeviceId']?.toString() ?? '';
+    final transferId = e['transferId']?.toString();
     final eventId = e['eventId']?.toString();
+    final time = DateTime.now();
     _add(LocalEvent(
       kind: LocalEventKind.fileFailed,
       title: 'File transfer failed',
       subtitle: fileName,
-      time: DateTime.now(),
+      time: time,
       identityKey: _buildIdentityKey(
         eventId: eventId,
         eventType: 'file_transfer.failed',
         peerDeviceId: peerDeviceId,
-        subject: e['transferId']?.toString() ?? fileName,
+        subject: transferId ?? fileName,
+        timestamp: transferId == null ? time.toIso8601String() : null,
       ),
       reconciliationKey: _buildReconciliationKey(
         'file_transfer.rejected',
         peerDeviceId,
       ),
+      reconciliationSubject: transferId,
       eventId: eventId,
       peerDeviceId: peerDeviceId,
     ));
+  }
+
+  String? _eventSubject(String eventType, Object? details) {
+    if (details is! Map) return null;
+    switch (eventType) {
+      case 'clipboard.offered':
+      case 'clipboard.expired':
+        return details['offerId']?.toString();
+      case 'file_transfer.rejected':
+        return details['transferId']?.toString();
+      case 'pairing.attempted':
+      case 'pairing.completed':
+        return details['persistedAt']?.toString() ??
+            details['fingerprint']?.toString();
+      case 'trust.transitioned':
+        final previousState = details['previousState']?.toString();
+        final newState = details['newState']?.toString();
+        if (previousState == null && newState == null) return null;
+        return '${previousState ?? ''}>${newState ?? ''}';
+      default:
+        return null;
+    }
   }
 
   String _buildIdentityKey({
