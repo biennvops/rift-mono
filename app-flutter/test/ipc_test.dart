@@ -7,8 +7,10 @@ import 'package:app_flutter/src/ipc/ipc_transport.dart';
 import 'package:app_flutter/src/ipc/json_rpc_client.dart';
 import 'package:app_flutter/src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'package:app_flutter/src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'package:app_flutter/src/media_playback/macos_remote_media_playback_coordinator.dart';
 import 'package:app_flutter/src/platform/android_shell.dart';
 import 'package:app_flutter/src/platform/ios_media_playback.dart';
+import 'package:app_flutter/src/platform/macos_media_playback.dart';
 import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
@@ -1322,6 +1324,144 @@ void main() {
       }
 
       expect(nativeCalls.map((call) => call.method), contains('clear'));
+    });
+
+    test('macOS mirrors the latest remote playback and routes seek actions',
+        () async {
+      const mediaPlaybackChannel = MethodChannel('rift/macos/media_playback');
+      final nativeCalls = <MethodCall>[];
+      MacOSMediaPlaybackBridge.debugIsMacOSOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'local-playback',
+            'sourceDeviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Local Song',
+            'playbackState': 'playing',
+            'positionMs': 500,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:31:00Z',
+          },
+          {
+            'playbackId': 'playback-older',
+            'sourceDeviceId': 'rift-linux',
+            'appId': 'org.mpris.MediaPlayer2.mpd',
+            'appName': 'MPD',
+            'title': 'Older Song',
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': false,
+            'updatedAt': '2026-07-19T17:29:00Z',
+          },
+          {
+            'playbackId': 'playback-latest',
+            'sourceDeviceId': 'rift-android',
+            'appId': 'com.example.player',
+            'appName': 'Example Player',
+            'title': 'Latest Song',
+            'artist': 'Test Artist',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          },
+        ],
+      };
+      await client.connect();
+      final coordinator = MacOSRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'showRemotePlayback',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-android');
+        expect(playback['playbackId'], 'playback-latest');
+        expect(playback['title'], 'Latest Song');
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-android',
+            'playbackId': 'playback-latest',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-android',
+            'playbackId': 'playback-latest',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+
+        transport.emitNotification('rift.onMediaPlaybackUpdated', {
+          'playbackId': 'playback-older',
+          'sourceDeviceId': 'rift-linux',
+          'appId': 'org.mpris.MediaPlayer2.mpd',
+          'appName': 'MPD',
+          'title': 'Older Song',
+          'playbackState': 'playing',
+          'positionMs': 2000,
+          'canPlay': false,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': false,
+          'updatedAt': '2026-07-19T17:32:00Z',
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final updatedPlayback = Map<String, dynamic>.from(
+          (nativeCalls.lastWhere(
+            (call) => call.method == 'showRemotePlayback',
+          ).arguments as Map)['playback'] as Map,
+        );
+        expect(updatedPlayback['sourceDeviceId'], 'rift-linux');
+        expect(updatedPlayback['playbackId'], 'playback-older');
+      } finally {
+        await coordinator.dispose();
+        MacOSMediaPlaybackBridge.debugIsMacOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(
+        nativeCalls.map((call) => call.method),
+        contains('clearRemotePlayback'),
+      );
     });
 
     test('should surface getOperation not found JSON-RPC errors', () async {

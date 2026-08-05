@@ -39,6 +39,29 @@ class MacOSMediaPlaybackBridge {
     return result ?? false;
   }
 
+  static Future<bool> showRemotePlayback({
+    required Map<String, Object?> playback,
+  }) async {
+    if (!isSupported) return false;
+    final shown = await _methodChannel.invokeMethod<bool>('showRemotePlayback', {
+      'playback': playback,
+    });
+    return shown ?? false;
+  }
+
+  static Future<bool> clearRemotePlayback() async {
+    if (!isSupported) return false;
+    final cleared =
+        await _methodChannel.invokeMethod<bool>('clearRemotePlayback');
+    return cleared ?? false;
+  }
+
+  static void setMethodCallHandler(
+    Future<dynamic> Function(MethodCall call)? handler,
+  ) {
+    _methodChannel.setMethodCallHandler(handler);
+  }
+
   static Future<Map<String, dynamic>?> performAction({
     required String action,
     int? positionMs,
