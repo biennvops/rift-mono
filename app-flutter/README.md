@@ -9,7 +9,7 @@ surface across platforms.
 - pairing and trusted-device management UI
 - security event log and settings views
 - clipboard and operation workflow UI
-- transport-agnostic JSON-RPC client for desktop and Android
+- transport-agnostic JSON-RPC client for desktop, Android, and iOS
 
 Normative behavior lives in:
 
@@ -21,6 +21,7 @@ Normative behavior lives in:
 - Windows: named-pipe transport to `daemon-cs`
 - macOS and Linux: Unix-domain-socket transport to `daemon-cs`
 - Android 10 (API 29) or later: isolate transport to `daemon-dart`
+- iOS: in-process transport to `daemon-dart`
 
 Windows notes:
 
@@ -111,7 +112,7 @@ The Linux desktop entry forwards supported files opened with Rift to the
 existing process and adds them to the durable send queue.
 
 Desktop targets expect a compatible daemon endpoint to be available. Android
-starts the Dart daemon through the isolate bridge.
+starts the Dart daemon through the isolate bridge; iOS hosts it in-process.
 
 ## Structure
 
