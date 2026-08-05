@@ -119,15 +119,18 @@ class RiftDaemonService : Service() {
             "rift/android/identity",
         )
         identityChannel.setMethodCallHandler { call, result ->
-            if (call.method != "loadOrCreate") {
-                result.notImplemented()
-                return@setMethodCallHandler
-            }
-            try {
-                val legacyPath = (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
-                result.success(AndroidIdentityKeystore.loadOrCreate(this, legacyPath))
-            } catch (error: Exception) {
-                result.error("identity_keystore_error", error.message, null)
+            when (call.method) {
+                "loadOrCreate" -> {
+                    try {
+                        val legacyPath =
+                            (call.arguments as? Map<*, *>)?.get("legacyPath") as? String
+                        result.success(AndroidIdentityKeystore.loadOrCreate(this, legacyPath))
+                    } catch (error: Exception) {
+                        result.error("identity_keystore_error", error.message, null)
+                    }
+                }
+                "getDeviceInfo" -> result.success(AndroidDeviceInfo.asMap(this))
+                else -> result.notImplemented()
             }
         }
 

@@ -64,6 +64,11 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     if (identityKey == null) {
       throw StateError('Android identity keystore returned no identity key.');
     }
+    final nativeDeviceInfo =
+        await _identityChannel.invokeMethod<Map<Object?, Object?>>(
+      'getDeviceInfo',
+    );
+    final localDisplayName = nativeDeviceInfo?['displayName']?.toString();
 
     _uiReceive = ReceivePort();
     _incoming = StreamController<String>.broadcast();
@@ -91,6 +96,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
         'rootIsolateToken': token,
         'tlsProxyPort': _tlsProxyHost!.requestPort,
         'identityKey': identityKey,
+        if (localDisplayName != null) 'localDisplayName': localDisplayName,
         // Keep discovery on the root isolate so MethodChannel-based plugins
         // like `nsd` never run inside the daemon isolate.
         'enableDiscovery': false,

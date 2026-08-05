@@ -407,22 +407,28 @@ import UserNotifications
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     channel.setMethodCallHandler { call, result in
-      guard call.method == "loadOrCreate" else {
+      switch call.method {
+      case "loadOrCreate":
+        do {
+          let arguments = call.arguments as? [String: Any]
+          let legacyPath = arguments?["legacyPath"] as? String
+          let key = try Self.loadOrCreateIdentityKey(legacyPath: legacyPath)
+          result(FlutterStandardTypedData(bytes: key))
+        } catch {
+          result(FlutterError(
+            code: "identity_keychain_error",
+            message: error.localizedDescription,
+            details: nil
+          ))
+        }
+      case "getDeviceInfo":
+        var info = ["platform": "ios"]
+        if let displayName = Self.currentDeviceDisplayName() {
+          info["displayName"] = displayName
+        }
+        result(info)
+      default:
         result(FlutterMethodNotImplemented)
-        return
-      }
-
-      do {
-        let arguments = call.arguments as? [String: Any]
-        let legacyPath = arguments?["legacyPath"] as? String
-        let key = try Self.loadOrCreateIdentityKey(legacyPath: legacyPath)
-        result(FlutterStandardTypedData(bytes: key))
-      } catch {
-        result(FlutterError(
-          code: "identity_keychain_error",
-          message: error.localizedDescription,
-          details: nil
-        ))
       }
     }
     identityChannel = channel
@@ -685,6 +691,25 @@ import UserNotifications
 
   private static let identityService = "dev.rift.identity.ed25519"
   private static let identityAccount = "device-seed"
+
+  private static func currentDeviceDisplayName() -> String? {
+    let normalized = UIDevice.current.name
+      .filter { character in
+        !character.unicodeScalars.contains {
+          CharacterSet.controlCharacters.contains($0)
+        }
+      }
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return nil }
+
+    let genericNames = ["iPhone", "iPad", "iPod touch", UIDevice.current.model]
+    guard !genericNames.contains(where: {
+      $0.caseInsensitiveCompare(normalized) == .orderedSame
+    }) else {
+      return nil
+    }
+    return String(normalized.prefix(128))
+  }
 
   private static func loadOrCreateIdentityKey(legacyPath: String?) throws -> Data {
     let query: [String: Any] = [

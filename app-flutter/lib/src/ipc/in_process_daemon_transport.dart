@@ -20,24 +20,15 @@ abstract class InProcessDaemon {
 class RiftInProcessDaemon implements InProcessDaemon {
   static const _identityChannel = MethodChannel('rift/ios/identity');
 
-  final RiftDaemon _daemon;
+  final String _storagePath;
+  final void Function(Map<String, dynamic>) _onIpcEvent;
+  RiftDaemon? _daemon;
 
-  RiftInProcessDaemon._(this._daemon);
-
-  factory RiftInProcessDaemon({
+  RiftInProcessDaemon({
     required String storagePath,
     required void Function(Map<String, dynamic>) onIpcEvent,
-  }) {
-    return RiftInProcessDaemon._(
-      RiftDaemon(
-        storagePath: storagePath,
-        identityPrivateKeyProvider: () => _loadIdentityKey(storagePath),
-        onIpcEvent: onIpcEvent,
-        peerTransportFactory: (identityManager, port) =>
-            AndroidNativePeerTransport(identityManager, port: port),
-      ),
-    );
-  }
+  })  : _storagePath = storagePath,
+        _onIpcEvent = onIpcEvent;
 
   static Future<Uint8List> _loadIdentityKey(String storagePath) async {
     final key = await _identityChannel.invokeMethod<Uint8List>(
@@ -50,17 +41,43 @@ class RiftInProcessDaemon implements InProcessDaemon {
     return key;
   }
 
-  @override
-  Future<void> start() => _daemon.start();
+  static Future<String?> _loadDisplayName() async {
+    final info = await _identityChannel.invokeMethod<Map<Object?, Object?>>(
+      'getDeviceInfo',
+    );
+    return info?['displayName']?.toString();
+  }
 
   @override
-  Future<void> stop() => _daemon.stop();
+  Future<void> start() async {
+    final daemon = RiftDaemon(
+      storagePath: _storagePath,
+      identityPrivateKeyProvider: () => _loadIdentityKey(_storagePath),
+      localDisplayName: await _loadDisplayName(),
+      onIpcEvent: _onIpcEvent,
+      peerTransportFactory: (identityManager, port) =>
+          AndroidNativePeerTransport(identityManager, port: port),
+    );
+    _daemon = daemon;
+    await daemon.start();
+  }
+
+  @override
+  Future<void> stop() async {
+    await _daemon?.stop();
+    _daemon = null;
+  }
 
   @override
   Future<Map<String, dynamic>> handleJsonRpcRequest(
     Map<String, dynamic> request,
-  ) =>
-      _daemon.handleJsonRpcRequest(request);
+  ) {
+    final daemon = _daemon;
+    if (daemon == null) {
+      throw StateError('iOS in-process daemon is not started.');
+    }
+    return daemon.handleJsonRpcRequest(request);
+  }
 }
 
 class InProcessDaemonTransport implements IpcTransport {
