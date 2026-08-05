@@ -74,9 +74,11 @@ the mode-`0600` filesystem fallback; the active backend is reported by
 `rift.getDeviceInfo` as `IdentityProtectionBackend`.
 
 On Linux, the daemon observes MPRIS players on the user session D-Bus and
-publishes their playback state to trusted peers. Remote play, pause, toggle,
-next, previous, and seek actions are routed back to the originating MPRIS
-player.
+publishes their playback state to trusted peers. Remote playback is exposed as
+the Rift-owned `org.mpris.MediaPlayer2.rift` player, so desktop MPRIS clients
+can display and control playback from another trusted device. Remote play,
+pause, toggle, next, previous, and seek actions are routed back to the
+originating device or MPRIS player.
 
 Run the isolated Linux daemon smoke test with:
 

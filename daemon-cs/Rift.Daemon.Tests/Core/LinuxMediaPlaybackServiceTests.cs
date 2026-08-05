@@ -12,10 +12,119 @@ public sealed class LinuxMediaPlaybackServiceTests
     [Theory]
     [InlineData("org.mpris.MediaPlayer2.vlc", true)]
     [InlineData("org.mpris.MediaPlayer2.playerctld", false)]
+    [InlineData("org.mpris.MediaPlayer2.rift", false)]
     [InlineData("org.example.Player", false)]
     public void IsPlayerService_ExcludesPlayerCtlProxy(string serviceName, bool expected)
     {
         Assert.Equal(expected, LinuxMprisClient.IsPlayerService(serviceName));
+    }
+
+    [Fact]
+    public void SelectRemotePlayback_UsesNewestActivePeerRecord()
+    {
+        var selected = LinuxMediaPlaybackService.SelectRemotePlayback(
+            [
+                CreateRecord("rift-local", "local", "playing", "2026-08-06T00:00:03Z"),
+                CreateRecord("rift-peer-a", "stopped", "stopped", "2026-08-06T00:00:04Z"),
+                CreateRecord("rift-peer-a", "older", "playing", "2026-08-06T00:00:01Z"),
+                CreateRecord("rift-peer-b", "newer", "paused", "2026-08-06T00:00:02Z")
+            ],
+            "rift-local");
+
+        Assert.NotNull(selected);
+        Assert.Equal("rift-peer-b", selected.SourceDeviceId);
+        Assert.Equal("newer", selected.PlaybackId);
+    }
+
+    [Fact]
+    public void SelectRemotePlayback_IgnoresRemovedAndStoppedRecords()
+    {
+        var removed = new MediaPlaybackRecord
+        {
+            SourceDeviceId = "rift-peer",
+            PlaybackId = "removed",
+            AppId = "test-player",
+            AppName = "Test Player",
+            PlaybackState = "playing",
+            PositionMs = 1_000,
+            UpdatedAt = "2026-08-06T00:00:02Z",
+            IsRemoved = true
+        };
+
+        Assert.Null(LinuxMediaPlaybackService.SelectRemotePlayback(
+            [removed, CreateRecord("rift-peer", "stopped", "stopped", "2026-08-06T00:00:03Z")],
+            "rift-local"));
+    }
+
+    [Theory]
+    [InlineData("playing", "Playing")]
+    [InlineData("buffering", "Playing")]
+    [InlineData("paused", "Paused")]
+    [InlineData("stopped", "Stopped")]
+    [InlineData(null, "Stopped")]
+    public void ToMprisPlaybackStatus_UsesMprisVocabulary(string? state, string expected)
+    {
+        Assert.Equal(expected, LinuxMprisRemotePlayer.ToMprisPlaybackStatus(state));
+    }
+
+    [Theory]
+    [InlineData("playing", false, true)]
+    [InlineData("buffering", false, true)]
+    [InlineData("paused", false, false)]
+    [InlineData("paused", true, true)]
+    public void CanMprisPlay_AllowsSelectionOfActivePlayback(
+        string state,
+        bool canPlay,
+        bool expected)
+    {
+        Assert.Equal(expected, LinuxMprisRemotePlayer.CanMprisPlay(
+            CreateRecord("rift-peer", "playback", state, "2026-08-06T00:00:00Z", canPlay)));
+    }
+
+    [Fact]
+    public void ShouldMaterializeArtwork_SkipsUnchangedPayloads()
+    {
+        var firstArtwork = new Dictionary<string, object?>
+        {
+            ["dataBase64"] = "cG5n",
+            ["mediaType"] = "image/png"
+        };
+        var sameArtwork = new Dictionary<string, object?>(firstArtwork);
+        var changedArtwork = new Dictionary<string, object?>(firstArtwork)
+        {
+            ["dataBase64"] = "anBn"
+        };
+        var previous = CreateRecord(
+            "rift-peer",
+            "playback",
+            "playing",
+            "2026-08-06T00:00:00Z",
+            artwork: firstArtwork);
+
+        Assert.False(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: sameArtwork),
+            playbackKeyChanged: false));
+        Assert.True(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: sameArtwork),
+            playbackKeyChanged: true));
+        Assert.True(LinuxMprisRemotePlayer.ShouldMaterializeArtwork(
+            previous,
+            CreateRecord("rift-peer", "playback", "playing", "2026-08-06T00:00:01Z", artwork: changedArtwork),
+            playbackKeyChanged: false));
+    }
+
+    [Fact]
+    public void CreateTrackPath_IsStableAndSourceScoped()
+    {
+        var first = LinuxMprisRemotePlayer.CreateTrackPath("rift-peer-a", "playback-1");
+        var duplicate = LinuxMprisRemotePlayer.CreateTrackPath("rift-peer-a", "playback-1");
+        var otherSource = LinuxMprisRemotePlayer.CreateTrackPath("rift-peer-b", "playback-1");
+
+        Assert.Equal(first, duplicate);
+        Assert.NotEqual(first, otherSource);
+        Assert.StartsWith("/org/mpris/MediaPlayer2/TrackList/Rift/", first, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -239,6 +348,30 @@ public sealed class LinuxMediaPlaybackServiceTests
         Assert.True(result.Success);
         Assert.Equal(("playback-1", action, positionMs), client.LastAction);
     }
+
+    private static MediaPlaybackRecord CreateRecord(
+        string sourceDeviceId,
+        string playbackId,
+        string state,
+        string updatedAt,
+        bool canPlay = true,
+        IReadOnlyDictionary<string, object?>? artwork = null) => new()
+        {
+            SourceDeviceId = sourceDeviceId,
+            PlaybackId = playbackId,
+            AppId = "test-player",
+            AppName = "Test Player",
+            PlaybackState = state,
+            PositionMs = 1_000,
+            DurationMs = 30_000,
+            Artwork = artwork,
+            CanPlay = canPlay,
+            CanPause = true,
+            CanSkipNext = true,
+            CanSkipPrevious = true,
+            CanSeek = true,
+            UpdatedAt = updatedAt
+        };
 
     private static LinuxMprisSnapshot CreateSnapshot(string state, long positionMs) => new(
         PlaybackId: "playback-1",

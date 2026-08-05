@@ -144,6 +144,54 @@ public class TlsTransportTests
         await listenerTask;
     }
 
+    [Fact]
+    public async Task ConnectToPeerWithIdentityAsync_RejectsUnexpectedExpectedDeviceBeforeRegistration()
+    {
+        var serverIdentity = new IdentityManager();
+        var clientIdentity = new IdentityManager();
+        serverIdentity.EnsureIdentityInitialized();
+        clientIdentity.EnsureIdentityInitialized();
+
+        var serverTrust = CreateTrustStoreWithTrustedPeer(clientIdentity);
+        var clientTrust = CreateTrustStoreWithTrustedPeer(serverIdentity);
+        var securityEventLog = new RecordingSecurityEventLog();
+        using var server = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            serverIdentity,
+            serverTrust,
+            listenPort: 0);
+        using var client = new TlsTransport(
+            NullLogger<TlsTransport>.Instance,
+            clientIdentity,
+            clientTrust,
+            securityEventLog);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var listenerTask = server.StartListeningAsync(cancellation.Token);
+        var port = await WaitForListeningPortAsync(server, cancellation.Token);
+        const string expectedDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ConnectToPeerWithIdentityAsync(
+                "127.0.0.1",
+                port,
+                cancellation.Token,
+                expectedDeviceId));
+
+        Assert.Contains(serverIdentity.GetDeviceId(), exception.Message, StringComparison.Ordinal);
+        Assert.False(client.HasActiveSession(serverIdentity.GetDeviceId()));
+        var authFailure = Assert.Single(securityEventLog.Events);
+        Assert.Equal(SecurityEventTypes.AuthFailed, authFailure.EventType);
+        Assert.Equal(SecurityEventSeverity.Critical, authFailure.Severity);
+        Assert.Equal(SecurityEventOutcome.Failure, authFailure.Outcome);
+        Assert.Equal("AuthenticationFailed", authFailure.FailureReason);
+        Assert.Equal(serverIdentity.GetDeviceId(), authFailure.PeerDeviceId);
+        Assert.Equal(expectedDeviceId, authFailure.Details!["expectedDeviceId"]);
+        Assert.Equal(serverIdentity.GetDeviceId(), authFailure.Details["authenticatedDeviceId"]);
+        Assert.Equal($"127.0.0.1:{port}", authFailure.Details["endpoint"]);
+        cancellation.Cancel();
+        await listenerTask;
+    }
+
     private static InMemoryTrustStore CreateTrustStoreWithTrustedPeer(IdentityManager peerIdentity)
     {
         var trustStore = new InMemoryTrustStore();
@@ -199,6 +247,20 @@ public class TlsTransportTests
         {
             await Task.Delay(10, cancellationToken);
         }
+    }
+
+    private sealed class RecordingSecurityEventLog : ISecurityEventLog
+    {
+        public List<SecurityEventRecord> Events { get; } = [];
+
+        public Task LogEventAsync(SecurityEventRecord securityEvent)
+        {
+            Events.Add(securityEvent);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<SecurityEventRecord>> QueryEventsAsync(SecurityEventQuery query) =>
+            Task.FromResult<IReadOnlyList<SecurityEventRecord>>(Events);
     }
 
     private sealed class InMemoryTrustStore : ITrustStore

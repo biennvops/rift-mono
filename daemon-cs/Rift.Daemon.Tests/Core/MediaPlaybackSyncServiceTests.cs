@@ -555,7 +555,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-peer");
 
         public bool HasActiveSession(string peerDeviceId) => true;

@@ -184,7 +184,11 @@ public interface ITransport
     /// returns the authenticated peer device ID derived from the TLS-bound
     /// Ed25519 identity after session bootstrap completes.
     /// </summary>
-    Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken);
+    Task<string> ConnectToPeerWithIdentityAsync(
+        string host,
+        int port,
+        CancellationToken cancellationToken,
+        string? expectedDeviceId = null);
 
     /// <summary>
     /// Returns <see langword="true"/> when an authenticated session already exists

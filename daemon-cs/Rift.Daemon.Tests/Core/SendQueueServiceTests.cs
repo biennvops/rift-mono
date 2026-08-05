@@ -709,7 +709,7 @@ public sealed class SendQueueServiceTests
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) => throw new NotSupportedException();
         public bool HasActiveSession(string peerDeviceId) => false;
         public bool HasProtectedSession(string peerDeviceId) => false;
         public void RefreshSessionAuthorization(string peerDeviceId) { }

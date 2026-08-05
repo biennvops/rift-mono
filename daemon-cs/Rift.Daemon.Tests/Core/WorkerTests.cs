@@ -269,7 +269,9 @@ public sealed class WorkerTests
         await WaitUntilAsync(() => transport.ConnectAttempts.Count > 0);
 
         Assert.Contains(transport.ConnectAttempts, attempt =>
-            attempt.Host == "192.168.2.68" && attempt.Port == 9140);
+            attempt.Host == "192.168.2.68" &&
+            attempt.Port == 9140 &&
+            attempt.ExpectedDeviceId == peerDeviceId);
         Assert.True(transport.HasActiveSession(peerDeviceId));
 
         await worker.StopAsync(CancellationToken.None);
@@ -462,7 +464,7 @@ public sealed class WorkerTests
         private readonly ConcurrentDictionary<string, bool> _activeSessions = new(StringComparer.Ordinal);
 
         public ConcurrentBag<SentMessage> SentMessages { get; } = [];
-        public ConcurrentBag<(string Host, int Port)> ConnectAttempts { get; } = [];
+        public ConcurrentBag<(string Host, int Port, string? ExpectedDeviceId)> ConnectAttempts { get; } = [];
         public string ConnectedDeviceId { get; set; } = "rift-test-peer";
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.Delay(Timeout.Infinite, cancellationToken);
@@ -472,9 +474,9 @@ public sealed class WorkerTests
             await ConnectToPeerWithIdentityAsync(host, port, cancellationToken);
         }
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null)
         {
-            ConnectAttempts.Add((host, port));
+            ConnectAttempts.Add((host, port, expectedDeviceId));
             _activeSessions[ConnectedDeviceId] = true;
             return Task.FromResult(ConnectedDeviceId);
         }
@@ -548,7 +550,7 @@ public sealed class WorkerTests
 
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-test-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken) => Task.CompletedTask;
