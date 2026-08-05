@@ -22,6 +22,7 @@ class LocalEvent {
     required this.subtitle,
     required this.time,
     required this.identityKey,
+    required this.reconciliationKey,
     this.eventId,
     this.peerDeviceId,
   });
@@ -31,6 +32,7 @@ class LocalEvent {
   final String subtitle;
   final DateTime time;
   final String identityKey;
+  final String reconciliationKey;
   final String? eventId;
   final String? peerDeviceId;
 }
@@ -46,8 +48,14 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   LocalEventsNotifier(this._client) {
     _subs.addAll([
-      _client.onSecurityEvent.listen(_onSecurityEvent),
+      _client.onTrustChanged.listen(_onTrustChanged),
+      _client.onPairingRequest.listen(_onPairingRequest),
+      _client.onPairingComplete.listen(_onPairingComplete),
+      _client.onClipboardOffer.listen(_onClipboardOffer),
+      _client.onClipboardExpired.listen(_onClipboardExpired),
       _client.onFileTransferCompleted.listen(_onFileCompleted),
+      _client.onFileTransferFailed.listen(_onFileFailed),
+      _client.onSecurityEvent.listen(_onSecurityEvent),
       _client.onConnectionChanged.listen((isConnected) {
         if (isConnected) unawaited(_loadHistory());
       }),
@@ -66,7 +74,11 @@ class LocalEventsNotifier extends ChangeNotifier {
 
   void _add(LocalEvent event, {bool unread = true}) {
     _events.removeWhere(
-      (existing) => existing.identityKey == event.identityKey,
+      (existing) =>
+          existing.identityKey == event.identityKey ||
+          (existing.reconciliationKey == event.reconciliationKey &&
+              existing.time.difference(event.time).abs() <=
+                  const Duration(seconds: 5)),
     );
     _events.insert(0, event);
     if (_events.length > _maxEvents) _events.removeLast();
@@ -84,6 +96,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           'connection.lost',
           'trust.transitioned',
           'pairing.attempted',
+          'pairing.completed',
           'clipboard.offered',
           'clipboard.expired',
           'file_transfer.rejected',
@@ -99,10 +112,13 @@ class LocalEventsNotifier extends ChangeNotifier {
           .whereType<LocalEvent>()
           .toList(growable: false);
       final historyKeys = historyEvents.map((event) => event.identityKey);
+      final historyReconciliationKeys =
+          historyEvents.map((event) => event.reconciliationKey).toSet();
       _events.removeWhere(
         (event) =>
             _historyEvents.contains(event) ||
-            historyKeys.contains(event.identityKey),
+            historyKeys.contains(event.identityKey) ||
+            historyReconciliationKeys.contains(event.reconciliationKey),
       );
       _historyEvents
         ..clear()
@@ -134,7 +150,9 @@ class LocalEventsNotifier extends ChangeNotifier {
       eventType: type,
       peerDeviceId: peerDeviceId,
       subject: record['details']?.toString(),
+      timestamp: record['timestamp']?.toString(),
     );
+    final reconciliationKey = _buildReconciliationKey(type, peerDeviceId);
 
     return switch (type) {
       'connection.established' => LocalEvent(
@@ -143,6 +161,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -152,6 +171,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -161,6 +181,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -170,6 +191,17 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
+          eventId: eventId,
+          peerDeviceId: peerDeviceId,
+        ),
+      'pairing.completed' => LocalEvent(
+          kind: LocalEventKind.deviceTrusted,
+          title: 'Pairing completed',
+          subtitle: peer,
+          time: time,
+          identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -179,6 +211,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer.isEmpty ? 'Incoming clipboard offer' : 'From $peer',
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -188,6 +221,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -197,6 +231,7 @@ class LocalEventsNotifier extends ChangeNotifier {
           subtitle: peer,
           time: time,
           identityKey: identityKey,
+          reconciliationKey: reconciliationKey,
           eventId: eventId,
           peerDeviceId: peerDeviceId,
         ),
@@ -207,6 +242,134 @@ class LocalEventsNotifier extends ChangeNotifier {
   void _onSecurityEvent(Map<String, dynamic> record) {
     final event = _fromSecurityEvent(record);
     if (event != null) _add(event);
+  }
+
+  void _onTrustChanged(Map<String, dynamic> e) {
+    final deviceId = e['deviceId']?.toString() ?? '';
+    final newState = e['newState']?.toString() ?? '';
+    final name = e['displayName']?.toString() ?? _shortId(deviceId);
+    final eventId = e['eventId']?.toString();
+    late final LocalEventKind kind;
+    late final String title;
+    switch (newState) {
+      case 'trusted':
+        kind = LocalEventKind.deviceTrusted;
+        title = 'Device trusted';
+      case 'discovered':
+        kind = LocalEventKind.deviceConnected;
+        title = 'Device discovered';
+      case 'blocked':
+        kind = LocalEventKind.deviceDisconnected;
+        title = 'Device blocked';
+      default:
+        return;
+    }
+    _add(LocalEvent(
+      kind: kind,
+      title: title,
+      subtitle: name,
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'trust.transitioned',
+        peerDeviceId: deviceId,
+        subject: newState,
+      ),
+      reconciliationKey: _buildReconciliationKey(
+        'trust.transitioned',
+        deviceId,
+      ),
+      eventId: eventId,
+      peerDeviceId: deviceId,
+    ));
+  }
+
+  void _onPairingRequest(Map<String, dynamic> e) {
+    final deviceId = e['deviceId']?.toString() ?? '';
+    final eventId = e['eventId']?.toString();
+    _add(LocalEvent(
+      kind: LocalEventKind.devicePairingRequest,
+      title: 'Pairing request',
+      subtitle: e['displayName']?.toString() ?? _shortId(deviceId),
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'pairing.attempted',
+        peerDeviceId: deviceId,
+        subject: e['fingerprint']?.toString(),
+      ),
+      reconciliationKey: _buildReconciliationKey(
+        'pairing.attempted',
+        deviceId,
+      ),
+      eventId: eventId,
+      peerDeviceId: deviceId,
+    ));
+  }
+
+  void _onPairingComplete(Map<String, dynamic> e) {
+    final deviceId = e['deviceId']?.toString() ?? '';
+    final eventId = e['eventId']?.toString();
+    _add(LocalEvent(
+      kind: LocalEventKind.deviceTrusted,
+      title: 'Pairing completed',
+      subtitle: e['displayName']?.toString() ?? _shortId(deviceId),
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'pairing.completed',
+        peerDeviceId: deviceId,
+      ),
+      reconciliationKey: _buildReconciliationKey(
+        'pairing.completed',
+        deviceId,
+      ),
+      eventId: eventId,
+      peerDeviceId: deviceId,
+    ));
+  }
+
+  void _onClipboardOffer(Map<String, dynamic> e) {
+    final deviceId = e['sourceDeviceId']?.toString() ?? '';
+    final contentType = e['contentType']?.toString() ?? 'content';
+    final label = contentType.startsWith('text/') ? 'Text' : 'File';
+    final eventId = e['eventId']?.toString();
+    _add(LocalEvent(
+      kind: LocalEventKind.clipboardReceived,
+      title: 'Clipboard received',
+      subtitle: '$label from ${_shortId(deviceId)}',
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'clipboard.offered',
+        peerDeviceId: deviceId,
+        subject: e['offerId']?.toString() ?? contentType,
+      ),
+      reconciliationKey: _buildReconciliationKey(
+        'clipboard.offered',
+        deviceId,
+      ),
+      eventId: eventId,
+      peerDeviceId: deviceId,
+    ));
+  }
+
+  void _onClipboardExpired(Map<String, dynamic> e) {
+    final offerId = e['offerId']?.toString() ?? '';
+    final eventId = e['eventId']?.toString();
+    _add(LocalEvent(
+      kind: LocalEventKind.clipboardExpired,
+      title: 'Clipboard offer expired',
+      subtitle: 'Offer ID: ${_shortId(offerId)}',
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'clipboard.expired',
+        subject: offerId,
+      ),
+      reconciliationKey: _buildReconciliationKey('clipboard.expired', null),
+      eventId: eventId,
+    ));
   }
 
   void _onFileCompleted(Map<String, dynamic> e) {
@@ -224,6 +387,34 @@ class LocalEventsNotifier extends ChangeNotifier {
         peerDeviceId: peerDeviceId,
         subject: e['transferId']?.toString() ?? fileName,
       ),
+      reconciliationKey: _buildReconciliationKey(
+        'file_transfer.completed',
+        peerDeviceId,
+      ),
+      eventId: eventId,
+      peerDeviceId: peerDeviceId,
+    ));
+  }
+
+  void _onFileFailed(Map<String, dynamic> e) {
+    final fileName = e['fileName']?.toString() ?? 'file';
+    final peerDeviceId = e['peerDeviceId']?.toString() ?? '';
+    final eventId = e['eventId']?.toString();
+    _add(LocalEvent(
+      kind: LocalEventKind.fileFailed,
+      title: 'File transfer failed',
+      subtitle: fileName,
+      time: DateTime.now(),
+      identityKey: _buildIdentityKey(
+        eventId: eventId,
+        eventType: 'file_transfer.failed',
+        peerDeviceId: peerDeviceId,
+        subject: e['transferId']?.toString() ?? fileName,
+      ),
+      reconciliationKey: _buildReconciliationKey(
+        'file_transfer.rejected',
+        peerDeviceId,
+      ),
       eventId: eventId,
       peerDeviceId: peerDeviceId,
     ));
@@ -234,12 +425,18 @@ class LocalEventsNotifier extends ChangeNotifier {
     required String eventType,
     String? peerDeviceId,
     String? subject,
+    String? timestamp,
   }) {
     final normalizedEventId = eventId?.trim();
     if (normalizedEventId != null && normalizedEventId.isNotEmpty) {
       return 'event:$normalizedEventId';
     }
-    return '$eventType|${peerDeviceId ?? ''}|${subject ?? ''}';
+    return '$eventType|${peerDeviceId ?? ''}|${subject ?? ''}|${timestamp ?? ''}';
+  }
+
+  String _buildReconciliationKey(String eventType, String? peerDeviceId) {
+    if (eventType == 'clipboard.expired') return eventType;
+    return '$eventType|${peerDeviceId ?? ''}';
   }
 
   String _shortId(String id) {

@@ -79,6 +79,48 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 }
 
+class DirectActivityClient extends FakeJsonRpcRiftClient {
+  final trustChanged = StreamController<Map<String, dynamic>>.broadcast();
+  final pairingRequest = StreamController<Map<String, dynamic>>.broadcast();
+  final pairingComplete = StreamController<Map<String, dynamic>>.broadcast();
+  final clipboardOffer = StreamController<Map<String, dynamic>>.broadcast();
+  final clipboardExpired = StreamController<Map<String, dynamic>>.broadcast();
+  final fileTransferFailed = StreamController<Map<String, dynamic>>.broadcast();
+
+  @override
+  Stream<Map<String, dynamic>> get onSecurityEvent => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onTrustChanged => trustChanged.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onPairingRequest => pairingRequest.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onPairingComplete => pairingComplete.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardOffer => clipboardOffer.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onClipboardExpired =>
+      clipboardExpired.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onFileTransferFailed =>
+      fileTransferFailed.stream;
+
+  Future<void> closeDirectControllers() async {
+    await trustChanged.close();
+    await pairingRequest.close();
+    await pairingComplete.close();
+    await clipboardOffer.close();
+    await clipboardExpired.close();
+    await fileTransferFailed.close();
+    await _connectionChangedController.close();
+  }
+}
+
 void main() {
   test('LocalEventsNotifier seeds the feed from event history', () async {
     final client = FakeJsonRpcRiftClient()
@@ -101,6 +143,27 @@ void main() {
     expect(notifier.events, hasLength(1));
     expect(notifier.events.single.title, 'Clipboard received');
     expect(notifier.unreadCount, 0);
+  });
+
+  test('LocalEventsNotifier loads completed pairing history', () async {
+    final client = FakeJsonRpcRiftClient()
+      ..events = [
+        {
+          'eventId': 'evt-pairing-complete',
+          'eventType': 'pairing.completed',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-complete',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client._connectionChangedController.close);
+
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events.single.title, 'Pairing completed');
   });
 
   test('LocalEventsNotifier retries history after connecting', () async {
@@ -127,6 +190,99 @@ void main() {
 
     expect(notifier.events, hasLength(1));
     expect(notifier.events.single.title, 'Clipboard received');
+  });
+
+  test('LocalEventsNotifier handles C# direct live notifications', () async {
+    final client = DirectActivityClient()..connected = false;
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    client.trustChanged.add({
+      'deviceId': 'rift-peer-trust',
+      'newState': 'trusted',
+    });
+    client.pairingRequest.add({
+      'deviceId': 'rift-peer-request',
+      'displayName': 'Request Peer',
+      'fingerprint': 'fingerprint-request',
+    });
+    client.pairingComplete.add({
+      'deviceId': 'rift-peer-complete',
+      'displayName': 'Complete Peer',
+    });
+    client.clipboardOffer.add({
+      'offerId': 'offer-live',
+      'sourceDeviceId': 'rift-peer-clipboard',
+      'contentType': 'text/plain',
+    });
+    client.clipboardExpired.add({'offerId': 'offer-expired'});
+    client.fileTransferFailed.add({
+      'transferId': 'transfer-failed',
+      'peerDeviceId': 'rift-peer-file',
+      'fileName': 'failed.txt',
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      notifier.events.map((event) => event.title),
+      containsAll([
+        'Device trusted',
+        'Pairing request',
+        'Pairing completed',
+        'Clipboard received',
+        'Clipboard offer expired',
+        'File transfer failed',
+      ]),
+    );
+  });
+
+  test('LocalEventsNotifier reconciles direct live events with history',
+      () async {
+    final client = DirectActivityClient()
+      ..events = [
+        {
+          'eventId': 'evt-existing',
+          'eventType': 'connection.established',
+          'severity': 'info',
+          'peerDeviceId': 'rift-peer-existing',
+          'timestamp': '2026-06-23T12:00:00Z',
+          'outcome': 'success',
+        },
+      ];
+    final notifier = LocalEventsNotifier(client);
+    addTearDown(notifier.dispose);
+    addTearDown(client.closeDirectControllers);
+
+    await Future<void>.delayed(Duration.zero);
+    client.clipboardOffer.add({
+      'offerId': 'offer-reconnect',
+      'sourceDeviceId': 'rift-peer-clipboard',
+      'contentType': 'text/plain',
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(notifier.events, hasLength(2));
+
+    client.events = [
+      ...client.events,
+      {
+        'eventId': 'evt-clipboard-reconnect',
+        'eventType': 'clipboard.offered',
+        'severity': 'info',
+        'peerDeviceId': 'rift-peer-clipboard',
+        'timestamp': '2026-06-23T12:01:00Z',
+        'outcome': 'success',
+      },
+    ];
+    await client.emitConnectionChanged(false);
+    await client.emitConnectionChanged(true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifier.events, hasLength(2));
+    expect(
+      notifier.events.where((event) => event.title == 'Clipboard received'),
+      hasLength(1),
+    );
   });
 
   test('LocalEventsNotifier replaces history after reconnecting', () async {
