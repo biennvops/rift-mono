@@ -184,7 +184,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
                 expiresInMs = PairingExpiryMs,
-                displayName = _identityManager.GetDisplayName()
+                displayName = _identityManager.GetDisplayName(),
+                platform = DaemonInfoService.GetLocalPlatform()
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
@@ -591,10 +592,13 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
                 ? NormalizeRemoteDisplayName(displayNameElement.GetString())
                 : null;
-            if (!string.IsNullOrWhiteSpace(displayName))
+            var platform = payload.TryGetProperty("platform", out var platformElement) && platformElement.ValueKind == JsonValueKind.String
+                ? NormalizeRemotePlatform(platformElement.GetString())
+                : null;
+            if (!string.IsNullOrWhiteSpace(displayName) || platform is not null)
             {
-                peer.DisplayName = displayName;
-                peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
+                peer.DisplayName = displayName ?? peer.DisplayName;
+                peer.Platform = platform ?? DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
                 _trustStore.SavePeer(peer);
             }
 
@@ -647,6 +651,11 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             ? displayName
             : displayName[..MaxRemoteDisplayNameLength];
     }
+
+    private static string? NormalizeRemotePlatform(string? platform) =>
+        platform is "android" or "ios" or "windows" or "macos" or "linux" or "unknown"
+            ? platform
+            : null;
 
     private async Task HandlePairingCompleteAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
     {

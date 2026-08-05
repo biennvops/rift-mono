@@ -547,6 +547,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             {
                 throw new InvalidOperationException($"{expectedType} identityProof verification failed.");
             }
+
+            PersistVerifiedPeerMetadata(certificateDeviceId, payload, expectedType);
         }
         catch (KeyNotFoundException ex)
         {
@@ -560,6 +562,59 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             throw new InvalidOperationException($"{expectedType} identityProof was not valid lowercase hexadecimal.", ex);
         }
+    }
+
+    private void PersistVerifiedPeerMetadata(string deviceId, JsonElement payload, string messageType)
+    {
+        string? displayName = null;
+        if (payload.TryGetProperty("displayName", out var displayNameElement))
+        {
+            if (displayNameElement.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"{messageType} displayName must be a string.");
+            }
+
+            var rawDisplayName = displayNameElement.GetString();
+            var trimmedDisplayName = rawDisplayName?.Trim();
+            if (string.IsNullOrEmpty(trimmedDisplayName) ||
+                trimmedDisplayName.Length > 128 ||
+                trimmedDisplayName.Any(char.IsControl))
+            {
+                throw new InvalidOperationException($"{messageType} contained an invalid displayName.");
+            }
+
+            displayName = trimmedDisplayName;
+        }
+
+        string? platform = null;
+        if (payload.TryGetProperty("platform", out var platformElement))
+        {
+            if (platformElement.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"{messageType} platform must be a string.");
+            }
+
+            platform = platformElement.GetString();
+            if (platform is not ("android" or "ios" or "windows" or "macos" or "linux" or "unknown"))
+            {
+                throw new InvalidOperationException($"{messageType} contained an invalid platform.");
+            }
+        }
+
+        if (displayName is null && platform is null)
+        {
+            return;
+        }
+
+        var peer = _trustStore?.GetPeer(deviceId);
+        if (peer is null)
+        {
+            return;
+        }
+
+        peer.DisplayName = displayName ?? peer.DisplayName;
+        peer.Platform = platform ?? peer.Platform;
+        _trustStore!.SavePeer(peer);
     }
 
     internal async Task ValidatePeerBeforeHandshakeAsync(X509Certificate2 remoteCert, string deviceId)

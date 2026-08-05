@@ -18,6 +18,14 @@ import '../core/rpc_utils.dart';
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
   static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
+  static const Set<String> _validPlatforms = {
+    'android',
+    'ios',
+    'windows',
+    'macos',
+    'linux',
+    'unknown',
+  };
 
   final TrustStore trustStore;
   final SessionManager sessionManager;
@@ -162,6 +170,7 @@ class PairingManager {
         'payload': {
           'expiresInMs': _pairingTimeoutSeconds * 1000,
           'displayName': identityManager.displayName,
+          'platform': _localPlatform(),
         },
       });
       RiftLog.debug('[Pairing] pairing.start sent to $peerDeviceId');
@@ -520,8 +529,23 @@ class PairingManager {
           timeout: Duration(milliseconds: clampedExpiry),
         );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final displayName =
-            payload['displayName'] as String? ?? 'Unknown Device';
+        final displayName = _normalizeDisplayName(payload['displayName']);
+        final platform = _normalizePlatform(payload['platform']);
+        if (displayName != null || platform != null) {
+          await trustStore.upsertPeer(
+            PeerRecord(
+              deviceId: record.deviceId,
+              displayName: displayName ?? record.displayName,
+              platform: platform ?? record.platform,
+              certDer: record.certDer,
+              state: record.state,
+              pairedAt: record.pairedAt,
+              updatedAt: DateTime.now().toUtc(),
+              lastSeenAt: record.lastSeenAt,
+              trustedEndpoints: record.trustedEndpoints,
+            ),
+          );
+        }
 
         // Emit event to UI to show popup
         onIpcEvent({
@@ -530,7 +554,7 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
-            'displayName': displayName,
+            'displayName': displayName ?? record.displayName ?? 'Unknown Device',
             'expiresInMs': clampedExpiry,
           },
         });
@@ -699,6 +723,27 @@ class PairingManager {
     }
   }
 
+  static String _localPlatform() {
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isMacOS) return 'macos';
+    if (Platform.isLinux) return 'linux';
+    return 'unknown';
+  }
+
+  static String? _normalizeDisplayName(Object? value) {
+    if (value is! String) return null;
+    final normalized = value
+        .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
+        .trim();
+    if (normalized.isEmpty) return null;
+    return normalized.length <= 128 ? normalized : normalized.substring(0, 128);
+  }
+
+  static String? _normalizePlatform(Object? value) =>
+      value is String && _validPlatforms.contains(value) ? value : null;
+
   Future<void> _ensurePeerInTrustStore(
     String peerDeviceId,
     Uint8List? certDer, {
@@ -733,6 +778,7 @@ class PairingManager {
         final replacement = PeerRecord(
           deviceId: peerDeviceId,
           displayName: record.displayName,
+          platform: record.platform,
           certDer: certDer,
           state: TrustState.discovered,
           pairedAt: null,
@@ -747,6 +793,7 @@ class PairingManager {
       final updatedRecord = PeerRecord(
         deviceId: record.deviceId,
         displayName: record.displayName,
+        platform: record.platform,
         certDer: certDer,
         state: record.state,
         pairedAt: record.pairedAt,

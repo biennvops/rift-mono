@@ -216,7 +216,11 @@ void main() {
       () async {
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.start',
-          'payload': {'expiresInMs': 120000, 'displayName': 'Peer Device'},
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Peer Device',
+            'platform': 'ios',
+          },
         });
 
         // Wait for microtask for stream to process
@@ -224,6 +228,8 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.pairingPending);
+        expect(peer.displayName, 'Peer Device');
+        expect(peer.platform, 'ios');
 
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
@@ -483,6 +489,11 @@ void main() {
           'method': 'rift.startPairing',
           'params': {'deviceId': 'rift-peer'},
         });
+
+        final pairingStart = sessionManager.sentMessages.single;
+        expect(pairingStart['type'], 'pairing.start');
+        expect(pairingStart['payload']['displayName'], 'Android Phone 01');
+        expect(pairingStart['payload']['platform'], isA<String>());
 
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.approve',

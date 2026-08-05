@@ -165,6 +165,8 @@ void main() {
       expect(transport.sentMessages.single['messageId'], isNotNull);
       expect(transport.sentMessages.single['payload']['supportedVersions'], ['0.1-draft']);
       expect(transport.sentMessages.single['payload']['implementationId'], 'riftd-dart/0.1.0');
+      expect(transport.sentMessages.single['payload']['displayName'], 'Android Phone 01');
+      expect(transport.sentMessages.single['payload']['platform'], isA<String>());
       expect(transport.sentMessages.single['payload']['capabilities'], isA<List>());
       expect(transport.sentMessages.single['payload']['bindingType'], 'app-nonce');
       expect(

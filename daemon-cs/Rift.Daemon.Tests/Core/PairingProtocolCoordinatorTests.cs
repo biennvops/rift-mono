@@ -75,7 +75,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
         await _coordinator.NotifyLocalPairingStartedAsync("rift-peer-start");
 
         Assert.Contains(_transport.ConnectionAttempts, attempt => attempt.Host == "192.168.1.50" && attempt.Port == 9140);
-        Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
+        var pairingStart = Assert.Single(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
+        Assert.Equal(_identityManager.GetDisplayName(), pairingStart.Payload.GetProperty("displayName").GetString());
+        Assert.Contains(
+            pairingStart.Payload.GetProperty("platform").GetString(),
+            new[] { "windows", "macos", "linux", "unknown" });
     }
 
     [Fact]

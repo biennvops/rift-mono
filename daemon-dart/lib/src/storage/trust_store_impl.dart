@@ -69,6 +69,7 @@ class TrustStoreImpl implements TrustStore {
       CREATE TABLE IF NOT EXISTS peers (
         device_id    TEXT PRIMARY KEY,
         display_name TEXT,
+        platform     TEXT,
         cert_der     BLOB NOT NULL,
         state        TEXT NOT NULL,
         paired_at    INTEGER,
@@ -148,6 +149,19 @@ class TrustStoreImpl implements TrustStore {
         }
       }
       _db!.execute("UPDATE config SET value = '4' WHERE key = 'schema_version'");
+      currentVersion = 4;
+    }
+
+    if (currentVersion < 5) {
+      try {
+        _db!.execute("ALTER TABLE peers ADD COLUMN platform TEXT;");
+      } on SqliteException catch (e) {
+        final msg = e.message.toLowerCase();
+        if (!msg.contains('duplicate column') && !msg.contains('already exists')) {
+          rethrow;
+        }
+      }
+      _db!.execute("UPDATE config SET value = '5' WHERE key = 'schema_version'");
     }
   }
 
@@ -158,6 +172,7 @@ class TrustStoreImpl implements TrustStore {
       INSERT INTO peers (
         device_id,
         display_name,
+        platform,
         cert_der,
         state,
         paired_at,
@@ -165,9 +180,10 @@ class TrustStoreImpl implements TrustStore {
         last_seen_at,
         trusted_endpoints_json
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(device_id) DO UPDATE SET
-        display_name = excluded.display_name,
+        display_name = COALESCE(excluded.display_name, peers.display_name),
+        platform = COALESCE(excluded.platform, peers.platform),
         cert_der = CASE
           WHEN peers.state IN ('trusted', 'blocked', 'revoked') THEN peers.cert_der
           ELSE excluded.cert_der
@@ -187,6 +203,7 @@ class TrustStoreImpl implements TrustStore {
       stmt.execute([
         record.deviceId,
         record.displayName,
+        record.platform,
         record.certDer,
         record.state.toJson(),
         record.pairedAt?.millisecondsSinceEpoch,
@@ -411,6 +428,7 @@ class TrustStoreImpl implements TrustStore {
     return PeerRecord(
       deviceId: row['device_id'] as String,
       displayName: row['display_name'] as String?,
+      platform: row['platform'] as String?,
       // Defensive copy (Immutable State rule in noiquy.md)
       certDer: Uint8List.fromList(row['cert_der'] as List<int>),
       state: TrustState.fromJson(row['state'] as String),

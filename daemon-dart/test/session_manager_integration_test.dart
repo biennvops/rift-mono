@@ -13,13 +13,19 @@ import 'dart:async';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 
 class FakeTrustStore implements TrustStore {
+  final Map<String, PeerRecord> peers = {};
+
   @override Future<void> initialize() async {}
-  @override Future<void> upsertPeer(PeerRecord record) async {}
-  @override Future<PeerRecord?> getPeer(String deviceId) async => null;
-  @override Future<List<PeerRecord>> getAllPeers() async => [];
-  @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
+  @override Future<void> upsertPeer(PeerRecord record) async {
+    peers[record.deviceId] = record.copy();
+  }
+  @override Future<PeerRecord?> getPeer(String deviceId) async => peers[deviceId]?.copy();
+  @override Future<List<PeerRecord>> getAllPeers() async => peers.values.map((peer) => peer.copy()).toList();
+  @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => peers.values.where((peer) => peer.state == state).map((peer) => peer.copy()).toList();
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
-  @override Future<void> deletePeer(String deviceId) async {}
+  @override Future<void> deletePeer(String deviceId) async {
+    peers.remove(deviceId);
+  }
   @override Future<void> updateLastSeen(String deviceId, DateTime lastSeenAt) async {}
   @override Future<void> appendSecurityEvent(SecurityEventRecord record) async {}
   @override Future<List<SecurityEventRecord>> querySecurityEvents(SecurityEventQuery query) async => [];
@@ -93,10 +99,16 @@ class FakeIdentityManager implements IdentityManager {
   final String _deviceId;
   final SimpleKeyPair _keyPair;
   final Uint8List _testCertDer;
+  final String _displayName;
   late final Uint8List _pubKey;
   late final Uint8List _privKey;
 
-  FakeIdentityManager(this._deviceId, this._keyPair, this._testCertDer);
+  FakeIdentityManager(
+    this._deviceId,
+    this._keyPair,
+    this._testCertDer,
+    this._displayName,
+  );
 
   Future<void> initKeys() async {
     _pubKey = Uint8List.fromList((await _keyPair.extractPublicKey()).bytes);
@@ -104,7 +116,7 @@ class FakeIdentityManager implements IdentityManager {
   }
 
   @override String get deviceId => _deviceId;
-  @override String get displayName => 'Android Phone 01';
+  @override String get displayName => _displayName;
   @override Uint8List getDeviceFingerprint() => Uint8List(32);
   @override Uint8List getEd25519PublicKey() => _pubKey;
   @override String get tlsCertificatePem => '';
@@ -134,6 +146,8 @@ void main() {
     late FakeTransport transport2;
     late SessionManager sessionManager1;
     late SessionManager sessionManager2;
+    late FakeTrustStore trustStore1;
+    late FakeTrustStore trustStore2;
 
     late Uint8List testCertDer1;
     late Uint8List pubKeyBytes1;
@@ -156,21 +170,33 @@ void main() {
       final pem2 = RiftCertBuilder.generateSelfSignedCert(ecKeyPair2, pubKeyBytes2, commonName: 'rift-device2');
       testCertDer2 = Uint8List.fromList(base64.decode(pem2.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty && !l.startsWith('-----')).join()));
 
-      final fm1 = FakeIdentityManager('rift-device1', edKeyPair1, testCertDer1);
+      final fm1 = FakeIdentityManager(
+        'rift-device1',
+        edKeyPair1,
+        testCertDer1,
+        'Device One',
+      );
       await fm1.initKeys();
-      final fm2 = FakeIdentityManager('rift-device2', edKeyPair2, testCertDer2);
+      final fm2 = FakeIdentityManager(
+        'rift-device2',
+        edKeyPair2,
+        testCertDer2,
+        'Device Two',
+      );
       await fm2.initKeys();
+      trustStore1 = FakeTrustStore();
+      trustStore2 = FakeTrustStore();
 
       sessionManager1 = SessionManager(
         transport1,
         fm1,
-        FakeTrustStore(),
+        trustStore1,
         peerAllowanceResolver: (_) async => true,
       );
       sessionManager2 = SessionManager(
         transport2,
         fm2,
-        FakeTrustStore(),
+        trustStore2,
         peerAllowanceResolver: (_) async => true,
       );
     });
@@ -198,6 +224,28 @@ void main() {
       );
     });
     
+    test('Unauthenticated session metadata is not persisted', () async {
+      transport1.registerPeerCert('rift-device2', testCertDer2);
+
+      await sessionManager1.sendSessionHello('rift-device2');
+      final helloMsg = Map<String, dynamic>.from(transport1.sentMessages.last);
+      final payload = Map<String, dynamic>.from(helloMsg['payload'] as Map)
+        ..['displayName'] = 'Spoofed Device'
+        ..['identityProof'] = List.filled(128, '0').join();
+      helloMsg['payload'] = payload;
+
+      transport2.simulateIncomingMessage(
+        'rift-device1',
+        testCertDer1,
+        pubKeyBytes1,
+        helloMsg,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(await trustStore2.getPeer('rift-device1'), isNull);
+      expect(transport2.isDisconnected, isTrue);
+    });
+
     test('Integration test for full session establishment and capability negotiation', () async {
       transport1.registerPeerCert('rift-device2', testCertDer2);
       
@@ -210,6 +258,8 @@ void main() {
       expect(helloMsg['messageId'], isNotNull);
       expect(helloMsg['payload']['bindingType'], 'app-nonce');
       expect(helloMsg['payload']['implementationId'], 'riftd-dart/0.1.0');
+      expect(helloMsg['payload']['displayName'], 'Device One');
+      expect(helloMsg['payload']['platform'], isA<String>());
       expect(helloMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(helloMsg['payload']['sessionNonce'] as String),
@@ -224,12 +274,25 @@ void main() {
       expect(acceptMsg['type'], 'session.accept');
       expect(acceptMsg['messageId'], isNotNull);
       expect(acceptMsg['payload']['bindingType'], 'app-nonce');
+      expect(acceptMsg['payload']['displayName'], 'Device Two');
+      expect(acceptMsg['payload']['platform'], isA<String>());
       expect(acceptMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(acceptMsg['payload']['sessionNonce'] as String),
         hasLength(32),
       );
       
+      expect((await trustStore2.getPeer('rift-device1'))?.displayName, 'Device One');
+
+      transport1.simulateIncomingMessage(
+        'rift-device2',
+        testCertDer2,
+        pubKeyBytes2,
+        acceptMsg,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect((await trustStore1.getPeer('rift-device2'))?.displayName, 'Device Two');
+
       // Discovery flow and session establish complete.
       expect(transport1.isDisconnected, isFalse);
     });

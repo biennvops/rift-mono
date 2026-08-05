@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
@@ -144,6 +145,15 @@ class SessionManager {
 
   final Future<bool> Function(String)? peerAllowanceResolver;
 
+  static const Set<String> _validPlatforms = {
+    'android',
+    'ios',
+    'windows',
+    'macos',
+    'linux',
+    'unknown',
+  };
+
   static const Set<String> _validBindingTypes = {
     'tls-exporter',
     'tls-unique',
@@ -182,6 +192,64 @@ class SessionManager {
       return null;
     }
     return bindingType;
+  }
+
+  String _localPlatform() {
+    if (Platform.isAndroid) return 'android';
+    if (Platform.isIOS) return 'ios';
+    if (Platform.isWindows) return 'windows';
+    if (Platform.isMacOS) return 'macos';
+    if (Platform.isLinux) return 'linux';
+    return 'unknown';
+  }
+
+  Future<void> _persistVerifiedDeviceMetadata(
+    String peerDeviceId,
+    Map<String, dynamic> payload,
+    Uint8List peerCertDer,
+  ) async {
+    String? displayName;
+    if (payload.containsKey('displayName')) {
+      final rawDisplayName = payload['displayName'];
+      if (rawDisplayName is! String) {
+        throw const FormatException('displayName must be a string');
+      }
+      final normalized = rawDisplayName.trim();
+      if (normalized.isEmpty ||
+          normalized.length > 128 ||
+          RegExp(r'[\x00-\x1F\x7F]').hasMatch(normalized)) {
+        throw const FormatException('displayName is invalid');
+      }
+      displayName = normalized;
+    }
+
+    String? platform;
+    if (payload.containsKey('platform')) {
+      final rawPlatform = payload['platform'];
+      if (rawPlatform is! String || !_validPlatforms.contains(rawPlatform)) {
+        throw const FormatException('platform is invalid');
+      }
+      platform = rawPlatform;
+    }
+
+    if (displayName == null && platform == null) {
+      return;
+    }
+
+    final existing = await _trustStore.getPeer(peerDeviceId);
+    await _trustStore.upsertPeer(
+      PeerRecord(
+        deviceId: peerDeviceId,
+        displayName: displayName ?? existing?.displayName,
+        platform: platform ?? existing?.platform,
+        certDer: existing?.certDer ?? peerCertDer,
+        state: existing?.state ?? TrustState.discovered,
+        pairedAt: existing?.pairedAt,
+        updatedAt: DateTime.now().toUtc(),
+        lastSeenAt: existing?.lastSeenAt,
+        trustedEndpoints: existing?.trustedEndpoints ?? const [],
+      ),
+    );
   }
 
   final Set<String> _requiredCapabilityNames = const {
@@ -428,6 +496,8 @@ class SessionManager {
         'deviceId': _identityManager.deviceId,
         'supportedVersions': ['0.1-draft'],
         'implementationId': 'riftd-dart/0.1.0',
+        'displayName': _identityManager.displayName,
+        'platform': _localPlatform(),
         'capabilities': _defaultCapabilities.map((c) => c.toJson()).toList(),
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
@@ -880,6 +950,17 @@ class SessionManager {
       );
     }
 
+    try {
+      await _persistVerifiedDeviceMetadata(
+        peerDeviceId,
+        payload,
+        msg.peerCertDer!,
+      );
+    } on FormatException catch (error) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', error.message);
+      return;
+    }
+
     RiftLog.debug(
       '[Session] Verified session.hello from $peerDeviceId; sending session.accept.',
     );
@@ -924,6 +1005,8 @@ class SessionManager {
         'selectedVersion': '0.1-draft',
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
+        'displayName': _identityManager.displayName,
+        'platform': _localPlatform(),
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
@@ -1097,6 +1180,17 @@ class SessionManager {
       throw SessionException(
         'SecurityError: Identity Misbinding / Invalid PoP Signature',
       );
+    }
+
+    try {
+      await _persistVerifiedDeviceMetadata(
+        peerDeviceId,
+        payload,
+        msg.peerCertDer!,
+      );
+    } on FormatException catch (error) {
+      await _rejectSession(peerDeviceId, 'ProtocolError', error.message);
+      return;
     }
 
     RiftLog.debug(

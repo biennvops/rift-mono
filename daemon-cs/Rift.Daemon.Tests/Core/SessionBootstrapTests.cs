@@ -158,7 +158,7 @@ public class SessionBootstrapTests
     [Fact]
     public async Task SendSessionHelloAsync_EmitsAppNonceHelloPayload()
     {
-        var identityManager = new IdentityManager();
+        var identityManager = new IdentityManager(displayNameProvider: () => "Office Desktop");
         identityManager.EnsureIdentityInitialized();
         var peerIdentity = new IdentityManager();
         peerIdentity.EnsureIdentityInitialized();
@@ -182,6 +182,10 @@ public class SessionBootstrapTests
         var sessionNonce = Convert.FromBase64String(messagePayload.GetProperty("sessionNonce").GetString()!);
         Assert.Equal(32, sessionNonce.Length);
         Assert.Equal("riftd-cs/0.1.0", messagePayload.GetProperty("implementationId").GetString());
+        Assert.Equal("Office Desktop", messagePayload.GetProperty("displayName").GetString());
+        Assert.Contains(
+            messagePayload.GetProperty("platform").GetString(),
+            new[] { "windows", "macos", "linux", "unknown" });
         Assert.Contains(
             messagePayload.GetProperty("supportedVersions").EnumerateArray().Select(element => element.GetString()),
             version => version == "0.1-draft");
@@ -191,7 +195,7 @@ public class SessionBootstrapTests
     [Fact]
     public async Task SendSessionAcceptAsync_EmitsAppNonceAcceptPayload()
     {
-        var identityManager = new IdentityManager();
+        var identityManager = new IdentityManager(displayNameProvider: () => "Office Desktop");
         identityManager.EnsureIdentityInitialized();
         var peerIdentity = new IdentityManager();
         peerIdentity.EnsureIdentityInitialized();
@@ -211,6 +215,10 @@ public class SessionBootstrapTests
         Assert.Equal(identityManager.GetDeviceId(), messagePayload.GetProperty("deviceId").GetString());
         Assert.Equal("0.1-draft", messagePayload.GetProperty("selectedVersion").GetString());
         Assert.True(messagePayload.GetProperty("identityVerified").GetBoolean());
+        Assert.Equal("Office Desktop", messagePayload.GetProperty("displayName").GetString());
+        Assert.Contains(
+            messagePayload.GetProperty("platform").GetString(),
+            new[] { "windows", "macos", "linux", "unknown" });
         Assert.Equal("app-nonce", messagePayload.GetProperty("bindingType").GetString());
 
         var sessionNonce = Convert.FromBase64String(messagePayload.GetProperty("sessionNonce").GetString()!);

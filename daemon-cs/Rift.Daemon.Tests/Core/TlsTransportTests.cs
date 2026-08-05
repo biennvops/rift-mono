@@ -27,8 +27,8 @@ public class TlsTransportTests
     [Fact]
     public async Task CSharpPeers_EstablishProtectedSessionAndExchangeMessagesBidirectionally()
     {
-        var serverIdentity = new IdentityManager();
-        var clientIdentity = new IdentityManager();
+        var serverIdentity = new IdentityManager(displayNameProvider: () => "Server Workstation");
+        var clientIdentity = new IdentityManager(displayNameProvider: () => "Client Laptop");
         serverIdentity.EnsureIdentityInitialized();
         clientIdentity.EnsureIdentityInitialized();
 
@@ -61,6 +61,10 @@ public class TlsTransportTests
         Assert.Equal(serverIdentity.GetDeviceId(), connectedDeviceId);
         Assert.True(server.HasProtectedSession(clientIdentity.GetDeviceId()));
         Assert.True(client.HasProtectedSession(serverIdentity.GetDeviceId()));
+        Assert.Equal("Client Laptop", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
+        Assert.Equal("Server Workstation", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.DisplayName);
+        Assert.NotEqual("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
+        Assert.NotEqual("unknown", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.Platform);
         Assert.False(server.GetPeerSessionEndpoint(clientIdentity.GetDeviceId())!.IsInitiator);
         Assert.True(client.GetPeerSessionEndpoint(serverIdentity.GetDeviceId())!.IsInitiator);
 
