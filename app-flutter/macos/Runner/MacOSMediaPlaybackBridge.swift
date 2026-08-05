@@ -7,6 +7,7 @@ import MediaPlayer
 final class MacOSMediaPlaybackBridge: NSObject, FlutterStreamHandler {
   private static let methodChannelName = "rift/macos/media_playback"
   private static let eventChannelName = "rift/macos/media_playback_events"
+  private static let remoteContentIdentifierPrefix = "rift.remote:"
 
   private let mediaRemote = MediaRemoteController()
   private let workQueue = DispatchQueue(label: "dev.rift.macos.mediaPlayback")
@@ -156,12 +157,19 @@ final class MacOSMediaPlaybackBridge: NSObject, FlutterStreamHandler {
   }
 
   private func clearRemotePlayback() {
+    let infoCenter = MPNowPlayingInfoCenter.default()
+    let contentIdentifier = infoCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyExternalContentIdentifier] as? String
+    let ownsNowPlayingEntry =
+      contentIdentifier?.hasPrefix(Self.remoteContentIdentifierPrefix) == true
+
     currentRemoteSourceDeviceId = nil
     currentRemotePlaybackId = nil
     currentRemotePlaybackState = nil
     currentRemoteNowPlayingInfo = nil
-    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-    MPNowPlayingInfoCenter.default().playbackState = .stopped
+    if ownsNowPlayingEntry {
+      infoCenter.nowPlayingInfo = nil
+      infoCenter.playbackState = .stopped
+    }
     updateRemoteCommandAvailability([:])
   }
 
@@ -207,9 +215,7 @@ final class MacOSMediaPlaybackBridge: NSObject, FlutterStreamHandler {
         guard let self else {
           return .noSuchContent
         }
-        return self.dispatchRemotePlaybackAction(
-          self.currentRemotePlaybackState == "playing" ? "pause" : "play"
-        )
+        return self.dispatchRemotePlaybackAction("togglePlayPause")
       }
     )
     remoteCommandTargets.append(

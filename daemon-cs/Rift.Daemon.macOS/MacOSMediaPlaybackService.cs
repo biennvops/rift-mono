@@ -81,10 +81,9 @@ internal sealed class MacOSMediaPlaybackService(
             try
             {
                 var pollResult = await TryGetSnapshotAsync(stoppingToken).ConfigureAwait(false);
-                if (!pollResult.IsRiftRemotePlayback)
-                {
-                    await PublishIfChangedAsync(pollResult.Snapshot, stoppingToken).ConfigureAwait(false);
-                }
+                await PublishIfChangedAsync(
+                    pollResult.IsRiftRemotePlayback ? null : pollResult.Snapshot,
+                    stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
