@@ -124,7 +124,13 @@ separately from clipboard/file continuity.
 4. Start a macOS media source and confirm Linux observes its playback state.
 5. Where a desktop control client is available, issue pause/resume/seek or
    next/previous actions in both directions and verify the originating player.
-6. Restart one daemon and confirm the active playback state is replayed without
+6. On Linux, use an MPRIS client such as `playerctl` to verify the recipient:
+   `playerctl -l`, `playerctl -p rift metadata`, and `playerctl -p rift status`
+   should show the Rift-owned remote player. Issue pause/play, seek, next, and
+   previous where the source advertises those capabilities and verify the
+   originating device changes. The local Linux player list must not contain a
+   duplicate Rift-originated source record.
+7. Restart one daemon and confirm the active playback state is replayed without
    creating duplicate records.
 
 ### S10 — Notification sync (if enabled)

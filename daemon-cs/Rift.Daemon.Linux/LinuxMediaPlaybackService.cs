@@ -5,7 +5,8 @@ namespace Rift.Daemon.Linux;
 internal sealed class LinuxMediaPlaybackService(
     IServiceProvider serviceProvider,
     ILinuxMprisClient mprisClient,
-    ILogger<LinuxMediaPlaybackService> logger) : ILocalMediaPlaybackActionHandler
+    ILogger<LinuxMediaPlaybackService> logger,
+    ILinuxMprisRemotePlayer? remotePlayer = null) : ILocalMediaPlaybackActionHandler
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
 
@@ -168,31 +169,87 @@ internal sealed class LinuxMediaPlaybackService(
 
     private async Task RunAsync(CancellationToken stoppingToken)
     {
-        while (!stoppingToken.IsCancellationRequested)
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await PollOnceAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Failed to poll Linux MPRIS playback state.");
+                }
+
+                try
+                {
+                    await SyncRemotePlaybackAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Failed to update Linux remote MPRIS playback state.");
+                }
+
+                try
+                {
+                    await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+        finally
         {
             try
             {
-                await PollOnceAsync(stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
+                if (remotePlayer is not null)
+                {
+                    await remotePlayer.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "Failed to poll Linux MPRIS playback state.");
-            }
-
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
+                logger.LogDebug(ex, "Failed to stop Linux remote MPRIS playback.");
             }
         }
     }
+
+    private async Task SyncRemotePlaybackAsync(CancellationToken cancellationToken)
+    {
+        if (remotePlayer is null)
+        {
+            return;
+        }
+
+        var localDeviceId = serviceProvider.GetRequiredService<IIdentityManager>().GetDeviceId();
+        var result = await serviceProvider.GetRequiredService<IMediaPlaybackSyncService>()
+            .ListMediaPlaybackAsync(cancellationToken).ConfigureAwait(false);
+        var playback = SelectRemotePlayback(result.Playbacks, localDeviceId);
+        await remotePlayer.UpdateAsync(playback, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static MediaPlaybackRecord? SelectRemotePlayback(
+        IEnumerable<MediaPlaybackRecord> playbacks,
+        string localDeviceId) =>
+        playbacks
+            .Where(candidate => !candidate.IsRemoved &&
+                                !string.Equals(candidate.SourceDeviceId, localDeviceId, StringComparison.Ordinal) &&
+                                candidate.PlaybackState != "stopped")
+            .OrderByDescending(candidate => DateTimeOffset.TryParse(candidate.UpdatedAt, out var updatedAt)
+                ? updatedAt
+                : DateTimeOffset.MinValue)
+            .FirstOrDefault();
 
     internal static string CreateFingerprint(LinuxMprisSnapshot snapshot)
     {

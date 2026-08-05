@@ -69,6 +69,7 @@ internal sealed class LinuxMprisClient(
     private const string PlayerInterface = "org.mpris.MediaPlayer2.Player";
     private const string ServicePrefix = "org.mpris.MediaPlayer2.";
     private const string PlayerCtlProxyService = "org.mpris.MediaPlayer2.playerctld";
+    private const string RiftRemotePlayerService = LinuxMprisRemotePlayer.ServiceName;
 
     private readonly DBusConnection _connection = DBusConnection.Session;
     private readonly ConcurrentDictionary<string, MprisEndpoint> _endpoints = new(StringComparer.Ordinal);
@@ -177,7 +178,8 @@ internal sealed class LinuxMprisClient(
 
     internal static bool IsPlayerService(string serviceName) =>
         serviceName.StartsWith(ServicePrefix, StringComparison.Ordinal) &&
-        !string.Equals(serviceName, PlayerCtlProxyService, StringComparison.Ordinal);
+        !string.Equals(serviceName, PlayerCtlProxyService, StringComparison.Ordinal) &&
+        !string.Equals(serviceName, RiftRemotePlayerService, StringComparison.Ordinal);
 
     internal static LinuxMprisSnapshot CreateSnapshot(
         string serviceName,
