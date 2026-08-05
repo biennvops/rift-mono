@@ -164,7 +164,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
             await CompleteSessionHandshakeAsync(session, remoteCert, linkedToken);
-            PersistAuthorizedPeer(remoteCert, deviceId, session.VerifiedPeerMetadata);
+            PersistAuthorizedPeer(remoteCert, deviceId);
             var registration = RegisterOrReuseSession(deviceId, session);
             if (registration == SessionRegistrationResult.Conflict)
             {
@@ -207,7 +207,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 remoteCert,
                 deviceId,
                 token => CompleteSessionHandshakeAsync(session, remoteCert, token),
-                () => PersistAuthorizedPeer(remoteCert, deviceId, session.VerifiedPeerMetadata),
+                () => PersistAuthorizedPeer(remoteCert, deviceId),
                 () => RegisterOrReuseSession(deviceId, session),
                 token),
             _ => RunSessionLifetimeAsync(session, cancellationToken),
@@ -325,7 +325,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException("Peer closed connection before sending session.accept.");
             }
             _logger.LogInformation("Received session.accept from peer {DeviceId}.", session.DeviceId);
-            session.VerifiedPeerMetadata = VerifySessionControlMessage(
+            VerifySessionControlMessage(
                 session.Stream,
                 remoteCert,
                 acceptPayload,
@@ -336,7 +336,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             _logger.LogInformation(
                 "Received session.accept from peer {DeviceId} without a preceding peer session.hello. Accepting responder-style handshake.",
                 session.DeviceId);
-            session.VerifiedPeerMetadata = VerifySessionControlMessage(
+            VerifySessionControlMessage(
                 session.Stream,
                 remoteCert,
                 firstPayload,
@@ -368,6 +368,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 capability => capability.Version,
                 StringComparer.Ordinal));
         session.IsAuthenticated = true;
+        await SendTrustedDeviceMetadataAsync(session, cancellationToken);
     }
 
     private static string? GetMessageType(byte[] payloadBuffer)
@@ -391,6 +392,12 @@ public sealed class TlsTransport : ITransport, IDisposable
             if (payloadBuffer is null)
             {
                 break;
+            }
+
+            if (string.Equals(GetMessageType(payloadBuffer), "device.metadata", StringComparison.Ordinal))
+            {
+                await PersistTrustedDeviceMetadataAsync(session, payloadBuffer, cancellationToken);
+                continue;
             }
 
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
@@ -489,7 +496,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
     }
 
-    private VerifiedPeerMetadata? VerifySessionControlMessage(SslStream sslStream, X509Certificate2 remoteCert, byte[] payloadBuffer, string expectedType)
+    private void VerifySessionControlMessage(SslStream sslStream, X509Certificate2 remoteCert, byte[] payloadBuffer, string expectedType)
     {
         try
         {
@@ -556,9 +563,6 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException($"{expectedType} identityProof verification failed.");
             }
 
-            return expectedType == "session.accept"
-                ? ParseVerifiedPeerMetadata(payload, expectedType)
-                : null;
         }
         catch (KeyNotFoundException ex)
         {
@@ -574,7 +578,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
     }
 
-    private static VerifiedPeerMetadata? ParseVerifiedPeerMetadata(JsonElement payload, string messageType)
+    private static DeviceMetadata ParseDeviceMetadata(JsonElement payload, string messageType)
     {
         string? displayName = null;
         if (payload.TryGetProperty("displayName", out var displayNameElement))
@@ -611,9 +615,107 @@ public sealed class TlsTransport : ITransport, IDisposable
             }
         }
 
-        return displayName is null && platform is null
-            ? null
-            : new VerifiedPeerMetadata(displayName, platform);
+        if (displayName is null || platform is null)
+        {
+            throw new InvalidOperationException($"{messageType} requires displayName and platform.");
+        }
+
+        var requestPeerMetadata = false;
+        if (payload.TryGetProperty("requestPeerMetadata", out var requestElement))
+        {
+            if (requestElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new InvalidOperationException($"{messageType} requestPeerMetadata must be a boolean.");
+            }
+            requestPeerMetadata = requestElement.GetBoolean();
+        }
+
+        return new DeviceMetadata(displayName, platform, requestPeerMetadata);
+    }
+
+    private async Task SendTrustedDeviceMetadataAsync(
+        ActiveSession session,
+        CancellationToken cancellationToken,
+        bool requestPeerMetadata = true)
+    {
+        if (!session.IsAuthenticated ||
+            !session.AllowsProtectedTraffic ||
+            !ShouldAllowProtectedTraffic(session.DeviceId))
+        {
+            return;
+        }
+
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "device.metadata",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            destinationDeviceId = session.DeviceId,
+            payload = new
+            {
+                displayName = _identityManager.GetDisplayName(),
+                platform = DaemonInfoService.GetLocalPlatform(),
+                requestPeerMetadata
+            }
+        };
+        var frame = RiftFrame.Encode(System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope)));
+        await session.WriteGate.RunAsync(
+            token => session.Stream.WriteAsync(frame, token).AsTask(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PersistTrustedDeviceMetadataAsync(
+        ActiveSession session,
+        byte[] payloadBuffer,
+        CancellationToken cancellationToken)
+    {
+        if (_trustStore is null)
+        {
+            return;
+        }
+
+        using var document = JsonDocument.Parse(payloadBuffer);
+        var root = document.RootElement;
+        var sourceDeviceId = root.GetProperty("sourceDeviceId").GetString();
+        if (!string.Equals(sourceDeviceId, session.DeviceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("device.metadata sourceDeviceId did not match the authenticated peer identity.");
+        }
+
+        if (root.TryGetProperty("destinationDeviceId", out var destinationElement) &&
+            !string.Equals(destinationElement.GetString(), _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("device.metadata destinationDeviceId did not match the local device identity.");
+        }
+
+        var metadata = ParseDeviceMetadata(root.GetProperty("payload"), "device.metadata");
+        if (!session.AllowsProtectedTraffic || !ShouldAllowProtectedTraffic(session.DeviceId))
+        {
+            return;
+        }
+
+        SaveTrustedDeviceMetadata(session.DeviceId, metadata);
+        if (metadata.RequestPeerMetadata)
+        {
+            await SendTrustedDeviceMetadataAsync(
+                session,
+                cancellationToken,
+                requestPeerMetadata: false);
+        }
+    }
+
+    private void SaveTrustedDeviceMetadata(string deviceId, DeviceMetadata metadata)
+    {
+        var peer = _trustStore?.GetPeer(deviceId);
+        if (peer?.State != TrustState.Trusted)
+        {
+            return;
+        }
+
+        peer.DisplayName = metadata.DisplayName;
+        peer.Platform = metadata.Platform;
+        _trustStore!.SavePeer(peer);
     }
 
     internal async Task ValidatePeerBeforeHandshakeAsync(X509Certificate2 remoteCert, string deviceId)
@@ -652,10 +754,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
     }
 
-    internal void PersistAuthorizedPeer(
-        X509Certificate2 remoteCert,
-        string deviceId,
-        VerifiedPeerMetadata? verifiedMetadata = null)
+    internal void PersistAuthorizedPeer(X509Certificate2 remoteCert, string deviceId)
     {
         if (_trustStore is null)
         {
@@ -672,8 +771,6 @@ public sealed class TlsTransport : ITransport, IDisposable
             {
                 DeviceId = deviceId,
                 Ed25519PublicKey = peerPublicKey,
-                DisplayName = verifiedMetadata?.DisplayName,
-                Platform = verifiedMetadata?.Platform ?? "unknown",
                 State = TrustState.Discovered,
                 EcdsaCertificateFingerprint = certificateFingerprint,
                 LastStateTransitionAt = DateTimeOffset.UtcNow
@@ -683,8 +780,6 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         existingPeer.Ed25519PublicKey ??= peerPublicKey;
         existingPeer.EcdsaCertificateFingerprint = certificateFingerprint;
-        existingPeer.DisplayName = verifiedMetadata?.DisplayName ?? existingPeer.DisplayName;
-        existingPeer.Platform = verifiedMetadata?.Platform ?? existingPeer.Platform;
         _trustStore.SavePeer(existingPeer);
     }
 
@@ -872,6 +967,13 @@ public sealed class TlsTransport : ITransport, IDisposable
             isOnline: true,
             session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
             allowsProtectedTraffic));
+
+        if (allowsProtectedTraffic)
+        {
+            TrackBackgroundTask(
+                SendTrustedDeviceMetadataAsync(session, _shutdownCts.Token),
+                "trusted device metadata sync");
+        }
     }
 
     public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId)
@@ -953,7 +1055,10 @@ public sealed class TlsTransport : ITransport, IDisposable
         return isAuthenticated ? RiftFrame.MaxPostAuthSize : RiftFrame.MaxPreAuthSize;
     }
 
-    internal sealed record VerifiedPeerMetadata(string? DisplayName, string? Platform);
+    private sealed record DeviceMetadata(
+        string DisplayName,
+        string Platform,
+        bool RequestPeerMetadata);
 
     private class ActiveSession : IDisposable
     {
@@ -962,7 +1067,6 @@ public sealed class TlsTransport : ITransport, IDisposable
         public string DeviceId { get; }
         public bool IsInitiator { get; }
         public bool IsAuthenticated { get; set; }
-        public VerifiedPeerMetadata? VerifiedPeerMetadata { get; set; }
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
         public bool AllowsProtectedTraffic { get; set; }
         public SessionPeerContext PeerContext { get; set; }

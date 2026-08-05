@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Cryptography;
 using Rift.Daemon.Core.Interfaces;
@@ -61,8 +62,10 @@ public class TlsTransportTests
         Assert.Equal(serverIdentity.GetDeviceId(), connectedDeviceId);
         Assert.True(server.HasProtectedSession(clientIdentity.GetDeviceId()));
         Assert.True(client.HasProtectedSession(serverIdentity.GetDeviceId()));
-        Assert.Equal("Client Laptop", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
-        Assert.Equal("Server Workstation", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.DisplayName);
+        await WaitForAsync(
+            () => serverTrust.GetPeer(clientIdentity.GetDeviceId())?.DisplayName == "Client Laptop" &&
+                  clientTrust.GetPeer(serverIdentity.GetDeviceId())?.DisplayName == "Server Workstation",
+            cancellation.Token);
         Assert.NotEqual("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
         Assert.NotEqual("unknown", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.Platform);
         Assert.False(server.GetPeerSessionEndpoint(clientIdentity.GetDeviceId())!.IsInitiator);
@@ -92,7 +95,7 @@ public class TlsTransportTests
     }
 
     [Fact]
-    public async Task CSharpPeers_FirstSessionPersistsVerifiedMetadataForNewPeers()
+    public async Task CSharpPeers_FirstUntrustedSessionDoesNotExchangeRealMetadata()
     {
         var serverIdentity = new IdentityManager(displayNameProvider: () => "Server Workstation");
         var clientIdentity = new IdentityManager(displayNameProvider: () => "Client Laptop");
@@ -119,10 +122,23 @@ public class TlsTransportTests
         await client.ConnectToPeerWithIdentityAsync("127.0.0.1", port, cancellation.Token);
         await Task.WhenAll(serverOnline, clientOnline).WaitAsync(cancellation.Token);
 
-        Assert.Equal("Client Laptop", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
-        Assert.Equal("Server Workstation", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.DisplayName);
-        Assert.NotEqual("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
-        Assert.NotEqual("unknown", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.Platform);
+        Assert.Null(serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
+        Assert.Null(clientTrust.GetPeer(serverIdentity.GetDeviceId())!.DisplayName);
+        Assert.Equal("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
+        Assert.Equal("unknown", clientTrust.GetPeer(serverIdentity.GetDeviceId())!.Platform);
+
+        var metadata = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            rift = "0.1-draft",
+            type = "device.metadata",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = clientIdentity.GetDeviceId(),
+            payload = new { displayName = "Injected Name", platform = "linux" }
+        }));
+        await client.SendAsync(serverIdentity.GetDeviceId(), metadata, cancellation.Token);
+        await Task.Delay(100, cancellation.Token);
+        Assert.Null(serverTrust.GetPeer(clientIdentity.GetDeviceId())!.DisplayName);
+        Assert.Equal("unknown", serverTrust.GetPeer(clientIdentity.GetDeviceId())!.Platform);
 
         cancellation.Cancel();
         await listenerTask;
@@ -175,6 +191,14 @@ public class TlsTransportTests
             await Task.Delay(10, cancellationToken);
         }
         return port.Value;
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+        {
+            await Task.Delay(10, cancellationToken);
+        }
     }
 
     private sealed class InMemoryTrustStore : ITrustStore

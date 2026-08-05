@@ -228,12 +228,13 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.pairingPending);
-        expect(peer.displayName, 'Peer Device');
-        expect(peer.platform, 'ios');
+        expect(peer.displayName, isNull);
+        expect(peer.platform, isNull);
 
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
         expect(ipcEvents[0]['params']['fingerprint'], testFingerprint);
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
 
         expect(ipcEvents[0]['params']['expiresInMs'], 120000);
         // Because FakeAsync is not used, skip waiting for the actual timer and
@@ -296,7 +297,7 @@ void main() {
         expect(peer!.state, TrustState.pairingPending);
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
-        expect(ipcEvents[0]['params']['displayName'], 'Peer Device');
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
       },
     );
 
@@ -524,8 +525,8 @@ void main() {
 
         final pairingStart = sessionManager.sentMessages.single;
         expect(pairingStart['type'], 'pairing.start');
-        expect(pairingStart['payload']['displayName'], 'Android Phone 01');
-        expect(pairingStart['payload']['platform'], isA<String>());
+        expect(pairingStart['payload'].containsKey('displayName'), isFalse);
+        expect(pairingStart['payload'].containsKey('platform'), isFalse);
 
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.approve',

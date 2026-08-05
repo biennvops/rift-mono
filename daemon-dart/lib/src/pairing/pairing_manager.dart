@@ -18,15 +18,6 @@ import '../core/rpc_utils.dart';
 /// Manages the State Machine for the Pairing process according to the Rift protocol standard.
 class PairingManager {
   static const Duration _disconnectGracePeriod = Duration(milliseconds: 1500);
-  static const Set<String> _validPlatforms = {
-    'android',
-    'ios',
-    'windows',
-    'macos',
-    'linux',
-    'unknown',
-  };
-
   final TrustStore trustStore;
   final SessionManager sessionManager;
   final IdentityManager identityManager;
@@ -167,11 +158,7 @@ class PairingManager {
         'type': 'pairing.start',
         'sourceDeviceId': identityManager.deviceId,
         'destinationDeviceId': peerDeviceId,
-        'payload': {
-          'expiresInMs': _pairingTimeoutSeconds * 1000,
-          'displayName': identityManager.displayName,
-          'platform': _localPlatform(),
-        },
+        'payload': {'expiresInMs': _pairingTimeoutSeconds * 1000},
       });
       RiftLog.debug('[Pairing] pairing.start sent to $peerDeviceId');
     } on StateError {
@@ -529,28 +516,6 @@ class PairingManager {
           timeout: Duration(milliseconds: clampedExpiry),
         );
         final derivedFingerprint = _deriveFingerprint(record.certDer);
-        final pairingDisplayName = _normalizeDisplayName(
-          payload['displayName'],
-        );
-        final pairingPlatform = _normalizePlatform(payload['platform']);
-        final displayName = record.displayName ?? pairingDisplayName;
-        final platform = record.platform ?? pairingPlatform;
-        if (displayName != record.displayName || platform != record.platform) {
-          await trustStore.upsertPeer(
-            PeerRecord(
-              deviceId: record.deviceId,
-              displayName: displayName,
-              platform: platform,
-              certDer: record.certDer,
-              state: record.state,
-              pairedAt: record.pairedAt,
-              updatedAt: DateTime.now().toUtc(),
-              lastSeenAt: record.lastSeenAt,
-              trustedEndpoints: record.trustedEndpoints,
-            ),
-          );
-        }
-
         // Emit event to UI to show popup
         onIpcEvent({
           'jsonrpc': '2.0',
@@ -558,7 +523,7 @@ class PairingManager {
           'params': {
             'deviceId': peerDeviceId,
             'fingerprint': derivedFingerprint,
-            'displayName': displayName ?? 'Unknown Device',
+            'displayName': record.displayName ?? peerDeviceId,
             'expiresInMs': clampedExpiry,
           },
         });
@@ -726,27 +691,6 @@ class PairingManager {
         break;
     }
   }
-
-  static String _localPlatform() {
-    if (Platform.isAndroid) return 'android';
-    if (Platform.isIOS) return 'ios';
-    if (Platform.isWindows) return 'windows';
-    if (Platform.isMacOS) return 'macos';
-    if (Platform.isLinux) return 'linux';
-    return 'unknown';
-  }
-
-  static String? _normalizeDisplayName(Object? value) {
-    if (value is! String) return null;
-    final normalized = value
-        .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
-        .trim();
-    if (normalized.isEmpty) return null;
-    return normalized.length <= 128 ? normalized : normalized.substring(0, 128);
-  }
-
-  static String? _normalizePlatform(Object? value) =>
-      value is String && _validPlatforms.contains(value) ? value : null;
 
   Future<void> _ensurePeerInTrustStore(
     String peerDeviceId,

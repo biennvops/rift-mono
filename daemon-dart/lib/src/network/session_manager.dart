@@ -203,51 +203,27 @@ class SessionManager {
     return 'unknown';
   }
 
-  Future<void> _persistVerifiedDeviceMetadata(
+  Future<void> _persistTrustedDeviceMetadata(
     String peerDeviceId,
-    Map<String, dynamic> payload,
-    Uint8List peerCertDer,
+    String displayName,
+    String platform,
   ) async {
-    String? displayName;
-    if (payload.containsKey('displayName')) {
-      final rawDisplayName = payload['displayName'];
-      if (rawDisplayName is! String) {
-        throw const FormatException('displayName must be a string');
-      }
-      final normalized = rawDisplayName.trim();
-      if (normalized.isEmpty ||
-          normalized.length > 128 ||
-          RegExp(r'[\x00-\x1F\x7F]').hasMatch(normalized)) {
-        throw const FormatException('displayName is invalid');
-      }
-      displayName = normalized;
-    }
-
-    String? platform;
-    if (payload.containsKey('platform')) {
-      final rawPlatform = payload['platform'];
-      if (rawPlatform is! String || !_validPlatforms.contains(rawPlatform)) {
-        throw const FormatException('platform is invalid');
-      }
-      platform = rawPlatform;
-    }
-
-    if (displayName == null && platform == null) {
+    final existing = await _trustStore.getPeer(peerDeviceId);
+    if (existing?.state != TrustState.trusted) {
       return;
     }
 
-    final existing = await _trustStore.getPeer(peerDeviceId);
     await _trustStore.upsertPeer(
       PeerRecord(
-        deviceId: peerDeviceId,
-        displayName: displayName ?? existing?.displayName,
-        platform: platform ?? existing?.platform,
-        certDer: existing?.certDer ?? peerCertDer,
-        state: existing?.state ?? TrustState.discovered,
-        pairedAt: existing?.pairedAt,
+        deviceId: existing!.deviceId,
+        displayName: displayName,
+        platform: platform,
+        certDer: existing.certDer,
+        state: existing.state,
+        pairedAt: existing.pairedAt,
         updatedAt: DateTime.now().toUtc(),
-        lastSeenAt: existing?.lastSeenAt,
-        trustedEndpoints: existing?.trustedEndpoints ?? const [],
+        lastSeenAt: existing.lastSeenAt,
+        trustedEndpoints: existing.trustedEndpoints,
       ),
     );
   }
@@ -687,6 +663,8 @@ class SessionManager {
           'Capability negotiation not complete',
         );
         return;
+      } else if (type == 'device.metadata') {
+        await _handleDeviceMetadata(ctx, jsonMap);
       } else if (type == 'presence.update') {
         await _handlePresenceUpdate(ctx, msg, jsonMap);
       } else {
@@ -992,8 +970,6 @@ class SessionManager {
         'selectedVersion': '0.1-draft',
         'deviceId': _identityManager.deviceId,
         'identityVerified': true,
-        'displayName': _identityManager.displayName,
-        'platform': _localPlatform(),
         'bindingType': 'app-nonce',
         'sessionNonce': base64.encode(sessionNonce),
         'identityProof': proofHex,
@@ -1169,17 +1145,6 @@ class SessionManager {
       );
     }
 
-    try {
-      await _persistVerifiedDeviceMetadata(
-        peerDeviceId,
-        payload,
-        msg.peerCertDer!,
-      );
-    } on FormatException catch (error) {
-      await _rejectSession(peerDeviceId, 'ProtocolError', error.message);
-      return;
-    }
-
     RiftLog.debug(
       '[Session] Verified session.accept from $peerDeviceId; marking established and starting capability negotiation.',
     );
@@ -1271,6 +1236,108 @@ class SessionManager {
           .catchError((_) {
             _transport.disconnect(ctx.peerDeviceId);
           }),
+    );
+  }
+
+  Future<void> _sendTrustedDeviceMetadata(
+    SessionContext ctx, {
+    bool requestPeerMetadata = true,
+  }) async {
+    if (!isCurrentEstablishedContext(
+          activeContext: _sessions[ctx.peerDeviceId],
+          candidateContext: ctx,
+        ) ||
+        ctx.trustState != TrustState.trusted ||
+        (await _trustStore.getPeer(ctx.peerDeviceId))?.state !=
+            TrustState.trusted) {
+      return;
+    }
+
+    final message = {
+      'rift': '0.1-draft',
+      'id': const Uuid().v4(),
+      'messageId': const Uuid().v4(),
+      'type': 'device.metadata',
+      'sourceDeviceId': _identityManager.deviceId,
+      'destinationDeviceId': ctx.peerDeviceId,
+      'payload': {
+        'displayName': _identityManager.displayName,
+        'platform': _localPlatform(),
+        'requestPeerMetadata': requestPeerMetadata,
+      },
+    };
+    await _transport.sendMessage(
+      ctx.peerDeviceId,
+      Uint8List.fromList(utf8.encode(json.encode(message))),
+    );
+  }
+
+  Future<void> _handleDeviceMetadata(
+    SessionContext ctx,
+    Map<String, dynamic> jsonMap,
+  ) async {
+    final payload = jsonMap['payload'];
+    if (payload is! Map<String, dynamic>) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'MalformedMessage',
+        'Missing device.metadata payload',
+      );
+      return;
+    }
+
+    final rawDisplayName = payload['displayName'];
+    final platform = payload['platform'];
+    final requestPeerMetadata = payload['requestPeerMetadata'] ?? false;
+    if (rawDisplayName is! String ||
+        platform is! String ||
+        requestPeerMetadata is! bool ||
+        !_validPlatforms.contains(platform)) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'ProtocolError',
+        'Invalid device.metadata payload',
+      );
+      return;
+    }
+
+    final displayName = rawDisplayName.trim();
+    if (displayName.isEmpty ||
+        displayName.length > 128 ||
+        RegExp(r'[\x00-\x1F\x7F]').hasMatch(displayName)) {
+      await _rejectSession(
+        ctx.peerDeviceId,
+        'ProtocolError',
+        'Invalid device.metadata displayName',
+      );
+      return;
+    }
+
+    if (ctx.trustState != TrustState.trusted) {
+      return;
+    }
+
+    await _persistTrustedDeviceMetadata(
+      ctx.peerDeviceId,
+      displayName,
+      platform,
+    );
+    if (requestPeerMetadata) {
+      await _sendTrustedDeviceMetadata(ctx, requestPeerMetadata: false);
+    }
+  }
+
+  Future<void> _syncTrustedDeviceMetadata(SessionContext ctx) =>
+      _sendTrustedDeviceMetadata(ctx);
+
+  void _scheduleTrustedDeviceMetadataSync(SessionContext ctx) {
+    unawaited(
+      _syncTrustedDeviceMetadata(ctx).catchError((Object error) {
+        RiftLog.warn(
+          '[Session] Trusted device metadata sync failed for '
+          '${ctx.peerDeviceId}: $error',
+        );
+      }),
     );
   }
 
@@ -1473,6 +1540,9 @@ class SessionManager {
       return;
     }
     ctx.capabilityNegotiated = true;
+    if (ctx.trustState == TrustState.trusted) {
+      _scheduleTrustedDeviceMetadataSync(ctx);
+    }
     final waiter = _establishmentWaiters.remove(ctx.peerDeviceId);
     if (waiter != null && !waiter.isCompleted) {
       RiftLog.info(
@@ -1539,6 +1609,7 @@ class SessionManager {
         // Otherwise, _startHeartbeatIfTrusted will be called at the end of negotiation.
         if (ctx.capabilityNegotiated) {
           _startHeartbeatIfTrusted(ctx);
+          _scheduleTrustedDeviceMetadataSync(ctx);
         }
       } else if (wasTrusted && newState != TrustState.trusted) {
         ctx.heartbeatTimer?.cancel();

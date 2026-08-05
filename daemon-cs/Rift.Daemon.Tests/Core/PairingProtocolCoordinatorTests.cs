@@ -76,10 +76,8 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         Assert.Contains(_transport.ConnectionAttempts, attempt => attempt.Host == "192.168.1.50" && attempt.Port == 9140);
         var pairingStart = Assert.Single(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-manual-peer" && sent.Type == "pairing.start");
-        Assert.Equal(_identityManager.GetDisplayName(), pairingStart.Payload.GetProperty("displayName").GetString());
-        Assert.Contains(
-            pairingStart.Payload.GetProperty("platform").GetString(),
-            new[] { "windows", "macos", "linux", "unknown" });
+        Assert.False(pairingStart.Payload.TryGetProperty("displayName", out _));
+        Assert.False(pairingStart.Payload.TryGetProperty("platform", out _));
     }
 
     [Fact]
@@ -708,7 +706,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         var peer = _trustStore.GetPeer("rift-peer-inbound-display");
         Assert.Equal(TrustState.PairingPending, peer!.State);
-        Assert.Equal("Pixel 9 Pro", peer.DisplayName);
+        Assert.Null(peer.DisplayName);
+        var notification = Assert.Single(
+            _notificationService.Notifications,
+            evt => evt.Method == "rift.onPairingRequest");
+        Assert.Equal("rift-peer-inbound-display", notification.Parameters["displayName"]);
     }
 
     [Fact]
@@ -795,11 +797,11 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
             _notificationService.Notifications,
             evt => evt.Method == "rift.onPairingRequest");
         Assert.Equal("rift-peer-pending-notify", notification.Parameters["deviceId"]);
-        Assert.Equal("Pixel 9", notification.Parameters["displayName"]);
+        Assert.Equal("rift-peer-pending-notify", notification.Parameters["displayName"]);
     }
 
     [Fact]
-    public async Task HandleMessageAsync_PairingStart_TruncatesOversizedRemoteDisplayName()
+    public async Task HandleMessageAsync_PairingStart_IgnoresCompatibilityDisplayName()
     {
         _trustStore.SavePeer(new PeerIdentity
         {
@@ -822,14 +824,12 @@ public sealed class PairingProtocolCoordinatorTests : IDisposable
 
         var storedPeer = _trustStore.GetPeer("rift-peer-long-name");
         Assert.NotNull(storedPeer);
-        Assert.NotNull(storedPeer!.DisplayName);
-        Assert.Equal(128, storedPeer.DisplayName!.Length);
-        Assert.Equal(oversizedDisplayName[..128], storedPeer.DisplayName);
+        Assert.Null(storedPeer!.DisplayName);
 
         var notification = Assert.Single(
             _notificationService.Notifications,
             evt => evt.Method == "rift.onPairingRequest");
-        Assert.Equal(oversizedDisplayName[..128], notification.Parameters["displayName"]);
+        Assert.Equal("rift-peer-long-name", notification.Parameters["displayName"]);
     }
 
     [Fact]

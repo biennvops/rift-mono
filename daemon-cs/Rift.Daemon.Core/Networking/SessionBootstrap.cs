@@ -222,8 +222,6 @@ public class SessionBootstrap
                 selectedVersion = "0.1-draft",
                 deviceId = myDeviceId,
                 identityVerified = true,
-                displayName = _identityManager.GetDisplayName(),
-                platform = DaemonInfoService.GetLocalPlatform(),
                 bindingType,
                 sessionNonce = nonceBase64,
                 identityProof = hexProof,

@@ -246,6 +246,32 @@ void main() {
       expect(transport2.isDisconnected, isTrue);
     });
 
+    test('Untrusted device.metadata does not update the trust store', () async {
+      sessionManager1.injectContextForTesting(
+        SessionContext(peerDeviceId: 'rift-device2', isInitiator: true)
+          ..handshakeState = HandshakeState.established
+          ..capabilityNegotiated = true
+          ..trustState = TrustState.discovered,
+      );
+
+      transport1.simulateIncomingMessage(
+        'rift-device2',
+        testCertDer2,
+        pubKeyBytes2,
+        {
+          'rift': '0.1-draft',
+          'messageId': '33333333-3333-4333-8333-333333333333',
+          'type': 'device.metadata',
+          'sourceDeviceId': 'rift-device2',
+          'destinationDeviceId': 'rift-device1',
+          'payload': {'displayName': 'Untrusted Device', 'platform': 'ios'},
+        },
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(await trustStore1.getPeer('rift-device2'), isNull);
+    });
+
     test('Integration test for full session establishment and capability negotiation', () async {
       transport1.registerPeerCert('rift-device2', testCertDer2);
       
@@ -274,8 +300,8 @@ void main() {
       expect(acceptMsg['type'], 'session.accept');
       expect(acceptMsg['messageId'], isNotNull);
       expect(acceptMsg['payload']['bindingType'], 'app-nonce');
-      expect(acceptMsg['payload']['displayName'], 'Device Two');
-      expect(acceptMsg['payload']['platform'], isA<String>());
+      expect(acceptMsg['payload'].containsKey('displayName'), isFalse);
+      expect(acceptMsg['payload'].containsKey('platform'), isFalse);
       expect(acceptMsg['payload']['capabilities'], isA<List>());
       expect(
         base64.decode(acceptMsg['payload']['sessionNonce'] as String),
@@ -291,7 +317,7 @@ void main() {
         acceptMsg,
       );
       await Future<void>.delayed(Duration.zero);
-      expect((await trustStore1.getPeer('rift-device2'))?.displayName, 'Device Two');
+      expect((await trustStore1.getPeer('rift-device2'))?.displayName, isNull);
 
       // Discovery flow and session establish complete.
       expect(transport1.isDisconnected, isFalse);
@@ -435,10 +461,35 @@ void main() {
       expect(received.payload['payload']['value'], 'hello-from-device1');
     });
 
-    test('Unidirectional handshake (sequential) completes capability negotiation for both peers', () async {
-      // Device1 initiates by sending session.hello. Device2 responds with session.accept.
+    test('Trusted sequential handshake synchronizes metadata in both directions', () async {
+      await trustStore1.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-device2',
+          displayName: 'Old Device Two',
+          platform: 'unknown',
+          certDer: testCertDer2,
+          state: TrustState.trusted,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+      await trustStore2.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-device1',
+          displayName: 'Old Device One',
+          platform: 'unknown',
+          certDer: testCertDer1,
+          state: TrustState.trusted,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
       transport1.registerPeerCert('rift-device2', testCertDer2);
       transport2.registerPeerCert('rift-device1', testCertDer1);
+      final metadataFrom1Future = transport1.onSentMessage.firstWhere(
+        (msg) => msg['type'] == 'device.metadata',
+      );
+      final metadataFrom2Future = transport2.onSentMessage.firstWhere(
+        (msg) => msg['type'] == 'device.metadata',
+      );
 
       final advertiseFrom2Future = transport2.onSentMessage.firstWhere(
         (msg) => msg['type'] == 'capability.advertise',
@@ -510,6 +561,25 @@ void main() {
       expect(ctx2!.handshakeState, HandshakeState.established);
       expect(ctx1.capabilityNegotiated, isTrue);
       expect(ctx2.capabilityNegotiated, isTrue);
+
+      final metadataFrom1 = Map<String, dynamic>.from(await metadataFrom1Future);
+      final metadataFrom2 = Map<String, dynamic>.from(await metadataFrom2Future);
+      transport1.simulateIncomingMessage(
+        'rift-device2',
+        testCertDer2,
+        pubKeyBytes2,
+        metadataFrom2,
+      );
+      transport2.simulateIncomingMessage(
+        'rift-device1',
+        testCertDer1,
+        pubKeyBytes1,
+        metadataFrom1,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect((await trustStore1.getPeer('rift-device2'))?.displayName, 'Device Two');
+      expect((await trustStore2.getPeer('rift-device1'))?.displayName, 'Device One');
     });
   });
 }

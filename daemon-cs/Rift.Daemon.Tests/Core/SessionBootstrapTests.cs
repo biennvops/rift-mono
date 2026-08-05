@@ -213,10 +213,8 @@ public class SessionBootstrapTests
         Assert.Equal(identityManager.GetDeviceId(), messagePayload.GetProperty("deviceId").GetString());
         Assert.Equal("0.1-draft", messagePayload.GetProperty("selectedVersion").GetString());
         Assert.True(messagePayload.GetProperty("identityVerified").GetBoolean());
-        Assert.Equal("Office Desktop", messagePayload.GetProperty("displayName").GetString());
-        Assert.Contains(
-            messagePayload.GetProperty("platform").GetString(),
-            new[] { "windows", "macos", "linux", "unknown" });
+        Assert.False(messagePayload.TryGetProperty("displayName", out _));
+        Assert.False(messagePayload.TryGetProperty("platform", out _));
         Assert.Equal("app-nonce", messagePayload.GetProperty("bindingType").GetString());
 
         var sessionNonce = Convert.FromBase64String(messagePayload.GetProperty("sessionNonce").GetString()!);

@@ -76,9 +76,11 @@ class FakeTransport implements Transport {
 
 
 class FakeTrustStore implements TrustStore {
+  PeerRecord? peer;
+
   @override Future<void> initialize() async {}
   @override Future<void> upsertPeer(PeerRecord record) async {}
-  @override Future<PeerRecord?> getPeer(String deviceId) async => null;
+  @override Future<PeerRecord?> getPeer(String deviceId) async => peer;
   @override Future<List<PeerRecord>> getAllPeers() async => [];
   @override Future<List<PeerRecord>> getPeersByState(TrustState state) async => [];
   @override Future<bool> transitionState(String deviceId, TrustState from, TrustState to, {DateTime? pairedAt}) async => true;
@@ -110,14 +112,16 @@ void main() {
     late Uint8List testCertDer;
     late Uint8List pubKeyBytes;
     late bool allowPeer;
+    late FakeTrustStore trustStore;
 
     setUp(() async {
       transport = FakeTransport();
       allowPeer = true;
+      trustStore = FakeTrustStore();
       sessionManager = SessionManager(
         transport,
         FakeIdentityManager(),
-        FakeTrustStore(),
+        trustStore,
         peerAllowanceResolver: (_) async => allowPeer,
       );
 
@@ -318,6 +322,29 @@ void main() {
 
       expect(transport.isDisconnected, isTrue);
       expect(transport.sentMessages.single['payload']['failureReason'], 'MalformedMessage');
+    });
+
+    test('trust transition sends local device metadata', () async {
+      trustStore.peer = PeerRecord(
+        deviceId: 'rift-peer',
+        certDer: testCertDer,
+        state: TrustState.trusted,
+        updatedAt: DateTime.now().toUtc(),
+      );
+      sessionManager.injectContextForTesting(
+        SessionContext(peerDeviceId: 'rift-peer', isInitiator: true)
+          ..handshakeState = HandshakeState.established
+          ..capabilityNegotiated = true
+          ..trustState = TrustState.discovered,
+      );
+
+      sessionManager.updateTrustState('rift-peer', TrustState.trusted);
+      await Future<void>.delayed(Duration.zero);
+
+      final metadata = transport.sentMessages.single;
+      expect(metadata['type'], 'device.metadata');
+      expect(metadata['payload']['displayName'], 'Android Phone 01');
+      expect(metadata['payload']['platform'], isA<String>());
     });
 
     test('sendMessage succeeds once session is established, trusted, and capability negotiated', () async {
