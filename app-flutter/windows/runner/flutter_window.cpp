@@ -1106,16 +1106,23 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
 
     winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties
         timeline_properties;
-    timeline_properties.StartTime(std::chrono::milliseconds(0));
-    const int64_t position_ms = FindInt64(playback, "positionMs").value_or(0);
-    timeline_properties.Position(std::chrono::milliseconds(position_ms));
+    const int64_t raw_position_ms = FindInt64(playback, "positionMs").value_or(0);
+    const int64_t normalized_position_ms = std::max<int64_t>(0, raw_position_ms);
     const bool can_seek = IsTrue(playback, "canSeek");
     const auto duration_ms = FindInt64(playback, "durationMs");
-    if (can_seek && duration_ms.has_value() && duration_ms.value() > 0) {
-      timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
-      timeline_properties.MaxSeekTime(
-          std::chrono::milliseconds(duration_ms.value()));
-      timeline_properties.EndTime(std::chrono::milliseconds(duration_ms.value()));
+    if (duration_ms.has_value() && duration_ms.value() > 0) {
+      const int64_t normalized_duration_ms = duration_ms.value();
+      const int64_t clamped_position_ms =
+          std::min(normalized_position_ms, normalized_duration_ms);
+      timeline_properties.StartTime(std::chrono::milliseconds(0));
+      timeline_properties.Position(std::chrono::milliseconds(clamped_position_ms));
+      timeline_properties.EndTime(
+          std::chrono::milliseconds(normalized_duration_ms));
+      if (can_seek) {
+        timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
+        timeline_properties.MaxSeekTime(
+            std::chrono::milliseconds(normalized_duration_ms));
+      }
     }
     controls.UpdateTimelineProperties(timeline_properties);
 
