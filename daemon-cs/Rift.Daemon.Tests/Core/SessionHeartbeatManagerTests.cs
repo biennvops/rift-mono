@@ -45,6 +45,47 @@ public sealed class SessionHeartbeatManagerTests
     }
 
     [Fact]
+    public void TimeoutTransition_DoesNotMarkReplacementSessionOffline()
+    {
+        long tick = 1_000;
+        var presenceService = new PresenceService();
+        var manager = new SessionHeartbeatManager(
+            new FakeTransport(),
+            new FakeIdentityManager(),
+            presenceService,
+            () => tick);
+        var session = new SessionPeerContext(
+            "rift-peer",
+            [SessionHeartbeatManager.PresenceBasicCapability],
+            allowsProtectedTraffic: true);
+        var online = new SessionStateChangedEventArgs(
+            session.PeerDeviceId,
+            isOnline: true,
+            session.SelectedCapabilities,
+            allowsProtectedTraffic: true);
+
+        manager.OnSessionStateChanged(online);
+        var staleSession = manager.GetTrackedSession(session.PeerDeviceId);
+        Assert.NotNull(staleSession);
+
+        tick += (long)SessionHeartbeatManager.OfflineThreshold.TotalMilliseconds;
+        manager.OnSessionStateChanged(online);
+        presenceService.UpdatePeerPresence(
+            session.PeerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            session.SelectedCapabilities);
+
+        var timedOut = manager.TryMarkSessionTimedOut(
+            session.PeerDeviceId,
+            staleSession!,
+            staleSession.ReadLastHeardTick());
+
+        Assert.False(timedOut);
+        Assert.Equal("online", presenceService.GetPeerPresence(session.PeerDeviceId)?.Status);
+    }
+
+    [Fact]
     public void TimeoutTransition_DoesNotOverwriteNewAuthenticatedTraffic()
     {
         var tracked = new SessionHeartbeatManager.TrackedSession(

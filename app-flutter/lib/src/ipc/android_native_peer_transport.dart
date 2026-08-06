@@ -157,7 +157,11 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
         // cannot remove the replacement session.
         resetSessionForReplacement(peerDeviceId);
       }
-      await _closeConnection(existing, notify: false);
+      await _closeConnection(
+        existing,
+        notify: false,
+        waitForStreamTeardown: false,
+      );
     }
     peer.authenticationTimeout = Timer(const Duration(seconds: 10), () {
       if (identical(_peers[peerDeviceId], peer) &&
@@ -184,6 +188,20 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       remotePort: 0,
       isServer: false,
     )..frameSubscription = frameSubscription;
+  }
+
+  @visibleForTesting
+  Future<void> closeConnectionForReplacementForTesting(
+    String peerDeviceId,
+  ) async {
+    final peer = _peers[peerDeviceId];
+    if (peer != null) {
+      await _closeConnection(
+        peer,
+        notify: false,
+        waitForStreamTeardown: false,
+      );
+    }
   }
 
   @visibleForTesting
@@ -265,6 +283,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     _NativePeerConnection peer, {
     required bool notify,
     bool cancelFrameSubscription = true,
+    bool waitForStreamTeardown = true,
   }) async {
     if (peer.isClosing) {
       return;
@@ -277,10 +296,29 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     if (notify && !_disconnects.isClosed) {
       _disconnects.add(peer.peerDeviceId);
     }
-    if (cancelFrameSubscription) {
-      await peer.frameSubscription?.cancel();
+    final streamTeardown = _tearDownConnectionStreams(
+      peer,
+      cancelFrameSubscription: cancelFrameSubscription,
+    );
+    if (waitForStreamTeardown) {
+      await streamTeardown;
+    } else {
+      unawaited(streamTeardown);
     }
-    await peer.chunkController?.close();
+  }
+
+  Future<void> _tearDownConnectionStreams(
+    _NativePeerConnection peer, {
+    required bool cancelFrameSubscription,
+  }) async {
+    if (cancelFrameSubscription) {
+      try {
+        await peer.frameSubscription?.cancel();
+      } catch (_) {}
+    }
+    try {
+      await peer.chunkController?.close();
+    } catch (_) {}
   }
 
   @override

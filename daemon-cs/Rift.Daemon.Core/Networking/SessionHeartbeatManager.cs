@@ -15,6 +15,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
     private readonly IIdentityManager _identityManager;
     private readonly IPresenceService _presenceService;
     private readonly ConcurrentDictionary<string, TrackedSession> _sessions = new(StringComparer.Ordinal);
+    private readonly Lock _sessionsGate = new();
     private readonly Lock _sync = new();
     private PeriodicTimer? _timer;
     private Task? _runLoopTask;
@@ -51,21 +52,24 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
     public void OnSessionStateChanged(SessionStateChangedEventArgs args)
     {
         var now = _tickProvider();
-        if (!args.IsOnline)
+        lock (_sessionsGate)
         {
-            _sessions.TryRemove(args.PeerDeviceId, out _);
-            _presenceService.MarkPeerOffline(args.PeerDeviceId);
-            return;
-        }
+            if (!args.IsOnline)
+            {
+                _sessions.TryRemove(args.PeerDeviceId, out _);
+                _presenceService.MarkPeerOffline(args.PeerDeviceId);
+                return;
+            }
 
-        if (!ShouldTrackPresence(args))
-        {
-            _sessions.TryRemove(args.PeerDeviceId, out _);
-            _presenceService.MarkPeerOffline(args.PeerDeviceId);
-            return;
-        }
+            if (!ShouldTrackPresence(args))
+            {
+                _sessions.TryRemove(args.PeerDeviceId, out _);
+                _presenceService.MarkPeerOffline(args.PeerDeviceId);
+                return;
+            }
 
-        _sessions[args.PeerDeviceId] = new TrackedSession(args.SelectedCapabilities, now);
+            _sessions[args.PeerDeviceId] = new TrackedSession(args.SelectedCapabilities, now);
+        }
     }
 
     public void ObserveAuthenticatedMessage(SessionPeerContext session)
@@ -178,9 +182,34 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
                 continue;
             }
 
-            entry.Value.TryMarkTimedOut(
-                lastHeardTick,
-                () => _presenceService.MarkPeerOffline(entry.Key));
+            TryMarkSessionTimedOut(entry.Key, entry.Value, lastHeardTick);
+        }
+    }
+
+    internal TrackedSession? GetTrackedSession(string peerDeviceId)
+    {
+        lock (_sessionsGate)
+        {
+            return _sessions.TryGetValue(peerDeviceId, out var tracked) ? tracked : null;
+        }
+    }
+
+    internal bool TryMarkSessionTimedOut(
+        string peerDeviceId,
+        TrackedSession tracked,
+        long observedLastHeardTick)
+    {
+        lock (_sessionsGate)
+        {
+            if (!_sessions.TryGetValue(peerDeviceId, out var current) ||
+                !ReferenceEquals(current, tracked))
+            {
+                return false;
+            }
+
+            return tracked.TryMarkTimedOut(
+                observedLastHeardTick,
+                () => _presenceService.MarkPeerOffline(peerDeviceId));
         }
     }
 

@@ -139,6 +139,33 @@ void main() {
       await transport.stopServer();
     });
 
+    test('replacement close does not await blocked stream teardown', () async {
+      final tls = _RecordingNativeTlsApi();
+      final cancellation = Completer<void>();
+      final frameController = StreamController<Map<String, dynamic>>(
+        onCancel: () => cancellation.future,
+      );
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        frameSubscription: frameController.stream.listen((_) {}),
+      );
+
+      await transport
+          .closeConnectionForReplacementForTesting('rift-peer')
+          .timeout(const Duration(milliseconds: 100));
+
+      expect(tls.closedConnectionIds, [42]);
+      cancellation.complete();
+      await Future<void>.delayed(Duration.zero);
+      await transport.stopServer();
+    });
+
     test('serializes concurrent writes for one peer', () async {
       final tls = _RecordingNativeTlsApi();
       final transport = AndroidNativePeerTransport(
