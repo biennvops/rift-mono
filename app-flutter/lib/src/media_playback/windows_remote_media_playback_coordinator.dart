@@ -32,6 +32,10 @@ class WindowsRemoteMediaPlaybackCoordinator {
     _connectionSub = _client.onConnectionChanged.listen((isConnected) {
       if (isConnected) {
         unawaited(refresh());
+      } else {
+        _actionRefreshTimer?.cancel();
+        _playbacksByKey.clear();
+        unawaited(WindowsMediaPlayback.clear());
       }
     });
     await refresh();
