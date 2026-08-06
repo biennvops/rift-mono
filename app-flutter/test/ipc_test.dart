@@ -436,6 +436,67 @@ void main() {
       );
     });
 
+    test('should canonicalize C# device status fields in results and events',
+        () async {
+      transport.listTrustedPeersJson = jsonEncode({
+        'Peers': [
+          {
+            'DeviceId': 'rift-phone',
+            'DeviceStatus': {
+              'SourceDeviceId': 'rift-phone',
+              'SourcePlatform': 'android',
+              'BatteryPresent': true,
+              'BatteryPercent': 64,
+              'ChargingState': 'charging',
+              'PowerSource': 'usb',
+              'LowPowerMode': false,
+              'ObservedAt': '2026-08-06T12:00:00Z',
+              'IsStale': false,
+            },
+          },
+        ],
+      });
+      await client.connect();
+
+      final result = await client.listTrustedPeers();
+      expect((result['peers'] as List).single, {
+        'deviceId': 'rift-phone',
+        'deviceStatus': {
+          'sourceDeviceId': 'rift-phone',
+          'sourcePlatform': 'android',
+          'batteryPresent': true,
+          'batteryPercent': 64,
+          'chargingState': 'charging',
+          'powerSource': 'usb',
+          'lowPowerMode': false,
+          'observedAt': '2026-08-06T12:00:00Z',
+          'isStale': false,
+        },
+      });
+
+      final eventFuture = client.onDeviceStatusUpdated.first;
+      transport.emitNotification('rift.onDeviceStatusUpdated', {
+        'SourceDeviceId': 'rift-phone',
+        'BatteryPresent': true,
+        'BatteryPercent': 64,
+        'ChargingState': 'charging',
+        'PowerSource': 'usb',
+        'LowPowerMode': false,
+        'ObservedAt': '2026-08-06T12:00:00Z',
+        'IsStale': false,
+      });
+      expect(await eventFuture, {
+        'sourceDeviceId': 'rift-phone',
+        'batteryPresent': true,
+        'batteryPercent': 64,
+        'chargingState': 'charging',
+        'powerSource': 'usb',
+        'lowPowerMode': false,
+        'observedAt': '2026-08-06T12:00:00Z',
+        'isStale': false,
+      });
+    });
+
     test('should format transport and pairing errors for display', () {
       expect(
         JsonRpcRiftClient.formatDisplayError(
@@ -1445,9 +1506,11 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         final updatedPlayback = Map<String, dynamic>.from(
-          (nativeCalls.lastWhere(
-            (call) => call.method == 'showRemotePlayback',
-          ).arguments as Map)['playback'] as Map,
+          (nativeCalls
+              .lastWhere(
+                (call) => call.method == 'showRemotePlayback',
+              )
+              .arguments as Map)['playback'] as Map,
         );
         expect(updatedPlayback['sourceDeviceId'], 'rift-linux');
         expect(updatedPlayback['playbackId'], 'playback-older');

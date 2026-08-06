@@ -10,18 +10,31 @@ import '../ipc/json_rpc_client.dart';
 import 'system_power_status.dart';
 
 class DeviceStatusPublisher with WidgetsBindingObserver {
-  DeviceStatusPublisher(this._client);
+  DeviceStatusPublisher(
+    this._client, {
+    Duration Function()? monotonicNow,
+    Directory? linuxPowerSupplyDirectory,
+  })  : _monotonicNow = monotonicNow ?? _createMonotonicClock(),
+        _linuxPowerSupplyDirectory =
+            linuxPowerSupplyDirectory ?? Directory('/sys/class/power_supply');
 
   static const _androidChannel = MethodChannel('rift/android/shell');
   static const _iosChannel = MethodChannel('rift/ios/device_status');
   static const _pollInterval = Duration(minutes: 5);
   static const _maximumSilence = Duration(minutes: 30);
 
+  static Duration Function() _createMonotonicClock() {
+    final stopwatch = Stopwatch()..start();
+    return () => stopwatch.elapsed;
+  }
+
   final JsonRpcRiftClient _client;
+  final Duration Function() _monotonicNow;
+  final Directory _linuxPowerSupplyDirectory;
   StreamSubscription<bool>? _connectionSubscription;
   Timer? _timer;
   Map<String, Object?>? _lastPublished;
-  DateTime? _lastPublishedAt;
+  Duration? _lastPublishedElapsed;
   bool _publishing = false;
 
   Future<void> start() async {
@@ -71,7 +84,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         observedAt: DateTime.now().toUtc().toIso8601String(),
       );
       _lastPublished = Map<String, Object?>.from(status);
-      _lastPublishedAt = DateTime.now();
+      _lastPublishedElapsed = _monotonicNow();
     } catch (error) {
       debugPrint('[Device Status] Failed to publish local status: $error');
     } finally {
@@ -101,9 +114,9 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     } else if ((previousBattery - battery).abs() >= 5) {
       return true;
     }
-    final lastPublishedAt = _lastPublishedAt;
-    return lastPublishedAt == null ||
-        DateTime.now().difference(lastPublishedAt) >= _maximumSilence;
+    final lastPublishedElapsed = _lastPublishedElapsed;
+    return lastPublishedElapsed == null ||
+        _monotonicNow() - lastPublishedElapsed >= _maximumSilence;
   }
 
   Future<Map<String, Object?>?> _readCurrentStatus() async {
@@ -143,7 +156,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
   }
 
   Future<Map<String, Object?>?> _readLinuxStatus() async {
-    final powerSupply = Directory('/sys/class/power_supply');
+    final powerSupply = _linuxPowerSupplyDirectory;
     if (!await powerSupply.exists()) {
       return null;
     }
@@ -155,7 +168,13 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     final externalPowerOnline = await _readLinuxExternalPowerOnline(supplies);
 
     for (final entity in supplies) {
-      if (!entity.path.split(Platform.pathSeparator).last.startsWith('BAT')) {
+      final type =
+          (await _readTrimmedFile('${entity.path}/type'))?.toLowerCase();
+      if (type != 'battery') {
+        continue;
+      }
+      final present = await _readTrimmedFile('${entity.path}/present');
+      if (present == '0') {
         continue;
       }
       final capacity = await _readTrimmedFile('${entity.path}/capacity');
@@ -170,7 +189,8 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
       };
       return {
         'batteryPresent': true,
-        if (batteryPercent != null) 'batteryPercent': batteryPercent,
+        if (batteryPercent != null)
+          'batteryPercent': batteryPercent.clamp(0, 100).toInt(),
         'chargingState': chargingState,
         'powerSource': deriveLinuxPowerSource(
           chargingState: chargingState,
@@ -191,10 +211,6 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
   ) async {
     var sawOfflineSupply = false;
     for (final supply in supplies) {
-      final name = supply.path.split(Platform.pathSeparator).last;
-      if (name.startsWith('BAT')) {
-        continue;
-      }
       final type =
           (await _readTrimmedFile('${supply.path}/type'))?.toLowerCase();
       if (type == 'battery') {
