@@ -16,7 +16,9 @@ builder.Services.AddSingleton<IIpcListener, LinuxIpcListener>();
 builder.Services.AddSingleton<ILinuxMprisArtworkLoader, LinuxMprisArtworkLoader>();
 builder.Services.AddSingleton<ILinuxMprisClient, LinuxMprisClient>();
 builder.Services.AddSingleton<ILinuxMprisRemotePlayer, LinuxMprisRemotePlayer>();
+builder.Services.AddSingleton<ILinuxNotificationMonitor, LinuxFreedesktopNotificationMonitor>();
 builder.Services.AddSingleton<LinuxMediaPlaybackService>();
+builder.Services.AddHostedService<LinuxNotificationSyncObserver>();
 builder.Services.AddSingleton<ILocalMediaPlaybackActionHandler>(sp =>
     sp.GetRequiredService<LinuxMediaPlaybackService>());
 builder.Services.AddHostedService<Worker>();

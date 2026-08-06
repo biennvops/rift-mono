@@ -326,7 +326,7 @@ The v1 notification record fields are:
 
 | Field             | Required | Type                | Notes                                                                 |
 | ----------------- | -------- | ------------------- | --------------------------------------------------------------------- |
-| `notificationId`  | Yes      | string              | Stable Android-origin identifier scoped to `sourceDeviceId`           |
+| `notificationId`  | Yes      | string              | Stable source-origin identifier scoped to `sourceDeviceId`            |
 | `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                        |
 | `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `ios`, `windows`, `macos`, `linux` |
 | `packageName`     | Yes      | string              | Stable source application identifier                                  |
@@ -595,7 +595,9 @@ Expiry is measured from local receipt time using monotonic timers. Wall-clock ti
 
 Notification sync mirrors limited notification metadata between trusted peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
 
-The Android source daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
+The originating daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
+
+Desktop observers MAY provide only forward-observed state when the platform has no supported active-notification enumeration API. Linux notification identifiers derived from `org.freedesktop.Notifications` server IDs are stable for the lifetime of that notification-server instance. An implementation that cannot safely map local actions MUST advertise `isDismissible: false` and `isOpenable: false`.
 
 Receivers MUST key mirrored records by `(sourceDeviceId, notificationId)` and mutate them in place on `notification.updated` / `notification.removed`. Senders and receivers SHOULD log accepted, denied, expired, malformed, and action-result flows with metadata only. Event details MUST NOT include full unredacted notification content beyond the mirrored title/body preview already permitted on the wire.
 

@@ -760,13 +760,13 @@ Requests a remote action against a mirrored notification when the source marked 
 
 #### `rift.updateNotificationSyncPolicy`
 
-Updates the local notification-sync policy. In v1, the default policy is enabled with a package blacklist.
+Updates the local notification-sync policy. In v1, the default policy is enabled with an application/package blacklist.
 
 **Params:**
 
 | Field                 | Type             | Required | Description                                   |
 | --------------------- | ---------------- | -------- | --------------------------------------------- |
-| `enabled`             | boolean          | Yes      | Whether Android notification sync is enabled  |
+| `enabled`             | boolean          | Yes      | Whether local notification sync is enabled    |
 | `blacklistedPackages` | array of strings | Yes      | Android package names excluded from syncing   |
 
 **Result:**

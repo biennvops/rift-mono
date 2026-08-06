@@ -644,6 +644,31 @@ void main() {
     ]);
   });
 
+  testWidgets('local notification post does not emit a duplicate native popup',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+    final showCountBefore =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-local',
+      'sourceDeviceId': mockDeviceInfo['deviceId'],
+      'sourcePlatform': 'linux',
+      'appName': 'Example Chat',
+      'title': 'Local message',
+      'bodyPreview': 'Already shown by the source application',
+      'isOpenable': false,
+      'isDismissible': false,
+    });
+    await tester.pump();
+
+    final showCountAfter =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+    expect(showCountAfter, showCountBefore);
+  });
+
   testWidgets('iOS consumes launch actions without requesting permission',
       (WidgetTester tester) async {
     setMacOSNotificationBridgeOverride(false);
