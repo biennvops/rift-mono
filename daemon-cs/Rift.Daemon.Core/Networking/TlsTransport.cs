@@ -179,8 +179,11 @@ public sealed class TlsTransport : ITransport, IDisposable
                         ["authenticatedDeviceId"] = deviceId,
                         ["endpoint"] = $"{host}:{port}"
                     }).ConfigureAwait(false);
-                throw new InvalidOperationException(
-                    $"Endpoint {host}:{port} authenticated unexpected peer {deviceId} instead of {expectedDeviceId}.");
+                throw new UnexpectedPeerIdentityException(
+                    host,
+                    port,
+                    expectedDeviceId,
+                    deviceId);
             }
             await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);

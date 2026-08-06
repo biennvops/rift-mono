@@ -166,6 +166,34 @@ void main() {
       await transport.stopServer();
     });
 
+    test('candidate teardown preserves the established connection', () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub = transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+
+      await transport.closePendingCandidateForTesting('rift-peer');
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(tls.closedConnectionIds, [43]);
+      expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+      await disconnectSub.cancel();
+      await transport.stopServer();
+    });
+
     test('serializes concurrent writes for one peer', () async {
       final tls = _RecordingNativeTlsApi();
       final transport = AndroidNativePeerTransport(

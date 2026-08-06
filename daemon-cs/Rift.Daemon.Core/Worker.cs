@@ -352,6 +352,26 @@ public class Worker(
                     {
                         throw;
                     }
+                    catch (UnexpectedPeerIdentityException ex)
+                    {
+                        logger.LogWarning(
+                            ex,
+                            "Trusted reconnect endpoint {Address}:{Port} belongs to {ActualDeviceId}, not {ExpectedDeviceId}; quarantining the stale endpoint.",
+                            ex.Address,
+                            ex.Port,
+                            ex.ActualDeviceId,
+                            ex.ExpectedDeviceId);
+                        var remainingEndpoints = peer.TrustedEndpoints
+                            .Where(endpoint =>
+                                endpoint.Address != ex.Address ||
+                                endpoint.Port != ex.Port)
+                            .ToArray();
+                        if (remainingEndpoints.Length != peer.TrustedEndpoints.Count)
+                        {
+                            peer.TrustedEndpoints = remainingEndpoints;
+                            trustStore.SavePeer(peer);
+                        }
+                    }
                     catch (Exception ex)
                     {
                         logger.LogDebug(ex, "Trusted reconnect endpoint attempt failed for {DeviceId}.", peer.DeviceId);

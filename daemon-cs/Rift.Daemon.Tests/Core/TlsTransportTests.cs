@@ -170,7 +170,7 @@ public class TlsTransportTests
         var port = await WaitForListeningPortAsync(server, cancellation.Token);
         const string expectedDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<UnexpectedPeerIdentityException>(() =>
             client.ConnectToPeerWithIdentityAsync(
                 "127.0.0.1",
                 port,
@@ -178,6 +178,10 @@ public class TlsTransportTests
                 expectedDeviceId));
 
         Assert.Contains(serverIdentity.GetDeviceId(), exception.Message, StringComparison.Ordinal);
+        Assert.Equal("127.0.0.1", exception.Address);
+        Assert.Equal(port, exception.Port);
+        Assert.Equal(expectedDeviceId, exception.ExpectedDeviceId);
+        Assert.Equal(serverIdentity.GetDeviceId(), exception.ActualDeviceId);
         Assert.False(client.HasActiveSession(serverIdentity.GetDeviceId()));
         var authFailure = Assert.Single(securityEventLog.Events);
         Assert.Equal(SecurityEventTypes.AuthFailed, authFailure.EventType);
