@@ -172,8 +172,14 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
 
   const std::string* media_type = FindString(*artwork, "mediaType");
   const std::string* data_base64 = FindString(*artwork, "dataBase64");
-  if (media_type == nullptr || data_base64 == nullptr ||
-      *media_type != "image/png") {
+  if (media_type == nullptr || data_base64 == nullptr) {
+    return std::nullopt;
+  }
+
+  const bool supported_media_type =
+      *media_type == "image/png" || *media_type == "image/jpeg" ||
+      *media_type == "image/gif" || *media_type == "image/webp";
+  if (!supported_media_type) {
     return std::nullopt;
   }
 
