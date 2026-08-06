@@ -1102,8 +1102,9 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
     timeline_properties.StartTime(std::chrono::milliseconds(0));
     const int64_t position_ms = FindInt64(playback, "positionMs").value_or(0);
     timeline_properties.Position(std::chrono::milliseconds(position_ms));
+    const bool can_seek = IsTrue(playback, "canSeek");
     const auto duration_ms = FindInt64(playback, "durationMs");
-    if (duration_ms.has_value() && duration_ms.value() > 0) {
+    if (can_seek && duration_ms.has_value() && duration_ms.value() > 0) {
       timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
       timeline_properties.MaxSeekTime(
           std::chrono::milliseconds(duration_ms.value()));
