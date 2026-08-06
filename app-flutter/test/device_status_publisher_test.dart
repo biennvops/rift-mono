@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -18,9 +19,13 @@ class _FakeDeviceStatusClient extends JsonRpcRiftClient {
   _FakeDeviceStatusClient() : super(_NoopTransport());
 
   final publications = <Map<String, Object?>>[];
+  final connectionController = StreamController<bool>.broadcast();
 
   @override
   bool get isConnected => true;
+
+  @override
+  Stream<bool> get onConnectionChanged => connectionController.stream;
 
   @override
   Future<dynamic> notifyLocalDeviceStatus({
@@ -240,6 +245,40 @@ void main() {
         await publisher.publishCurrentStatus();
         expect(client.publications, hasLength(2));
       } finally {
+        await root.delete(recursive: true);
+      }
+    });
+
+    test('republishes unchanged status after daemon reconnect', () async {
+      if (!Platform.isLinux) {
+        return;
+      }
+      final root = await _createSupplyRoot('PowerCell0', {
+        'type': 'Battery',
+        'present': '1',
+        'capacity': '64',
+        'status': 'Discharging',
+      });
+      final client = _FakeDeviceStatusClient();
+      final publisher = DeviceStatusPublisher(
+        client,
+        linuxPowerSupplyDirectory: root,
+      );
+      try {
+        await _addSupply(root, 'AC', {
+          'type': 'Mains',
+          'online': '0',
+        });
+        await publisher.start();
+        expect(client.publications, hasLength(1));
+
+        client.connectionController.add(true);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+
+        expect(client.publications, hasLength(2));
+      } finally {
+        await publisher.dispose();
+        await client.connectionController.close();
         await root.delete(recursive: true);
       }
     });

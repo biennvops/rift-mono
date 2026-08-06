@@ -41,7 +41,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _connectionSubscription = _client.onConnectionChanged.listen((connected) {
       if (connected) {
-        unawaited(publishCurrentStatus());
+        unawaited(publishCurrentStatus(force: true));
       }
     });
     _timer = Timer.periodic(
@@ -64,14 +64,16 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     }
   }
 
-  Future<void> publishCurrentStatus() async {
+  Future<void> publishCurrentStatus({bool force = false}) async {
     if (_publishing || !_client.isConnected) {
       return;
     }
     _publishing = true;
     try {
       final status = await _readCurrentStatus();
-      if (status == null || status.isEmpty || !_shouldPublish(status)) {
+      if (status == null ||
+          status.isEmpty ||
+          (!force && !_shouldPublish(status))) {
         return;
       }
       await _client.notifyLocalDeviceStatus(
