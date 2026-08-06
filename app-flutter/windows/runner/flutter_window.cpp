@@ -6,6 +6,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 namespace Gdiplus {
@@ -24,6 +25,10 @@ using std::min;
 #include <string>
 #include <vector>
 #include <wincodec.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Media.h>
+#include <winrt/Windows.Media.Playback.h>
+#include <winrt/Windows.Storage.Streams.h>
 #include <wrl/client.h>
 
 #include "flutter/generated_plugin_registrant.h"
@@ -33,6 +38,7 @@ using std::min;
 namespace {
 
 constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
+constexpr UINT kRiftMediaPlaybackActionMessage = WM_APP + 2;
 // tray_manager owns icon 1 and WM_USER + 1. Native balloons temporarily
 // borrow that icon so Rift has only one notification-area entry.
 constexpr UINT kTrayManagerNotifyMessage = WM_USER + 1;
@@ -45,6 +51,14 @@ constexpr size_t kMaxNotificationIconBytes = 131072;
 constexpr UINT kMaxNotificationIconDimension = 128;
 
 std::wstring Utf16FromUtf8(const std::string& utf8_string);
+const std::string* FindString(const flutter::EncodableMap& map,
+                              const char* key);
+std::optional<int64_t> FindInt64(const flutter::EncodableMap& map,
+                                 const char* key);
+bool IsTrue(const flutter::EncodableMap& map, const char* key);
+std::vector<uint8_t> DecodeBase64(const std::string& input);
+std::optional<winrt::Windows::Storage::Streams::RandomAccessStreamReference>
+CreateArtworkReference(const flutter::EncodableMap& playback);
 
 void LogClipboardMessage(const std::string& message) {
   std::wstring wide_message = Utf16FromUtf8(message);
@@ -88,6 +102,96 @@ std::wstring Utf16FromUtf8(const std::string& utf8_string) {
   }
 
   return utf16_string;
+}
+
+const std::string* FindString(const flutter::EncodableMap& map,
+                              const char* key) {
+  auto it = map.find(flutter::EncodableValue(key));
+  if (it == map.end()) {
+    return nullptr;
+  }
+  return std::get_if<std::string>(&it->second);
+}
+
+std::optional<int64_t> FindInt64(const flutter::EncodableMap& map,
+                                 const char* key) {
+  auto it = map.find(flutter::EncodableValue(key));
+  if (it == map.end()) {
+    return std::nullopt;
+  }
+  if (const auto* value = std::get_if<int32_t>(&it->second)) {
+    return static_cast<int64_t>(*value);
+  }
+  if (const auto* value = std::get_if<int64_t>(&it->second)) {
+    return *value;
+  }
+  return std::nullopt;
+}
+
+bool IsTrue(const flutter::EncodableMap& map, const char* key) {
+  auto it = map.find(flutter::EncodableValue(key));
+  return it != map.end() && std::get_if<bool>(&it->second) != nullptr &&
+         std::get<bool>(it->second);
+}
+
+std::vector<uint8_t> DecodeBase64(const std::string& input) {
+  static const std::string kAlphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  std::vector<uint8_t> output;
+  int value = 0;
+  int bits = -8;
+  for (unsigned char c : input) {
+    if (c == '=') {
+      break;
+    }
+    const size_t index = kAlphabet.find(static_cast<char>(c));
+    if (index == std::string::npos) {
+      continue;
+    }
+    value = (value << 6) | static_cast<int>(index);
+    bits += 6;
+    if (bits >= 0) {
+      output.push_back(static_cast<uint8_t>((value >> bits) & 0xFF));
+      bits -= 8;
+    }
+  }
+  return output;
+}
+
+std::optional<winrt::Windows::Storage::Streams::RandomAccessStreamReference>
+CreateArtworkReference(const flutter::EncodableMap& playback) {
+  auto artwork_it = playback.find(flutter::EncodableValue("artwork"));
+  if (artwork_it == playback.end()) {
+    return std::nullopt;
+  }
+  const auto* artwork = std::get_if<flutter::EncodableMap>(&artwork_it->second);
+  if (artwork == nullptr) {
+    return std::nullopt;
+  }
+
+  const std::string* media_type = FindString(*artwork, "mediaType");
+  const std::string* data_base64 = FindString(*artwork, "dataBase64");
+  if (media_type == nullptr || data_base64 == nullptr ||
+      *media_type != "image/png") {
+    return std::nullopt;
+  }
+
+  auto bytes = DecodeBase64(*data_base64);
+  if (bytes.empty()) {
+    return std::nullopt;
+  }
+
+  using namespace winrt::Windows::Storage::Streams;
+  InMemoryRandomAccessStream stream;
+  DataWriter writer(stream);
+  writer.WriteBytes(
+      winrt::array_view<const uint8_t>(bytes.data(), bytes.size()));
+  writer.StoreAsync().get();
+  writer.FlushAsync().get();
+  writer.DetachStream();
+  stream.Seek(0);
+  return RandomAccessStreamReference::CreateFromStream(stream);
 }
 
 bool ReadGlobalMemory(HANDLE handle, std::vector<uint8_t>* bytes) {
@@ -392,6 +496,7 @@ bool FlutterWindow::OnCreate() {
   RegisterClipboardEventChannel();
   RegisterClipboardMethodChannel();
   RegisterWindowsShellMethodChannel();
+  RegisterWindowsMediaPlaybackMethodChannel();
   RegisterSendFilesMethodChannel();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
@@ -416,7 +521,9 @@ void FlutterWindow::OnDestroy() {
   clipboard_event_channel_.reset();
   clipboard_method_channel_.reset();
   CleanupShellNotificationIcon();
+  ClearWindowsMediaPlayback();
   windows_shell_method_channel_.reset();
+  windows_media_playback_method_channel_.reset();
   send_files_method_channel_.reset();
   send_files_channel_ready_ = false;
   if (flutter_controller_) {
@@ -505,6 +612,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;
+    case kRiftMediaPlaybackActionMessage:
+      DispatchPendingWindowsMediaPlaybackActions();
+      return 0;
   }
 
   return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
@@ -874,6 +984,273 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
         }
         result->Success(flutter::EncodableValue(shown));
       });
+}
+
+void FlutterWindow::RegisterWindowsMediaPlaybackMethodChannel() {
+  auto messenger = flutter_controller_->engine()->messenger();
+  windows_media_playback_method_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          messenger, "rift/windows/media_playback",
+          &flutter::StandardMethodCodec::GetInstance());
+
+  windows_media_playback_method_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+                 result) {
+        const auto method_name = call.method_name();
+        if (method_name == "clear") {
+          result->Success(flutter::EncodableValue(ClearWindowsMediaPlayback()));
+          return;
+        }
+        if (method_name != "show") {
+          result->NotImplemented();
+          return;
+        }
+
+        const auto* arguments =
+            std::get_if<flutter::EncodableMap>(call.arguments());
+        if (arguments == nullptr) {
+          result->Error("invalid_args", "Expected map arguments.");
+          return;
+        }
+        const auto playback_it =
+            arguments->find(flutter::EncodableValue("playback"));
+        if (playback_it == arguments->end()) {
+          result->Error("invalid_args", "playback is required.");
+          return;
+        }
+        const auto* playback =
+            std::get_if<flutter::EncodableMap>(&playback_it->second);
+        if (playback == nullptr) {
+          result->Error("invalid_args", "playback must be a map.");
+          return;
+        }
+
+        result->Success(
+            flutter::EncodableValue(ShowWindowsMediaPlayback(*playback)));
+      });
+}
+
+bool FlutterWindow::ShowWindowsMediaPlayback(
+    const flutter::EncodableMap& playback) {
+  const std::string* source_device_id = FindString(playback, "sourceDeviceId");
+  const std::string* playback_id = FindString(playback, "playbackId");
+  if (source_device_id == nullptr || playback_id == nullptr ||
+      source_device_id->empty() || playback_id->empty()) {
+    return false;
+  }
+
+  try {
+    try {
+      winrt::init_apartment();
+    } catch (...) {
+    }
+
+    if (!media_playback_player_) {
+      media_playback_player_ = winrt::Windows::Media::Playback::MediaPlayer();
+      media_playback_player_.CommandManager().IsEnabled(false);
+    }
+
+    auto controls = media_playback_player_.SystemMediaTransportControls();
+    controls.IsEnabled(true);
+    controls.IsPlayEnabled(IsTrue(playback, "canPlay"));
+    controls.IsPauseEnabled(IsTrue(playback, "canPause"));
+    controls.IsNextEnabled(IsTrue(playback, "canSkipNext"));
+    controls.IsPreviousEnabled(IsTrue(playback, "canSkipPrevious"));
+
+    const std::string playback_state =
+        FindString(playback, "playbackState") != nullptr
+            ? *FindString(playback, "playbackState")
+            : "stopped";
+    using winrt::Windows::Media::MediaPlaybackStatus;
+    if (playback_state == "playing") {
+      controls.PlaybackStatus(MediaPlaybackStatus::Playing);
+    } else if (playback_state == "paused") {
+      controls.PlaybackStatus(MediaPlaybackStatus::Paused);
+    } else if (playback_state == "buffering") {
+      controls.PlaybackStatus(MediaPlaybackStatus::Changing);
+    } else {
+      controls.PlaybackStatus(MediaPlaybackStatus::Stopped);
+    }
+
+    auto display_updater = controls.DisplayUpdater();
+    display_updater.Type(winrt::Windows::Media::MediaPlaybackType::Music);
+    const std::string* app_name = FindString(playback, "appName");
+    const std::string* title = FindString(playback, "title");
+    const std::string* artist = FindString(playback, "artist");
+    const std::string* album = FindString(playback, "album");
+    display_updater.AppMediaId(Utf16FromUtf8(
+        app_name != nullptr && !app_name->empty() ? *app_name : "Rift"));
+    auto music_properties = display_updater.MusicProperties();
+    music_properties.Title(Utf16FromUtf8(
+        title != nullptr && !title->empty()
+            ? *title
+            : (app_name != nullptr && !app_name->empty() ? *app_name
+                                                          : "Remote playback")));
+    music_properties.Artist(
+        Utf16FromUtf8(artist != nullptr ? *artist : std::string()));
+    music_properties.AlbumTitle(
+        Utf16FromUtf8(album != nullptr ? *album : std::string()));
+    auto artwork = CreateArtworkReference(playback);
+    if (artwork.has_value()) {
+      display_updater.Thumbnail(*artwork);
+    }
+    display_updater.Update();
+
+    winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties
+        timeline_properties;
+    timeline_properties.StartTime(std::chrono::milliseconds(0));
+    const int64_t position_ms = FindInt64(playback, "positionMs").value_or(0);
+    timeline_properties.Position(std::chrono::milliseconds(position_ms));
+    const auto duration_ms = FindInt64(playback, "durationMs");
+    if (duration_ms.has_value() && duration_ms.value() > 0) {
+      timeline_properties.MinSeekTime(std::chrono::milliseconds(0));
+      timeline_properties.MaxSeekTime(
+          std::chrono::milliseconds(duration_ms.value()));
+      timeline_properties.EndTime(std::chrono::milliseconds(duration_ms.value()));
+    }
+    controls.UpdateTimelineProperties(timeline_properties);
+
+    if (media_playback_button_pressed_token_.value != 0) {
+      controls.ButtonPressed(media_playback_button_pressed_token_);
+      media_playback_button_pressed_token_ = {};
+    }
+    if (media_playback_position_change_token_.value != 0) {
+      controls.PlaybackPositionChangeRequested(
+          media_playback_position_change_token_);
+      media_playback_position_change_token_ = {};
+    }
+
+    media_playback_button_pressed_token_ = controls.ButtonPressed(
+        [this](auto&&, auto&& args) {
+          using winrt::Windows::Media::SystemMediaTransportControlsButton;
+          std::optional<std::string> action;
+          switch (args.Button()) {
+            case SystemMediaTransportControlsButton::Play:
+              action = "play";
+              break;
+            case SystemMediaTransportControlsButton::Pause:
+              action = "pause";
+              break;
+            case SystemMediaTransportControlsButton::Next:
+              action = "next";
+              break;
+            case SystemMediaTransportControlsButton::Previous:
+              action = "previous";
+              break;
+            default:
+              break;
+          }
+          if (action.has_value()) {
+            QueueWindowsMediaPlaybackAction(action.value());
+          }
+        });
+    media_playback_position_change_token_ =
+        controls.PlaybackPositionChangeRequested([this](auto&&, auto&& args) {
+          const auto position_ms = static_cast<int64_t>(
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  args.RequestedPlaybackPosition())
+                  .count());
+          QueueWindowsMediaPlaybackAction("seek", position_ms);
+        });
+
+    {
+      std::scoped_lock lock(media_playback_mutex_);
+      current_media_playback_source_device_id_ = *source_device_id;
+      current_media_playback_playback_id_ = *playback_id;
+    }
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool FlutterWindow::ClearWindowsMediaPlayback() {
+  {
+    std::scoped_lock lock(media_playback_mutex_);
+    current_media_playback_source_device_id_.clear();
+    current_media_playback_playback_id_.clear();
+    pending_media_playback_actions_.clear();
+  }
+
+  try {
+    if (!media_playback_player_) {
+      return true;
+    }
+    auto controls = media_playback_player_.SystemMediaTransportControls();
+    controls.IsEnabled(false);
+    controls.IsPlayEnabled(false);
+    controls.IsPauseEnabled(false);
+    controls.IsNextEnabled(false);
+    controls.IsPreviousEnabled(false);
+    if (media_playback_button_pressed_token_.value != 0) {
+      controls.ButtonPressed(media_playback_button_pressed_token_);
+      media_playback_button_pressed_token_ = {};
+    }
+    if (media_playback_position_change_token_.value != 0) {
+      controls.PlaybackPositionChangeRequested(
+          media_playback_position_change_token_);
+      media_playback_position_change_token_ = {};
+    }
+    controls.PlaybackStatus(
+        winrt::Windows::Media::MediaPlaybackStatus::Closed);
+    auto display_updater = controls.DisplayUpdater();
+    display_updater.ClearAll();
+    display_updater.Update();
+    controls.UpdateTimelineProperties(
+        winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties());
+    media_playback_player_.Close();
+    media_playback_player_ = nullptr;
+  } catch (...) {
+  }
+
+  return true;
+}
+
+void FlutterWindow::QueueWindowsMediaPlaybackAction(
+    const std::string& action,
+    std::optional<int64_t> position_ms) {
+  flutter::EncodableMap payload;
+  {
+    std::scoped_lock lock(media_playback_mutex_);
+    if (current_media_playback_source_device_id_.empty() ||
+        current_media_playback_playback_id_.empty()) {
+      return;
+    }
+    payload[flutter::EncodableValue("sourceDeviceId")] =
+        flutter::EncodableValue(current_media_playback_source_device_id_);
+    payload[flutter::EncodableValue("playbackId")] =
+        flutter::EncodableValue(current_media_playback_playback_id_);
+    payload[flutter::EncodableValue("action")] =
+        flutter::EncodableValue(action);
+    if (position_ms.has_value()) {
+      payload[flutter::EncodableValue("positionMs")] =
+          flutter::EncodableValue(position_ms.value());
+    }
+    pending_media_playback_actions_.push_back(flutter::EncodableValue(payload));
+  }
+
+  if (GetHandle() != nullptr) {
+    PostMessageW(GetHandle(), kRiftMediaPlaybackActionMessage, 0, 0);
+  }
+}
+
+void FlutterWindow::DispatchPendingWindowsMediaPlaybackActions() {
+  if (!windows_media_playback_method_channel_) {
+    return;
+  }
+
+  std::vector<flutter::EncodableValue> actions;
+  {
+    std::scoped_lock lock(media_playback_mutex_);
+    actions.swap(pending_media_playback_actions_);
+  }
+
+  for (const auto& action : actions) {
+    windows_media_playback_method_channel_->InvokeMethod(
+        "mediaPlaybackAction",
+        std::make_unique<flutter::EncodableValue>(action));
+  }
 }
 
 void FlutterWindow::QueueSendFiles(const std::vector<std::wstring>& paths) {

@@ -34,6 +34,7 @@ import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/media_playback/macos_remote_media_playback_coordinator.dart';
+import 'src/media_playback/windows_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
@@ -253,6 +254,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
   DeviceStatusPublisher? _deviceStatusPublisher;
   TrustedPeerNameResolver? _trustedPeerNameResolver;
+  WindowsRemoteMediaPlaybackCoordinator? _windowsRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
   Future<String?>? _localDeviceIdFuture;
@@ -475,6 +477,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     } else if (Platform.isMacOS) {
       _macOSRemoteMediaPlayback = MacOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_macOSRemoteMediaPlayback!.start());
+    } else if (Platform.isWindows) {
+      _windowsRemoteMediaPlayback =
+          WindowsRemoteMediaPlaybackCoordinator(client);
+      unawaited(_windowsRemoteMediaPlayback!.start());
     }
   }
 
@@ -1085,6 +1091,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_macOSRemoteMediaPlayback?.dispose());
     unawaited(_deviceStatusPublisher?.dispose());
+    unawaited(_windowsRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
     super.dispose();
   }
