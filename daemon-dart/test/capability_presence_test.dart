@@ -360,6 +360,41 @@ void main() {
     expect(readyEvents.single.currentPresenceStatus, 'online');
   });
 
+  test('trusted session becomes ready without optional file transfer', () async {
+    final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
+    ctx.handshakeState = HandshakeState.established;
+    ctx.trustState = TrustState.trusted;
+    ctx.localAdvertisedCapabilities = [
+      Capability(name: 'clipboard.offer_fetch', version: 1),
+      Capability(name: 'device.status', version: 1),
+      Capability(name: 'presence.basic', version: 1),
+      Capability(name: 'operation.lifecycle', version: 1),
+      Capability(name: 'security.event_log', version: 1),
+    ];
+    sessionManager.injectContextForTesting(ctx);
+
+    final readyEvents = <SessionContext>[];
+    final sub = sessionManager.onTrustedSessionReady.listen(readyEvents.add);
+
+    transport.simulateMessage('peer1', 'capability.advertise', {
+      'capabilities': [
+        {'name': 'clipboard.offer_fetch', 'version': 1},
+        {'name': 'device.status', 'version': 1},
+        {'name': 'presence.basic', 'version': 1},
+        {'name': 'operation.lifecycle', 'version': 1},
+        {'name': 'security.event_log', 'version': 1},
+      ],
+    });
+
+    await Future.delayed(Duration.zero);
+    await sub.cancel();
+
+    expect(ctx.hasCapability('file.transfer'), isFalse);
+    expect(ctx.hasCapability('device.status'), isTrue);
+    expect(ctx.currentPresenceStatus, 'online');
+    expect(readyEvents, hasLength(1));
+  });
+
   test('trusted session ready does not emit for untrusted sessions', () async {
     final ctx = SessionContext(peerDeviceId: 'peer1', isInitiator: true);
     ctx.handshakeState = HandshakeState.established;

@@ -15,6 +15,8 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
       StreamController<Map<String, dynamic>>.broadcast();
   final _peerLostController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final _deviceStatusController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final _connectionController = StreamController<bool>.broadcast();
 
   List<Map<String, dynamic>> trustedPeers = [
@@ -37,6 +39,10 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onPeerLost => _peerLostController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get onDeviceStatusUpdated =>
+      _deviceStatusController.stream;
 
   @override
   Stream<bool> get onConnectionChanged => _connectionController.stream;
@@ -76,6 +82,10 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
 
   Future<void> emitPeerLost(Map<String, dynamic> event) async {
     _peerLostController.add(event);
+  }
+
+  Future<void> emitDeviceStatus(Map<String, dynamic> event) async {
+    _deviceStatusController.add(event);
   }
 }
 
@@ -161,6 +171,114 @@ void main() {
 
     expect(find.text('Offline'), findsOneWidget);
     expect(find.text('Device unavailable'), findsNothing);
+  });
+
+  testWidgets('DeviceDetailScreen renders and updates peer power status',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['device.status', 'presence.basic'],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPercent': 64,
+            'chargingState': 'charging',
+            'powerSource': 'usb',
+            'lowPowerMode': false,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Power status'), findsOneWidget);
+    expect(find.text('64%'), findsOneWidget);
+    expect(find.text('Charging'), findsOneWidget);
+    expect(find.text('USB power'), findsOneWidget);
+    expect(find.text('Off'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsNothing);
+
+    await tester.pump(const Duration(minutes: 30));
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-phone',
+      'batteryPercent': 59,
+      'chargingState': 'discharging',
+      'powerSource': 'battery',
+      'lowPowerMode': true,
+      'observedAt': '2026-07-29T00:05:00Z',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('59%'), findsOneWidget);
+    expect(find.text('Discharging'), findsOneWidget);
+    expect(find.text('Battery'), findsWidgets);
+    expect(find.text('On'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsNothing);
+  });
+
+  testWidgets('DeviceDetailScreen marks power status stale on peer loss',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPresent': true,
+            'batteryPercent': 64,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Stale ·'), findsNothing);
+
+    await client.emitPeerLost({'deviceId': 'rift-phone'});
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+  });
+
+  testWidgets('DeviceDetailScreen renders a peer without a battery',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-desktop',
+          'displayName': 'Desktop',
+          'platform': 'windows',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-desktop',
+            'batteryPresent': false,
+            'powerSource': 'ac',
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No battery'), findsOneWidget);
+    expect(find.text('AC power'), findsOneWidget);
   });
 
   testWidgets(

@@ -234,7 +234,6 @@ class SessionManager {
 
   final Set<String> _requiredCapabilityNames = const {
     'clipboard.offer_fetch',
-    'file.transfer',
     'presence.basic',
     'operation.lifecycle',
     'security.event_log',
@@ -256,6 +255,7 @@ class SessionManager {
 
   static final List<Capability> _defaultCapabilities = [
     Capability(name: 'clipboard.offer_fetch', version: 1),
+    Capability(name: 'device.status', version: 1),
     Capability(name: 'file.transfer', version: 1),
     Capability(name: 'media.playback', version: 1),
     Capability(name: 'notification.sync', version: 1),

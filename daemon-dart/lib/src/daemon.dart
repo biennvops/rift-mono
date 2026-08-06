@@ -26,6 +26,7 @@ import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
+import 'package:daemon_dart/src/device_status/device_status_manager.dart';
 import 'package:daemon_dart/src/media_playback/media_playback_manager.dart';
 import 'package:daemon_dart/src/media_playback/media_playback_models.dart';
 import 'package:daemon_dart/src/operation/operation_manager.dart';
@@ -465,8 +466,10 @@ class RiftDaemon {
   FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
   MediaPlaybackManager? _mediaPlaybackManager;
+  DeviceStatusManager? _deviceStatusManager;
   StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
   StreamSubscription<ProtocolMessage>? _mediaPlaybackMessageSub;
+  StreamSubscription<ProtocolMessage>? _deviceStatusMessageSub;
   StreamSubscription<String>? _sessionDisconnectSub;
   final Map<String, Map<String, dynamic>> _pendingMediaPlaybackActions = {};
   final Map<String, String> _pendingMediaPlaybackActionKeys = {};
@@ -613,6 +616,7 @@ class RiftDaemon {
       );
       _operationManager = OperationManager();
       _mediaPlaybackManager = MediaPlaybackManager();
+      _deviceStatusManager = DeviceStatusManager();
       _sessionDisconnectSub = _sessionManager!.onPeerDisconnected.listen((
         peerDeviceId,
       ) {
@@ -704,6 +708,17 @@ class RiftDaemon {
       _mediaPlaybackMessageSub = _sessionManager!.onMessage.listen(
         _handleMediaPlaybackProtocolMessage,
       );
+      _deviceStatusMessageSub = _sessionManager!.onMessage.listen(
+        _handleDeviceStatusProtocolMessage,
+      );
+
+      _deviceStatusManager!.onUpdated.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onDeviceStatusUpdated',
+          'params': record.toJson(),
+        });
+      });
 
       _mediaPlaybackManager!.onPosted.listen((record) {
         onIpcEvent?.call({
@@ -872,6 +887,139 @@ class RiftDaemon {
     return _mediaPlaybackManager?.listStateJson() ?? {'playbacks': <dynamic>[]};
   }
 
+  Future<Map<String, dynamic>> _getPeerDeviceStatus(
+    Map<String, dynamic> params,
+  ) async {
+    final sourceDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
+    final peer = await _trustStore!.getPeer(sourceDeviceId);
+    if (peer == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    if (peer.state != TrustState.trusted) {
+      throw const RiftUnauthorizedException('Peer is not trusted');
+    }
+    final context = _sessionManager?.getContext(sourceDeviceId);
+    final status = _deviceStatusManager?.getStatus(
+      sourceDeviceId,
+      isOnline: context?.currentPresenceStatus == 'online',
+    );
+    if (status == null) {
+      throw const RiftNotFoundException('Device status is unavailable');
+    }
+    return status.toJson();
+  }
+
+  Future<Map<String, dynamic>> _handleLocalDeviceStatus(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final record = DeviceStatusRecord(
+      sourceDeviceId: _identityManager!.deviceId,
+      sourcePlatform: params['sourcePlatform'] is String
+          ? params['sourcePlatform'] as String
+          : _localPlatform(),
+      batteryPresent: params['batteryPresent'] as bool?,
+      batteryPercent: params['batteryPercent'] as int?,
+      chargingState: params['chargingState'] as String?,
+      powerSource: params['powerSource'] as String?,
+      lowPowerMode: params['lowPowerMode'] as bool?,
+      observedAt: params['observedAt'] is String
+          ? params['observedAt'] as String
+          : DateTime.now().toUtc().toIso8601String(),
+    );
+    _validateDeviceStatus(record);
+    _deviceStatusManager!.update(record);
+
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final context = _sessionManager!.getContext(peer.deviceId);
+        if (context == null || !context.hasCapability('device.status')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': 'device.statusUpdated',
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': record.toJson(),
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[DeviceStatus] Could not send status to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return {'broadcastTo': broadcastTo};
+  }
+
+  void _validateDeviceStatus(DeviceStatusRecord record) {
+    const chargingStates = {
+      'charging',
+      'discharging',
+      'full',
+      'notCharging',
+      'unknown',
+    };
+    const powerSources = {'battery', 'ac', 'usb', 'unknown'};
+    final batteryPercent = record.batteryPercent;
+    if (batteryPercent != null &&
+        (batteryPercent < 0 || batteryPercent > 100)) {
+      throw ArgumentError.value(
+        batteryPercent,
+        'batteryPercent',
+        'must be between 0 and 100',
+      );
+    }
+    if (record.batteryPresent == false &&
+        (batteryPercent != null || record.chargingState != null)) {
+      throw ArgumentError.value(
+        record.toJson(),
+        'deviceStatus',
+        'batteryPercent and chargingState must be omitted when batteryPresent is false',
+      );
+    }
+    if (record.chargingState != null &&
+        !chargingStates.contains(record.chargingState)) {
+      throw ArgumentError.value(
+        record.chargingState,
+        'chargingState',
+        'is not supported',
+      );
+    }
+    if (record.powerSource != null &&
+        !powerSources.contains(record.powerSource)) {
+      throw ArgumentError.value(
+        record.powerSource,
+        'powerSource',
+        'is not supported',
+      );
+    }
+    if (record.batteryPresent == null &&
+        batteryPercent == null &&
+        record.chargingState == null &&
+        record.powerSource == null &&
+        record.lowPowerMode == null) {
+      throw ArgumentError.value(
+        record.toJson(),
+        'deviceStatus',
+        'requires at least one power-state field',
+      );
+    }
+    if (!_rfc3339UtcTimestamp.hasMatch(record.observedAt) ||
+        DateTime.tryParse(record.observedAt) == null) {
+      throw ArgumentError.value(
+        record.observedAt,
+        'observedAt',
+        'must be an RFC 3339 UTC timestamp',
+      );
+    }
+  }
+
   Map<String, dynamic> _getMediaPlaybackState(Map<String, dynamic> params) {
     final sourceDeviceId = RpcUtils.requireStringParam(
       params,
@@ -906,9 +1054,11 @@ class RiftDaemon {
     final sessionManager = _sessionManager;
     final identityManager = _identityManager;
     final mediaPlaybackManager = _mediaPlaybackManager;
+    final deviceStatusManager = _deviceStatusManager;
     if (sessionManager == null ||
         identityManager == null ||
-        mediaPlaybackManager == null) {
+        mediaPlaybackManager == null ||
+        deviceStatusManager == null) {
       return;
     }
 
@@ -918,6 +1068,27 @@ class RiftDaemon {
     }
 
     final localDeviceId = identityManager.deviceId;
+    if (context.hasCapability('device.status')) {
+      final status = deviceStatusManager.getStatus(localDeviceId);
+      if (status != null) {
+        try {
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'device.statusUpdated',
+            'sourceDeviceId': localDeviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': status.toJson()..remove('isStale'),
+          });
+        } catch (error) {
+          RiftLog.warn(
+            '[DeviceStatus] Failed to replay status to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
+
     if (context.hasCapability('notification.sync')) {
       for (final record in _notificationSyncRecords.values) {
         if (record['sourceDeviceId'] != localDeviceId) {
@@ -1744,6 +1915,122 @@ class RiftDaemon {
   SessionManager get sessionManagerForTesting => _sessionManager!;
 
   @visibleForTesting
+  Future<void> handleDeviceStatusProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleDeviceStatusProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
+
+  Future<void> _handleDeviceStatusProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'];
+    if (type != 'device.statusUpdated') {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(message.peerDeviceId, 'device.status');
+      final context = _sessionManager!.getContext(message.peerDeviceId);
+      if (context?.trustState != TrustState.trusted) {
+        throw const RiftUnauthorizedException(
+          'Device status requires a trusted peer',
+        );
+      }
+      final payload = message.payload['payload'];
+      if (payload is! Map<String, dynamic>) {
+        throw ArgumentError.value(payload, 'payload', 'must be an object');
+      }
+      final sourceDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'sourceDeviceId',
+      );
+      if (sourceDeviceId != message.peerDeviceId) {
+        await _recordSecurityEvent(
+          eventType: 'auth.failed',
+          severity: 'critical',
+          peerDeviceId: message.peerDeviceId,
+          outcome: 'denied',
+          failureReason: 'Unauthorized',
+          details: {
+            'messageType': 'device.statusUpdated',
+            'identityField': 'sourceDeviceId',
+          },
+        );
+        throw const RiftUnauthorizedException(
+          'Device status sourceDeviceId mismatch',
+        );
+      }
+      final record = DeviceStatusRecord(
+        sourceDeviceId: sourceDeviceId,
+        sourcePlatform: payload['sourcePlatform'] as String?,
+        batteryPresent: payload['batteryPresent'] as bool?,
+        batteryPercent: payload['batteryPercent'] as int?,
+        chargingState: payload['chargingState'] as String?,
+        powerSource: payload['powerSource'] as String?,
+        lowPowerMode: payload['lowPowerMode'] as bool?,
+        observedAt: RpcUtils.requireStringParam(payload, 'observedAt'),
+      );
+      _validateDeviceStatus(record);
+      _deviceStatusManager!.update(record);
+    } on SessionException catch (error) {
+      final failureReason = error.message.contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'Unauthorized';
+      await _trySendDeviceStatusPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on RiftException catch (error) {
+      final failureReason = error.code == -32004
+          ? 'Unauthorized'
+          : error.toString().contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'MalformedMessage';
+      await _trySendDeviceStatusPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on ArgumentError catch (error) {
+      await _trySendDeviceStatusPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    } on TypeError catch (error) {
+      await _trySendDeviceStatusPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    }
+  }
+
+  Future<void> _trySendDeviceStatusPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[DeviceStatus] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  @visibleForTesting
   Future<void> handleMediaPlaybackProtocolMessageForTesting(
     String peerDeviceId,
     Map<String, dynamic> envelope,
@@ -2082,6 +2369,7 @@ class RiftDaemon {
     _isStopping = true;
     await _notificationSyncMessageSub?.cancel();
     await _mediaPlaybackMessageSub?.cancel();
+    await _deviceStatusMessageSub?.cancel();
     await _sessionDisconnectSub?.cancel();
     for (final timer in _trustedReconnectTimers.values) {
       timer.cancel();
@@ -2102,6 +2390,7 @@ class RiftDaemon {
     _clipboardEngine?.dispose();
     await _fileTransferService?.dispose();
     _mediaPlaybackManager?.dispose();
+    _deviceStatusManager?.dispose();
     _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
@@ -2167,6 +2456,12 @@ class RiftDaemon {
       final lastSeenAt =
           ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
+      final deviceStatus = peer.state == TrustState.trusted
+          ? _deviceStatusManager?.getStatus(
+              peer.deviceId,
+              isOnline: ctx?.currentPresenceStatus == 'online',
+            )
+          : null;
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
@@ -2179,6 +2474,7 @@ class RiftDaemon {
         'capabilities':
             ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
             <String>[],
+        if (deviceStatus != null) 'deviceStatus': deviceStatus.toJson(),
       };
     }).toList();
   }
@@ -2196,6 +2492,12 @@ class RiftDaemon {
       final lastSeenAt =
           ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
+      final deviceStatus = peer.state == TrustState.trusted
+          ? _deviceStatusManager?.getStatus(
+              peer.deviceId,
+              isOnline: ctx?.currentPresenceStatus == 'online',
+            )
+          : null;
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
@@ -2208,6 +2510,7 @@ class RiftDaemon {
         'capabilities':
             ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
             <String>[],
+        if (deviceStatus != null) 'deviceStatus': deviceStatus.toJson(),
       };
     }).toList();
   }
@@ -2389,6 +2692,8 @@ class RiftDaemon {
       case 'rift.listPeersByState':
         final state = RpcUtils.requireStringParam(params, 'trustState');
         return {'peers': await listPeersByState(state)};
+      case 'rift.getPeerDeviceStatus':
+        return _getPeerDeviceStatus(params);
       case 'rift.getPeerPresence':
         final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
         final trustRecord = await _trustStore!.getPeer(peerDeviceId);
@@ -2485,6 +2790,9 @@ class RiftDaemon {
 
       case 'rift.notifyLocalNotificationEvent':
         return _handleLocalNotificationSyncEvent(params);
+
+      case 'rift.notifyLocalDeviceStatus':
+        return _handleLocalDeviceStatus(params);
 
       case 'rift.notifyLocalMediaPlaybackEvent':
         return _handleLocalMediaPlaybackEvent(params);

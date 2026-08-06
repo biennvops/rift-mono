@@ -22,6 +22,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly FileTransferService _fileTransferService;
     private readonly MediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly NotificationSyncService _notificationSyncService;
+    private readonly DeviceStatusService _deviceStatusService;
     private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
     private readonly FakeTransport _pairingTransport;
@@ -73,7 +74,38 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _securityEventLog,
             null,
             NullLogger<NotificationSyncService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService);
+        _deviceStatusService = new DeviceStatusService(
+            _clipboardTransport,
+            _presenceService,
+            _identityManager,
+            logger: NullLogger<DeviceStatusService>.Instance);
+        _router = new ProtocolMessageRouter(
+            _pairingCoordinator,
+            _presenceService,
+            _clipboardService,
+            _fileTransferService,
+            _mediaPlaybackSyncService,
+            _notificationSyncService,
+            _deviceStatusService,
+            _securityEventLog,
+            _identityManager);
+    }
+
+    [Fact]
+    public async Task SendPeerErrorAsync_OmitsNullReferenceMessageId()
+    {
+        await _deviceStatusService.SendPeerErrorAsync(
+            "rift-peer-error",
+            "MalformedMessage",
+            refMessageId: null,
+            message: "Invalid device status payload",
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        var payload = error.GetProperty("payload");
+        Assert.Equal("MalformedMessage", payload.GetProperty("failureReason").GetString());
+        Assert.False(payload.TryGetProperty("refMessageId", out _));
+        Assert.Equal("Invalid device status payload", payload.GetProperty("message").GetString());
     }
 
     [Fact]
@@ -99,6 +131,88 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         Assert.Equal("online", presence!.Status);
         Assert.Equal("2026-06-18T11:00:00Z", presence.LastSeenAt);
         Assert.Contains("presence.basic", presence.Capabilities);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_CachesPeerPowerState()
+    {
+        const string peerDeviceId = "rift-peer-device-status";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = peerDeviceId,
+                sourcePlatform = "android",
+                batteryPresent = true,
+                batteryPercent = 64,
+                chargingState = "charging",
+                powerSource = "usb",
+                lowPowerMode = false,
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var status = _deviceStatusService.GetDeviceStatus(peerDeviceId);
+        Assert.NotNull(status);
+        Assert.True(status!.BatteryPresent);
+        Assert.Equal(64, status.BatteryPercent);
+        Assert.Equal("charging", status.ChargingState);
+        Assert.Equal("usb", status.PowerSource);
+        Assert.False(status.LowPowerMode);
+        Assert.False(status.IsStale);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_RejectsWrongTypedOptionalField()
+    {
+        const string peerDeviceId = "rift-peer-device-status-type";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = peerDeviceId,
+                batteryPresent = "false",
+                powerSource = "ac",
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_deviceStatusService.GetDeviceStatus(peerDeviceId));
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        Assert.Equal("error", error.GetProperty("type").GetString());
+        Assert.Equal("MalformedMessage", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_AuditsSpoofedPayloadIdentity()
+    {
+        const string peerDeviceId = "rift-peer-device-status-spoof";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = "rift-spoofed-device-status",
+                batteryPresent = true,
+                batteryPercent = 64,
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_deviceStatusService.GetDeviceStatus(peerDeviceId));
+        var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.AuthFailed],
+            PeerDeviceId = peerDeviceId
+        });
+        var securityEvent = Assert.Single(events);
+        Assert.Equal(SecurityEventSeverity.Critical, securityEvent.Severity);
+        Assert.Equal(SecurityEventOutcome.Denied, securityEvent.Outcome);
+        Assert.Equal("Unauthorized", securityEvent.FailureReason);
+        Assert.Equal("device.statusUpdated", securityEvent.Details!["messageType"]);
+        Assert.Equal("sourceDeviceId", securityEvent.Details["identityField"]);
+
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
     }
 
     [Fact]

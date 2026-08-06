@@ -27,6 +27,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly SendQueueService _sendQueueService;
     private readonly FakeMediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly FakeNotificationSyncService _notificationSyncService;
+    private readonly DeviceStatusService _deviceStatusService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -48,13 +49,18 @@ public sealed class RiftApiHandlerTests : IDisposable
         _sendQueueService = new SendQueueService(_trustStore, null);
         _mediaPlaybackSyncService = new FakeMediaPlaybackSyncService();
         _notificationSyncService = new FakeNotificationSyncService();
+        _deviceStatusService = new DeviceStatusService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            logger: NullLogger<DeviceStatusService>.Instance);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService, _deviceStatusService);
     }
 
     [Fact]
@@ -70,6 +76,98 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Contains(result.Capabilities, capability => capability.Name == "security.event_log");
         Assert.Contains(result.Capabilities, capability => capability.Name == "media.playback");
         Assert.Contains(result.Capabilities, capability => capability.Name == "notification.sync");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "device.status");
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_CachesValidatedPowerState()
+    {
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 64,
+            chargingState: "charging",
+            powerSource: "usb",
+            lowPowerMode: false,
+            observedAt: "2026-06-18T11:00:00Z",
+            sourcePlatform: "android");
+
+        Assert.Empty(result.BroadcastTo);
+        var status = _deviceStatusService.GetDeviceStatus(_identityManager.GetDeviceId());
+        Assert.NotNull(status);
+        Assert.True(status!.BatteryPresent);
+        Assert.Equal(64, status.BatteryPercent);
+        Assert.Equal("charging", status.ChargingState);
+        Assert.Equal("usb", status.PowerSource);
+        Assert.False(status.LowPowerMode);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_RejectsNonRfc3339Timestamp()
+    {
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.NotifyLocalDeviceStatusAsync(
+                batteryPresent: true,
+                batteryPercent: 64,
+                observedAt: "2026-06-18 11:00:00Z"));
+
+        Assert.Equal(-32602, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_UsesNegotiatedSessionCapabilities()
+    {
+        const string peerDeviceId = "rift-peer-status-gate";
+        _presenceService.UpdatePeerPresence(
+            peerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            ["device.status"]);
+
+        var beforeSession = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 64);
+        Assert.Empty(beforeSession.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["presence.basic"]);
+        var withoutCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 63);
+        Assert.Empty(withoutCapability.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["device.status", "presence.basic"]);
+        var withCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 62);
+        Assert.Contains(peerDeviceId, withCapability.BroadcastTo);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_ContinuesAfterPeerSendFailure()
+    {
+        const string failingPeer = "rift-peer-status-failing";
+        const string healthyPeer = "rift-peer-status-healthy";
+        _transport.EmitSessionStateChanged(
+            failingPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.EmitSessionStateChanged(
+            healthyPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.FailSendsTo.Add(failingPeer);
+
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 61);
+
+        Assert.DoesNotContain(failingPeer, result.BroadcastTo);
+        Assert.Contains(healthyPeer, result.BroadcastTo);
     }
 
     [Fact]
@@ -846,13 +944,23 @@ public sealed class RiftApiHandlerTests : IDisposable
             add { }
             remove { }
         }
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public HashSet<string> FailSendsTo { get; } = new(StringComparer.Ordinal);
+
+        public void EmitSessionStateChanged(
+            string peerDeviceId,
+            bool isOnline,
+            IReadOnlyList<string> selectedCapabilities,
+            bool allowsProtectedTraffic = true) =>
+            SessionStateChanged?.Invoke(
+                this,
+                new SessionStateChangedEventArgs(
+                    peerDeviceId,
+                    isOnline,
+                    selectedCapabilities,
+                    allowsProtectedTraffic));
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -863,6 +971,11 @@ public sealed class RiftApiHandlerTests : IDisposable
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
+            if (FailSendsTo.Contains(peerDeviceId))
+            {
+                throw new IOException("Simulated device status send failure.");
+            }
+
             using var document = JsonDocument.Parse(frameBody);
             SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
             return Task.CompletedTask;

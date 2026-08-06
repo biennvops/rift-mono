@@ -78,6 +78,11 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onNotificationActionResult =>
       _notificationActionResultController.stream;
 
+  late final _deviceStatusUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onDeviceStatusUpdated =>
+      _deviceStatusUpdatedController.stream;
+
   late final _mediaPlaybackPostedController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
@@ -232,8 +237,16 @@ class JsonRpcRiftClient {
     'OfferId': 'offerId',
     'OperationType': 'operationType',
     'State': 'state',
+    'DeviceStatus': 'deviceStatus',
     'SourceDeviceId': 'sourceDeviceId',
     'SourcePlatform': 'sourcePlatform',
+    'BatteryPresent': 'batteryPresent',
+    'BatteryPercent': 'batteryPercent',
+    'ChargingState': 'chargingState',
+    'PowerSource': 'powerSource',
+    'LowPowerMode': 'lowPowerMode',
+    'ObservedAt': 'observedAt',
+    'IsStale': 'isStale',
     'DestinationDeviceId': 'destinationDeviceId',
     'CreatedAt': 'createdAt',
     'UpdatedAt': 'updatedAt',
@@ -658,6 +671,15 @@ class JsonRpcRiftClient {
           ],
         );
       });
+      _client!.registerMethod('rift.onDeviceStatusUpdated',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onDeviceStatusUpdated',
+          _asMap(params),
+          _deviceStatusUpdatedController,
+          requiredStringKeys: const ['sourceDeviceId', 'observedAt'],
+        );
+      });
       _client!.registerMethod('rift.onMediaPlaybackPosted',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -937,6 +959,7 @@ class JsonRpcRiftClient {
     await _notificationUpdatedController.close();
     await _notificationRemovedController.close();
     await _notificationActionResultController.close();
+    await _deviceStatusUpdatedController.close();
     await _mediaPlaybackPostedController.close();
     await _mediaPlaybackUpdatedController.close();
     await _mediaPlaybackRemovedController.close();
@@ -988,6 +1011,30 @@ class JsonRpcRiftClient {
 
   Future<dynamic> listMediaPlayback() async {
     return _sendRequest('rift.listMediaPlayback');
+  }
+
+  Future<dynamic> getPeerDeviceStatus(String deviceId) async {
+    return _sendRequest('rift.getPeerDeviceStatus', {'deviceId': deviceId});
+  }
+
+  Future<dynamic> notifyLocalDeviceStatus({
+    bool? batteryPresent,
+    int? batteryPercent,
+    String? chargingState,
+    String? powerSource,
+    bool? lowPowerMode,
+    String? observedAt,
+    String? sourcePlatform,
+  }) async {
+    return _sendRequest('rift.notifyLocalDeviceStatus', {
+      if (batteryPresent != null) 'batteryPresent': batteryPresent,
+      if (batteryPercent != null) 'batteryPercent': batteryPercent,
+      if (chargingState != null) 'chargingState': chargingState,
+      if (powerSource != null) 'powerSource': powerSource,
+      if (lowPowerMode != null) 'lowPowerMode': lowPowerMode,
+      if (observedAt != null) 'observedAt': observedAt,
+      if (sourcePlatform != null) 'sourcePlatform': sourcePlatform,
+    });
   }
 
   Future<dynamic> getMediaPlayback({

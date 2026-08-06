@@ -3,6 +3,7 @@ class RiftConstants {
   static const String implementationId = 'riftd-dart/0.1.0';
   static const List<Map<String, dynamic>> capabilities = [
     {'name': 'clipboard.offer_fetch', 'version': 1},
+    {'name': 'device.status', 'version': 1},
     {'name': 'file.transfer', 'version': 1},
     {'name': 'media.playback', 'version': 1},
     {'name': 'notification.sync', 'version': 1},

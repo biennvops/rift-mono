@@ -10,7 +10,10 @@ public sealed class ProtocolMessageRouter(
     IClipboardService clipboardService,
     IFileTransferService fileTransferService,
     IMediaPlaybackSyncService mediaPlaybackSyncService,
-    INotificationSyncService notificationSyncService) : IProtocolMessageRouter
+    INotificationSyncService notificationSyncService,
+    IDeviceStatusService? deviceStatusService = null,
+    ISecurityEventLog? securityEventLog = null,
+    IIdentityManager? identityManager = null) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
@@ -41,6 +44,26 @@ public sealed class ProtocolMessageRouter(
                 _ => "MalformedMessage"
             };
             await mediaPlaybackSyncService.SendPeerErrorAsync(
+                session.PeerDeviceId,
+                failureReason,
+                messageId,
+                ex.Message,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (string.Equals(messageType, "device.statusUpdated", StringComparison.Ordinal) && IsDeviceStatusMessageError(ex))
+        {
+            if (deviceStatusService is null)
+            {
+                throw;
+            }
+
+            var failureReason = ex switch
+            {
+                UnauthorizedAccessException when ex.Message.Contains("requires negotiated capability", StringComparison.Ordinal) => "CapabilityUnavailable",
+                UnauthorizedAccessException => "Unauthorized",
+                _ => "MalformedMessage"
+            };
+            await deviceStatusService.SendPeerErrorAsync(
                 session.PeerDeviceId,
                 failureReason,
                 messageId,
@@ -153,6 +176,35 @@ public sealed class ProtocolMessageRouter(
                 : [];
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
+            return;
+        }
+
+        if (string.Equals(messageType, "device.statusUpdated", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "device.status", messageType);
+            var statusPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = statusPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            if (!string.Equals(peerDeviceId, payloadSourceDeviceId, StringComparison.Ordinal))
+            {
+                await LogDeviceStatusIdentityMismatchAsync(peerDeviceId, messageType, cancellationToken).ConfigureAwait(false);
+                throw new UnauthorizedAccessException($"{messageType} sourceDeviceId did not match the authenticated peer identity.");
+            }
+            if (deviceStatusService is null)
+            {
+                throw new InvalidOperationException("Device status service is unavailable.");
+            }
+
+            await deviceStatusService.HandlePeerStatusUpdatedAsync(new DeviceStatusRecord
+            {
+                SourceDeviceId = payloadSourceDeviceId,
+                SourcePlatform = GetOptionalString(statusPayload, "sourcePlatform"),
+                BatteryPresent = GetOptionalBoolean(statusPayload, "batteryPresent"),
+                BatteryPercent = GetOptionalInt32(statusPayload, "batteryPercent"),
+                ChargingState = GetOptionalString(statusPayload, "chargingState"),
+                PowerSource = GetOptionalString(statusPayload, "powerSource"),
+                LowPowerMode = GetOptionalBoolean(statusPayload, "lowPowerMode"),
+                ObservedAt = statusPayload.GetProperty("observedAt").GetString() ?? string.Empty
+            }, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -455,6 +507,72 @@ public sealed class ProtocolMessageRouter(
         throw new UnauthorizedAccessException($"{messageType} sourceDeviceId did not match the authenticated peer identity.");
     }
 
+    private async Task LogDeviceStatusIdentityMismatchAsync(
+        string peerDeviceId,
+        string messageType,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (securityEventLog is null || identityManager is null)
+        {
+            return;
+        }
+
+        await securityEventLog.LogEventAsync(new SecurityEventRecord
+        {
+            EventType = SecurityEventTypes.AuthFailed,
+            Severity = SecurityEventSeverity.Critical,
+            LocalDeviceId = identityManager.GetDeviceId(),
+            PeerDeviceId = peerDeviceId,
+            Outcome = SecurityEventOutcome.Denied,
+            FailureReason = "Unauthorized",
+            Details = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["messageType"] = messageType,
+                ["identityField"] = "sourceDeviceId"
+            }
+        }).ConfigureAwait(false);
+    }
+
+    private static string? GetOptionalString(JsonElement payload, string propertyName)
+    {
+        if (!payload.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            throw new JsonException($"Device status field '{propertyName}' must be a string.");
+        }
+        return value.GetString();
+    }
+
+    private static bool? GetOptionalBoolean(JsonElement payload, string propertyName)
+    {
+        if (!payload.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+        if (value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new JsonException($"Device status field '{propertyName}' must be a boolean.");
+        }
+        return value.GetBoolean();
+    }
+
+    private static int? GetOptionalInt32(JsonElement payload, string propertyName)
+    {
+        if (!payload.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+        if (value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var parsed))
+        {
+            throw new JsonException($"Device status field '{propertyName}' must be an integer.");
+        }
+        return parsed;
+    }
+
     private static NotificationSyncRecord ParseNotificationRecord(JsonElement notificationPayload)
     {
         IReadOnlyDictionary<string, object?>? icon = null;
@@ -484,6 +602,9 @@ public sealed class ProtocolMessageRouter(
 
     private static bool IsMediaMessageError(Exception exception) =>
         exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or MediaPlaybackSyncFailureException or UnauthorizedAccessException;
+
+    private static bool IsDeviceStatusMessageError(Exception exception) =>
+        exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException or OverflowException or ArgumentException or UnauthorizedAccessException;
 
     private static MediaPlaybackRecord ParseMediaPlaybackRecord(JsonElement mediaPayload)
     {
