@@ -194,6 +194,39 @@ void main() {
       await transport.stopServer();
     });
 
+    test(
+        'valid candidate with the same role preserves the authenticated session',
+        () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub =
+          transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        authenticated: true,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+
+      transport.acceptPendingCandidateHelloForTesting('rift-peer');
+      await Future<void>.delayed(Duration.zero);
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(tls.closedConnectionIds, [43]);
+      expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+      await disconnectSub.cancel();
+      await transport.stopServer();
+    });
+
     test('serializes concurrent writes for one peer', () async {
       final tls = _RecordingNativeTlsApi();
       final transport = AndroidNativePeerTransport(

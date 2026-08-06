@@ -239,6 +239,19 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     final existing = _peers[peerDeviceId];
     _pendingCandidates.remove(peerDeviceId);
     candidate.pendingCandidate = false;
+    if (existing != null &&
+        shouldKeepExistingPreAuthConnection(
+          existingIsServer: existing.isServer,
+          candidateIsServer: candidate.isServer,
+          preferredIsServer:
+              _identityManager.deviceId.compareTo(peerDeviceId) > 0,
+        )) {
+      // The candidate has now demonstrated a valid protocol session, but the
+      // established connection already has the deterministic role. Keep it.
+      unawaited(_closeConnection(candidate, notify: false));
+      return;
+    }
+
     _peers[peerDeviceId] = candidate;
     _authenticatedPeers.remove(peerDeviceId);
     if (existing != null && !identical(existing, candidate)) {
@@ -268,6 +281,8 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     required String peerDeviceId,
     required int connectionId,
     StreamSubscription<Map<String, dynamic>>? frameSubscription,
+    bool isServer = false,
+    bool authenticated = false,
   }) {
     _peers[peerDeviceId] = _NativePeerConnection(
       connectionId: connectionId,
@@ -276,8 +291,11 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       peerEd25519Key: Uint8List(0),
       remoteAddress: '127.0.0.1',
       remotePort: 0,
-      isServer: false,
+      isServer: isServer,
     )..frameSubscription = frameSubscription;
+    if (authenticated) {
+      _authenticatedPeers.add(peerDeviceId);
+    }
   }
 
   @visibleForTesting
@@ -301,6 +319,14 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     final candidate = _pendingCandidates[peerDeviceId];
     if (candidate != null) {
       await _handleConnectionClosed(candidate);
+    }
+  }
+
+  @visibleForTesting
+  void acceptPendingCandidateHelloForTesting(String peerDeviceId) {
+    final candidate = _pendingCandidates[peerDeviceId];
+    if (candidate != null) {
+      _handleCandidateFrame(candidate, const {'type': 'session.hello'});
     }
   }
 
