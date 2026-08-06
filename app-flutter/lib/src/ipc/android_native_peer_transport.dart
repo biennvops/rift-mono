@@ -7,7 +7,8 @@ import 'package:daemon_dart/daemon_dart.dart';
 import '../platform/android_native_tls.dart';
 import 'native_tls_api.dart';
 
-class AndroidNativePeerTransport implements Transport, BoundTransport {
+class AndroidNativePeerTransport
+    implements Transport, BoundTransport, PendingCandidateTransport {
   AndroidNativePeerTransport(
     this._identityManager, {
     required int port,
@@ -20,7 +21,6 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   final int _requestedPort;
   final Map<String, _NativePeerConnection> _peers = {};
   final Map<String, _NativePeerConnection> _pendingCandidates = {};
-  final Set<String> _authenticatedPeers = {};
   final Map<String, Future<void>> _peerWriteTails = {};
   final StreamController<TransportMessage> _messages =
       StreamController<TransportMessage>.broadcast();
@@ -111,7 +111,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     );
     final peerDeviceId = _deviceIdForKey(peerEd25519Key);
     final existing = _peers[peerDeviceId];
-    final wasAuthenticated = _authenticatedPeers.contains(peerDeviceId);
+    final wasAuthenticated = existing?.authenticated ?? false;
 
     if (existing != null) {
       if (wasAuthenticated) {
@@ -156,7 +156,6 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     );
     _peers[peerDeviceId] = peer;
     if (existing != null) {
-      _authenticatedPeers.remove(peerDeviceId);
       await _closeConnection(
         existing,
         notify: false,
@@ -216,7 +215,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
           unawaited(_closeConnection(peer, notify: false));
         }
       } else if (identical(_peers[peer.peerDeviceId], peer) &&
-          !_authenticatedPeers.contains(peer.peerDeviceId)) {
+          !peer.authenticated) {
         disconnect(peer.peerDeviceId);
       }
     });
@@ -236,33 +235,12 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       return;
     }
 
-    final existing = _peers[peerDeviceId];
-    _pendingCandidates.remove(peerDeviceId);
-    candidate.pendingCandidate = false;
-    if (existing != null &&
-        shouldKeepExistingPreAuthConnection(
-          existingIsServer: existing.isServer,
-          candidateIsServer: candidate.isServer,
-          preferredIsServer:
-              _identityManager.deviceId.compareTo(peerDeviceId) > 0,
-        )) {
-      // The candidate has now demonstrated a valid protocol session, but the
-      // established connection already has the deterministic role. Keep it.
+    if (candidate.helloPendingValidation) {
+      _pendingCandidates.remove(peerDeviceId);
       unawaited(_closeConnection(candidate, notify: false));
       return;
     }
-
-    _peers[peerDeviceId] = candidate;
-    _authenticatedPeers.remove(peerDeviceId);
-    if (existing != null && !identical(existing, candidate)) {
-      // The candidate has now demonstrated a valid protocol session. Reset the
-      // old context before delivering the candidate's session.hello so the
-      // session layer can accept it as a replacement.
-      resetSessionForReplacement(peerDeviceId);
-      unawaited(
-        _closeConnection(existing, notify: false, waitForStreamTeardown: false),
-      );
-    }
+    candidate.helloPendingValidation = true;
     _messages.add(_transportMessage(candidate, frame));
   }
 
@@ -274,6 +252,8 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     payload: Uint8List.fromList(utf8.encode(json.encode(frame))),
     peerEd25519Key: peer.peerEd25519Key,
     peerCertDer: peer.peerCertificateDer,
+    connectionToken: peer,
+    pendingCandidate: peer.pendingCandidate,
   );
 
   @visibleForTesting
@@ -292,10 +272,9 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
       remoteAddress: '127.0.0.1',
       remotePort: 0,
       isServer: isServer,
-    )..frameSubscription = frameSubscription;
-    if (authenticated) {
-      _authenticatedPeers.add(peerDeviceId);
-    }
+    )
+      ..frameSubscription = frameSubscription
+      ..authenticated = authenticated;
   }
 
   @visibleForTesting
@@ -323,6 +302,15 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   }
 
   @visibleForTesting
+  int frameSizeLimitForTesting(int connectionId) {
+    final peer = <_NativePeerConnection>[
+      ..._peers.values,
+      ..._pendingCandidates.values,
+    ].singleWhere((candidate) => candidate.connectionId == connectionId);
+    return _maxFrameSizeForPeer(peer);
+  }
+
+  @visibleForTesting
   void acceptPendingCandidateHelloForTesting(String peerDeviceId) {
     final candidate = _pendingCandidates[peerDeviceId];
     if (candidate != null) {
@@ -344,12 +332,55 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     }
   }
 
-  @visibleForTesting
-  void resetSessionForReplacement(String peerDeviceId) {
-    if (!_disconnects.isClosed) {
-      _disconnects.add(peerDeviceId);
+  @override
+  Future<bool> promotePendingCandidate(TransportMessage message) async {
+    final candidate = message.connectionToken;
+    if (candidate is! _NativePeerConnection ||
+        !identical(_pendingCandidates[message.peerDeviceId], candidate)) {
+      return false;
     }
+
+    final peerDeviceId = message.peerDeviceId;
+    final existing = _peers[peerDeviceId];
+    _pendingCandidates.remove(peerDeviceId);
+    candidate.pendingCandidate = false;
+    candidate.helloPendingValidation = false;
+    if (existing != null &&
+        shouldKeepExistingPreAuthConnection(
+          existingIsServer: existing.isServer,
+          candidateIsServer: candidate.isServer,
+          preferredIsServer:
+              _identityManager.deviceId.compareTo(peerDeviceId) > 0,
+        )) {
+      await _closeConnection(candidate, notify: false);
+      return false;
+    }
+
+    _peers[peerDeviceId] = candidate;
+    if (existing != null && !identical(existing, candidate)) {
+      await _closeConnection(
+        existing,
+        notify: false,
+        waitForStreamTeardown: false,
+      );
+    }
+    return true;
   }
+
+  @override
+  Future<void> rejectPendingCandidate(TransportMessage message) async {
+    final candidate = message.connectionToken;
+    if (candidate is! _NativePeerConnection ||
+        !identical(_pendingCandidates[message.peerDeviceId], candidate)) {
+      return;
+    }
+    _pendingCandidates.remove(message.peerDeviceId);
+    await _closeConnection(candidate, notify: false);
+  }
+
+  int _maxFrameSizeForPeer(_NativePeerConnection peer) => peer.authenticated
+      ? RiftFrameCodec.maxFrameSizePostAuth
+      : RiftFrameCodec.maxFrameSizePreAuth;
 
   void _startReadLoop(_NativePeerConnection peer) {
     final chunks = StreamController<List<int>>();
@@ -357,10 +388,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     peer.frameSubscription = chunks.stream
         .transform(
       RiftFrameTransformer(
-        maxFrameSizeProvider: () =>
-            _authenticatedPeers.contains(peer.peerDeviceId)
-                ? RiftFrameCodec.maxFrameSizePostAuth
-                : RiftFrameCodec.maxFrameSizePreAuth,
+        maxFrameSizeProvider: () => _maxFrameSizeForPeer(peer),
       ),
     )
         .listen(
@@ -419,7 +447,6 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     }
     if (_peers[peer.peerDeviceId] != peer) return;
     _peers.remove(peer.peerDeviceId);
-    _authenticatedPeers.remove(peer.peerDeviceId);
     await _closeConnection(
       peer,
       notify: true,
@@ -500,7 +527,6 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
   void disconnect(String peerDeviceId) {
     final peer = _peers.remove(peerDeviceId);
     final candidate = _pendingCandidates.remove(peerDeviceId);
-    _authenticatedPeers.remove(peerDeviceId);
     if (peer != null) {
       unawaited(_closeConnection(peer, notify: true));
     }
@@ -514,7 +540,7 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     final peer = _peers[peerDeviceId];
     if (peer != null) {
       peer.authenticationTimeout?.cancel();
-      _authenticatedPeers.add(peerDeviceId);
+      peer.authenticated = true;
     }
   }
 
@@ -542,7 +568,6 @@ class AndroidNativePeerTransport implements Transport, BoundTransport {
     }.toList(growable: false);
     _peers.clear();
     _pendingCandidates.clear();
-    _authenticatedPeers.clear();
     for (final peer in peers) {
       await _closeConnection(peer, notify: false);
     }
@@ -586,6 +611,8 @@ class _NativePeerConnection {
   final int remotePort;
   final bool isServer;
   bool pendingCandidate = false;
+  bool helloPendingValidation = false;
+  bool authenticated = false;
   StreamController<List<int>>? chunkController;
   StreamSubscription<Map<String, dynamic>>? frameSubscription;
   Timer? authenticationTimeout;

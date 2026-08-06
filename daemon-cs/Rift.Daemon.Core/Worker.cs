@@ -354,23 +354,7 @@ public class Worker(
                     }
                     catch (UnexpectedPeerIdentityException ex)
                     {
-                        logger.LogWarning(
-                            ex,
-                            "Trusted reconnect endpoint {Address}:{Port} belongs to {ActualDeviceId}, not {ExpectedDeviceId}; quarantining the stale endpoint.",
-                            ex.Address,
-                            ex.Port,
-                            ex.ActualDeviceId,
-                            ex.ExpectedDeviceId);
-                        var remainingEndpoints = peer.TrustedEndpoints
-                            .Where(endpoint =>
-                                endpoint.Address != ex.Address ||
-                                endpoint.Port != ex.Port)
-                            .ToArray();
-                        if (remainingEndpoints.Length != peer.TrustedEndpoints.Count)
-                        {
-                            peer.TrustedEndpoints = remainingEndpoints;
-                            trustStore.SavePeer(peer);
-                        }
+                        QuarantineUnexpectedEndpoint(peer, ex);
                     }
                     catch (Exception ex)
                     {
@@ -383,16 +367,46 @@ public class Worker(
             finally
             {
                 attemptsCts.Cancel();
-                try
+                foreach (var attempt in attempts)
                 {
-                    await Task.WhenAll(attempts);
+                    try
+                    {
+                        await attempt;
+                    }
+                    catch (UnexpectedPeerIdentityException ex)
+                    {
+                        QuarantineUnexpectedEndpoint(peer, ex);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || attemptsCts.IsCancellationRequested)
+                    {
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex, "Parallel reconnect attempt failed for {DeviceId}.", peer.DeviceId);
+                    }
                 }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || attemptsCts.IsCancellationRequested)
+            }
+
+            void QuarantineUnexpectedEndpoint(
+                PeerIdentity reconnectPeer,
+                UnexpectedPeerIdentityException exception)
+            {
+                logger.LogWarning(
+                    exception,
+                    "Trusted reconnect endpoint {Address}:{Port} belongs to {ActualDeviceId}, not {ExpectedDeviceId}; quarantining the stale endpoint.",
+                    exception.Address,
+                    exception.Port,
+                    exception.ActualDeviceId,
+                    exception.ExpectedDeviceId);
+                var remainingEndpoints = reconnectPeer.TrustedEndpoints
+                    .Where(endpoint =>
+                        endpoint.Address != exception.Address ||
+                        endpoint.Port != exception.Port)
+                    .ToArray();
+                if (remainingEndpoints.Length != reconnectPeer.TrustedEndpoints.Count)
                 {
-                }
-                catch (Exception ex)
-                {
-                    logger.LogDebug(ex, "One or more parallel reconnect attempts failed for {DeviceId}.", peer.DeviceId);
+                    reconnectPeer.TrustedEndpoints = remainingEndpoints;
+                    trustStore.SavePeer(reconnectPeer);
                 }
             }
 

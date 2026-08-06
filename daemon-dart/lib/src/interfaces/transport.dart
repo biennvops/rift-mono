@@ -17,12 +17,16 @@ class TransportMessage {
   final Uint8List payload;
   final Uint8List? peerEd25519Key;
   final Uint8List? peerCertDer;
+  final Object? connectionToken;
+  final bool pendingCandidate;
 
   TransportMessage({
     required this.peerDeviceId,
     required this.payload,
     this.peerEd25519Key,
     this.peerCertDer,
+    this.connectionToken,
+    this.pendingCandidate = false,
   });
 }
 
@@ -44,6 +48,11 @@ abstract class Transport {
   Future<void> sendMessage(String deviceId, Uint8List message);
   Uint8List? getPeerCert(String peerDeviceId);
   PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId);
+}
+
+abstract interface class PendingCandidateTransport {
+  Future<bool> promotePendingCandidate(TransportMessage message);
+  Future<void> rejectPendingCandidate(TransportMessage message);
 }
 
 abstract interface class BoundTransport {

@@ -162,21 +162,24 @@ class SessionManager {
 
   Future<String?> _validateBindingType(
     String peerDeviceId,
-    String? bindingType,
-  ) async {
+    String? bindingType, {
+    TransportMessage? sourceMessage,
+  }) async {
     if (bindingType == null) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Missing bindingType',
+        sourceMessage: sourceMessage,
       );
       return null;
     }
     if (!_validBindingTypes.contains(bindingType)) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Unrecognized bindingType',
+        sourceMessage: sourceMessage,
       );
       return null;
     }
@@ -184,10 +187,11 @@ class SessionManager {
       // Spec supports a tiered hierarchy (tls-exporter / tls-unique / app-nonce),
       // but dart:io SecureSocket does not expose TLS channel binding primitives.
       // This daemon can only *verify* PoP using Tier 3 (app-nonce).
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Unsupported bindingType on this platform: $bindingType (only app-nonce is supported by Dart daemon)',
+        sourceMessage: sourceMessage,
       );
       return null;
     }
@@ -271,13 +275,19 @@ class SessionManager {
       late final Future<void> next;
       next = (previous?.catchError((_) {}) ?? Future<void>.value())
           .then((_) => _handleMessage(msg))
-          .catchError((Object e, StackTrace st) {
+          .catchError((Object e, StackTrace st) async {
             RiftLog.error(
               '[Session] Unhandled exception in _handleMessage',
               error: e,
               stackTrace: st,
             );
-            _transport.disconnect(msg.peerDeviceId);
+            if (msg.pendingCandidate &&
+                _transport is PendingCandidateTransport) {
+              await (_transport as PendingCandidateTransport)
+                  .rejectPendingCandidate(msg);
+            } else {
+              _transport.disconnect(msg.peerDeviceId);
+            }
           })
           .whenComplete(() {
             if (identical(_inboundMessageTails[msg.peerDeviceId], next)) {
@@ -538,49 +548,54 @@ class SessionManager {
       final payloadStr = utf8.decode(msg.payload);
       final decoded = json.decode(payloadStr);
       if (decoded is! Map<String, dynamic>) {
-        await _rejectSession(
+        await _rejectHandshakeMessage(
           peerDeviceId,
           'MalformedMessage',
           'Top-level message must be a JSON object',
+          sourceMessage: msg,
         );
         return;
       }
       jsonMap = decoded;
     } on FormatException {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Invalid JSON payload',
+        sourceMessage: msg,
       );
       return;
     }
 
     final protocolVersion = jsonMap['rift'];
     if (protocolVersion is! String || protocolVersion != '0.1-draft') {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'VersionMismatch',
         'Unsupported protocol version',
+        sourceMessage: msg,
       );
       return;
     }
 
     final messageId = jsonMap['messageId'];
     if (messageId is! String || !_isValidUuidV4(messageId)) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing or invalid messageId',
+        sourceMessage: msg,
       );
       return;
     }
 
     final type = jsonMap['type'];
     if (type is! String) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing or invalid message type',
+        sourceMessage: msg,
       );
       return;
     }
@@ -588,28 +603,31 @@ class SessionManager {
 
     final requiredExtensions = jsonMap['requiredExtensions'];
     if (requiredExtensions != null && requiredExtensions is! List) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'ProtocolError',
         'requiredExtensions must be a list',
+        sourceMessage: msg,
       );
       return;
     }
     if (requiredExtensions is List && requiredExtensions.isNotEmpty) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'ProtocolError',
         'Unknown requiredExtensions',
+        sourceMessage: msg,
       );
       return;
     }
 
     final envelopeSourceDeviceId = jsonMap['sourceDeviceId'];
     if (envelopeSourceDeviceId is! String) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing or invalid sourceDeviceId',
+        sourceMessage: msg,
       );
       return;
     }
@@ -618,19 +636,21 @@ class SessionManager {
     if (destinationDeviceId != null &&
         (destinationDeviceId is! String ||
             destinationDeviceId != _identityManager.deviceId)) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'Unauthorized',
         'destinationDeviceId mismatch',
+        sourceMessage: msg,
       );
       return;
     }
 
     if (envelopeSourceDeviceId != peerDeviceId) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'Unauthorized',
         'sourceDeviceId mismatch with TLS identity',
+        sourceMessage: msg,
       );
       return;
     }
@@ -673,6 +693,26 @@ class SessionManager {
         );
       }
     }
+  }
+
+  Future<void> _rejectHandshakeMessage(
+    String peerDeviceId,
+    String failureReason,
+    String message, {
+    TransportMessage? sourceMessage,
+  }) async {
+    if (sourceMessage?.pendingCandidate == true &&
+        _transport is PendingCandidateTransport) {
+      RiftLog.warn(
+        '[Session] Rejecting pending candidate from $peerDeviceId: '
+        '$failureReason - $message',
+      );
+      await (_transport as PendingCandidateTransport).rejectPendingCandidate(
+        sourceMessage!,
+      );
+      return;
+    }
+    await _rejectSession(peerDeviceId, failureReason, message);
   }
 
   Future<void> _rejectSession(
@@ -719,46 +759,13 @@ class SessionManager {
     RiftLog.debug(
       '[Session] _handleSessionHello entered for $peerDeviceId ${_describeContext(ctx)}',
     );
-    if (ctx == null) {
-      if (!await _isPeerAllowedForSession(peerDeviceId)) {
-        await _rejectSession(
-          peerDeviceId,
-          'Unauthorized',
-          'peer identity is blocked',
-        );
-        throw SessionException('Unauthorized: peer identity is blocked');
-      }
-      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
-      final record = await _trustStore.getPeer(peerDeviceId);
-      ctx.trustState = record?.state ?? TrustState.discovered;
-      _sessions[peerDeviceId] = ctx;
-      RiftLog.info(
-        '[Session] Created responder SessionContext for $peerDeviceId ${_describeContext(ctx)}',
-      );
-    } else if (ctx.handshakeState == HandshakeState.handshaking &&
-        ctx.isInitiator &&
-        ctx.localHelloSent &&
-        !ctx.remoteHelloReceived) {
-      RiftLog.debug(
-        '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
-      );
-    } else if (ctx.handshakeState == HandshakeState.established) {
-      // The peer would not send a fresh session.hello if it still considered
-      // the session alive; mobile apps get killed/suspended without a clean
-      // TCP close, leaving us with a zombie established context. Treat the
-      // hello as a peer restart and rebuild the session on the connection it
-      // arrived over. Do not touch the transport: the hello came in on the
-      // transport's current (live) connection for this peer.
-      RiftLog.info(
-        '[Session] Peer $peerDeviceId sent session.hello over an established '
-        'session; assuming peer restart and rebuilding session.',
-      );
-      ctx.dispose();
-      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
-      final record = await _trustStore.getPeer(peerDeviceId);
-      ctx.trustState = record?.state ?? TrustState.discovered;
-      _sessions[peerDeviceId] = ctx;
-    } else {
+    if (!msg.pendingCandidate &&
+        ctx != null &&
+        ctx.handshakeState != HandshakeState.established &&
+        !(ctx.handshakeState == HandshakeState.handshaking &&
+            ctx.isInitiator &&
+            ctx.localHelloSent &&
+            !ctx.remoteHelloReceived)) {
       await _rejectSession(
         peerDeviceId,
         'ProtocolError',
@@ -768,91 +775,118 @@ class SessionManager {
         'ProtocolError: Double session.hello received from $peerDeviceId',
       );
     }
-    ctx.remoteHelloReceived = true;
-    RiftLog.debug(
-      '[Session] Marked remoteHelloReceived for $peerDeviceId ${_describeContext(ctx)}',
-    );
+    if ((ctx == null || msg.pendingCandidate) &&
+        !await _isPeerAllowedForSession(peerDeviceId)) {
+      await _rejectHandshakeMessage(
+        peerDeviceId,
+        'Unauthorized',
+        'peer identity is blocked',
+        sourceMessage: msg,
+      );
+      if (!msg.pendingCandidate) {
+        throw SessionException('Unauthorized: peer identity is blocked');
+      }
+      return;
+    }
 
     final payload = jsonMap['payload'] as Map<String, dynamic>?;
     if (payload == null) {
-      await _rejectSession(peerDeviceId, 'MalformedMessage', 'Missing payload');
+      await _rejectHandshakeMessage(
+        peerDeviceId,
+        'MalformedMessage',
+        'Missing payload',
+        sourceMessage: msg,
+      );
       return;
     }
 
     final supportedVersions = payload['supportedVersions'];
     if (supportedVersions is! List ||
         !supportedVersions.whereType<String>().contains('0.1-draft')) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'VersionMismatch',
         'Missing or unsupported supportedVersions',
+        sourceMessage: msg,
       );
       return;
     }
 
     final payloadDeviceId = payload['deviceId'] as String?;
     if (payloadDeviceId == null) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing payload.deviceId',
+        sourceMessage: msg,
       );
       return;
     }
     if (payloadDeviceId != peerDeviceId) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'Unauthorized',
         'payload.deviceId mismatch with TLS identity',
+        sourceMessage: msg,
       );
       return;
     }
 
     final identityProofHex = payload['identityProof'] as String?;
     if (identityProofHex == null) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Missing identityProof',
+        sourceMessage: msg,
       );
       return;
     }
 
     final implementationId = payload['implementationId'] as String?;
     if (implementationId == null || implementationId.isEmpty) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing implementationId',
+        sourceMessage: msg,
       );
       return;
     }
 
     final capabilities = payload['capabilities'];
     if (capabilities is! List) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Missing capabilities',
+        sourceMessage: msg,
       );
       return;
     }
     if (capabilities.length > 64) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'ProtocolError',
         'Too many capabilities',
+        sourceMessage: msg,
       );
       return;
     }
 
     if (msg.peerEd25519Key == null || msg.peerCertDer == null) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Missing peer certificate context',
+        sourceMessage: msg,
       );
-      throw SessionException('IdentityError: Missing peer certificate context');
+      if (!msg.pendingCandidate) {
+        throw SessionException(
+          'IdentityError: Missing peer certificate context',
+        );
+      }
+      return;
     }
 
     final sessionNonceStr = payload['sessionNonce'] as String?;
@@ -861,14 +895,16 @@ class SessionManager {
     final validatedBinding = await _validateBindingType(
       peerDeviceId,
       bindingType,
+      sourceMessage: msg,
     );
     if (validatedBinding == null) return;
 
     if (sessionNonceStr == null) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'ProtocolError',
         'Missing sessionNonce',
+        sourceMessage: msg,
       );
       return;
     }
@@ -876,18 +912,20 @@ class SessionManager {
     try {
       peerNonce = base64.decode(sessionNonceStr);
     } on FormatException {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'MalformedMessage',
         'Invalid base64 in sessionNonce',
+        sourceMessage: msg,
       );
       return;
     }
     if (peerNonce.length != 32) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'ProtocolError',
         'sessionNonce must be exactly 32 bytes',
+        sourceMessage: msg,
       );
       return;
     }
@@ -916,15 +954,73 @@ class SessionManager {
     );
 
     if (!isValidPoP) {
-      await _rejectSession(
+      await _rejectHandshakeMessage(
         peerDeviceId,
         'AuthenticationFailed',
         'Identity Misbinding / Invalid PoP Signature',
+        sourceMessage: msg,
+      );
+      if (!msg.pendingCandidate) {
+        throw SessionException(
+          'SecurityError: Identity Misbinding / Invalid PoP Signature',
+        );
+      }
+      return;
+    }
+
+    if (msg.pendingCandidate) {
+      if (_transport is! PendingCandidateTransport) {
+        throw StateError(
+          'Transport marked a pending candidate without candidate controls',
+        );
+      }
+      final promoted = await (_transport as PendingCandidateTransport)
+          .promotePendingCandidate(msg);
+      if (!promoted) {
+        return;
+      }
+      ctx = _sessions[peerDeviceId];
+    }
+
+    if (ctx == null) {
+      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
+      final record = await _trustStore.getPeer(peerDeviceId);
+      ctx.trustState = record?.state ?? TrustState.discovered;
+      _sessions[peerDeviceId] = ctx;
+      RiftLog.info(
+        '[Session] Created responder SessionContext for $peerDeviceId ${_describeContext(ctx)}',
+      );
+    } else if (ctx.handshakeState == HandshakeState.handshaking &&
+        ctx.isInitiator &&
+        ctx.localHelloSent &&
+        !ctx.remoteHelloReceived) {
+      RiftLog.debug(
+        '[Session] Accepting simultaneous session.hello from $peerDeviceId while local hello is in flight.',
+      );
+    } else if (ctx.handshakeState == HandshakeState.established) {
+      RiftLog.info(
+        '[Session] Peer $peerDeviceId sent a verified fresh session.hello; '
+        'rebuilding the session.',
+      );
+      ctx.dispose();
+      ctx = SessionContext(peerDeviceId: peerDeviceId, isInitiator: false);
+      final record = await _trustStore.getPeer(peerDeviceId);
+      ctx.trustState = record?.state ?? TrustState.discovered;
+      _sessions[peerDeviceId] = ctx;
+    } else {
+      await _rejectSession(
+        peerDeviceId,
+        'ProtocolError',
+        'Double session.hello received',
       );
       throw SessionException(
-        'SecurityError: Identity Misbinding / Invalid PoP Signature',
+        'ProtocolError: Double session.hello received from $peerDeviceId',
       );
     }
+    ctx.remoteHelloReceived = true;
+    RiftLog.debug(
+      '[Session] Marked remoteHelloReceived for $peerDeviceId ${_describeContext(ctx)}',
+    );
 
     RiftLog.debug(
       '[Session] Verified session.hello from $peerDeviceId; sending session.accept.',

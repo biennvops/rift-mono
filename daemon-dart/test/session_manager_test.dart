@@ -6,16 +6,22 @@ import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/src/crypto/cert_builder.dart';
+import 'package:daemon_dart/src/crypto/pop_manager.dart';
 import 'package:basic_utils/basic_utils.dart';
 import 'dart:async';
 
-class FakeTransport implements Transport {
+class FakeTransport implements Transport, PendingCandidateTransport {
   final _onMessage = StreamController<TransportMessage>.broadcast();
   final _onDisconnect = StreamController<String>.broadcast();
   final List<Map<String, dynamic>> sentMessages = [];
   final List<String> disconnectedPeers = [];
   bool isDisconnected = false;
+  bool promoteCandidateResult = true;
+  final List<TransportMessage> promotedCandidates = [];
+  final List<TransportMessage> rejectedCandidates = [];
+  final Completer<void> candidatePromoted = Completer<void>();
   // Track certs so getPeerCert works once simulateIncomingMessage is called.
   final Map<String, Uint8List> _peerCerts = {};
 
@@ -44,13 +50,33 @@ class FakeTransport implements Transport {
     sentMessages.add(json.decode(utf8.decode(payload)));
   }
 
-  void simulateIncomingMessage(String d, Uint8List cert, Uint8List key, Map<String, dynamic> payload) {
+  @override
+  Future<bool> promotePendingCandidate(TransportMessage message) async {
+    promotedCandidates.add(message);
+    if (!candidatePromoted.isCompleted) candidatePromoted.complete();
+    return promoteCandidateResult;
+  }
+
+  @override
+  Future<void> rejectPendingCandidate(TransportMessage message) async {
+    rejectedCandidates.add(message);
+  }
+
+  void simulateIncomingMessage(
+    String d,
+    Uint8List cert,
+    Uint8List key,
+    Map<String, dynamic> payload, {
+    bool pendingCandidate = false,
+  }) {
     _peerCerts[d] = cert; // register so getPeerCert works
     _onMessage.add(TransportMessage(
       peerDeviceId: d,
       payload: Uint8List.fromList(utf8.encode(json.encode(payload))),
       peerEd25519Key: key,
-      peerCertDer: cert
+      peerCertDer: cert,
+      connectionToken: pendingCandidate ? Object() : null,
+      pendingCandidate: pendingCandidate,
     ));
   }
 
@@ -111,6 +137,7 @@ void main() {
     late SessionManager sessionManager;
     late Uint8List testCertDer;
     late Uint8List pubKeyBytes;
+    late SimpleKeyPair edKeyPair;
     late bool allowPeer;
     late FakeTrustStore trustStore;
 
@@ -127,7 +154,7 @@ void main() {
 
       final ecKeyPair = CryptoUtils.generateEcKeyPair(curve: 'prime256v1');
       var algorithm = Ed25519();
-      final edKeyPair = await algorithm.newKeyPair();
+      edKeyPair = await algorithm.newKeyPair();
       pubKeyBytes = Uint8List.fromList((await edKeyPair.extractPublicKey()).bytes);
       final pem = RiftCertBuilder.generateSelfSignedCert(ecKeyPair, pubKeyBytes, commonName: 'rift-peer');
       
@@ -241,6 +268,90 @@ void main() {
 
       expect(transport.isDisconnected, isTrue);
       expect(transport.sentMessages.single['payload']['failureReason'], 'VersionMismatch');
+    });
+
+    test('invalid pending hello preserves the authenticated session', () async {
+      final active = SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
+        ..handshakeState = HandshakeState.established
+        ..capabilityNegotiated = true;
+      sessionManager.injectContextForTesting(active);
+
+      transport.simulateIncomingMessage(
+        'rift-peer',
+        testCertDer,
+        pubKeyBytes,
+        {
+          'rift': '0.1-draft',
+          'messageId': '34343434-3434-4434-8434-343434343434',
+          'type': 'session.hello',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'deviceId': 'rift-peer',
+            'implementationId': 'riftd-peer/0.1.0',
+            'capabilities': const [],
+            'identityProof': '0' * 128,
+          },
+        },
+        pendingCandidate: true,
+      );
+
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.rejectedCandidates, hasLength(1));
+      expect(transport.promotedCandidates, isEmpty);
+      expect(transport.disconnectedPeers, isEmpty);
+      expect(sessionManager.getContext('rift-peer'), same(active));
+    });
+
+    test('valid pending hello is promoted only after PoP verification', () async {
+      final active = SessionContext(peerDeviceId: 'rift-peer', isInitiator: false)
+        ..handshakeState = HandshakeState.established
+        ..capabilityNegotiated = true;
+      sessionManager.injectContextForTesting(active);
+      final nonce = Uint8List.fromList(List<int>.generate(32, (index) => index));
+      final localCertDer = FakeIdentityManager().tlsCertificateDer;
+      final bindingInput = Uint8List(nonce.length + testCertDer.length + localCertDer.length)
+        ..setRange(0, nonce.length, nonce)
+        ..setRange(nonce.length, nonce.length + testCertDer.length, testCertDer)
+        ..setRange(nonce.length + testCertDer.length, nonce.length + testCertDer.length + localCertDer.length, localCertDer);
+      final channelBinding = Uint8List.fromList(sha256.convert(bindingInput).bytes);
+      final signingInput = PoPManager.buildSigningInput(channelBinding, pubKeyBytes, testCertDer);
+      final signature = await Ed25519().sign(signingInput, keyPair: edKeyPair);
+      final proof = signature.bytes
+          .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+          .join();
+
+      transport.simulateIncomingMessage(
+        'rift-peer',
+        testCertDer,
+        pubKeyBytes,
+        {
+          'rift': '0.1-draft',
+          'messageId': '35353535-3535-4535-8535-353535353535',
+          'type': 'session.hello',
+          'sourceDeviceId': 'rift-peer',
+          'destinationDeviceId': 'rift-local',
+          'payload': {
+            'supportedVersions': ['0.1-draft'],
+            'deviceId': 'rift-peer',
+            'implementationId': 'riftd-peer/0.1.0',
+            'capabilities': const [],
+            'bindingType': 'app-nonce',
+            'sessionNonce': base64.encode(nonce),
+            'identityProof': proof,
+          },
+        },
+        pendingCandidate: true,
+      );
+
+      await transport.candidatePromoted.future;
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.promotedCandidates, hasLength(1));
+      expect(transport.rejectedCandidates, isEmpty);
+      expect(transport.disconnectedPeers, isEmpty);
+      expect(sessionManager.getContext('rift-peer'), isNot(same(active)));
     });
 
     test('session.hello rejects payload deviceId mismatch', () async {
