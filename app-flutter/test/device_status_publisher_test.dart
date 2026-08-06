@@ -20,6 +20,23 @@ void main() {
       );
     });
 
+    test('Linux does not infer AC power from a full battery', () {
+      expect(
+        DeviceStatusPublisher.deriveLinuxPowerSource(
+          chargingState: 'full',
+          externalPowerOnline: null,
+        ),
+        'unknown',
+      );
+      expect(
+        DeviceStatusPublisher.deriveLinuxPowerSource(
+          chargingState: 'full',
+          externalPowerOnline: true,
+        ),
+        'ac',
+      );
+    });
+
     test('Windows uses the charging bit instead of AC attachment', () {
       final pluggedIn = DeviceStatusPublisher.parseWindowsPowerStatus(
         acLineStatus: 1,

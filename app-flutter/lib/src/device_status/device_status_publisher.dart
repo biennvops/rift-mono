@@ -223,7 +223,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
       return 'battery';
     }
     return switch (chargingState) {
-      'charging' || 'full' => 'ac',
+      'charging' => 'ac',
       'discharging' => 'battery',
       _ => 'unknown',
     };

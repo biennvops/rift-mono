@@ -115,6 +115,16 @@ public sealed class DeviceStatusService : IDeviceStatusService
         string message,
         CancellationToken cancellationToken)
     {
+        var payload = new Dictionary<string, object?>
+        {
+            ["failureReason"] = failureReason,
+            ["message"] = message
+        };
+        if (refMessageId is not null)
+        {
+            payload["refMessageId"] = refMessageId;
+        }
+
         var envelope = new
         {
             rift = "0.1-draft",
@@ -122,12 +132,7 @@ public sealed class DeviceStatusService : IDeviceStatusService
             messageId = Guid.NewGuid().ToString("D"),
             sourceDeviceId = _identityManager.GetDeviceId(),
             destinationDeviceId = peerDeviceId,
-            payload = new
-            {
-                failureReason,
-                refMessageId,
-                message
-            }
+            payload
         };
         await _transport.SendAsync(
             peerDeviceId,

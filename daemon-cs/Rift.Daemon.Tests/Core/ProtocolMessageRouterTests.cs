@@ -92,6 +92,23 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task SendPeerErrorAsync_OmitsNullReferenceMessageId()
+    {
+        await _deviceStatusService.SendPeerErrorAsync(
+            "rift-peer-error",
+            "MalformedMessage",
+            refMessageId: null,
+            message: "Invalid device status payload",
+            CancellationToken.None);
+
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        var payload = error.GetProperty("payload");
+        Assert.Equal("MalformedMessage", payload.GetProperty("failureReason").GetString());
+        Assert.False(payload.TryGetProperty("refMessageId", out _));
+        Assert.Equal("Invalid device status payload", payload.GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task HandleMessageAsync_PresenceUpdate_UpdatesPresenceState()
     {
         _trustStore.SavePeer(new PeerIdentity
