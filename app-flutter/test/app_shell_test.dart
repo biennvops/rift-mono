@@ -607,13 +607,24 @@ void main() {
   testWidgets(
       'mirrored notification post emits desktop payload with route and notification id',
       (WidgetTester tester) async {
+    when(() => mockClient.listTrustedPeers()).thenAnswer(
+      (_) async => {
+        'peers': [
+          {
+            'deviceId': 'device-1234567890',
+            'displayName': 'Work Laptop',
+          },
+        ],
+      },
+    );
     await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
     await tester.pump();
     clearInteractions(mockClient);
 
     notificationPostedController.add(<String, dynamic>{
       'notificationId': 'notif-123',
-      'sourceDeviceId': 'rift-peer-1',
+      'sourceDeviceId': 'device-1234567890',
       'appName': 'Messages',
       'title': 'Alice',
       'bodyPreview': 'Ping',
@@ -629,11 +640,11 @@ void main() {
     );
     expect(arguments['route'], 'history.notifications');
     expect(arguments['title'], 'Alice');
-    expect(arguments['body'], 'rift-peer-1 • Ping');
+    expect(arguments['body'], 'Work Laptop • Ping');
     expect(arguments['payload'], <String, Object?>{
       'route': 'history.notifications',
       'notificationId': 'notif-123',
-      'sourceDeviceId': 'rift-peer-1',
+      'sourceDeviceId': 'device-1234567890',
       'appName': 'Messages',
       'isOpenable': true,
       'isDismissible': true,
