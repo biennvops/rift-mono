@@ -22,6 +22,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
     private readonly FileTransferService _fileTransferService;
     private readonly MediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly NotificationSyncService _notificationSyncService;
+    private readonly DeviceStatusService _deviceStatusService;
     private readonly OperationService _operationService;
     private readonly FakeTransport _clipboardTransport;
     private readonly FakeTransport _pairingTransport;
@@ -73,7 +74,12 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _securityEventLog,
             null,
             NullLogger<NotificationSyncService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService);
+        _deviceStatusService = new DeviceStatusService(
+            _clipboardTransport,
+            _presenceService,
+            _identityManager,
+            logger: NullLogger<DeviceStatusService>.Instance);
+        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService, _deviceStatusService);
     }
 
     [Fact]
@@ -99,6 +105,33 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         Assert.Equal("online", presence!.Status);
         Assert.Equal("2026-06-18T11:00:00Z", presence.LastSeenAt);
         Assert.Contains("presence.basic", presence.Capabilities);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_CachesPeerPowerState()
+    {
+        const string peerDeviceId = "rift-peer-device-status";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = peerDeviceId,
+                sourcePlatform = "android",
+                batteryPercent = 64,
+                chargingState = "charging",
+                powerSource = "usb",
+                lowPowerMode = false,
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var status = _deviceStatusService.GetDeviceStatus(peerDeviceId);
+        Assert.NotNull(status);
+        Assert.Equal(64, status!.BatteryPercent);
+        Assert.Equal("charging", status.ChargingState);
+        Assert.Equal("usb", status.PowerSource);
+        Assert.False(status.LowPowerMode);
+        Assert.False(status.IsStale);
     }
 
     [Fact]

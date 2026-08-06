@@ -24,6 +24,7 @@ import 'src/notification_sync_policy.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
+import 'src/device_status/device_status_publisher.dart';
 import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/android_remote_media_playback_coordinator.dart';
@@ -247,6 +248,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
   IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
+  DeviceStatusPublisher? _deviceStatusPublisher;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
 
@@ -266,6 +268,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       unawaited(context.read<SendQueueController>().ensureRestored());
       _bindPlatformNotificationActions();
       _bindMediaPlayback();
+      _bindDeviceStatus();
       _bindPairingRequests();
       _bindNotifications();
       _bindClipboardChannel();
@@ -281,6 +284,17 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   static const _clipboardChannel =
       MethodChannel('com.biennvops.rift/clipboard');
+
+  void _bindDeviceStatus() {
+    if (Platform.isAndroid ||
+        Platform.environment.containsKey('FLUTTER_TEST')) {
+      return;
+    }
+    _deviceStatusPublisher = DeviceStatusPublisher(
+      context.read<JsonRpcRiftClient>(),
+    );
+    unawaited(_deviceStatusPublisher!.start());
+  }
 
   Future<void> _applyAndroidClipboardPayload({
     required String contentType,
@@ -1043,6 +1057,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_androidRemoteMediaPlayback?.dispose());
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_macOSRemoteMediaPlayback?.dispose());
+    unawaited(_deviceStatusPublisher?.dispose());
     unawaited(_clipboardManager?.dispose());
     super.dispose();
   }
@@ -1353,12 +1368,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _pairingCompleteSub = client.onPairingComplete.listen((event) async {
       final deviceId = event['deviceId']?.toString();
       final eventName = event['displayName']?.toString();
-      String label = (eventName != null && eventName.isNotEmpty) ? eventName : '';
+      String label =
+          (eventName != null && eventName.isNotEmpty) ? eventName : '';
 
       if (label.isEmpty && deviceId != null && deviceId.isNotEmpty) {
         try {
           final result = await client.listTrustedPeers();
-          final peers = List<dynamic>.from((result as Map)['peers'] ?? const []);
+          final peers =
+              List<dynamic>.from((result as Map)['peers'] ?? const []);
           for (final candidate in peers) {
             if (candidate is! Map) continue;
             if (candidate['deviceId']?.toString() == deviceId) {

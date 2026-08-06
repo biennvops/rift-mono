@@ -370,8 +370,50 @@ private typealias MobileGestaltCopyAnswer = @convention(c) (CFString) -> Unmanag
     return .success
   }
 
+  private func currentDeviceStatus() -> [String: Any] {
+    let device = UIDevice.current
+    device.isBatteryMonitoringEnabled = true
+    var status: [String: Any] = [
+      "sourcePlatform": "ios",
+      "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled,
+    ]
+    if device.batteryLevel >= 0 {
+      status["batteryPercent"] = Int((device.batteryLevel * 100).rounded())
+    }
+    switch device.batteryState {
+    case .charging:
+      status["chargingState"] = "charging"
+      status["powerSource"] = "ac"
+    case .full:
+      status["chargingState"] = "full"
+      status["powerSource"] = "ac"
+    case .unplugged:
+      status["chargingState"] = "discharging"
+      status["powerSource"] = "battery"
+    case .unknown:
+      status["chargingState"] = "unknown"
+      status["powerSource"] = "unknown"
+    @unknown default:
+      status["chargingState"] = "unknown"
+      status["powerSource"] = "unknown"
+    }
+    return status
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    let deviceStatusChannel = FlutterMethodChannel(
+      name: "rift/ios/device_status",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    deviceStatusChannel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "getDeviceStatus", let self else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(self.currentDeviceStatus())
+    }
 
     let mediaPlaybackChannel = FlutterMethodChannel(
       name: "rift/ios/media_playback",

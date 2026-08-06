@@ -36,6 +36,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   bool _isRefreshing = false;
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _peerLostSub;
+  StreamSubscription<Map<String, dynamic>>? _deviceStatusSub;
   StreamSubscription<bool>? _connectionChangedSub;
 
   @override
@@ -65,6 +66,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   void dispose() {
     _trustChangedSub?.cancel();
     _peerLostSub?.cancel();
+    _deviceStatusSub?.cancel();
     _connectionChangedSub?.cancel();
     super.dispose();
   }
@@ -73,6 +75,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final client = context.read<JsonRpcRiftClient>();
     _trustChangedSub = client.onTrustChanged.listen(_handleTrustChanged);
     _peerLostSub = client.onPeerLost.listen(_handlePeerLost);
+    _deviceStatusSub = client.onDeviceStatusUpdated.listen(_handleDeviceStatus);
     _connectionChangedSub = client.onConnectionChanged.listen((isConnected) {
       if (!mounted) return;
       if (isConnected) {
@@ -110,6 +113,16 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
     setState(() {
       isOnline = false;
+    });
+  }
+
+  void _handleDeviceStatus(Map<String, dynamic> event) {
+    if (event['sourceDeviceId']?.toString() != _deviceId || !mounted) {
+      return;
+    }
+    setState(() {
+      peer = Map<String, dynamic>.from(peer)
+        ..['deviceStatus'] = Map<String, dynamic>.from(event);
     });
   }
 
@@ -191,6 +204,100 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     final min = parsed.minute.toString().padLeft(2, '0');
     final sec = parsed.second.toString().padLeft(2, '0');
     return '$yyyy-$mm-$dd $hh:$min:$sec';
+  }
+
+  String _formatChargingState(String value) => switch (value) {
+        'charging' => 'Charging',
+        'discharging' => 'Discharging',
+        'full' => 'Full',
+        'notCharging' => 'Not charging',
+        _ => 'Unknown',
+      };
+
+  String _formatPowerSource(String value) => switch (value) {
+        'ac' => 'AC power',
+        'usb' => 'USB power',
+        'battery' => 'Battery',
+        _ => 'Unknown',
+      };
+
+  Widget _buildDeviceStatusCard(
+    ThemeData theme,
+    Map<String, dynamic> status,
+    bool isMobile,
+  ) {
+    final rows = <({IconData icon, String label, String value})>[];
+    final batteryPercent = status['batteryPercent'];
+    if (batteryPercent is num) {
+      rows.add((
+        icon: Icons.battery_std,
+        label: 'Battery',
+        value: '${batteryPercent.toInt()}%',
+      ));
+    }
+    final chargingState = status['chargingState']?.toString();
+    if (chargingState != null) {
+      rows.add((
+        icon: Icons.battery_charging_full,
+        label: 'Charging state',
+        value: _formatChargingState(chargingState),
+      ));
+    }
+    final powerSource = status['powerSource']?.toString();
+    if (powerSource != null) {
+      rows.add((
+        icon: Icons.power,
+        label: 'Power source',
+        value: _formatPowerSource(powerSource),
+      ));
+    }
+    if (status['lowPowerMode'] is bool) {
+      rows.add((
+        icon: Icons.energy_savings_leaf_outlined,
+        label: 'Low Power Mode',
+        value: status['lowPowerMode'] == true ? 'On' : 'Off',
+      ));
+    }
+    final observedAt = _formatTimestamp(status['observedAt']?.toString());
+    rows.add((
+      icon: status['isStale'] == true ? Icons.schedule : Icons.update,
+      label: 'Status',
+      value: status['isStale'] == true ? 'Stale · $observedAt' : observedAt,
+    ));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      padding: EdgeInsets.all(isMobile ? 16 : 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Power status',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.01,
+              height: 32 / 24,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 16),
+          for (var index = 0; index < rows.length; index++)
+            _buildIdentityRow(
+              theme,
+              rows[index].icon,
+              rows[index].label,
+              rows[index].value,
+              isLast: index == rows.length - 1,
+            ),
+        ],
+      ),
+    );
   }
 
   IconData _platformIcon(String? platform) {
@@ -446,6 +553,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         final osVersion = peer['osVersion']?.toString() ?? 'Unavailable';
         final pairedAt = _formatTimestamp(peer['pairedAt']?.toString());
         final lastSeenAt = _formatTimestamp(peer['lastSeenAt']?.toString());
+        final deviceStatus = peer['deviceStatus'] is Map
+            ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
+            : null;
         final isOnline = this.isOnline;
 
         if (_wasRemoved) {
@@ -558,6 +668,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 ],
               ),
             ),
+            if (!widget.isSelf && deviceStatus != null)
+              _buildDeviceStatusCard(theme, deviceStatus, isMobile),
             if (!widget.isSelf)
               Container(
                 decoration: BoxDecoration(
@@ -590,8 +702,12 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    _buildCapabilityToggle(theme, Icons.content_paste,
-                        'Clipboard Sync', 'Allow shared clipboard access', true),
+                    _buildCapabilityToggle(
+                        theme,
+                        Icons.content_paste,
+                        'Clipboard Sync',
+                        'Allow shared clipboard access',
+                        true),
                     const SizedBox(height: 12),
                     _buildCapabilityToggle(theme, Icons.chevron_right,
                         'File Transfer', 'Allow secure file dropping', true),

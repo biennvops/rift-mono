@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../device_status/device_status_publisher.dart';
 import '../media_playback/android_remote_media_playback_coordinator.dart';
 import '../notification_sync_policy.dart';
 import '../platform/android_shell.dart';
@@ -169,6 +170,9 @@ Future<void> runAndroidBackgroundMain() async {
       unawaited(flushNativeEvents());
     }
   });
+
+  final deviceStatusPublisher = DeviceStatusPublisher(client);
+  unawaited(deviceStatusPublisher.start());
 
   final remoteMedia = AndroidRemoteMediaPlaybackCoordinator(client);
   unawaited(remoteMedia.start());

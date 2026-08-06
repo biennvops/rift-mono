@@ -10,7 +10,8 @@ public sealed class ProtocolMessageRouter(
     IClipboardService clipboardService,
     IFileTransferService fileTransferService,
     IMediaPlaybackSyncService mediaPlaybackSyncService,
-    INotificationSyncService notificationSyncService) : IProtocolMessageRouter
+    INotificationSyncService notificationSyncService,
+    IDeviceStatusService? deviceStatusService = null) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
@@ -153,6 +154,40 @@ public sealed class ProtocolMessageRouter(
                 : [];
 
             presenceService.UpdatePeerPresence(peerDeviceId, status, lastSeenAt, capabilities);
+            return;
+        }
+
+        if (string.Equals(messageType, "device.statusUpdated", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "device.status", messageType);
+            var statusPayload = root.GetProperty("payload");
+            var payloadSourceDeviceId = statusPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, payloadSourceDeviceId, messageType);
+            if (deviceStatusService is null)
+            {
+                throw new InvalidOperationException("Device status service is unavailable.");
+            }
+
+            await deviceStatusService.HandlePeerStatusUpdatedAsync(new DeviceStatusRecord
+            {
+                SourceDeviceId = payloadSourceDeviceId,
+                SourcePlatform = statusPayload.TryGetProperty("sourcePlatform", out var platformElement) && platformElement.ValueKind == JsonValueKind.String
+                    ? platformElement.GetString()
+                    : null,
+                BatteryPercent = statusPayload.TryGetProperty("batteryPercent", out var batteryElement) && batteryElement.ValueKind == JsonValueKind.Number
+                    ? batteryElement.GetInt32()
+                    : null,
+                ChargingState = statusPayload.TryGetProperty("chargingState", out var chargingElement) && chargingElement.ValueKind == JsonValueKind.String
+                    ? chargingElement.GetString()
+                    : null,
+                PowerSource = statusPayload.TryGetProperty("powerSource", out var powerElement) && powerElement.ValueKind == JsonValueKind.String
+                    ? powerElement.GetString()
+                    : null,
+                LowPowerMode = statusPayload.TryGetProperty("lowPowerMode", out var lowPowerElement) && lowPowerElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? lowPowerElement.GetBoolean()
+                    : null,
+                ObservedAt = statusPayload.GetProperty("observedAt").GetString() ?? string.Empty
+            }, cancellationToken).ConfigureAwait(false);
             return;
         }
 

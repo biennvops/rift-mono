@@ -185,6 +185,7 @@ class RiftDaemonService : Service() {
         result: MethodChannel.Result,
     ) {
         when (method) {
+            "getDeviceStatus" -> result.success(AndroidDeviceStatus.asMap(this))
             "showNotification" -> {
                 result.success(showActivityNotification(arguments))
             }

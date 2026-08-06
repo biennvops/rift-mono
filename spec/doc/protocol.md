@@ -286,7 +286,7 @@ Real user-assigned or platform-derived `displayName` and `platform` values MUST 
 
 ### 7.2 Capability Messages
 
-Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional file-transfer capability is `file.transfer`, with version `1` for legacy completion semantics and version `2` for receiver-confirmed publication. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`.
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional file-transfer capability is `file.transfer`, with version `1` for legacy completion semantics and version `2` for receiver-confirmed publication. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`. The optional device-status capability is `device.status` version `1`.
 
 `capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
 
@@ -307,6 +307,33 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 ### 7.4 Presence Messages
 
 `presence.update` payload fields: `status` one of `online`, `offline`, `away`; optional `lastSeenAt` RFC 3339 timestamp; `capabilities` array of selected capability names.
+
+### 7.4A Device Status Sync
+
+Device status sync v1 shares a coarse power-state snapshot between trusted
+peers. Peers MUST negotiate `device.status@1` before sending or accepting a
+`device.statusUpdated` message. Device status is informational only and MUST NOT
+be used as a trust, identity, authorization, or transport-reachability input.
+
+`device.statusUpdated` payload fields:
+
+| Field             | Required | Type                | Notes |
+| ----------------- | -------- | ------------------- | ----- |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity |
+| `sourcePlatform`  | No       | string              | Source hint such as `android`, `ios`, `windows`, `macos`, `linux` |
+| `batteryPercent`  | No       | integer             | Inclusive range `0` through `100` |
+| `chargingState`   | No       | string              | One of `charging`, `discharging`, `full`, `notCharging`, or `unknown` |
+| `powerSource`     | No       | string              | One of `battery`, `ac`, `usb`, or `unknown` |
+| `lowPowerMode`    | No       | boolean             | Whether the platform's battery-saver or low-power mode is active |
+| `observedAt`      | Yes      | RFC 3339 UTC string | Audit/display timestamp for the local observation |
+
+At least one of `batteryPercent`, `chargingState`, `powerSource`, or
+`lowPowerMode` MUST be present. Unsupported values MUST be omitted rather than
+fabricated. Receivers MUST replace the cached status for `sourceDeviceId` with
+the complete new snapshot. `observedAt` is audit and display metadata only;
+receivers MUST measure freshness from local receipt time using a monotonic
+clock. `isStale` is an IPC-derived field and MUST NOT be transmitted between
+peers.
 
 ### 7.5 Clipboard Messages
 
@@ -532,13 +559,16 @@ Capability negotiation proceeds as follows:
 
 If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
 
-### 9.3 Required v0.1-Draft Capabilities
+### 9.3 v0.1-Draft Capability Profile
 
-The following capabilities are REQUIRED for a conformant v0.1-draft session:
+The following capability names and versions are defined for v0.1-draft. The
+required session subset is specified immediately below; the remaining
+capabilities are optional extensions:
 
 | Name                    | Version | Minimum | Description                                              |
 | ----------------------- | ------- | ------- | -------------------------------------------------------- |
 | `clipboard.offer_fetch` | 1       | 1       | Clipboard metadata offer and authenticated content fetch |
+| `device.status`         | 1       | 1       | Optional coarse battery and power-state synchronization |
 | `file.transfer`         | 2       | 1       | Optional authenticated file offer, chunk transfer, and receiver-confirmed publication |
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
@@ -552,7 +582,7 @@ independently. If any required capability is absent after negotiation, the
 session MAY remain open for diagnostic purposes but MUST NOT permit clipboard,
 presence, or operation messages.
 
-`notification.sync` is optional. When absent, peers MUST reject notification-sync traffic with `CapabilityUnavailable`.
+`notification.sync`, `media.playback`, and `device.status` are optional. When absent, peers MUST reject traffic for the corresponding capability with `CapabilityUnavailable`.
 
 ### 9.4 Version Mismatch and Forward Compatibility
 
@@ -598,6 +628,21 @@ Notification sync mirrors limited notification metadata between trusted peers. T
 The Android source daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
 
 Receivers MUST key mirrored records by `(sourceDeviceId, notificationId)` and mutate them in place on `notification.updated` / `notification.removed`. Senders and receivers SHOULD log accepted, denied, expired, malformed, and action-result flows with metadata only. Event details MUST NOT include full unredacted notification content beyond the mirrored title/body preview already permitted on the wire.
+
+## 12A. Device Status
+
+A device SHOULD send its latest status snapshot after a trusted session
+negotiates `device.status@1`, and thereafter when a power-state field changes.
+Implementations SHOULD coalesce frequent battery changes and SHOULD periodically
+refresh the snapshot while connected. Charging-state and low-power-mode changes
+SHOULD be sent promptly. Implementations MUST NOT expose device status through
+mDNS or before trust is established.
+
+Receivers SHOULD retain the most recent snapshot while the peer remains trusted
+and mark it stale after a bounded local interval or when the peer becomes
+offline. Stale status MAY remain visible with an explicit stale indicator. A
+stale or missing status MUST NOT change presence, routing, authorization, or
+operation lifecycle decisions.
 
 ## 13. Presence
 

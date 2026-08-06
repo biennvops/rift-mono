@@ -27,6 +27,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly SendQueueService _sendQueueService;
     private readonly FakeMediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly FakeNotificationSyncService _notificationSyncService;
+    private readonly DeviceStatusService _deviceStatusService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -48,13 +49,18 @@ public sealed class RiftApiHandlerTests : IDisposable
         _sendQueueService = new SendQueueService(_trustStore, null);
         _mediaPlaybackSyncService = new FakeMediaPlaybackSyncService();
         _notificationSyncService = new FakeNotificationSyncService();
+        _deviceStatusService = new DeviceStatusService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            logger: NullLogger<DeviceStatusService>.Instance);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
             _securityEventLog,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService, _deviceStatusService);
     }
 
     [Fact]
@@ -70,6 +76,27 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Contains(result.Capabilities, capability => capability.Name == "security.event_log");
         Assert.Contains(result.Capabilities, capability => capability.Name == "media.playback");
         Assert.Contains(result.Capabilities, capability => capability.Name == "notification.sync");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "device.status");
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_CachesValidatedPowerState()
+    {
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPercent: 64,
+            chargingState: "charging",
+            powerSource: "usb",
+            lowPowerMode: false,
+            observedAt: "2026-06-18T11:00:00Z",
+            sourcePlatform: "android");
+
+        Assert.Empty(result.BroadcastTo);
+        var status = _deviceStatusService.GetDeviceStatus(_identityManager.GetDeviceId());
+        Assert.NotNull(status);
+        Assert.Equal(64, status!.BatteryPercent);
+        Assert.Equal("charging", status.ChargingState);
+        Assert.Equal("usb", status.PowerSource);
+        Assert.False(status.LowPowerMode);
     }
 
     [Fact]

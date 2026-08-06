@@ -257,6 +257,9 @@ class MainActivity: FlutterActivity() {
                             }
                         }
                     }
+                    "getDeviceStatus" -> {
+                        result.success(AndroidDeviceStatus.asMap(this))
+                    }
                     "getNotificationPermissionStatus" -> {
                         result.success(getNotificationPermissionStatus())
                     }

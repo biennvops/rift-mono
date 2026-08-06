@@ -10,11 +10,13 @@ public sealed class DaemonInfoService(
     IDiscoveryCoordinator discoveryCoordinator,
     IPresenceService presenceService,
     ITransport transport,
-    IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider = null) : IDaemonInfoService
+    IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider = null,
+    IDeviceStatusService? deviceStatusService = null) : IDaemonInfoService
 {
     private static readonly CapabilityInfo[] Capabilities =
     [
         DaemonCapabilities.ClipboardOfferFetch,
+        DaemonCapabilities.DeviceStatus,
         DaemonCapabilities.FileTransfer,
         DaemonCapabilities.MediaPlayback,
         DaemonCapabilities.NotificationSync,
@@ -65,7 +67,10 @@ public sealed class DaemonInfoService(
                     PairedAt = peer.State == TrustState.Trusted ? peer.LastStateTransitionAt.ToString("O") : null,
                     LastSeenAt = presence?.LastSeenAt,
                     Presence = presence?.Status ?? "offline",
-                    Capabilities = presence?.Capabilities ?? []
+                    Capabilities = presence?.Capabilities ?? [],
+                    DeviceStatus = peer.State == TrustState.Trusted
+                        ? deviceStatusService?.GetDeviceStatus(peer.DeviceId)
+                        : null
                 };
             })
             .ToArray();

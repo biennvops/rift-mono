@@ -16,6 +16,7 @@ public class RiftApiHandler : IRiftApi
     private readonly IPairingService _pairingService;
     private readonly IMediaPlaybackSyncService _mediaPlaybackSyncService;
     private readonly INotificationSyncService _notificationSyncService;
+    private readonly IDeviceStatusService _deviceStatusService;
 
     public RiftApiHandler()
         : this(new UnsupportedDaemonInfoService(), new UnsupportedDiscoveryCoordinator(), new UnsupportedClipboardService(), new UnsupportedFileTransferService(), new UnsupportedSendQueueService(), new UnsupportedOperationService(), new UnsupportedPairingService(), new UnsupportedMediaPlaybackSyncService(), new UnsupportedNotificationSyncService())
@@ -31,7 +32,8 @@ public class RiftApiHandler : IRiftApi
         IOperationService operationService,
         IPairingService pairingService,
         IMediaPlaybackSyncService mediaPlaybackSyncService,
-        INotificationSyncService notificationSyncService)
+        INotificationSyncService notificationSyncService,
+        IDeviceStatusService? deviceStatusService = null)
     {
         _daemonInfoService = daemonInfoService;
         _discoveryCoordinator = discoveryCoordinator;
@@ -42,6 +44,7 @@ public class RiftApiHandler : IRiftApi
         _pairingService = pairingService;
         _mediaPlaybackSyncService = mediaPlaybackSyncService;
         _notificationSyncService = notificationSyncService;
+        _deviceStatusService = deviceStatusService ?? new UnsupportedDeviceStatusService();
     }
 
     public Task<string> GetVersionAsync() => Task.FromResult("0.1-draft");
@@ -386,6 +389,54 @@ public class RiftApiHandler : IRiftApi
     [JsonRpcMethod("rift.listMediaPlayback")]
     public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync() =>
         _mediaPlaybackSyncService.ListMediaPlaybackAsync(CancellationToken.None);
+
+    [JsonRpcMethod("rift.getPeerDeviceStatus")]
+    public Task<DeviceStatusRecord> GetPeerDeviceStatusAsync(string deviceId)
+    {
+        var peer = _daemonInfoService.ListTrustedPeers().Peers.FirstOrDefault(candidate =>
+            string.Equals(candidate.DeviceId, deviceId, StringComparison.Ordinal));
+        if (peer is null)
+        {
+            throw new LocalRpcException($"Peer '{deviceId}' was not found.") { ErrorCode = -32009 };
+        }
+        if (!string.Equals(peer.TrustState, "trusted", StringComparison.Ordinal))
+        {
+            throw new LocalRpcException("Peer is not trusted.") { ErrorCode = -32004 };
+        }
+
+        var status = _deviceStatusService.GetDeviceStatus(deviceId);
+        return status is null
+            ? throw new LocalRpcException($"Device status for '{deviceId}' is unavailable.") { ErrorCode = -32009 }
+            : Task.FromResult(status);
+    }
+
+    [JsonRpcMethod("rift.notifyLocalDeviceStatus")]
+    public async Task<NotifyLocalDeviceStatusResult> NotifyLocalDeviceStatusAsync(
+        int? batteryPercent = null,
+        string? chargingState = null,
+        string? powerSource = null,
+        bool? lowPowerMode = null,
+        string? observedAt = null,
+        string? sourcePlatform = null)
+    {
+        try
+        {
+            return await _deviceStatusService.UpdateLocalStatusAsync(new DeviceStatusRecord
+            {
+                SourceDeviceId = _daemonInfoService.GetDeviceInfo().DeviceId,
+                SourcePlatform = sourcePlatform ?? _daemonInfoService.GetDeviceInfo().Platform,
+                BatteryPercent = batteryPercent,
+                ChargingState = chargingState,
+                PowerSource = powerSource,
+                LowPowerMode = lowPowerMode,
+                ObservedAt = observedAt ?? DateTimeOffset.UtcNow.ToString("O")
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = -32602 };
+        }
+    }
 
     [JsonRpcMethod("rift.getMediaPlayback")]
     public async Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId)
@@ -738,6 +789,21 @@ public class RiftApiHandler : IRiftApi
         private static LocalRpcException CreateNotConfiguredException()
         {
             return new LocalRpcException("Operation services are not configured for this IPC host.")
+            {
+                ErrorCode = -32603
+            };
+        }
+    }
+
+    private sealed class UnsupportedDeviceStatusService : IDeviceStatusService
+    {
+        public Task<NotifyLocalDeviceStatusResult> UpdateLocalStatusAsync(DeviceStatusRecord status, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task HandlePeerStatusUpdatedAsync(DeviceStatusRecord status, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public DeviceStatusRecord? GetDeviceStatus(string sourceDeviceId) => throw CreateNotConfiguredException();
+
+        private static LocalRpcException CreateNotConfiguredException()
+        {
+            return new LocalRpcException("Device status services are not configured for this IPC host.")
             {
                 ErrorCode = -32603
             };
