@@ -71,6 +71,8 @@ Future<void> _addSupply(
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('DeviceStatusPublisher power parsing', () {
     test('Linux does not infer battery power from notCharging', () {
       expect(
