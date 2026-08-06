@@ -1080,6 +1080,7 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
     }
 
     auto display_updater = controls.DisplayUpdater();
+    display_updater.ClearAll();
     display_updater.Type(winrt::Windows::Media::MediaPlaybackType::Music);
     const std::string* app_name = FindString(playback, "appName");
     const std::string* title = FindString(playback, "title");
