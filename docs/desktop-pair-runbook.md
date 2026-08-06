@@ -141,6 +141,20 @@ listener/extractor is configured, recording platform permission limitations,
 replay behavior after reconnect, and whether updates/removals create duplicate
 native notifications.
 
+For a Linux source, verify all of the following:
+
+1. A third-party `org.freedesktop.Notifications` post appears on the peer once.
+2. A replacement using `replaces_id` updates the existing peer record.
+3. Expiry or local dismissal removes the peer record after `NotificationClosed`.
+4. Restarting the Linux daemon does not replay historical notifications.
+5. A Rift-owned desktop notification is not rebroadcast to peers.
+6. Disabled sync and the persisted package blacklist suppress publication after
+   a daemon restart.
+7. The source Linux desktop does not show a second Rift popup for its own local
+   notification event.
+8. Portal-only applications and any desktop-environment-specific gaps are
+   recorded explicitly.
+
 ## Evidence table
 
 Copy one table per pair into the results section below (or into

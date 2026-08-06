@@ -1,6 +1,7 @@
 using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Rift.Daemon.Core.Data;
+using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -44,6 +45,53 @@ public sealed class DatabaseContextTests : IDisposable
 
         Assert.Contains("QueueItemId", queueColumns);
         Assert.Contains("Status", queueColumns);
+
+        using var policyCommand = connection.CreateCommand();
+        policyCommand.CommandText = "PRAGMA table_info(NotificationSyncPolicy);";
+        using var policyReader = policyCommand.ExecuteReader();
+        var policyColumns = new List<string>();
+        while (policyReader.Read())
+        {
+            policyColumns.Add((string)policyReader["name"]);
+        }
+
+        Assert.Contains("Enabled", policyColumns);
+        Assert.Contains("BlacklistedPackagesJson", policyColumns);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_RoundTripsPolicy()
+    {
+        _databaseContext.Initialize();
+        var store = new SqliteNotificationSyncPolicyStore(_databaseContext);
+
+        store.Save(new NotificationSyncPolicy
+        {
+            Enabled = false,
+            BlacklistedPackages = ["org.example.Secret", "org.example.Secret", " org.example.Chat "]
+        });
+        var restored = store.Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(["org.example.Secret", "org.example.Chat"], restored.BlacklistedPackages);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_FailsClosedForMalformedPersistedBlacklist()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson) VALUES (1, 0, 'not-json');";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Empty(restored.BlacklistedPackages);
     }
 
     [Fact]

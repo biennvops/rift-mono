@@ -227,6 +227,74 @@ public sealed class NotificationSyncServiceTests : IDisposable
         Assert.DoesNotContain(_ipcNotificationService.Events, evt => evt.Method == "rift.onNotificationPosted");
     }
 
+    [Fact]
+    public async Task NotificationPolicy_LoadsAndPersistsThroughStore()
+    {
+        var store = new RecordingNotificationSyncPolicyStore
+        {
+            StoredPolicy = new NotificationSyncPolicy
+            {
+                Enabled = false,
+                BlacklistedPackages = ["org.example.Secret"]
+            }
+        };
+        var service = new NotificationSyncService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            NullLogger<NotificationSyncService>.Instance,
+            store);
+
+        var initial = await service.ListNotificationsAsync(CancellationToken.None);
+        await service.UpdateNotificationSyncPolicyAsync(
+            enabled: true,
+            blacklistedPackages: [" org.example.Chat ", "org.example.Chat"],
+            cancellationToken: CancellationToken.None);
+
+        Assert.False(initial.Policy.Enabled);
+        Assert.Equal(["org.example.Secret"], initial.Policy.BlacklistedPackages);
+        Assert.NotNull(store.StoredPolicy);
+        Assert.True(store.StoredPolicy.Enabled);
+        Assert.Equal(["org.example.Chat"], store.StoredPolicy.BlacklistedPackages);
+    }
+
+    [Fact]
+    public async Task NotificationPolicy_UpdateRollsBackAndPropagatesWhenPersistenceFails()
+    {
+        var store = new RecordingNotificationSyncPolicyStore
+        {
+            StoredPolicy = new NotificationSyncPolicy
+            {
+                Enabled = true,
+                BlacklistedPackages = ["org.example.Secret"]
+            },
+            SaveException = new IOException("database is read-only")
+        };
+        var service = new NotificationSyncService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            NullLogger<NotificationSyncService>.Instance,
+            store);
+
+        var exception = await Assert.ThrowsAsync<IOException>(() =>
+            service.UpdateNotificationSyncPolicyAsync(
+                enabled: false,
+                blacklistedPackages: ["org.example.Chat"],
+                cancellationToken: CancellationToken.None));
+        var current = await service.ListNotificationsAsync(CancellationToken.None);
+
+        Assert.Equal("database is read-only", exception.Message);
+        Assert.True(current.Policy.Enabled);
+        Assert.Equal(["org.example.Secret"], current.Policy.BlacklistedPackages);
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -255,6 +323,37 @@ public sealed class NotificationSyncServiceTests : IDisposable
             IsDismissible = isDismissible,
             IsOpenable = isOpenable
         };
+    }
+
+    private sealed class RecordingNotificationSyncPolicyStore : INotificationSyncPolicyStore
+    {
+        public NotificationSyncPolicy StoredPolicy { get; set; } = new()
+        {
+            Enabled = true,
+            BlacklistedPackages = []
+        };
+
+        public Exception? SaveException { get; init; }
+
+        public NotificationSyncPolicy Load() => new()
+        {
+            Enabled = StoredPolicy.Enabled,
+            BlacklistedPackages = StoredPolicy.BlacklistedPackages.ToArray()
+        };
+
+        public void Save(NotificationSyncPolicy policy)
+        {
+            if (SaveException is not null)
+            {
+                throw SaveException;
+            }
+
+            StoredPolicy = new NotificationSyncPolicy
+            {
+                Enabled = policy.Enabled,
+                BlacklistedPackages = policy.BlacklistedPackages.ToArray()
+            };
+        }
     }
 
     private class RecordingTransport : ITransport

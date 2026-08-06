@@ -93,6 +93,12 @@ public sealed class DatabaseContext
                 Origin TEXT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS NotificationSyncPolicy (
+                Id INTEGER NOT NULL PRIMARY KEY CHECK (Id = 1),
+                Enabled INTEGER NOT NULL,
+                BlacklistedPackagesJson TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS IX_SecurityEvents_Timestamp
             ON SecurityEvents (Timestamp DESC);
 

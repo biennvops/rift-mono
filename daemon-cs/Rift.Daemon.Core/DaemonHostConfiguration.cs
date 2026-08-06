@@ -23,6 +23,7 @@ public static class DaemonHostConfiguration
         services.AddSingleton<ITrustStore, SqliteTrustStore>();
         services.AddSingleton<ISecurityEventLog, SqliteSecurityEventLog>();
         services.AddSingleton<ISendQueueStore, SqliteSendQueueStore>();
+        services.AddSingleton<INotificationSyncPolicyStore, SqliteNotificationSyncPolicyStore>();
         services.AddSingleton<IIdentityManager, IdentityManager>();
         services.AddSingleton<IDiscoveryCoordinator, DiscoveryCoordinator>();
         services.AddSingleton<IDaemonInfoService, DaemonInfoService>();

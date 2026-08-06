@@ -16,6 +16,7 @@ reference material, not sprint history.
 - `macOS`/`Windows`/`Linux` - useful tips and tricks for each platform
 - `macOS/NotificationExtractor.md` - macOS Full Disk Access notification-extractor boundary
 - `macOS/NotificationExtractorXpc.md` - authenticated extractor IPC prototype
+- `Linux/NotificationObserver.md` - Linux session D-Bus notification-observer boundary
 
 ## Supporting Docs
 

@@ -16,15 +16,12 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly IOperationService _operationService;
     private readonly ISecurityEventLog _securityEventLog;
     private readonly IIpcNotificationService? _ipcNotificationService;
+    private readonly INotificationSyncPolicyStore? _policyStore;
     private readonly ILogger<NotificationSyncService> _logger;
     private readonly Dictionary<string, NotificationSyncRecord> _notifications = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingNotificationAction> _pendingActionsByOperationId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _pendingActionKeys = new(StringComparer.Ordinal);
-    private NotificationSyncPolicy _policy = new()
-    {
-        Enabled = true,
-        BlacklistedPackages = []
-    };
+    private NotificationSyncPolicy _policy;
 
     public NotificationSyncService(
         ITransport transport,
@@ -33,7 +30,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         IOperationService operationService,
         ISecurityEventLog securityEventLog,
         IIpcNotificationService? ipcNotificationService = null,
-        ILogger<NotificationSyncService>? logger = null)
+        ILogger<NotificationSyncService>? logger = null,
+        INotificationSyncPolicyStore? policyStore = null)
     {
         _transport = transport;
         _presenceService = presenceService;
@@ -41,7 +39,13 @@ public sealed class NotificationSyncService : INotificationSyncService
         _operationService = operationService;
         _securityEventLog = securityEventLog;
         _ipcNotificationService = ipcNotificationService;
+        _policyStore = policyStore;
         _logger = logger ?? NullLogger<NotificationSyncService>.Instance;
+        _policy = policyStore?.Load() ?? new NotificationSyncPolicy
+        {
+            Enabled = true,
+            BlacklistedPackages = []
+        };
     }
 
     public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken)
@@ -247,11 +251,23 @@ public sealed class NotificationSyncService : INotificationSyncService
 
         lock (_gate)
         {
-            _policy = new NotificationSyncPolicy
+            var previous = ClonePolicy(_policy);
+            var updated = new NotificationSyncPolicy
             {
                 Enabled = enabled,
                 BlacklistedPackages = normalized
             };
+
+            _policy = updated;
+            try
+            {
+                _policyStore?.Save(updated);
+            }
+            catch
+            {
+                _policy = previous;
+                throw;
+            }
 
             return Task.FromResult(ClonePolicy(_policy));
         }

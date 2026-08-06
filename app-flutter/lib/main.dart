@@ -247,6 +247,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
+  Future<String?>? _localDeviceIdFuture;
 
   bool get _enableDesktopShellIntegration =>
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
@@ -1187,15 +1188,38 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     return actions;
   }
 
-  void _showMirroredNotificationPreview(Map<String, dynamic> event) {
+  Future<String?> _getLocalDeviceId() {
+    return _localDeviceIdFuture ??= () async {
+      try {
+        final result = await context.read<JsonRpcRiftClient>().getDeviceInfo();
+        if (result is Map) {
+          final deviceId = result['deviceId']?.toString();
+          if (deviceId != null && deviceId.isNotEmpty) {
+            return deviceId;
+          }
+        }
+      } catch (_) {
+        _localDeviceIdFuture = null;
+      }
+      return null;
+    }();
+  }
+
+  Future<void> _showMirroredNotificationPreview(
+    Map<String, dynamic> event,
+  ) async {
     final notificationId = event['notificationId']?.toString();
     if (notificationId == null || notificationId.isEmpty) {
+      return;
+    }
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    final localDeviceId = await _getLocalDeviceId();
+    if (localDeviceId != null && sourceDeviceId == localDeviceId) {
       return;
     }
     final title = event['title']?.toString().trim();
     final body = event['bodyPreview']?.toString().trim();
     final appName = event['appName']?.toString().trim();
-    final sourceDeviceId = event['sourceDeviceId']?.toString();
     final mirroredPayload = <String, Object?>{
       'route': NotificationRoute.historyNotifications,
       'notificationId': notificationId,
@@ -1435,7 +1459,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
 
     _notificationPostedSub = client.onNotificationPosted.listen((event) {
-      _showMirroredNotificationPreview(event);
+      unawaited(_showMirroredNotificationPreview(event));
     });
 
     _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
