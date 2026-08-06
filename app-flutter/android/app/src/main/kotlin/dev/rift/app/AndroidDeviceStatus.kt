@@ -14,7 +14,8 @@ object AndroidDeviceStatus {
         )
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-        val percent = if (level >= 0 && scale > 0) {
+        val batteryPresent = battery?.getBooleanExtra(BatteryManager.EXTRA_PRESENT, true)
+        val percent = if (batteryPresent != false && level >= 0 && scale > 0) {
             ((level * 100.0) / scale).toInt().coerceIn(0, 100)
         } else {
             null
@@ -28,7 +29,9 @@ object AndroidDeviceStatus {
             BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "notCharging"
             else -> "unknown"
         }
-        val powerSource = when (
+        val powerSource = if (batteryPresent == false) {
+            "ac"
+        } else when (
             battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
         ) {
             BatteryManager.BATTERY_PLUGGED_USB -> "usb"
@@ -37,12 +40,15 @@ object AndroidDeviceStatus {
             else -> "battery"
         }
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        return mapOf(
-            "batteryPercent" to percent,
-            "chargingState" to chargingState,
-            "powerSource" to powerSource,
-            "lowPowerMode" to powerManager.isPowerSaveMode,
-            "sourcePlatform" to "android",
-        )
+        return buildMap {
+            put("batteryPresent", batteryPresent)
+            if (batteryPresent != false) {
+                put("batteryPercent", percent)
+                put("chargingState", chargingState)
+            }
+            put("powerSource", powerSource)
+            put("lowPowerMode", powerManager.isPowerSaveMode)
+            put("sourcePlatform", "android")
+        }
     }
 }

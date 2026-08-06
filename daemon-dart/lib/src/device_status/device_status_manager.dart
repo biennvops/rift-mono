@@ -3,6 +3,7 @@ import 'dart:async';
 class DeviceStatusRecord {
   final String sourceDeviceId;
   final String? sourcePlatform;
+  final bool? batteryPresent;
   final int? batteryPercent;
   final String? chargingState;
   final String? powerSource;
@@ -13,6 +14,7 @@ class DeviceStatusRecord {
   const DeviceStatusRecord({
     required this.sourceDeviceId,
     this.sourcePlatform,
+    this.batteryPresent,
     this.batteryPercent,
     this.chargingState,
     this.powerSource,
@@ -24,6 +26,7 @@ class DeviceStatusRecord {
   Map<String, dynamic> toJson() => {
     'sourceDeviceId': sourceDeviceId,
     if (sourcePlatform != null) 'sourcePlatform': sourcePlatform,
+    if (batteryPresent != null) 'batteryPresent': batteryPresent,
     if (batteryPercent != null) 'batteryPercent': batteryPercent,
     if (chargingState != null) 'chargingState': chargingState,
     if (powerSource != null) 'powerSource': powerSource,
@@ -35,6 +38,7 @@ class DeviceStatusRecord {
   DeviceStatusRecord withStale(bool value) => DeviceStatusRecord(
     sourceDeviceId: sourceDeviceId,
     sourcePlatform: sourcePlatform,
+    batteryPresent: batteryPresent,
     batteryPercent: batteryPercent,
     chargingState: chargingState,
     powerSource: powerSource,

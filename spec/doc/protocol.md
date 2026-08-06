@@ -321,14 +321,16 @@ be used as a trust, identity, authorization, or transport-reachability input.
 | ----------------- | -------- | ------------------- | ----- |
 | `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity |
 | `sourcePlatform`  | No       | string              | Source hint such as `android`, `ios`, `windows`, `macos`, `linux` |
-| `batteryPercent`  | No       | integer             | Inclusive range `0` through `100` |
+| `batteryPresent`  | No       | boolean             | Whether a battery is physically present; false means battery fields are omitted |
+| `batteryPercent`  | No       | integer             | Inclusive range `0` through `100` when a battery is present |
 | `chargingState`   | No       | string              | One of `charging`, `discharging`, `full`, `notCharging`, or `unknown` |
 | `powerSource`     | No       | string              | One of `battery`, `ac`, `usb`, or `unknown` |
 | `lowPowerMode`    | No       | boolean             | Whether the platform's battery-saver or low-power mode is active |
 | `observedAt`      | Yes      | RFC 3339 UTC string | Audit/display timestamp for the local observation |
 
-At least one of `batteryPercent`, `chargingState`, `powerSource`, or
-`lowPowerMode` MUST be present. Unsupported values MUST be omitted rather than
+At least one of `batteryPresent`, `batteryPercent`, `chargingState`,
+`powerSource`, or `lowPowerMode` MUST be present. When `batteryPresent` is
+false, senders MUST omit `batteryPercent` and `chargingState`. Unsupported values MUST be omitted rather than
 fabricated. Receivers MUST replace the cached status for `sourceDeviceId` with
 the complete new snapshot. `observedAt` is audit and display metadata only;
 receivers MUST measure freshness from local receipt time using a monotonic

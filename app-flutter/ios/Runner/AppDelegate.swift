@@ -375,6 +375,7 @@ private typealias MobileGestaltCopyAnswer = @convention(c) (CFString) -> Unmanag
     device.isBatteryMonitoringEnabled = true
     var status: [String: Any] = [
       "sourcePlatform": "ios",
+      "batteryPresent": true,
       "lowPowerMode": ProcessInfo.processInfo.isLowPowerModeEnabled,
     ]
     if device.batteryLevel >= 0 {

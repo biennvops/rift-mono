@@ -83,6 +83,7 @@ public sealed class RiftApiHandlerTests : IDisposable
     public async Task NotifyLocalDeviceStatusAsync_CachesValidatedPowerState()
     {
         var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
             batteryPercent: 64,
             chargingState: "charging",
             powerSource: "usb",
@@ -93,7 +94,8 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Empty(result.BroadcastTo);
         var status = _deviceStatusService.GetDeviceStatus(_identityManager.GetDeviceId());
         Assert.NotNull(status);
-        Assert.Equal(64, status!.BatteryPercent);
+        Assert.True(status!.BatteryPresent);
+        Assert.Equal(64, status.BatteryPercent);
         Assert.Equal("charging", status.ChargingState);
         Assert.Equal("usb", status.PowerSource);
         Assert.False(status.LowPowerMode);

@@ -839,6 +839,7 @@ Returns the latest locally cached status snapshot for a trusted peer.
 {
   "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "sourcePlatform": "android",
+  "batteryPresent": true,
   "batteryPercent": 64,
   "chargingState": "charging",
   "powerSource": "usb",
@@ -859,10 +860,12 @@ peer is not trusted.
 Submits the latest locally observed power-state snapshot so the daemon can cache
 it and mirror it to trusted peers that negotiated `device.status@1`.
 
-**Params:** optional `batteryPercent` integer `0` through `100`, optional
-`chargingState` string, optional `powerSource` string, optional `lowPowerMode`
-boolean, optional `sourcePlatform` string, and optional `observedAt` RFC 3339 UTC
-string. At least one power-state field is required. The daemon supplies
+**Params:** optional `batteryPresent` boolean, optional `batteryPercent` integer
+`0` through `100`, optional `chargingState` string, optional `powerSource` string,
+optional `lowPowerMode` boolean, optional `sourcePlatform` string, and optional
+`observedAt` RFC 3339 UTC string. At least one power-state field is required.
+When `batteryPresent` is false, battery percentage and charging state should be
+omitted. The daemon supplies
 `sourceDeviceId` and defaults `observedAt` and `sourcePlatform` when omitted.
 
 **Result:** `{ "broadcastTo": ["rift-..."] }`
@@ -1008,7 +1011,7 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
 | `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
 | `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
-| `rift.onDeviceStatusUpdated` | `{ "sourceDeviceId", "sourcePlatform?", "batteryPercent?", "chargingState?", "powerSource?", "lowPowerMode?", "observedAt", "isStale?" }` | Device power status changed |
+| `rift.onDeviceStatusUpdated` | `{ "sourceDeviceId", "sourcePlatform?", "batteryPresent?", "batteryPercent?", "chargingState?", "powerSource?", "lowPowerMode?", "observedAt", "isStale?" }` | Device power status changed |
 | `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
 | `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |
 | `rift.onMediaPlaybackRemoved` | `{ "playbackId", "sourceDeviceId", "removedAt?" }` | Mirrored playback removed |

@@ -4,6 +4,7 @@ public sealed class DeviceStatusRecord
 {
     public string SourceDeviceId { get; init; } = string.Empty;
     public string? SourcePlatform { get; init; }
+    public bool? BatteryPresent { get; init; }
     public int? BatteryPercent { get; init; }
     public string? ChargingState { get; init; }
     public string? PowerSource { get; init; }

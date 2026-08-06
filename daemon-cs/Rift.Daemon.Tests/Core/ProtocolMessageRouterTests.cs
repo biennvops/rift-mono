@@ -117,6 +117,7 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             {
                 sourceDeviceId = peerDeviceId,
                 sourcePlatform = "android",
+                batteryPresent = true,
                 batteryPercent = 64,
                 chargingState = "charging",
                 powerSource = "usb",
@@ -127,7 +128,8 @@ public sealed class ProtocolMessageRouterTests : IDisposable
 
         var status = _deviceStatusService.GetDeviceStatus(peerDeviceId);
         Assert.NotNull(status);
-        Assert.Equal(64, status!.BatteryPercent);
+        Assert.True(status!.BatteryPresent);
+        Assert.Equal(64, status.BatteryPercent);
         Assert.Equal("charging", status.ChargingState);
         Assert.Equal("usb", status.PowerSource);
         Assert.False(status.LowPowerMode);

@@ -174,6 +174,9 @@ public sealed class ProtocolMessageRouter(
                 SourcePlatform = statusPayload.TryGetProperty("sourcePlatform", out var platformElement) && platformElement.ValueKind == JsonValueKind.String
                     ? platformElement.GetString()
                     : null,
+                BatteryPresent = statusPayload.TryGetProperty("batteryPresent", out var batteryPresentElement) && batteryPresentElement.ValueKind is JsonValueKind.True or JsonValueKind.False
+                    ? batteryPresentElement.GetBoolean()
+                    : null,
                 BatteryPercent = statusPayload.TryGetProperty("batteryPercent", out var batteryElement) && batteryElement.ValueKind == JsonValueKind.Number
                     ? batteryElement.GetInt32()
                     : null,

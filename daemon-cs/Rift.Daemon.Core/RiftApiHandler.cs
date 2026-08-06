@@ -412,6 +412,7 @@ public class RiftApiHandler : IRiftApi
 
     [JsonRpcMethod("rift.notifyLocalDeviceStatus")]
     public async Task<NotifyLocalDeviceStatusResult> NotifyLocalDeviceStatusAsync(
+        bool? batteryPresent = null,
         int? batteryPercent = null,
         string? chargingState = null,
         string? powerSource = null,
@@ -425,6 +426,7 @@ public class RiftApiHandler : IRiftApi
             {
                 SourceDeviceId = _daemonInfoService.GetDeviceInfo().DeviceId,
                 SourcePlatform = sourcePlatform ?? _daemonInfoService.GetDeviceInfo().Platform,
+                BatteryPresent = batteryPresent,
                 BatteryPercent = batteryPercent,
                 ChargingState = chargingState,
                 PowerSource = powerSource,

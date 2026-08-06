@@ -1010,6 +1010,7 @@ class JsonRpcRiftClient {
   }
 
   Future<dynamic> notifyLocalDeviceStatus({
+    bool? batteryPresent,
     int? batteryPercent,
     String? chargingState,
     String? powerSource,
@@ -1018,6 +1019,7 @@ class JsonRpcRiftClient {
     String? sourcePlatform,
   }) async {
     return _sendRequest('rift.notifyLocalDeviceStatus', {
+      if (batteryPresent != null) 'batteryPresent': batteryPresent,
       if (batteryPercent != null) 'batteryPercent': batteryPercent,
       if (chargingState != null) 'chargingState': chargingState,
       if (powerSource != null) 'powerSource': powerSource,

@@ -186,6 +186,7 @@ public sealed class DeviceStatusService : IDeviceStatusService
     {
         SourceDeviceId = localDeviceId,
         SourcePlatform = status.SourcePlatform,
+        BatteryPresent = status.BatteryPresent,
         BatteryPercent = status.BatteryPercent,
         ChargingState = status.ChargingState,
         PowerSource = status.PowerSource,
@@ -205,6 +206,10 @@ public sealed class DeviceStatusService : IDeviceStatusService
         {
             throw new ArgumentException("batteryPercent must be between 0 and 100.");
         }
+        if (status.BatteryPresent == false && (status.BatteryPercent.HasValue || status.ChargingState is not null))
+        {
+            throw new ArgumentException("batteryPercent and chargingState must be omitted when batteryPresent is false.");
+        }
         if (status.ChargingState is not null && !ChargingStates.Contains(status.ChargingState))
         {
             throw new ArgumentException("chargingState is not supported.");
@@ -213,7 +218,7 @@ public sealed class DeviceStatusService : IDeviceStatusService
         {
             throw new ArgumentException("powerSource is not supported.");
         }
-        if (status.BatteryPercent is null && status.ChargingState is null && status.PowerSource is null && status.LowPowerMode is null)
+        if (status.BatteryPresent is null && status.BatteryPercent is null && status.ChargingState is null && status.PowerSource is null && status.LowPowerMode is null)
         {
             throw new ArgumentException("Device status requires at least one power-state field.");
         }
@@ -240,6 +245,10 @@ public sealed class DeviceStatusService : IDeviceStatusService
         {
             payload["sourcePlatform"] = status.SourcePlatform;
         }
+        if (status.BatteryPresent.HasValue)
+        {
+            payload["batteryPresent"] = status.BatteryPresent.Value;
+        }
         if (status.BatteryPercent.HasValue)
         {
             payload["batteryPercent"] = status.BatteryPercent.Value;
@@ -263,6 +272,7 @@ public sealed class DeviceStatusService : IDeviceStatusService
     {
         SourceDeviceId = status.SourceDeviceId,
         SourcePlatform = status.SourcePlatform,
+        BatteryPresent = status.BatteryPresent,
         BatteryPercent = status.BatteryPercent,
         ChargingState = status.ChargingState,
         PowerSource = status.PowerSource,

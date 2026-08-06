@@ -918,6 +918,7 @@ class RiftDaemon {
       sourcePlatform: params['sourcePlatform'] is String
           ? params['sourcePlatform'] as String
           : _localPlatform(),
+      batteryPresent: params['batteryPresent'] as bool?,
       batteryPercent: params['batteryPercent'] as int?,
       chargingState: params['chargingState'] as String?,
       powerSource: params['powerSource'] as String?,
@@ -974,6 +975,14 @@ class RiftDaemon {
         'must be between 0 and 100',
       );
     }
+    if (record.batteryPresent == false &&
+        (batteryPercent != null || record.chargingState != null)) {
+      throw ArgumentError.value(
+        record.toJson(),
+        'deviceStatus',
+        'batteryPercent and chargingState must be omitted when batteryPresent is false',
+      );
+    }
     if (record.chargingState != null &&
         !chargingStates.contains(record.chargingState)) {
       throw ArgumentError.value(
@@ -990,7 +999,8 @@ class RiftDaemon {
         'is not supported',
       );
     }
-    if (batteryPercent == null &&
+    if (record.batteryPresent == null &&
+        batteryPercent == null &&
         record.chargingState == null &&
         record.powerSource == null &&
         record.lowPowerMode == null) {
@@ -1944,6 +1954,7 @@ class RiftDaemon {
       final record = DeviceStatusRecord(
         sourceDeviceId: sourceDeviceId,
         sourcePlatform: payload['sourcePlatform'] as String?,
+        batteryPresent: payload['batteryPresent'] as bool?,
         batteryPercent: payload['batteryPercent'] as int?,
         chargingState: payload['chargingState'] as String?,
         powerSource: payload['powerSource'] as String?,

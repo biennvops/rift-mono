@@ -12,6 +12,7 @@ void main() {
     manager.update(
       const DeviceStatusRecord(
         sourceDeviceId: 'rift-peer',
+        batteryPresent: true,
         batteryPercent: 64,
         chargingState: 'charging',
         observedAt: '2026-07-16T10:00:00.000Z',
@@ -51,6 +52,7 @@ void main() {
       final result = await daemon.handleJsonRpcRequest({
         'method': 'rift.notifyLocalDeviceStatus',
         'params': {
+          'batteryPresent': true,
           'batteryPercent': 64,
           'chargingState': 'charging',
           'powerSource': 'usb',
@@ -65,6 +67,7 @@ void main() {
         ipcEvents.any(
           (event) =>
               event['method'] == 'rift.onDeviceStatusUpdated' &&
+              event['params']['batteryPresent'] == true &&
               event['params']['batteryPercent'] == 64,
         ),
         isTrue,
@@ -100,6 +103,7 @@ void main() {
           'sourceDeviceId': 'rift-peer-status',
           'payload': {
             'sourceDeviceId': 'rift-peer-status',
+            'batteryPresent': true,
             'batteryPercent': 42,
             'chargingState': 'discharging',
             'powerSource': 'battery',
@@ -110,6 +114,7 @@ void main() {
       );
 
       expect(ipcEvents.last['method'], 'rift.onDeviceStatusUpdated');
+      expect(ipcEvents.last['params']['batteryPresent'], isTrue);
       expect(ipcEvents.last['params']['batteryPercent'], 42);
       expect(ipcEvents.last['params']['lowPowerMode'], isTrue);
     });

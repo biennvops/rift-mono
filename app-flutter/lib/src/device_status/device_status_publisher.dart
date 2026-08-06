@@ -62,6 +62,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         return;
       }
       await _client.notifyLocalDeviceStatus(
+        batteryPresent: status['batteryPresent'] as bool?,
         batteryPercent: status['batteryPercent'] as int?,
         chargingState: status['chargingState'] as String?,
         powerSource: status['powerSource'] as String?,
@@ -86,6 +87,9 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     if (previous['chargingState'] != status['chargingState'] ||
         previous['powerSource'] != status['powerSource'] ||
         previous['lowPowerMode'] != status['lowPowerMode']) {
+      return true;
+    }
+    if (previous['batteryPresent'] != status['batteryPresent']) {
       return true;
     }
     final previousBattery = previous['batteryPercent'] as int?;
@@ -159,6 +163,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         _ => 'unknown',
       };
       return {
+        'batteryPresent': true,
         if (batteryPercent != null) 'batteryPercent': batteryPercent,
         'chargingState': chargingState,
         'powerSource': chargingState == 'charging' || chargingState == 'full'
@@ -167,7 +172,11 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         'sourcePlatform': 'linux',
       };
     }
-    return null;
+    return {
+      'batteryPresent': false,
+      'powerSource': 'ac',
+      'sourcePlatform': 'linux',
+    };
   }
 
   Future<Map<String, Object?>?> _readWindowsStatus() async {
@@ -181,22 +190,31 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
       if (getSystemPowerStatus(status) == 0) {
         return null;
       }
-      final batteryPercent = status.ref.batteryLifePercent == 255
-          ? null
-          : status.ref.batteryLifePercent;
+      final batteryPresent = switch (status.ref.batteryFlag) {
+        128 => false,
+        255 => null,
+        _ => true,
+      };
+      final batteryPercent =
+          batteryPresent == false || status.ref.batteryLifePercent == 255
+              ? null
+              : status.ref.batteryLifePercent;
       final powerSource = switch (status.ref.acLineStatus) {
         0 => 'battery',
         1 => 'ac',
         _ => 'unknown',
       };
-      final chargingState = powerSource == 'ac'
-          ? (batteryPercent == 100 ? 'full' : 'charging')
-          : powerSource == 'battery'
-              ? 'discharging'
-              : 'unknown';
+      final chargingState = batteryPresent == false
+          ? null
+          : powerSource == 'ac'
+              ? (batteryPercent == 100 ? 'full' : 'charging')
+              : powerSource == 'battery'
+                  ? 'discharging'
+                  : 'unknown';
       return {
+        if (batteryPresent != null) 'batteryPresent': batteryPresent,
         if (batteryPercent != null) 'batteryPercent': batteryPercent,
-        'chargingState': chargingState,
+        if (chargingState != null) 'chargingState': chargingState,
         'powerSource': powerSource,
         'sourcePlatform': 'windows',
       };
@@ -214,6 +232,7 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     final percentMatch = RegExp(r'(\d{1,3})%').firstMatch(output);
     final batteryPercent = int.tryParse(percentMatch?.group(1) ?? '');
     final lower = output.toLowerCase();
+    final batteryPresent = lower.contains('no battery') ? false : true;
     final chargingState = lower.contains('; charging;')
         ? 'charging'
         : lower.contains('; charged;')
@@ -222,8 +241,9 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
                 ? 'discharging'
                 : 'unknown';
     return {
+      'batteryPresent': batteryPresent,
       if (batteryPercent != null) 'batteryPercent': batteryPercent,
-      'chargingState': chargingState,
+      if (batteryPresent) 'chargingState': chargingState,
       'powerSource': output.contains("'AC Power'") ? 'ac' : 'battery',
       'sourcePlatform': 'macos',
     };
