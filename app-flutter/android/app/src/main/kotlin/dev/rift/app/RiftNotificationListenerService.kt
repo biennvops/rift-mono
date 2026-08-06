@@ -22,9 +22,14 @@ class RiftNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName == packageName && !isSyncTestNotification(sbn)) {
+        if (isIgnoredOwnNotification(sbn)) {
             return
         }
+        if (shouldIgnoreNotification(sbn)) {
+            cleanUpIgnoredNotificationIfTracked(sbn)
+            return
+        }
+
         val payload = buildPostedPayload(sbn) ?: return
         RiftBackgroundHost.sendNativeEvent(this, payload)
         Log.d(
@@ -34,19 +39,63 @@ class RiftNotificationListenerService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        if (sbn.packageName == packageName && !isSyncTestNotification(sbn)) {
+        if (isIgnoredOwnNotification(sbn)) {
             return
         }
-        NotificationSyncRelay.markNotificationRemoved(this, sbn.key)
+        if (shouldIgnoreNotification(sbn)) {
+            cleanUpIgnoredNotificationIfTracked(sbn)
+            return
+        }
+
+        emitRemovedNotification(sbn.key)
+        Log.d(tag, "Notification removed from ${sbn.packageName} key=${sbn.key}")
+    }
+
+    private fun shouldIgnoreNotification(sbn: StatusBarNotification): Boolean {
+        val notification = sbn.notification
+        val hasMediaSession =
+            notification.extras?.containsKey(Notification.EXTRA_MEDIA_SESSION) == true
+        val ignored = NotificationSyncFilter.shouldIgnoreAsMedia(
+            isSyncTestNotification = isSyncTestNotification(sbn),
+            category = notification.category,
+            hasMediaSession = hasMediaSession,
+        )
+        if (ignored) {
+            val reason = if (hasMediaSession) "mediaSession" else "transportCategory"
+            Log.d(
+                tag,
+                "Ignoring Android media notification package=${sbn.packageName} " +
+                    "key=${sbn.key} reason=$reason",
+            )
+        }
+        return ignored
+    }
+
+    private fun cleanUpIgnoredNotificationIfTracked(sbn: StatusBarNotification) {
+        if (!NotificationSyncRelay.hasSeenNotification(this, sbn.key)) {
+            return
+        }
+        Log.d(
+            tag,
+            "Removing previously synced media notification package=${sbn.packageName} " +
+                "key=${sbn.key}",
+        )
+        emitRemovedNotification(sbn.key)
+    }
+
+    private fun emitRemovedNotification(notificationId: String) {
+        NotificationSyncRelay.markNotificationRemoved(this, notificationId)
         val payload =
             mapOf(
                 "eventType" to "removed",
-                "notificationId" to sbn.key,
+                "notificationId" to notificationId,
                 "removedAt" to formatUtcTimestamp(System.currentTimeMillis()),
             )
         RiftBackgroundHost.sendNativeEvent(this, payload)
-        Log.d(tag, "Notification removed from ${sbn.packageName} key=${sbn.key}")
     }
+
+    private fun isIgnoredOwnNotification(sbn: StatusBarNotification): Boolean =
+        sbn.packageName == packageName && !isSyncTestNotification(sbn)
 
     private fun buildPostedPayload(sbn: StatusBarNotification): Map<String, Any?>? {
         val extras = sbn.notification.extras ?: return null
