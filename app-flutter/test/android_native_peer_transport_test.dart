@@ -95,20 +95,32 @@ class _RecordingNativeTlsApi implements NativeTlsApi {
 
 void main() {
   group('AndroidNativePeerTransport duplicate connection ownership', () {
-    test('resets the old session synchronously before replacement teardown',
-        () {
+    test('pending candidate keeps the pre-authentication frame limit', () async {
+      final tls = _RecordingNativeTlsApi();
       final transport = AndroidNativePeerTransport(
         _FakeIdentityManager(),
         port: 0,
+        tlsApi: tls,
       );
-      String? disconnectedPeer;
-      transport.onPeerDisconnected.listen((peerDeviceId) {
-        disconnectedPeer = peerDeviceId;
-      });
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        authenticated: true,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
 
-      transport.resetSessionForReplacement('rift-peer');
-
-      expect(disconnectedPeer, 'rift-peer');
+      expect(
+        transport.frameSizeLimitForTesting(42),
+        RiftFrameCodec.maxFrameSizePostAuth,
+      );
+      expect(
+        transport.frameSizeLimitForTesting(43),
+        RiftFrameCodec.maxFrameSizePreAuth,
+      );
+      await transport.stopServer();
     });
 
     test('closes and notifies before blocked stream teardown', () async {
@@ -163,6 +175,108 @@ void main() {
       expect(tls.closedConnectionIds, [42]);
       cancellation.complete();
       await Future<void>.delayed(Duration.zero);
+      await transport.stopServer();
+    });
+
+    test('candidate teardown preserves the established connection', () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub =
+          transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+
+      await transport.closePendingCandidateForTesting('rift-peer');
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(tls.closedConnectionIds, [43]);
+      expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+      await disconnectSub.cancel();
+      await transport.stopServer();
+    });
+
+    test('syntactic candidate hello does not evict the authenticated session',
+        () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub =
+          transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        authenticated: true,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+      final candidateMessage = transport.onMessageReceived.first;
+
+      transport.acceptPendingCandidateHelloForTesting('rift-peer');
+      final message = await candidateMessage;
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(message.pendingCandidate, isTrue);
+      expect(tls.closedConnectionIds, isEmpty);
+      expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+
+      await transport.rejectPendingCandidate(message);
+      expect(tls.closedConnectionIds, [43]);
+      await disconnectSub.cancel();
+      await transport.stopServer();
+    });
+
+    test(
+        'validated candidate with the same role preserves the authenticated session',
+        () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      final disconnects = <String>[];
+      final disconnectSub =
+          transport.onPeerDisconnected.listen(disconnects.add);
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        authenticated: true,
+      );
+      transport.injectPendingCandidateForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 43,
+      );
+      final candidateMessage = transport.onMessageReceived.first;
+
+      transport.acceptPendingCandidateHelloForTesting('rift-peer');
+      final message = await candidateMessage;
+      final promoted = await transport.promotePendingCandidate(message);
+      await transport.sendMessage('rift-peer', Uint8List.fromList([123, 125]));
+
+      expect(promoted, isFalse);
+      expect(tls.closedConnectionIds, [43]);
+      expect(tls.writtenConnectionIds, [42]);
+      expect(disconnects, isEmpty);
+      await disconnectSub.cancel();
       await transport.stopServer();
     });
 

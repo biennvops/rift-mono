@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core;
 using Rift.Daemon.Core.Cryptography;
 using Rift.Daemon.Core.Interfaces;
+using Rift.Daemon.Core.Networking;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -278,6 +279,61 @@ public sealed class WorkerTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_QuarantinesCompletedIdentityMismatchWhenAnotherEndpointSucceeds()
+    {
+        const string peerDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        var trustStore = new FakeTrustStore();
+        var peer = new PeerIdentity
+        {
+            DeviceId = peerDeviceId,
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow,
+            TrustedEndpoints =
+            [
+                new TrustedPeerEndpoint
+                {
+                    Address = "192.168.2.68",
+                    Port = 9140,
+                    Source = "session-established",
+                    LastSuccessAt = DateTimeOffset.UtcNow
+                },
+                new TrustedPeerEndpoint
+                {
+                    Address = "192.168.2.69",
+                    Port = 9140,
+                    Source = "session-established",
+                    LastSuccessAt = DateTimeOffset.UtcNow.AddMinutes(-1)
+                }
+            ]
+        };
+        trustStore.Peers.Add(peer);
+        var transport = new FakeTransport
+        {
+            ConnectedDeviceId = peerDeviceId,
+            UnexpectedIdentityHost = "192.168.2.69"
+        };
+        await using var worker = new TestWorker(
+            NullLogger<Worker>.Instance,
+            new FakeIpcListener(),
+            new IdentityManager(),
+            trustStore,
+            new FakeDiscoveryService(),
+            transport,
+            new FakeProtocolMessageRouter(),
+            new PresenceService());
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => trustStore.SaveCount > 0);
+
+        Assert.Single(peer.TrustedEndpoints);
+        Assert.Equal("192.168.2.68", peer.TrustedEndpoints[0].Address);
+        Assert.True(transport.HasActiveSession(peerDeviceId));
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task SessionOffline_ReconnectsTrustedPeerWithoutDaemonRestart()
     {
         const string peerDeviceId = "rift-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
@@ -466,6 +522,7 @@ public sealed class WorkerTests
         public ConcurrentBag<SentMessage> SentMessages { get; } = [];
         public ConcurrentBag<(string Host, int Port, string? ExpectedDeviceId)> ConnectAttempts { get; } = [];
         public string ConnectedDeviceId { get; set; } = "rift-test-peer";
+        public string? UnexpectedIdentityHost { get; set; }
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.Delay(Timeout.Infinite, cancellationToken);
 
@@ -477,6 +534,14 @@ public sealed class WorkerTests
         public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null)
         {
             ConnectAttempts.Add((host, port, expectedDeviceId));
+            if (string.Equals(host, UnexpectedIdentityHost, StringComparison.Ordinal))
+            {
+                return Task.FromException<string>(new UnexpectedPeerIdentityException(
+                    host,
+                    port,
+                    expectedDeviceId ?? "rift-expected-peer",
+                    "rift-unexpected-peer"));
+            }
             _activeSessions[ConnectedDeviceId] = true;
             return Task.FromResult(ConnectedDeviceId);
         }
@@ -608,8 +673,12 @@ public sealed class WorkerTests
     private sealed class FakeTrustStore : ITrustStore
     {
         public List<PeerIdentity> Peers { get; } = [];
+        public int SaveCount { get; private set; }
 
-        public void SavePeer(PeerIdentity peer) => throw new NotImplementedException();
+        public void SavePeer(PeerIdentity peer)
+        {
+            SaveCount++;
+        }
 
         public PeerIdentity? GetPeer(string deviceId) =>
             Peers.FirstOrDefault(peer => string.Equals(peer.DeviceId, deviceId, StringComparison.Ordinal));

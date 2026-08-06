@@ -26,7 +26,6 @@ import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
 import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
-import 'src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/media_playback/macos_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
@@ -244,7 +243,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       <Map<String, String>>[];
   final List<Map<String, String>> _pendingSharedSendItems =
       <Map<String, String>>[];
-  AndroidRemoteMediaPlaybackCoordinator? _androidRemoteMediaPlayback;
   IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
   String? _lastExternalClipboardFingerprint;
@@ -406,12 +404,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   Future<dynamic> _handlePlatformNotificationMethodCall(MethodCall call) async {
-    final mediaPlaybackResult =
-        await _androidRemoteMediaPlayback?.handlePlatformMethodCall(call);
-    if (mediaPlaybackResult != null) {
-      return mediaPlaybackResult;
-    }
-
     if (call.method == 'notificationActivated') {
       final arguments = call.arguments;
       if (arguments is Map) {
@@ -433,13 +425,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   void _bindMediaPlayback() {
     final client = context.read<JsonRpcRiftClient>();
-    if (Platform.isAndroid) {
-      _androidRemoteMediaPlayback =
-          AndroidRemoteMediaPlaybackCoordinator(client);
-      unawaited(_androidRemoteMediaPlayback!.start());
-      // Android media observation is owned by the foreground service. The UI
-      // only subscribes to the daemon's mirrored playback events.
-    } else if (Platform.isIOS) {
+    if (Platform.isIOS) {
       _iosRemoteMediaPlayback = IOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_iosRemoteMediaPlayback!.start());
     } else if (Platform.isMacOS) {
@@ -1040,7 +1026,6 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationUpdatedSub?.cancel();
     _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
-    unawaited(_androidRemoteMediaPlayback?.dispose());
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_macOSRemoteMediaPlayback?.dispose());
     unawaited(_clipboardManager?.dispose());
