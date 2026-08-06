@@ -141,8 +141,8 @@ std::vector<uint8_t> DecodeBase64(const std::string& input) {
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
   std::vector<uint8_t> output;
-  int value = 0;
-  int bits = -8;
+  uint32_t value = 0;
+  int bit_count = 0;
   for (unsigned char c : input) {
     if (c == '=') {
       break;
@@ -151,11 +151,16 @@ std::vector<uint8_t> DecodeBase64(const std::string& input) {
     if (index == std::string::npos) {
       continue;
     }
-    value = (value << 6) | static_cast<int>(index);
-    bits += 6;
-    if (bits >= 0) {
-      output.push_back(static_cast<uint8_t>((value >> bits) & 0xFF));
-      bits -= 8;
+    value = (value << 6) | static_cast<uint32_t>(index);
+    bit_count += 6;
+    while (bit_count >= 8) {
+      bit_count -= 8;
+      output.push_back(static_cast<uint8_t>((value >> bit_count) & 0xFFu));
+      if (bit_count == 0) {
+        value = 0;
+      } else {
+        value &= (1u << bit_count) - 1u;
+      }
     }
   }
   return output;
