@@ -1974,6 +1974,15 @@ class RiftDaemon {
       );
       _validateDeviceStatus(record);
       _deviceStatusManager!.update(record);
+    } on SessionException catch (error) {
+      final failureReason = error.message.contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'Unauthorized';
+      await _trySendDeviceStatusPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
     } on RiftException catch (error) {
       final failureReason = error.code == -32004
           ? 'Unauthorized'

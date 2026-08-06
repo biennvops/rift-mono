@@ -3,6 +3,23 @@ import 'package:rift/src/device_status/device_status_publisher.dart';
 
 void main() {
   group('DeviceStatusPublisher power parsing', () {
+    test('Linux does not infer battery power from notCharging', () {
+      expect(
+        DeviceStatusPublisher.deriveLinuxPowerSource(
+          chargingState: 'notCharging',
+          externalPowerOnline: null,
+        ),
+        'unknown',
+      );
+      expect(
+        DeviceStatusPublisher.deriveLinuxPowerSource(
+          chargingState: 'notCharging',
+          externalPowerOnline: true,
+        ),
+        'ac',
+      );
+    });
+
     test('Windows uses the charging bit instead of AC attachment', () {
       final pluggedIn = DeviceStatusPublisher.parseWindowsPowerStatus(
         acLineStatus: 1,

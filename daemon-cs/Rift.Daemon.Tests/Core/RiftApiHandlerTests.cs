@@ -102,6 +102,52 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_RejectsNonRfc3339Timestamp()
+    {
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.NotifyLocalDeviceStatusAsync(
+                batteryPresent: true,
+                batteryPercent: 64,
+                observedAt: "2026-06-18 11:00:00Z"));
+
+        Assert.Equal(-32602, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_UsesNegotiatedSessionCapabilities()
+    {
+        const string peerDeviceId = "rift-peer-status-gate";
+        _presenceService.UpdatePeerPresence(
+            peerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            ["device.status"]);
+
+        var beforeSession = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 64);
+        Assert.Empty(beforeSession.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["presence.basic"]);
+        var withoutCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 63);
+        Assert.Empty(withoutCapability.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["device.status", "presence.basic"]);
+        var withCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 62);
+        Assert.Contains(peerDeviceId, withCapability.BroadcastTo);
+    }
+
+    [Fact]
     public async Task StartDiscoveryAsync_StartsCoordinatorBackedDiscovery()
     {
         var result = await _handler.StartDiscoveryAsync();
@@ -875,13 +921,22 @@ public sealed class RiftApiHandlerTests : IDisposable
             add { }
             remove { }
         }
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+
+        public void EmitSessionStateChanged(
+            string peerDeviceId,
+            bool isOnline,
+            IReadOnlyList<string> selectedCapabilities,
+            bool allowsProtectedTraffic = true) =>
+            SessionStateChanged?.Invoke(
+                this,
+                new SessionStateChangedEventArgs(
+                    peerDeviceId,
+                    isOnline,
+                    selectedCapabilities,
+                    allowsProtectedTraffic));
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 

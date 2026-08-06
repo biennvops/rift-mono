@@ -88,6 +88,43 @@ void main() {
       );
     });
 
+    test('handles a missing negotiated capability without escaping', () async {
+      final context =
+          SessionContext(
+              peerDeviceId: 'rift-peer-no-status-capability',
+              isInitiator: false,
+            )
+            ..handshakeState = HandshakeState.established
+            ..trustState = TrustState.trusted
+            ..capabilityNegotiated = true
+            ..negotiatedCapabilities = [
+              Capability(name: 'presence.basic', version: 1),
+            ];
+      daemon.sessionManagerForTesting.injectContextForTesting(context);
+
+      await daemon.handleDeviceStatusProtocolMessageForTesting(
+        'rift-peer-no-status-capability',
+        {
+          'type': 'device.statusUpdated',
+          'messageId': '018f2f9a-8b7c-4a4b-9c0d-cccccccccccc',
+          'sourceDeviceId': 'rift-peer-no-status-capability',
+          'payload': {
+            'sourceDeviceId': 'rift-peer-no-status-capability',
+            'batteryPresent': true,
+            'batteryPercent': 42,
+            'observedAt': '2026-07-16T10:00:00.000Z',
+          },
+        },
+      );
+
+      expect(
+        ipcEvents.where(
+          (event) => event['method'] == 'rift.onDeviceStatusUpdated',
+        ),
+        isEmpty,
+      );
+    });
+
     test('audits a spoofed peer status identity', () async {
       final context =
           SessionContext(peerDeviceId: 'rift-peer-spoof', isInitiator: false)

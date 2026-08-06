@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Rift.Daemon.Core.Interfaces;
@@ -12,6 +13,9 @@ public sealed class DeviceStatusService : IDeviceStatusService
 {
     private const string RequiredCapability = "device.status";
     private static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(30);
+    private static readonly Regex Rfc3339UtcTimestamp = new(
+        @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$",
+        RegexOptions.CultureInvariant);
     private static readonly HashSet<string> ChargingStates = new(StringComparer.Ordinal)
     {
         "charging",
@@ -30,6 +34,7 @@ public sealed class DeviceStatusService : IDeviceStatusService
 
     private readonly Lock _gate = new();
     private readonly Dictionary<string, CachedStatus> _statuses = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _statusCapablePeers = new(StringComparer.Ordinal);
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
@@ -61,18 +66,22 @@ public sealed class DeviceStatusService : IDeviceStatusService
         Cache(normalized);
         await NotifyIpcAsync(normalized, cancellationToken).ConfigureAwait(false);
 
-        var broadcastTo = new List<string>();
-        foreach (var peer in _presenceService.ListPeers())
+        string[] eligiblePeers;
+        lock (_gate)
         {
-            if (!string.Equals(peer.Status, "online", StringComparison.Ordinal) ||
-                !peer.Capabilities.Contains(RequiredCapability, StringComparer.Ordinal) ||
-                !_transport.HasProtectedSession(peer.DeviceId))
+            eligiblePeers = _statusCapablePeers.ToArray();
+        }
+
+        var broadcastTo = new List<string>();
+        foreach (var peerDeviceId in eligiblePeers)
+        {
+            if (!_transport.HasProtectedSession(peerDeviceId))
             {
                 continue;
             }
 
-            await SendStatusAsync(peer.DeviceId, normalized, cancellationToken).ConfigureAwait(false);
-            broadcastTo.Add(peer.DeviceId);
+            await SendStatusAsync(peerDeviceId, normalized, cancellationToken).ConfigureAwait(false);
+            broadcastTo.Add(peerDeviceId);
         }
 
         return new NotifyLocalDeviceStatusResult { BroadcastTo = broadcastTo };
@@ -138,16 +147,23 @@ public sealed class DeviceStatusService : IDeviceStatusService
 
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
-        if (!args.IsOnline || !args.SelectedCapabilities.Contains(RequiredCapability, StringComparer.Ordinal))
-        {
-            return;
-        }
+        var canReceiveStatus = args.IsOnline &&
+            args.AllowsProtectedTraffic &&
+            args.SelectedCapabilities.Contains(RequiredCapability, StringComparer.Ordinal);
 
-        DeviceStatusRecord? localStatus;
+        DeviceStatusRecord? localStatus = null;
         lock (_gate)
         {
-            _statuses.TryGetValue(_identityManager.GetDeviceId(), out var cached);
-            localStatus = cached?.Status;
+            if (canReceiveStatus)
+            {
+                _statusCapablePeers.Add(args.PeerDeviceId);
+                _statuses.TryGetValue(_identityManager.GetDeviceId(), out var cached);
+                localStatus = cached?.Status;
+            }
+            else
+            {
+                _statusCapablePeers.Remove(args.PeerDeviceId);
+            }
         }
 
         if (localStatus is not null)
@@ -249,7 +265,8 @@ public sealed class DeviceStatusService : IDeviceStatusService
         {
             throw new ArgumentException("Device status requires at least one power-state field.");
         }
-        if (!DateTimeOffset.TryParse(
+        if (!Rfc3339UtcTimestamp.IsMatch(status.ObservedAt) ||
+            !DateTimeOffset.TryParse(
                 status.ObservedAt,
                 CultureInfo.InvariantCulture,
                 DateTimeStyles.RoundtripKind,

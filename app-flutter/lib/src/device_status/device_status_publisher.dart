@@ -147,9 +147,15 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     if (!await powerSupply.exists()) {
       return null;
     }
-    await for (final entity in powerSupply.list()) {
-      if (entity is! Directory ||
-          !entity.path.split(Platform.pathSeparator).last.startsWith('BAT')) {
+    final supplies = await powerSupply
+        .list()
+        .where((entity) => entity is Directory)
+        .cast<Directory>()
+        .toList();
+    final externalPowerOnline = await _readLinuxExternalPowerOnline(supplies);
+
+    for (final entity in supplies) {
+      if (!entity.path.split(Platform.pathSeparator).last.startsWith('BAT')) {
         continue;
       }
       final capacity = await _readTrimmedFile('${entity.path}/capacity');
@@ -166,16 +172,60 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
         'batteryPresent': true,
         if (batteryPercent != null) 'batteryPercent': batteryPercent,
         'chargingState': chargingState,
-        'powerSource': chargingState == 'charging' || chargingState == 'full'
-            ? 'ac'
-            : 'battery',
+        'powerSource': deriveLinuxPowerSource(
+          chargingState: chargingState,
+          externalPowerOnline: externalPowerOnline,
+        ),
         'sourcePlatform': 'linux',
       };
     }
     return {
       'batteryPresent': false,
-      'powerSource': 'ac',
+      'powerSource': externalPowerOnline == true ? 'ac' : 'unknown',
       'sourcePlatform': 'linux',
+    };
+  }
+
+  Future<bool?> _readLinuxExternalPowerOnline(
+    List<Directory> supplies,
+  ) async {
+    var sawOfflineSupply = false;
+    for (final supply in supplies) {
+      final name = supply.path.split(Platform.pathSeparator).last;
+      if (name.startsWith('BAT')) {
+        continue;
+      }
+      final type =
+          (await _readTrimmedFile('${supply.path}/type'))?.toLowerCase();
+      if (type == 'battery') {
+        continue;
+      }
+      final online = await _readTrimmedFile('${supply.path}/online');
+      if (online == '1') {
+        return true;
+      }
+      if (online == '0') {
+        sawOfflineSupply = true;
+      }
+    }
+    return sawOfflineSupply ? false : null;
+  }
+
+  @visibleForTesting
+  static String deriveLinuxPowerSource({
+    required String chargingState,
+    required bool? externalPowerOnline,
+  }) {
+    if (externalPowerOnline == true) {
+      return 'ac';
+    }
+    if (externalPowerOnline == false) {
+      return 'battery';
+    }
+    return switch (chargingState) {
+      'charging' || 'full' => 'ac',
+      'discharging' => 'battery',
+      _ => 'unknown',
     };
   }
 
