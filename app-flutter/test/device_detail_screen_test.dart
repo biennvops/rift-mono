@@ -203,6 +203,10 @@ void main() {
     expect(find.text('Charging'), findsOneWidget);
     expect(find.text('USB power'), findsOneWidget);
     expect(find.text('Off'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsNothing);
+
+    await tester.pump(const Duration(minutes: 30));
+    expect(find.textContaining('Stale ·'), findsOneWidget);
 
     await client.emitDeviceStatus({
       'sourceDeviceId': 'rift-phone',
@@ -218,6 +222,63 @@ void main() {
     expect(find.text('Discharging'), findsOneWidget);
     expect(find.text('Battery'), findsWidgets);
     expect(find.text('On'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsNothing);
+  });
+
+  testWidgets('DeviceDetailScreen marks power status stale on peer loss',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPresent': true,
+            'batteryPercent': 64,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Stale ·'), findsNothing);
+
+    await client.emitPeerLost({'deviceId': 'rift-phone'});
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+  });
+
+  testWidgets('DeviceDetailScreen renders a peer without a battery',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-desktop',
+          'displayName': 'Desktop',
+          'platform': 'windows',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-desktop',
+            'batteryPresent': false,
+            'powerSource': 'ac',
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client));
+    await tester.pumpAndSettle();
+
+    expect(find.text('No battery'), findsOneWidget);
+    expect(find.text('AC power'), findsOneWidget);
   });
 
   testWidgets(

@@ -148,6 +148,29 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_ContinuesAfterPeerSendFailure()
+    {
+        const string failingPeer = "rift-peer-status-failing";
+        const string healthyPeer = "rift-peer-status-healthy";
+        _transport.EmitSessionStateChanged(
+            failingPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.EmitSessionStateChanged(
+            healthyPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.FailSendsTo.Add(failingPeer);
+
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 61);
+
+        Assert.DoesNotContain(failingPeer, result.BroadcastTo);
+        Assert.Contains(healthyPeer, result.BroadcastTo);
+    }
+
+    [Fact]
     public async Task StartDiscoveryAsync_StartsCoordinatorBackedDiscovery()
     {
         var result = await _handler.StartDiscoveryAsync();
@@ -924,6 +947,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
+        public HashSet<string> FailSendsTo { get; } = new(StringComparer.Ordinal);
 
         public void EmitSessionStateChanged(
             string peerDeviceId,
@@ -947,6 +971,11 @@ public sealed class RiftApiHandlerTests : IDisposable
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
+            if (FailSendsTo.Contains(peerDeviceId))
+            {
+                throw new IOException("Simulated device status send failure.");
+            }
+
             using var document = JsonDocument.Parse(frameBody);
             SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
             return Task.CompletedTask;

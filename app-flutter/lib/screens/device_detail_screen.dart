@@ -29,6 +29,8 @@ class DeviceDetailScreen extends StatefulWidget {
 }
 
 class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
+  static const _deviceStatusStaleAfter = Duration(minutes: 30);
+
   late Map<String, dynamic> peer;
   late bool isOnline;
   String get _deviceId => peer['deviceId']?.toString() ?? '';
@@ -38,12 +40,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   StreamSubscription<Map<String, dynamic>>? _peerLostSub;
   StreamSubscription<Map<String, dynamic>>? _deviceStatusSub;
   StreamSubscription<bool>? _connectionChangedSub;
+  Timer? _deviceStatusStaleTimer;
 
   @override
   void initState() {
     super.initState();
     peer = widget.peer;
     isOnline = widget.isOnline;
+    _scheduleDeviceStatusStaleTransition();
     if (!widget.isSelf) {
       _subscribeToPeerUpdates();
     }
@@ -59,6 +63,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         peer = widget.peer;
         isOnline = widget.isOnline;
       });
+      _scheduleDeviceStatusStaleTransition();
     }
   }
 
@@ -68,6 +73,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     _peerLostSub?.cancel();
     _deviceStatusSub?.cancel();
     _connectionChangedSub?.cancel();
+    _deviceStatusStaleTimer?.cancel();
     super.dispose();
   }
 
@@ -84,6 +90,28 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     });
   }
 
+  void _scheduleDeviceStatusStaleTransition() {
+    _deviceStatusStaleTimer?.cancel();
+    final status = peer['deviceStatus'];
+    if (status is! Map || status['isStale'] == true) {
+      return;
+    }
+    _deviceStatusStaleTimer = Timer(_deviceStatusStaleAfter, () {
+      if (!mounted) {
+        return;
+      }
+      final currentStatus = peer['deviceStatus'];
+      if (currentStatus is! Map || currentStatus['isStale'] == true) {
+        return;
+      }
+      setState(() {
+        peer = Map<String, dynamic>.from(peer)
+          ..['deviceStatus'] =
+              (Map<String, dynamic>.from(currentStatus)..['isStale'] = true);
+      });
+    });
+  }
+
   void _handleTrustChanged(Map<String, dynamic> event) {
     final eventDeviceId = event['deviceId']?.toString();
     if (eventDeviceId == null || eventDeviceId != _deviceId) {
@@ -97,6 +125,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     }
 
     if (!mounted) return;
+    _deviceStatusStaleTimer?.cancel();
     setState(() {
       _wasRemoved = true;
       isOnline = false;
@@ -111,8 +140,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     if (eventDeviceId == null || eventDeviceId != _deviceId || !mounted) {
       return;
     }
+    _deviceStatusStaleTimer?.cancel();
     setState(() {
       isOnline = false;
+      final status = peer['deviceStatus'];
+      if (status is Map) {
+        peer = Map<String, dynamic>.from(peer)
+          ..['deviceStatus'] =
+              (Map<String, dynamic>.from(status)..['isStale'] = true);
+      }
     });
   }
 
@@ -124,6 +160,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       peer = Map<String, dynamic>.from(peer)
         ..['deviceStatus'] = Map<String, dynamic>.from(event);
     });
+    _scheduleDeviceStatusStaleTransition();
   }
 
   Future<void> _refreshPeerFromDaemon() async {
@@ -152,6 +189,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
       if (!mounted) return;
       if (refreshedPeer == null) {
+        _deviceStatusStaleTimer?.cancel();
         setState(() {
           _wasRemoved = true;
           isOnline = false;
@@ -164,6 +202,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         isOnline = refreshedPeer['presence']?.toString() == 'online';
         _wasRemoved = false;
       });
+      _scheduleDeviceStatusStaleTransition();
     } catch (_) {
     } finally {
       _isRefreshing = false;
@@ -227,8 +266,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     bool isMobile,
   ) {
     final rows = <({IconData icon, String label, String value})>[];
+    final batteryPresent = status['batteryPresent'];
     final batteryPercent = status['batteryPercent'];
-    if (batteryPercent is num) {
+    if (batteryPresent == false) {
+      rows.add((
+        icon: Icons.battery_0_bar,
+        label: 'Battery',
+        value: 'No battery',
+      ));
+    } else if (batteryPercent is num) {
       rows.add((
         icon: Icons.battery_std,
         label: 'Battery',

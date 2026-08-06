@@ -230,7 +230,6 @@ class SessionManager {
 
   final Set<String> _requiredCapabilityNames = const {
     'clipboard.offer_fetch',
-    'file.transfer',
     'presence.basic',
     'operation.lifecycle',
     'security.event_log',

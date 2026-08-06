@@ -80,8 +80,19 @@ public sealed class DeviceStatusService : IDeviceStatusService
                 continue;
             }
 
-            await SendStatusAsync(peerDeviceId, normalized, cancellationToken).ConfigureAwait(false);
-            broadcastTo.Add(peerDeviceId);
+            try
+            {
+                await SendStatusAsync(peerDeviceId, normalized, cancellationToken).ConfigureAwait(false);
+                broadcastTo.Add(peerDeviceId);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to broadcast device status to {PeerDeviceId}.", peerDeviceId);
+            }
         }
 
         return new NotifyLocalDeviceStatusResult { BroadcastTo = broadcastTo };
