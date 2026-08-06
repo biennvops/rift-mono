@@ -133,7 +133,11 @@ public sealed class SessionHeartbeatManagerTests
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) => Task.FromResult(string.Empty);
+        public Task<string> ConnectToPeerWithIdentityAsync(
+            string host,
+            int port,
+            CancellationToken cancellationToken,
+            string? expectedDeviceId = null) => Task.FromResult(string.Empty);
         public bool HasActiveSession(string peerDeviceId) => false;
         public bool HasProtectedSession(string peerDeviceId) => false;
         public void RefreshSessionAuthorization(string peerDeviceId) { }

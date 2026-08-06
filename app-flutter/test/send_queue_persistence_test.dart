@@ -1,5 +1,5 @@
-import 'package:app_flutter/src/file_transfer/send_queue_panel.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_persistence.dart';
+import 'package:rift/src/file_transfer/send_queue_panel.dart';
+import 'package:rift/src/file_transfer/send_queue_persistence.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

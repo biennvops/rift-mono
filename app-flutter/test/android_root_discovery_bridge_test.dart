@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:app_flutter/src/ipc/android_root_discovery_bridge.dart';
+import 'package:rift/src/ipc/android_root_discovery_bridge.dart';
 
 void main() {
   test('AndroidDiscoveryPeerTracker ingests and computes added/removed deltas', () {

@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/android_media_playback.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/android_media_playback.dart';
 import 'package:flutter/foundation.dart';
 
 /// Publishes local Android media sessions to the daemon so trusted peers can

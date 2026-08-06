@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:app_flutter/src/ipc/android_native_peer_transport.dart';
-import 'package:app_flutter/src/ipc/native_tls_api.dart';
-import 'package:app_flutter/src/platform/android_native_tls.dart';
+import 'package:rift/src/ipc/android_native_peer_transport.dart';
+import 'package:rift/src/ipc/native_tls_api.dart';
+import 'package:rift/src/platform/android_native_tls.dart';
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:flutter_test/flutter_test.dart';
 

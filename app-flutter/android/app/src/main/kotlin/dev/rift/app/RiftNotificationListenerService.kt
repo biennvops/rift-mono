@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.app.Notification
 import android.service.notification.NotificationListenerService
@@ -12,7 +12,7 @@ import java.util.TimeZone
 class RiftNotificationListenerService : NotificationListenerService() {
     companion object {
         private const val tag = "RiftNotifListener"
-        private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
+        private const val syncTestExtraKey = "dev.rift.app.SYNC_TEST_NOTIFICATION"
     }
 
     override fun onListenerConnected() {

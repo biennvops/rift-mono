@@ -1,13 +1,33 @@
 import 'dart:io';
 
-import 'package:app_flutter/src/file_transfer/file_storage.dart' as storage;
+import 'package:rift/constants.dart';
+import 'package:rift/src/file_transfer/file_storage.dart' as storage;
 import 'package:crypto/crypto.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:rift/src/platform/android_shell.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('desktop clipboard manager uses a ChangeNotifier provider', () async {
+    final mainSource = await File('lib/main.dart').readAsString();
+
+    expect(
+      mainSource,
+      contains('ChangeNotifierProvider<DesktopClipboardManager?>.value'),
+    );
+    expect(
+      mainSource.split('\n').any(
+            (line) => line
+                .trim()
+                .startsWith('Provider<DesktopClipboardManager?>.value'),
+          ),
+      isFalse,
+    );
+  });
+
   group('Android download bridge', () {
     const channel = MethodChannel('rift/android/shell');
 
@@ -201,6 +221,22 @@ void main() {
         File('${destination.path}.rift-transfer-3.part').existsSync(),
         isFalse,
       );
+    });
+  });
+
+  group('incoming file destination', () {
+    test('uses the saved default download path', () async {
+      final directory =
+          await Directory.systemTemp.createTemp('rift-downloads-');
+      addTearDown(() => directory.delete(recursive: true));
+      SharedPreferences.setMockInitialValues({
+        AppPrefs.defaultDownloadPath: directory.path,
+      });
+
+      final path = await storage.buildIncomingFilePath('report.txt');
+
+      expect(path, storage.joinPlatformPath(directory.path, 'report.txt'));
+      expect(File(path!).parent.path, directory.path);
     });
   });
 

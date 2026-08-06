@@ -1,4 +1,4 @@
-import 'package:app_flutter/src/ipc/unix_socket_transport.dart';
+import 'package:rift/src/ipc/unix_socket_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

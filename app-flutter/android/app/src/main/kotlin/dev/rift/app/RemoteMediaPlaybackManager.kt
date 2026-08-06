@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -25,7 +25,7 @@ class RemoteMediaPlaybackManager(
         const val notificationChannelId = "rift.media_playback"
         const val notificationChannelName = "Rift media playback"
         private const val notificationId = 4109
-        private const val actionIntent = "com.example.app_flutter.MEDIA_PLAYBACK_ACTION"
+        private const val actionIntent = "dev.rift.app.MEDIA_PLAYBACK_ACTION"
         private const val extraSourceDeviceId = "sourceDeviceId"
         private const val extraPlaybackId = "playbackId"
         private const val extraAction = "action"

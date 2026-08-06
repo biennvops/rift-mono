@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/ipc_transport.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 class FakeTransport implements IpcTransport {

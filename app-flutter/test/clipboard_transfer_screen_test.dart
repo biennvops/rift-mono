@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:app_flutter/screens/clipboard_transfer_screen.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/ios_clipboard.dart';
-import 'package:app_flutter/src/platform/notification_route.dart';
+import 'package:rift/screens/clipboard_transfer_screen.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/ios_clipboard.dart';
+import 'package:rift/src/platform/notification_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -45,6 +45,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   final _fileCompletedController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _connectionChangedController = StreamController<bool>.broadcast();
+  final _clipboardOfferController =
+      StreamController<Map<String, dynamic>>.broadcast();
   final List<Map<String, dynamic>> transfers;
   final List<Map<String, dynamic>> clipboardOffers;
   final Map<String, dynamic>? clipboardFetchResult;
@@ -78,7 +80,7 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onClipboardOffer =>
-      const Stream<Map<String, dynamic>>.empty();
+      _clipboardOfferController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onClipboardExpired =>
@@ -279,11 +281,15 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
   Future<void> emitTrustChanged(Map<String, dynamic> value) async {
     _trustChangedController.add(value);
   }
+
+  Future<void> emitClipboardOffer(Map<String, dynamic> value) async {
+    _clipboardOfferController.add(value);
+  }
 }
 
 void main() {
   Widget buildScreen({
-    required bool revealInFolder,
+    bool? revealInFolder,
     FakeTransferJsonRpcClient? client,
     Future<List<Map<String, String>>> Function()? pickSendFilesOverride,
     ValueNotifier<String?>? routeNotifier,
@@ -329,6 +335,55 @@ void main() {
       ),
     );
   }
+
+  testWidgets('default Activity keeps the Rift four-section UI',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildScreen());
+    await tester.pump();
+
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Clipboard'), findsOneWidget);
+    expect(find.text('Send File'), findsOneWidget);
+    expect(find.text('Incoming Offers'), findsOneWidget);
+    expect(find.text('Transfer Activity'), findsOneWidget);
+    expect(find.text('Notifications'), findsOneWidget);
+  });
+
+  testWidgets('default Activity remains compact on a phone viewport',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(390, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(buildScreen());
+    await tester.pump();
+
+    expect(find.text('Activity'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Clipboard shows a newly received offer immediately',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient();
+    await tester.pumpWidget(buildScreen(client: client));
+    await tester.pumpAndSettle();
+
+    await client.emitClipboardOffer({
+      'offerId': 'offer-live',
+      'sourceDeviceId': 'rift-peer-1',
+      'contentType': 'text/plain',
+      'byteSize': 27,
+      'sha256': 'hash-live',
+      'expiresInMs': 120000,
+    });
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-live')),
+        findsOneWidget);
+    expect(find.text('Pixel 9 Pro'), findsOneWidget);
+    expect(find.text('TEXT'), findsOneWidget);
+  });
 
   testWidgets('Transfer activity hides folder action for direct-open flow',
       (WidgetTester tester) async {
@@ -729,7 +784,7 @@ void main() {
 
     expect(find.text('Clipboard History'), findsNothing);
     expect(find.text('Pixel 9 Pro'), findsOneWidget);
-    expect(find.textContaining('Text'), findsWidgets);
+    expect(find.textContaining('TEXT'), findsWidgets);
   });
 
   testWidgets('send flow uses daemon queue actions when supported',

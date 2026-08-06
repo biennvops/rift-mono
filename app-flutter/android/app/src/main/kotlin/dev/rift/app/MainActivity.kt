@@ -1,4 +1,4 @@
-package com.example.app_flutter
+package dev.rift.app
 
 import android.Manifest
 import android.content.ActivityNotFoundException
@@ -40,7 +40,7 @@ class MainActivity: FlutterActivity() {
     companion object {
         private const val notificationChannelId = "rift.events"
         private const val notificationChannelName = "Rift activity"
-        private const val syncTestExtraKey = "com.example.app_flutter.SYNC_TEST_NOTIFICATION"
+        private const val syncTestExtraKey = "dev.rift.app.SYNC_TEST_NOTIFICATION"
         private const val notificationIntentRouteKey = "rift.notification.route"
         private const val notificationIntentDestinationPathKey = "rift.notification.destinationPath"
         private const val notificationIntentPayloadPrefix = "rift.notification.payload."
@@ -327,7 +327,7 @@ class MainActivity: FlutterActivity() {
             }
         handleLaunchIntent(intent)
 
-        val filter = IntentFilter("com.example.app_flutter.CLIPBOARD_CHANGED")
+        val filter = IntentFilter("dev.rift.app.CLIPBOARD_CHANGED")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(clipboardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {

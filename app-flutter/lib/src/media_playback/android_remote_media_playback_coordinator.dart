@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/android_shell.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 

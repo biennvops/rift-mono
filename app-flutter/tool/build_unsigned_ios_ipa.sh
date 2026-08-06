@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IPA_DIR="$ROOT_DIR/build/ios/ipa"
-APP_PATH="$ROOT_DIR/build/ios/iphoneos/Runner.app"
-IPA_PATH="$IPA_DIR/Runner-unsigned-release.ipa"
+APP_PATH="$ROOT_DIR/build/ios/iphoneos/Rift.app"
+IPA_PATH="$IPA_DIR/Rift-unsigned-release.ipa"
 DEV_BACKGROUND_LOCATION="${RIFT_DEV_BACKGROUND_LOCATION:-0}"
 DEV_REMOTE_MEDIA_SESSION="${RIFT_DEV_REMOTE_MEDIA_SESSION:-0}"
 DEV_PRIVATE_DEVICE_NAME="${RIFT_DEV_PRIVATE_DEVICE_NAME:-0}"
@@ -52,7 +52,7 @@ if [[ "$DEV_PRIVATE_DEVICE_NAME" == "1" ]]; then
     CODE_SIGN_IDENTITY='' \
     SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) RIFT_PRIVATE_API' \
     build
-  APP_PATH="$PRIVATE_DERIVED_DATA/Build/Products/Release-iphoneos/Runner.app"
+  APP_PATH="$PRIVATE_DERIVED_DATA/Build/Products/Release-iphoneos/Rift.app"
 else
   flutter build "${BUILD_ARGS[@]}"
 fi
@@ -104,13 +104,13 @@ plist['RiftDevPrivateDeviceNameEnabled'] = True
 with open(path, 'wb') as destination:
     plistlib.dump(plist, destination, fmt=plistlib.FMT_BINARY)
 PY
-  if ! strings "$APP_PATH/Runner" | grep -F 'UserAssignedDeviceName' >/dev/null; then
-    printf 'Private iOS device-name code was not compiled into Runner.\n' >&2
+  if ! strings "$APP_PATH/Rift" | grep -F 'UserAssignedDeviceName' >/dev/null; then
+    printf 'Private iOS device-name code was not compiled into Rift.\n' >&2
     exit 1
   fi
   printf 'Enabled private MobileGestalt device-name lookup.\n'
 else
-  if strings "$APP_PATH/Runner" | grep -F 'UserAssignedDeviceName' >/dev/null; then
+  if strings "$APP_PATH/Rift" | grep -F 'UserAssignedDeviceName' >/dev/null; then
     printf 'Normal iOS build unexpectedly contains private device-name code.\n' >&2
     exit 1
   fi

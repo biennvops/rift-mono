@@ -103,7 +103,7 @@ public sealed class MacOSMediaPlaybackServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("com.example.appFlutter", null)]
+    [InlineData("dev.rift.app", null)]
     [InlineData("com.rift.desktop", null)]
     [InlineData("com.example.other", "rift.remote:rift-peer:playback-1")]
     public void IsRiftRemotePlayback_RecognizesMirroredNowPlayingMetadata(

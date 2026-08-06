@@ -1,4 +1,4 @@
-import 'package:app_flutter/src/platform/windows_send_files.dart';
+import 'package:rift/src/platform/windows_send_files.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 

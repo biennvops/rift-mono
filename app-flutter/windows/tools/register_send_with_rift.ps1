@@ -1,5 +1,5 @@
 param(
-    [string]$ExecutablePath = (Join-Path $PSScriptRoot '..\..\build\windows\x64\runner\Release\app_flutter.exe')
+    [string]$ExecutablePath = (Join-Path $PSScriptRoot '..\..\build\windows\x64\runner\Release\Rift.exe')
 )
 
 $ErrorActionPreference = 'Stop'

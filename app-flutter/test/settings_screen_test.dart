@@ -6,19 +6,18 @@ import 'package:flutter/material.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:app_flutter/screens/settings_screen.dart';
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/platform/android_shell.dart';
-import 'package:app_flutter/src/platform/ios_notifications.dart';
-import 'package:app_flutter/src/platform/linux_notifications.dart';
+import 'package:rift/screens/settings_screen.dart';
+import 'package:rift/screens/onboarding_screen.dart';
+import 'package:rift/constants.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/platform/android_shell.dart';
+import 'package:rift/src/platform/linux_notifications.dart';
 
 class MockJsonRpcClient extends Mock implements JsonRpcRiftClient {}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const androidShellChannel = MethodChannel('rift/android/shell');
-  const iosNotificationsChannel = MethodChannel('rift/ios/notifications');
   const linuxNotificationsChannel = MethodChannel('rift/linux/notifications');
   const macOsPermissionsChannel = MethodChannel('rift.permissions');
   late MockJsonRpcClient mockClient;
@@ -29,7 +28,6 @@ void main() {
     'deviceId': 'rift-test-device-id',
     'displayName': 'Test Device',
     'fingerprint': 'TEST-FINGERPRINT',
-    'identityProtectionBackend': 'secret-service',
   };
 
   setUpAll(() {
@@ -40,7 +38,6 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     AndroidShell.debugIsAndroidOverride = true;
-    IOSNotifications.debugIsIOSOverride = false;
     LinuxNotifications.debugIsLinuxOverride = null;
     mockClient = MockJsonRpcClient();
     connectionChangedController = StreamController<bool>.broadcast();
@@ -96,7 +93,7 @@ void main() {
       ),
     ).thenAnswer(
       (_) async => {
-        'notificationId': 'android:com.example.app_flutter:test:1',
+        'notificationId': 'android:dev.rift.app:test:1',
         'broadcastTo': ['rift-peer'],
         'suppressed': false,
       },
@@ -104,17 +101,31 @@ void main() {
     when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
     when(() => mockClient.onConnectionChanged)
         .thenAnswer((_) => connectionChangedController.stream);
+    when(() => mockClient.onTrustChanged)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPairingRequest)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onPairingComplete)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.startPairingByEndpoint(any(), any())).thenAnswer(
+      (_) async => <String, dynamic>{
+        'deviceId': 'rift-manual-peer',
+        'displayName': 'Manual Peer',
+        'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+        'peerFingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+        'expiresInMs': 120000,
+      },
+    );
+    when(() => mockClient.listTrustedPeers())
+        .thenAnswer((_) async => <String, dynamic>{'peers': <dynamic>[]});
   });
 
   tearDown(() {
     AndroidShell.debugIsAndroidOverride = null;
-    IOSNotifications.debugIsIOSOverride = null;
     LinuxNotifications.debugIsLinuxOverride = null;
     connectionChangedController.close();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(androidShellChannel, null);
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(iosNotificationsChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(linuxNotificationsChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -128,6 +139,9 @@ void main() {
 
   testWidgets('SettingsScreen shows UI elements and device info',
       (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
@@ -137,62 +151,69 @@ void main() {
 
     await pumpLoaded(tester);
 
-    // Sections should be visible
-    expect(find.text('GENERAL'), findsOneWidget);
-    expect(find.text('IDENTITY'), findsOneWidget);
-    expect(find.text('PERMISSIONS'), findsOneWidget);
-    await tester.scrollUntilVisible(
-        find.text('System notifications enabled'), 200);
-    expect(find.text('System notifications enabled'), findsOneWidget);
-    expect(find.text('Android notification access is off'), findsOneWidget);
-    // Info from mock should be visible
+    // Tab rail labels should be visible
+    expect(find.text('General'),
+        findsNWidgets(2)); // Tab rail label + panel header
+    expect(find.text('Identity'), findsOneWidget);
+    expect(find.text('Permissions'), findsOneWidget);
+    expect(find.text('System Checks'), findsOneWidget);
+    expect(find.text('File Transfer'), findsOneWidget);
+    expect(find.text('Trust Store'), findsOneWidget);
+    expect(find.text('About'), findsOneWidget);
+
+    // Default tab is General
+    expect(find.text('Device name'), findsOneWidget);
+    expect(find.text('Pair by IP'), findsOneWidget);
+    final generalCard = find
+        .ancestor(
+            of: find.text('Device name'), matching: find.byType(Container))
+        .evaluate()
+        .map((element) => element.widget)
+        .whereType<Container>()
+        .firstWhere(
+          (container) =>
+              container.decoration is BoxDecoration &&
+              (container.decoration! as BoxDecoration).color == Colors.white &&
+              (container.decoration! as BoxDecoration).borderRadius ==
+                  BorderRadius.circular(8),
+        );
+    expect(
+      (generalCard.decoration! as BoxDecoration).color,
+      Colors.white,
+    );
+
+    // Tap Identity tab to see device info
+    await tester.tap(find.text('Identity'));
+    await pumpLoaded(tester);
+
     expect(find.text('rift-test-device-id'), findsOneWidget);
     expect(find.text('TEST-FINGERPRINT'), findsOneWidget);
   });
 
-  testWidgets('SettingsScreen reports real Linux runtime status',
+  testWidgets('Android download location is read-only',
       (WidgetTester tester) async {
-    AndroidShell.debugIsAndroidOverride = false;
-    LinuxNotifications.debugIsLinuxOverride = true;
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
         child: const MaterialApp(home: SettingsScreen()),
       ),
     );
-
     await pumpLoaded(tester);
-    await tester.scrollUntilVisible(
-      find.text('Linux Runtime'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
 
-    expect(find.text('Linux Runtime'), findsOneWidget);
-    expect(find.text('Daemon IPC: connected'), findsOneWidget);
-    expect(find.text('Identity protection: secret-service'), findsOneWidget);
-    expect(find.text('avahi-daemon: running'), findsNothing);
-    expect(find.text('appindicator: supported'), findsNothing);
+    await tester.tap(find.text('File Transfer'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Downloads (managed by Android)'), findsOneWidget);
+    expect(find.byTooltip('Choose folder'), findsNothing);
   });
 
-  testWidgets('SettingsScreen exposes iOS notification diagnostics',
+  testWidgets('Pair by IP opens the canonical PairingScreen',
       (WidgetTester tester) async {
-    AndroidShell.debugIsAndroidOverride = false;
-    IOSNotifications.debugIsIOSOverride = true;
-    final calls = <MethodCall>[];
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(iosNotificationsChannel, (call) async {
-      calls.add(call);
-      switch (call.method) {
-        case 'getPermissionStatus':
-          return 'authorized';
-        case 'showNotification':
-        case 'openSettings':
-        case 'requestPermission':
-          return true;
-      }
-      return null;
-    });
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
 
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
@@ -202,35 +223,71 @@ void main() {
     );
     await pumpLoaded(tester);
 
-    await tester.scrollUntilVisible(
-      find.text('System notifications enabled'),
-      200,
-    );
-    expect(find.text('System notifications enabled'), findsOneWidget);
-    expect(find.text('Used during discovery and pairing'), findsOneWidget);
+    await tester.tap(find.text('Pair by IP'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '10.53.38.174:9140');
+    await tester.tap(find.text('PAIR'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    verify(() => mockClient.startPairingByEndpoint('10.53.38.174', 9140))
+        .called(1);
+    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Confirm Pairing'), findsNothing);
     expect(
-      find.text(
-        'Development builds can use location keepalive; iOS may still terminate the app',
-      ),
+      find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
       findsOneWidget,
     );
+  });
 
-    final testNotificationButton =
-        find.byKey(const Key('test-notification-button'));
-    await tester.ensureVisible(testNotificationButton);
-    await tester.pumpAndSettle();
-    await tester.tap(testNotificationButton);
-    await tester.pumpAndSettle();
+  testWidgets('mobile settings menu uses tinted square icon containers',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(500, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    expect(calls.any((call) => call.method == 'getPermissionStatus'), isTrue);
-    final showCall =
-        calls.lastWhere((call) => call.method == 'showNotification');
-    final arguments = Map<String, Object?>.from(
-      showCall.arguments as Map<Object?, Object?>,
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
     );
-    expect(arguments['title'], 'Rift test notification');
-    expect(arguments['route'], 'history.notifications');
-    expect(find.text('Sent iOS test notification.'), findsOneWidget);
+    await pumpLoaded(tester);
+
+    expect(find.byIcon(Icons.tune), findsOneWidget);
+    final tintedSquare = find.byWidgetPredicate(
+      (widget) {
+        if (widget is! DecoratedBox || widget.decoration is! BoxDecoration) {
+          return false;
+        }
+        final decoration = widget.decoration as BoxDecoration;
+        return decoration.color != null &&
+            decoration.color != Colors.transparent &&
+            decoration.borderRadius == BorderRadius.circular(8);
+      },
+    );
+    expect(tintedSquare, findsWidgets);
+  });
+
+  testWidgets('Trust Store opens blocked peer management',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+
+    await tester.tap(find.text('Trust Store'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('MANAGE TRUST STORE'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Blocked Peers'), findsOneWidget);
+    expect(find.text('No Blocked Peers'), findsOneWidget);
   });
 
   testWidgets('SettingsScreen shows error message for generic error',
@@ -247,12 +304,34 @@ void main() {
 
     await pumpLoaded(tester);
 
-    // The error should be formatted by JsonRpcRiftClient.formatDisplayError
-    // Usually it starts with "Exception: " or something. We'll just look for "Generic failure"
-    expect(find.textContaining('Generic failure'), findsOneWidget);
-
     // UI should still be rendered (fallback values)
     expect(find.text('Unknown Device'), findsOneWidget);
+  });
+
+  testWidgets('SettingsScreen reloads after the daemon connects',
+      (WidgetTester tester) async {
+    isConnected = false;
+    when(() => mockClient.getDeviceInfo()).thenAnswer((_) async {
+      if (!isConnected) throw StateError('Not connected to daemon');
+      return mockDeviceInfo;
+    });
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+    expect(find.text('Unknown Device'), findsOneWidget);
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await pumpLoaded(tester);
+
+    expect(find.text('Test Device'), findsOneWidget);
+    expect(find.text('Unknown Device'), findsNothing);
+    verify(() => mockClient.getDeviceInfo()).called(2);
   });
 
   testWidgets('SettingsScreen shows loading spinner while waiting',
@@ -288,11 +367,18 @@ void main() {
     await pumpLoaded(tester);
 
     expect(find.text('Unknown Device'), findsOneWidget);
+
+    await tester.tap(find.text('Identity'));
+    await pumpLoaded(tester);
+
     expect(find.text('Unknown'), findsNWidgets(2)); // Device ID and Fingerprint
   });
 
   testWidgets('SettingsScreen persists clipboard notification preference',
       (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
     await tester.pumpWidget(
       Provider<JsonRpcRiftClient>.value(
         value: mockClient,
@@ -301,16 +387,14 @@ void main() {
     );
 
     await pumpLoaded(tester);
-
-    await tester.scrollUntilVisible(
-      find.text('Clipboard received notifications'),
-      200,
-    );
-    await tester.ensureVisible(find.text('Clipboard received notifications'));
+    await tester.tap(find.text('Permissions'));
     await pumpLoaded(tester);
-    expect(find.byType(SwitchListTile), findsNWidgets(2));
 
-    await tester.tap(find.text('Clipboard received notifications'));
+    expect(find.text('Clipboard received notifications'), findsOneWidget);
+    final switchFinder = find.byType(Switch).first;
+    expect(switchFinder, findsOneWidget);
+
+    await tester.tap(switchFinder);
     await tester.pump();
 
     final prefs = await SharedPreferences.getInstance();
@@ -330,17 +414,12 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    final notificationSyncTile = find.widgetWithText(
-      SwitchListTile,
-      'Android notification sync',
-    );
-    await tester.dragUntilVisible(
-      notificationSyncTile,
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
-    await tester.tap(notificationSyncTile);
+    final switches = find.byType(Switch);
+    expect(switches, findsAtLeastNWidgets(2));
+    await tester.tap(switches.at(1)); // Android notification sync switch
     await tester.pump();
 
     final prefs = await SharedPreferences.getInstance();
@@ -351,7 +430,7 @@ void main() {
     );
 
     await tester.enterText(
-      find.widgetWithText(TextField, 'Notification blacklist'),
+      find.byType(TextField),
       'com.bank.example',
     );
     await tester.pump(const Duration(milliseconds: 300));
@@ -376,13 +455,10 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    final blacklistField =
-        find.widgetWithText(TextField, 'Notification blacklist');
-    await tester.dragUntilVisible(
-      blacklistField,
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
+
+    final blacklistField = find.byType(TextField);
 
     await tester.enterText(blacklistField, 'com.example.one');
     await tester.pump(const Duration(milliseconds: 100));
@@ -428,17 +504,14 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Notification access'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
     expect(find.text('Notification access'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, 'Test notification'),
-        findsOneWidget);
+    final testBtn = find.textContaining('Test notification');
+    expect(testBtn, findsOneWidget);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test notification'));
+    await tester.tap(testBtn);
     await tester.pump();
 
     expect(find.text('Sent Android test notification.'), findsOneWidget);
@@ -450,9 +523,9 @@ void main() {
     ).captured.single as Map<String, Object?>;
     expect(
       captured['notificationId'] as String,
-      startsWith('android:com.example.app_flutter:test:'),
+      startsWith('android:dev.rift.app:test:'),
     );
-    expect(captured['packageName'], 'com.example.app_flutter');
+    expect(captured['packageName'], 'dev.rift.app');
     expect(captured['appName'], 'Rift');
     expect(captured['title'], 'Rift test notification');
     expect(
@@ -479,13 +552,11 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Test desktop sync'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Experimental'));
+    await pumpLoaded(tester);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    final testBtn = find.textContaining('Test desktop sync');
+    await tester.tap(testBtn);
     await tester.pumpAndSettle();
 
     verify(() => mockClient.getDeviceInfo()).called(greaterThan(0));
@@ -507,15 +578,43 @@ void main() {
     );
 
     await pumpLoaded(tester);
-    await tester.dragUntilVisible(
-      find.text('Test desktop sync'),
-      find.byType(ListView),
-      const Offset(0, -200),
-    );
+    await tester.tap(find.text('Experimental'));
+    await pumpLoaded(tester);
 
-    await tester.tap(find.widgetWithText(OutlinedButton, 'Test desktop sync'));
+    final testBtn = find.textContaining('Test desktop sync');
+    await tester.tap(testBtn);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('trusted peers'), findsNothing);
+  });
+
+  testWidgets(
+      'SettingsScreen restart onboarding navigates to OnboardingScreen and resets flag',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({'has_completed_onboarding': true});
+
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Experimental'));
+    await pumpLoaded(tester);
+
+    final restartBtn = find.textContaining('Restart onboarding');
+    expect(restartBtn, findsWidgets);
+
+    await tester.tap(restartBtn.first);
+    await tester.pumpAndSettle();
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('has_completed_onboarding'), isFalse);
+    expect(find.byType(OnboardingScreen), findsOneWidget);
   });
 }

@@ -4,13 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
-import 'package:app_flutter/constants.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/src/file_transfer/send_queue_controller.dart';
-import 'package:app_flutter/src/platform/ios_notifications.dart';
-import 'package:app_flutter/src/platform/notification_route.dart';
-import 'package:app_flutter/src/platform/windows_shell.dart';
-import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
+import 'package:rift/constants.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/platform/ios_notifications.dart';
+import 'package:rift/src/platform/notification_route.dart';
+import 'package:rift/src/platform/windows_shell.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
+import 'package:rift/src/ui/app_shell.dart';
+import 'package:rift/main.dart'; // Or wherever RiftApp is defined
 import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
 
@@ -175,6 +177,9 @@ void main() {
         Provider<JsonRpcRiftClient>.value(value: client),
         ChangeNotifierProvider<SendQueueController>(
           create: (_) => SendQueueController(client, false),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (_) => LocalEventsNotifier(client),
         ),
       ],
       child: const RiftApp(hasCompletedOnboarding: true),
@@ -342,6 +347,9 @@ void main() {
         action: any(named: 'action'),
       ),
     ).thenAnswer((_) async => <String, Object?>{'success': true});
+    when(() => mockClient.onFileProgress).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileCompleted).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileFailed).thenAnswer((_) => const Stream.empty());
     when(() => mockClient.connect()).thenAnswer((_) async {});
 
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -405,11 +413,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Devices'), findsOneWidget);
-    expect(find.text('History'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
-    expect(find.text('Ops'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    expect(find.text('RIFT'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+    expect(find.text('Operations'), findsOneWidget);
+    expect(find.text('Settings'), findsWidgets);
   });
 
   testWidgets('tray right-click opens the configured context menu',
@@ -444,6 +451,9 @@ void main() {
           Provider<JsonRpcRiftClient>.value(value: mockClient),
           ChangeNotifierProvider<SendQueueController>(
             create: (_) => SendQueueController(mockClient, false),
+          ),
+          ChangeNotifierProvider<LocalEventsNotifier>(
+            create: (_) => LocalEventsNotifier(mockClient),
           ),
         ],
         child: MaterialApp(
@@ -488,11 +498,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
+    expect(
+      find.textContaining('Linux Laptop', findRichText: true),
+      findsOneWidget,
+    );
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });

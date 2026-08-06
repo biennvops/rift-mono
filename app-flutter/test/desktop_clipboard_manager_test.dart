@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:app_flutter/src/clipboard/desktop_clipboard_manager.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/clipboard/desktop_clipboard_manager.dart';
+import 'package:rift/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
@@ -35,6 +35,14 @@ class ClipboardTransport implements IpcTransport {
     }));
   }
 
+  void _sendError(dynamic id, int code, String message) {
+    _daemonToApp?.add(jsonEncode({
+      'jsonrpc': '2.0',
+      'error': {'code': code, 'message': message},
+      'id': id,
+    }));
+  }
+
   @override
   Future<StreamChannel<String>> connect() async {
     connectionAttempts++;
@@ -53,7 +61,9 @@ class ClipboardTransport implements IpcTransport {
           final offerId =
               (decoded['params'] as Map<String, dynamic>)['offerId'] as String;
           final result = fetchResultsByOfferId[offerId] ?? const {};
-          if (result is Future) {
+          if (result is Exception) {
+            _sendError(id, -32009, result.toString());
+          } else if (result is Future) {
             _sendResult(id, await result);
           } else {
             _sendResult(id, result);
@@ -168,6 +178,44 @@ void main() {
             .length,
         1,
       );
+
+      await manager.dispose();
+    });
+
+    test('tracks incoming offers without auto-fetching when disabled',
+        () async {
+      await client.connect();
+
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+        },
+        autoApplyIncomingOffers: false,
+      );
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'OfferId': 'offer-ui-only',
+        'SourceDeviceId': 'rift-peer',
+        'ContentType': 'text/plain',
+        'ByteSize': 5,
+        'Sha256':
+            '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+        'ExpiresInMs': 120000,
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(manager.activeOffers.keys, contains('offer-ui-only'));
+      expect(
+        transport.requests.where(
+          (request) => request['method'] == 'rift.fetchClipboardContent',
+        ),
+        isEmpty,
+      );
+      expect(clipboardWrites, isEmpty);
 
       await manager.dispose();
     });
@@ -739,6 +787,51 @@ void main() {
           reason: 'Should emit when content changes again');
 
       await sub.cancel();
+    });
+
+    test(
+        'notifies listeners and removes offer when fetch fails with not found error',
+        () async {
+      final manager = DesktopClipboardManager(
+        client,
+        clipboardChanges: clipboardChanges.stream,
+        readClipboardText: () async => clipboardText,
+        writeClipboardText: (text) async {
+          clipboardWrites.add(text);
+          clipboardText = text;
+        },
+      );
+
+      var listenerCallCount = 0;
+      manager.addListener(() {
+        listenerCallCount++;
+      });
+
+      unawaited(client.connect());
+      await waitForCondition(() => client.isConnected);
+
+      await manager.start();
+
+      transport.emitNotification('rift.onClipboardOffer', {
+        'offerId': 'stale-offer-1',
+        'sourceDeviceId': 'device-1',
+        'contentType': 'text/plain',
+        'byteSize': 10,
+        'sha256': 'hash1',
+      });
+
+      await waitForCondition(
+          () => manager.activeOffers.containsKey('stale-offer-1'));
+      expect(listenerCallCount, greaterThan(0));
+
+      transport.fetchResultsByOfferId['stale-offer-1'] =
+          Exception('-32009 Offer not found');
+
+      final success = await manager.fetchAndApplyOffer('stale-offer-1');
+      expect(success, isFalse);
+      expect(manager.activeOffers.containsKey('stale-offer-1'), isFalse);
+
+      await manager.dispose();
     });
   });
 }

@@ -1,4 +1,4 @@
-import 'package:app_flutter/src/platform/linux_send_files.dart';
+import 'package:rift/src/platform/linux_send_files.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
