@@ -22,6 +22,8 @@ using std::min;
 #include <objidl.h>
 #include <optional>
 #include <shellapi.h>
+#include <shcore.h>
+#include <shlwapi.h>
 #include <string>
 #include <vector>
 #include <wincodec.h>
@@ -189,14 +191,26 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
   }
 
   using namespace winrt::Windows::Storage::Streams;
-  InMemoryRandomAccessStream stream;
-  DataWriter writer(stream);
-  writer.WriteBytes(
-      winrt::array_view<const uint8_t>(bytes.data(), bytes.size()));
-  writer.StoreAsync().get();
-  writer.FlushAsync().get();
-  writer.DetachStream();
-  stream.Seek(0);
+  IStream* memory_stream =
+      SHCreateMemStream(bytes.data(), static_cast<UINT>(bytes.size()));
+  if (memory_stream == nullptr) {
+    return std::nullopt;
+  }
+
+  winrt::com_ptr<IStream> stream_owner;
+  stream_owner.attach(memory_stream);
+
+  winrt::com_ptr<::IInspectable> random_access_stream;
+  const HRESULT hr = CreateRandomAccessStreamOverStream(
+      stream_owner.get(), BSOS_DEFAULT,
+      __uuidof(ABI::Windows::Storage::Streams::IRandomAccessStream),
+      random_access_stream.put_void());
+  if (FAILED(hr)) {
+    return std::nullopt;
+  }
+
+  auto stream =
+      random_access_stream.as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
   return RandomAccessStreamReference::CreateFromStream(stream);
 }
 
