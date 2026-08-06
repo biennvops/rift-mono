@@ -179,6 +179,43 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
     };
   }
 
+  @visibleForTesting
+  static Map<String, Object?> parseWindowsPowerStatus({
+    required int acLineStatus,
+    required int batteryFlag,
+    required int batteryLifePercent,
+  }) {
+    final batteryPresent =
+        batteryFlag == 255 ? null : (batteryFlag & 0x80) == 0;
+    final batteryPercent = batteryPresent == false || batteryLifePercent == 255
+        ? null
+        : batteryLifePercent;
+    final powerSource = switch (acLineStatus) {
+      0 => 'battery',
+      1 => 'ac',
+      _ => 'unknown',
+    };
+    final isCharging = batteryFlag != 255 && (batteryFlag & 0x08) != 0;
+    final chargingState = batteryPresent == false
+        ? null
+        : batteryPercent == 100
+            ? 'full'
+            : isCharging
+                ? 'charging'
+                : powerSource == 'ac'
+                    ? 'notCharging'
+                    : powerSource == 'battery'
+                        ? 'discharging'
+                        : 'unknown';
+    return {
+      if (batteryPresent != null) 'batteryPresent': batteryPresent,
+      if (batteryPercent != null) 'batteryPercent': batteryPercent,
+      if (chargingState != null) 'chargingState': chargingState,
+      'powerSource': powerSource,
+      'sourcePlatform': 'windows',
+    };
+  }
+
   Future<Map<String, Object?>?> _readWindowsStatus() async {
     final getSystemPowerStatus = ffi.DynamicLibrary.open('kernel32.dll')
         .lookupFunction<
@@ -190,56 +227,32 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
       if (getSystemPowerStatus(status) == 0) {
         return null;
       }
-      final batteryPresent = switch (status.ref.batteryFlag) {
-        128 => false,
-        255 => null,
-        _ => true,
-      };
-      final batteryPercent =
-          batteryPresent == false || status.ref.batteryLifePercent == 255
-              ? null
-              : status.ref.batteryLifePercent;
-      final powerSource = switch (status.ref.acLineStatus) {
-        0 => 'battery',
-        1 => 'ac',
-        _ => 'unknown',
-      };
-      final chargingState = batteryPresent == false
-          ? null
-          : powerSource == 'ac'
-              ? (batteryPercent == 100 ? 'full' : 'charging')
-              : powerSource == 'battery'
-                  ? 'discharging'
-                  : 'unknown';
-      return {
-        if (batteryPresent != null) 'batteryPresent': batteryPresent,
-        if (batteryPercent != null) 'batteryPercent': batteryPercent,
-        if (chargingState != null) 'chargingState': chargingState,
-        'powerSource': powerSource,
-        'sourcePlatform': 'windows',
-      };
+      return parseWindowsPowerStatus(
+        acLineStatus: status.ref.acLineStatus,
+        batteryFlag: status.ref.batteryFlag,
+        batteryLifePercent: status.ref.batteryLifePercent,
+      );
     } finally {
       calloc.free(status);
     }
   }
 
-  Future<Map<String, Object?>?> _readMacOSStatus() async {
-    final result = await Process.run('/usr/bin/pmset', const ['-g', 'batt']);
-    if (result.exitCode != 0) {
-      return null;
-    }
-    final output = result.stdout.toString();
-    final percentMatch = RegExp(r'(\d{1,3})%').firstMatch(output);
-    final batteryPercent = int.tryParse(percentMatch?.group(1) ?? '');
+  @visibleForTesting
+  static Map<String, Object?> parseMacOSPowerStatus(String output) {
     final lower = output.toLowerCase();
-    final batteryPresent = lower.contains('no battery') ? false : true;
-    final chargingState = lower.contains('; charging;')
-        ? 'charging'
-        : lower.contains('; charged;')
-            ? 'full'
-            : lower.contains('; discharging;')
-                ? 'discharging'
-                : 'unknown';
+    final batteryPresent = !lower.contains('no battery');
+    final percentMatch = RegExp(r'(\d{1,3})%').firstMatch(output);
+    final batteryPercent =
+        batteryPresent ? int.tryParse(percentMatch?.group(1) ?? '') : null;
+    final chargingState = lower.contains('not charging')
+        ? 'notCharging'
+        : lower.contains('; charging;')
+            ? 'charging'
+            : lower.contains('; charged;')
+                ? 'full'
+                : lower.contains('; discharging;')
+                    ? 'discharging'
+                    : 'unknown';
     return {
       'batteryPresent': batteryPresent,
       if (batteryPercent != null) 'batteryPercent': batteryPercent,
@@ -247,6 +260,14 @@ class DeviceStatusPublisher with WidgetsBindingObserver {
       'powerSource': output.contains("'AC Power'") ? 'ac' : 'battery',
       'sourcePlatform': 'macos',
     };
+  }
+
+  Future<Map<String, Object?>?> _readMacOSStatus() async {
+    final result = await Process.run('/usr/bin/pmset', const ['-g', 'batt']);
+    if (result.exitCode != 0) {
+      return null;
+    }
+    return parseMacOSPowerStatus(result.stdout.toString());
   }
 
   Future<String?> _readTrimmedFile(String path) async {

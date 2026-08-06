@@ -1947,6 +1947,17 @@ class RiftDaemon {
         'sourceDeviceId',
       );
       if (sourceDeviceId != message.peerDeviceId) {
+        await _recordSecurityEvent(
+          eventType: 'auth.failed',
+          severity: 'critical',
+          peerDeviceId: message.peerDeviceId,
+          outcome: 'denied',
+          failureReason: 'Unauthorized',
+          details: {
+            'messageType': 'device.statusUpdated',
+            'identityField': 'sourceDeviceId',
+          },
+        );
         throw const RiftUnauthorizedException(
           'Device status sourceDeviceId mismatch',
         );

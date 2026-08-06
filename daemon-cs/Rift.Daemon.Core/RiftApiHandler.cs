@@ -801,6 +801,7 @@ public class RiftApiHandler : IRiftApi
     {
         public Task<NotifyLocalDeviceStatusResult> UpdateLocalStatusAsync(DeviceStatusRecord status, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public Task HandlePeerStatusUpdatedAsync(DeviceStatusRecord status, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
         public DeviceStatusRecord? GetDeviceStatus(string sourceDeviceId) => throw CreateNotConfiguredException();
 
         private static LocalRpcException CreateNotConfiguredException()

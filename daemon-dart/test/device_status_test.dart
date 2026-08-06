@@ -7,8 +7,9 @@ import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('DeviceStatusManager marks offline and old snapshots stale', () {
-    final manager = DeviceStatusManager();
+  test('DeviceStatusManager uses monotonic elapsed time for freshness', () {
+    var monotonicNow = Duration.zero;
+    final manager = DeviceStatusManager(monotonicNow: () => monotonicNow);
     manager.update(
       const DeviceStatusRecord(
         sourceDeviceId: 'rift-peer',
@@ -19,7 +20,10 @@ void main() {
       ),
     );
 
+    monotonicNow = const Duration(minutes: 29);
     expect(manager.getStatus('rift-peer')!.isStale, isFalse);
+    monotonicNow = const Duration(minutes: 30);
+    expect(manager.getStatus('rift-peer')!.isStale, isTrue);
     expect(manager.getStatus('rift-peer', isOnline: false)!.isStale, isTrue);
     manager.dispose();
   });
@@ -82,6 +86,49 @@ void main() {
         }),
         throwsA(isA<ArgumentError>()),
       );
+    });
+
+    test('audits a spoofed peer status identity', () async {
+      final context =
+          SessionContext(peerDeviceId: 'rift-peer-spoof', isInitiator: false)
+            ..handshakeState = HandshakeState.established
+            ..trustState = TrustState.trusted
+            ..capabilityNegotiated = true
+            ..negotiatedCapabilities = [
+              Capability(name: 'device.status', version: 1),
+            ];
+      daemon.sessionManagerForTesting.injectContextForTesting(context);
+
+      await daemon.handleDeviceStatusProtocolMessageForTesting(
+        'rift-peer-spoof',
+        {
+          'type': 'device.statusUpdated',
+          'messageId': '018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb',
+          'sourceDeviceId': 'rift-peer-spoof',
+          'payload': {
+            'sourceDeviceId': 'rift-spoofed-status',
+            'batteryPresent': true,
+            'batteryPercent': 42,
+            'observedAt': '2026-07-16T10:00:00.000Z',
+          },
+        },
+      );
+
+      final result = await daemon.handleJsonRpcRequest({
+        'method': 'rift.queryEventLog',
+        'params': {
+          'eventTypes': ['auth.failed'],
+          'peerDeviceId': 'rift-peer-spoof',
+        },
+      });
+      final events = result['events'] as List<dynamic>;
+      expect(events, hasLength(1));
+      final event = Map<String, dynamic>.from(events.single as Map);
+      expect(event['severity'], 'critical');
+      expect(event['outcome'], 'denied');
+      expect(event['failureReason'], 'Unauthorized');
+      expect(event['details']['messageType'], 'device.statusUpdated');
+      expect(event['details']['identityField'], 'sourceDeviceId');
     });
 
     test('accepts a negotiated peer status update', () async {

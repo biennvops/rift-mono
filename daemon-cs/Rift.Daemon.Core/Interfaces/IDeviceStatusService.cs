@@ -28,5 +28,12 @@ public interface IDeviceStatusService
         DeviceStatusRecord status,
         CancellationToken cancellationToken);
 
+    Task SendPeerErrorAsync(
+        string peerDeviceId,
+        string failureReason,
+        string? refMessageId,
+        string message,
+        CancellationToken cancellationToken);
+
     DeviceStatusRecord? GetDeviceStatus(string sourceDeviceId);
 }

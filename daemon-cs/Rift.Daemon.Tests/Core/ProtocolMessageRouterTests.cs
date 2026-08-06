@@ -79,7 +79,16 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _presenceService,
             _identityManager,
             logger: NullLogger<DeviceStatusService>.Instance);
-        _router = new ProtocolMessageRouter(_pairingCoordinator, _presenceService, _clipboardService, _fileTransferService, _mediaPlaybackSyncService, _notificationSyncService, _deviceStatusService);
+        _router = new ProtocolMessageRouter(
+            _pairingCoordinator,
+            _presenceService,
+            _clipboardService,
+            _fileTransferService,
+            _mediaPlaybackSyncService,
+            _notificationSyncService,
+            _deviceStatusService,
+            _securityEventLog,
+            _identityManager);
     }
 
     [Fact]
@@ -134,6 +143,59 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         Assert.Equal("usb", status.PowerSource);
         Assert.False(status.LowPowerMode);
         Assert.False(status.IsStale);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_RejectsWrongTypedOptionalField()
+    {
+        const string peerDeviceId = "rift-peer-device-status-type";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = peerDeviceId,
+                batteryPresent = "false",
+                powerSource = "ac",
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_deviceStatusService.GetDeviceStatus(peerDeviceId));
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        Assert.Equal("error", error.GetProperty("type").GetString());
+        Assert.Equal("MalformedMessage", error.GetProperty("payload").GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_DeviceStatusUpdated_AuditsSpoofedPayloadIdentity()
+    {
+        const string peerDeviceId = "rift-peer-device-status-spoof";
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["device.status"]),
+            CreateEnvelope(peerDeviceId, "device.statusUpdated", new
+            {
+                sourceDeviceId = "rift-spoofed-device-status",
+                batteryPresent = true,
+                batteryPercent = 64,
+                observedAt = "2026-06-18T11:00:00Z"
+            }),
+            CancellationToken.None);
+
+        Assert.Null(_deviceStatusService.GetDeviceStatus(peerDeviceId));
+        var events = await _securityEventLog.QueryEventsAsync(new SecurityEventQuery
+        {
+            EventTypes = [SecurityEventTypes.AuthFailed],
+            PeerDeviceId = peerDeviceId
+        });
+        var securityEvent = Assert.Single(events);
+        Assert.Equal(SecurityEventSeverity.Critical, securityEvent.Severity);
+        Assert.Equal(SecurityEventOutcome.Denied, securityEvent.Outcome);
+        Assert.Equal("Unauthorized", securityEvent.FailureReason);
+        Assert.Equal("device.statusUpdated", securityEvent.Details!["messageType"]);
+        Assert.Equal("sourceDeviceId", securityEvent.Details["identityField"]);
+
+        var error = Assert.Single(_clipboardTransport.Payloads);
+        Assert.Equal("Unauthorized", error.GetProperty("payload").GetProperty("failureReason").GetString());
     }
 
     [Fact]

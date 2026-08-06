@@ -88,6 +88,33 @@ public sealed class DeviceStatusService : IDeviceStatusService
         await NotifyIpcAsync(status, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task SendPeerErrorAsync(
+        string peerDeviceId,
+        string failureReason,
+        string? refMessageId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "error",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            destinationDeviceId = peerDeviceId,
+            payload = new
+            {
+                failureReason,
+                refMessageId,
+                message
+            }
+        };
+        await _transport.SendAsync(
+            peerDeviceId,
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope)),
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public DeviceStatusRecord? GetDeviceStatus(string sourceDeviceId)
     {
         if (string.IsNullOrWhiteSpace(sourceDeviceId))

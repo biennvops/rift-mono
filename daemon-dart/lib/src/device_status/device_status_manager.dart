@@ -53,13 +53,17 @@ class DeviceStatusManager {
 
   final Map<String, _CachedDeviceStatus> _statuses = {};
   final _updatedController = StreamController<DeviceStatusRecord>.broadcast();
+  final Duration Function() _monotonicNow;
+
+  DeviceStatusManager({Duration Function()? monotonicNow})
+    : _monotonicNow = monotonicNow ?? _createMonotonicClock();
 
   Stream<DeviceStatusRecord> get onUpdated => _updatedController.stream;
 
   void update(DeviceStatusRecord status) {
     _statuses[status.sourceDeviceId] = _CachedDeviceStatus(
       status.withStale(false),
-      DateTime.now(),
+      _monotonicNow(),
     );
     _updatedController.add(status.withStale(false));
   }
@@ -70,18 +74,23 @@ class DeviceStatusManager {
       return null;
     }
     final stale =
-        !isOnline || DateTime.now().difference(cached.receivedAt) >= staleAfter;
+        !isOnline || _monotonicNow() - cached.receivedAt >= staleAfter;
     return cached.status.withStale(stale);
   }
 
   void dispose() {
     _updatedController.close();
   }
+
+  static Duration Function() _createMonotonicClock() {
+    final stopwatch = Stopwatch()..start();
+    return () => stopwatch.elapsed;
+  }
 }
 
 class _CachedDeviceStatus {
   final DeviceStatusRecord status;
-  final DateTime receivedAt;
+  final Duration receivedAt;
 
   const _CachedDeviceStatus(this.status, this.receivedAt);
 }
