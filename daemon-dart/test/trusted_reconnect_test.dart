@@ -176,6 +176,26 @@ void main() {
     });
   });
 
+  group('scheduled trusted reconnect', () {
+    test('retries when the trust-store lookup fails', () async {
+      final daemon = RiftDaemon(
+        storagePath: '/tmp/rift-daemon-test',
+        enableDiscovery: false,
+        enableTransport: false,
+      );
+      var retryCount = 0;
+
+      await daemon.attemptTrustedReconnectForTesting(
+        peerDeviceId: 'rift-peer-a',
+        attempt: 0,
+        loadPeer: () async => throw StateError('database unavailable'),
+        scheduleRetry: () => retryCount += 1,
+      );
+
+      expect(retryCount, 1);
+    });
+  });
+
   group('single-flight helper', () {
     test('joins concurrent callers onto one in-flight operation', () async {
       final pending = <String, Future<String>>{};

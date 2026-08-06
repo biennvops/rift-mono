@@ -421,6 +421,15 @@ typedef PeerTransportFactory =
 
 class RiftDaemon {
   static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
+  static const Duration _discoveryPrefetchRetryDelay = Duration(seconds: 10);
+  static const List<Duration> _trustedReconnectDelays = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 16),
+    Duration(seconds: 30),
+  ];
   static const Duration _defaultMediaPlaybackActionTimeout = Duration(
     seconds: 30,
   );
@@ -458,6 +467,7 @@ class RiftDaemon {
   MediaPlaybackManager? _mediaPlaybackManager;
   StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
   StreamSubscription<ProtocolMessage>? _mediaPlaybackMessageSub;
+  StreamSubscription<String>? _sessionDisconnectSub;
   final Map<String, Map<String, dynamic>> _pendingMediaPlaybackActions = {};
   final Map<String, String> _pendingMediaPlaybackActionKeys = {};
   final Map<String, Timer> _pendingMediaPlaybackActionTimers = {};
@@ -467,13 +477,17 @@ class RiftDaemon {
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
+  final Map<String, DateTime> _lastDiscoveryPrefetchAttempts = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
   final Map<String, Future<Map<String, dynamic>>>
   _pendingEndpointStartPairings = {};
   final Map<String, Future<String>> _pendingTrustedReconnects = {};
   final Map<String, TrustedPeerEndpoint> _pendingTrustedEndpointHints = {};
+  final Map<String, Timer> _trustedReconnectTimers = {};
+  final Map<String, int> _trustedReconnectAttempts = {};
   bool _isDiscovering = false;
+  bool _isStopping = false;
 
   final String storagePath;
   final Future<Uint8List> Function()? identityPrivateKeyProvider;
@@ -500,6 +514,7 @@ class RiftDaemon {
   });
 
   Future<void> start() async {
+    _isStopping = false;
     _identityManager = IdentityManagerImpl(
       storagePath,
       privateKeyProvider: identityPrivateKeyProvider,
@@ -545,6 +560,8 @@ class RiftDaemon {
       );
 
       _sessionManager!.onTrustedSessionReady.listen((ctx) {
+        _trustedReconnectTimers.remove(ctx.peerDeviceId)?.cancel();
+        _trustedReconnectAttempts.remove(ctx.peerDeviceId);
         unawaited(
           _persistTrustedEndpointIfAvailable(
             ctx.peerDeviceId,
@@ -554,6 +571,9 @@ class RiftDaemon {
         unawaited(_replayActiveSyncState(ctx.peerDeviceId));
       });
       _sessionManager!.onPresenceUpdate.listen((ctx) {
+        if (ctx.currentPresenceStatus != 'online') {
+          _mediaPlaybackManager?.removePlaybacksFromSource(ctx.peerDeviceId);
+        }
         _forwardIpcEvent({
           'jsonrpc': '2.0',
           'method': 'rift.onPresenceUpdate',
@@ -593,6 +613,12 @@ class RiftDaemon {
       );
       _operationManager = OperationManager();
       _mediaPlaybackManager = MediaPlaybackManager();
+      _sessionDisconnectSub = _sessionManager!.onPeerDisconnected.listen((
+        peerDeviceId,
+      ) {
+        _mediaPlaybackManager?.removePlaybacksFromSource(peerDeviceId);
+        _scheduleTrustedReconnect(peerDeviceId);
+      });
       _fileTransferService = FileTransferService(
         sessionManager: _sessionManager!,
         trustStore: _trustStore!,
@@ -2053,8 +2079,16 @@ class RiftDaemon {
   }
 
   Future<void> stop() async {
+    _isStopping = true;
     await _notificationSyncMessageSub?.cancel();
     await _mediaPlaybackMessageSub?.cancel();
+    await _sessionDisconnectSub?.cancel();
+    for (final timer in _trustedReconnectTimers.values) {
+      timer.cancel();
+    }
+    _trustedReconnectTimers.clear();
+    _trustedReconnectAttempts.clear();
+    _lastDiscoveryPrefetchAttempts.clear();
     for (final timer in _pendingMediaPlaybackActionTimers.values) {
       timer.cancel();
     }
@@ -2206,7 +2240,8 @@ class RiftDaemon {
         if (knownPeer?.displayName != null)
           'displayName': knownPeer!.displayName,
         'platform':
-            knownPeer?.platform ?? _platformFromDisplayName(knownPeer?.displayName),
+            knownPeer?.platform ??
+            _platformFromDisplayName(knownPeer?.displayName),
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
@@ -3196,7 +3231,18 @@ class RiftDaemon {
     // cross-platform pairing, the Android daemon prefers proactively opening
     // outbound sessions to discovered peers and then reuses those authenticated
     // sessions when the local user initiates pairing later.
+    _lastDiscoveryPrefetchAttempts.removeWhere(
+      (peerId, _) => !refreshedPeerIds.contains(peerId),
+    );
+    final now = DateTime.now();
     for (final peerId in refreshedPeerIds) {
+      final lastAttempt = _lastDiscoveryPrefetchAttempts[peerId];
+      if (!addedPeerIds.contains(peerId) &&
+          lastAttempt != null &&
+          now.difference(lastAttempt) < _discoveryPrefetchRetryDelay) {
+        continue;
+      }
+      _lastDiscoveryPrefetchAttempts[peerId] = now;
       unawaited(prefetchSessionForDiscoveredPeer(peerId));
     }
   }
@@ -3443,6 +3489,72 @@ class RiftDaemon {
       }
     }
   }
+
+  void _scheduleTrustedReconnect(String peerDeviceId) {
+    if (_isStopping || _trustedReconnectTimers.containsKey(peerDeviceId)) {
+      return;
+    }
+
+    final attempt = _trustedReconnectAttempts[peerDeviceId] ?? 0;
+    final delay =
+        _trustedReconnectDelays[attempt
+            .clamp(0, _trustedReconnectDelays.length - 1)
+            .toInt()];
+    _trustedReconnectTimers[peerDeviceId] = Timer(delay, () {
+      _trustedReconnectTimers.remove(peerDeviceId);
+      unawaited(_attemptTrustedReconnect(peerDeviceId, attempt));
+    });
+  }
+
+  Future<void> _attemptTrustedReconnect(
+    String peerDeviceId,
+    int attempt, {
+    Future<PeerRecord?> Function()? loadPeer,
+    void Function()? scheduleRetry,
+  }) async {
+    if (_isStopping) {
+      return;
+    }
+
+    try {
+      final lookup = loadPeer?.call() ?? _trustStore?.getPeer(peerDeviceId);
+      final record = lookup == null ? null : await lookup;
+      if (record == null || record.state != TrustState.trusted) {
+        _trustedReconnectAttempts.remove(peerDeviceId);
+        return;
+      }
+
+      await _ensureTrustedSessionForPeer(peerDeviceId);
+      _trustedReconnectAttempts.remove(peerDeviceId);
+    } catch (error) {
+      if (_isStopping) {
+        return;
+      }
+      _trustedReconnectAttempts[peerDeviceId] = attempt + 1;
+      RiftLog.debug(
+        '[Reconnect] Scheduled trusted reconnect failed for '
+        'peerDeviceId=$peerDeviceId attempt=${attempt + 1} error=$error',
+      );
+      if (scheduleRetry != null) {
+        scheduleRetry();
+      } else {
+        _scheduleTrustedReconnect(peerDeviceId);
+      }
+    }
+  }
+
+  @visibleForTesting
+  Future<void> attemptTrustedReconnectForTesting({
+    required String peerDeviceId,
+    required int attempt,
+    required Future<PeerRecord?> Function() loadPeer,
+    required void Function() scheduleRetry,
+  }) => _attemptTrustedReconnect(
+    peerDeviceId,
+    attempt,
+    loadPeer: loadPeer,
+    scheduleRetry: scheduleRetry,
+  );
 
   Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
     final trustStore = _trustStore;

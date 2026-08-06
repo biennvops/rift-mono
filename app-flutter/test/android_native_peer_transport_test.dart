@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:rift/src/ipc/android_native_peer_transport.dart';
+import 'package:rift/src/ipc/native_tls_api.dart';
+import 'package:rift/src/platform/android_native_tls.dart';
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -40,6 +43,56 @@ class _FakeIdentityManager implements IdentityManager {
       '';
 }
 
+class _RecordingNativeTlsApi implements NativeTlsApi {
+  int concurrentWrites = 0;
+  int maxConcurrentWrites = 0;
+  final List<int> writtenConnectionIds = [];
+  final List<int> closedConnectionIds = [];
+
+  @override
+  Future<void> write(int connectionId, String dataBase64) async {
+    concurrentWrites += 1;
+    if (concurrentWrites > maxConcurrentWrites) {
+      maxConcurrentWrites = concurrentWrites;
+    }
+    writtenConnectionIds.add(connectionId);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    concurrentWrites -= 1;
+  }
+
+  @override
+  Future<AndroidTlsConnection> accept() => throw UnimplementedError();
+
+  @override
+  Future<void> close(int connectionId) async {
+    closedConnectionIds.add(connectionId);
+  }
+
+  @override
+  Future<AndroidTlsConnection> connect({
+    required String host,
+    required int port,
+    required String certificatePem,
+    required String privateKeyPem,
+  }) =>
+      throw UnimplementedError();
+
+  @override
+  Future<Map<String, dynamic>> read(int connectionId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<int> startServer({
+    required String certificatePem,
+    required String privateKeyPem,
+    int port = 0,
+  }) async =>
+      port;
+
+  @override
+  Future<void> stopServer() async {}
+}
+
 void main() {
   group('AndroidNativePeerTransport duplicate connection ownership', () {
     test('resets the old session synchronously before replacement teardown',
@@ -56,6 +109,83 @@ void main() {
       transport.resetSessionForReplacement('rift-peer');
 
       expect(disconnectedPeer, 'rift-peer');
+    });
+
+    test('closes and notifies before blocked stream teardown', () async {
+      final tls = _RecordingNativeTlsApi();
+      final cancellation = Completer<void>();
+      final frameController = StreamController<Map<String, dynamic>>(
+        onCancel: () => cancellation.future,
+      );
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        frameSubscription: frameController.stream.listen((_) {}),
+      );
+      final disconnected = transport.onPeerDisconnected.first;
+
+      transport.disconnect('rift-peer');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(tls.closedConnectionIds, [42]);
+      await expectLater(disconnected, completion('rift-peer'));
+      cancellation.complete();
+      await Future<void>.delayed(Duration.zero);
+      await transport.stopServer();
+    });
+
+    test('replacement close does not await blocked stream teardown', () async {
+      final tls = _RecordingNativeTlsApi();
+      final cancellation = Completer<void>();
+      final frameController = StreamController<Map<String, dynamic>>(
+        onCancel: () => cancellation.future,
+      );
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+        frameSubscription: frameController.stream.listen((_) {}),
+      );
+
+      await transport
+          .closeConnectionForReplacementForTesting('rift-peer')
+          .timeout(const Duration(milliseconds: 100));
+
+      expect(tls.closedConnectionIds, [42]);
+      cancellation.complete();
+      await Future<void>.delayed(Duration.zero);
+      await transport.stopServer();
+    });
+
+    test('serializes concurrent writes for one peer', () async {
+      final tls = _RecordingNativeTlsApi();
+      final transport = AndroidNativePeerTransport(
+        _FakeIdentityManager(),
+        port: 0,
+        tlsApi: tls,
+      );
+      transport.injectConnectionForTesting(
+        peerDeviceId: 'rift-peer',
+        connectionId: 42,
+      );
+
+      await Future.wait([
+        transport.sendMessage('rift-peer', Uint8List.fromList([123, 125])),
+        transport.sendMessage('rift-peer', Uint8List.fromList([123, 125])),
+      ]);
+
+      expect(tls.maxConcurrentWrites, 1);
+      expect(tls.writtenConnectionIds, [42, 42]);
+      await transport.stopServer();
     });
 
     test('retains an existing preferred connection', () {
