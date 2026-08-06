@@ -87,7 +87,8 @@ class FlutterWindow : public Win32Window {
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
-  winrt::Windows::Media::Playback::MediaPlayer media_playback_player_{nullptr};
+  winrt::Windows::Media::SystemMediaTransportControls
+      media_transport_controls_{nullptr};
   winrt::event_token media_playback_button_pressed_token_{};
   winrt::event_token media_playback_position_change_token_{};
   std::mutex media_playback_mutex_;

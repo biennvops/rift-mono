@@ -24,6 +24,7 @@ using std::min;
 #include <shellapi.h>
 #include <shcore.h>
 #include <shlwapi.h>
+#include <systemmediatransportcontrolsinterop.h>
 #include <string>
 #include <vector>
 #include <wincodec.h>
@@ -61,6 +62,8 @@ bool IsTrue(const flutter::EncodableMap& map, const char* key);
 std::vector<uint8_t> DecodeBase64(const std::string& input);
 std::optional<winrt::Windows::Storage::Streams::RandomAccessStreamReference>
 CreateArtworkReference(const flutter::EncodableMap& playback);
+winrt::Windows::Media::SystemMediaTransportControls GetTransportControlsForWindow(
+    HWND window);
 
 void LogClipboardMessage(const std::string& message) {
   std::wstring wide_message = Utf16FromUtf8(message);
@@ -217,6 +220,23 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
   auto stream =
       random_access_stream.as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
   return RandomAccessStreamReference::CreateFromStream(stream);
+}
+
+winrt::Windows::Media::SystemMediaTransportControls GetTransportControlsForWindow(
+    HWND window) {
+  if (window == nullptr) {
+    return nullptr;
+  }
+
+  auto interop = winrt::get_activation_factory<
+      winrt::Windows::Media::SystemMediaTransportControls,
+      ISystemMediaTransportControlsInterop>();
+
+  winrt::Windows::Media::SystemMediaTransportControls controls{nullptr};
+  winrt::check_hresult(interop->GetForWindow(
+      window, winrt::guid_of<ABI::Windows::Media::ISystemMediaTransportControls>(),
+      winrt::put_abi(controls)));
+  return controls;
 }
 
 bool ReadGlobalMemory(HANDLE handle, std::vector<uint8_t>* bytes) {
@@ -1071,12 +1091,11 @@ bool FlutterWindow::ShowWindowsMediaPlayback(
     } catch (...) {
     }
 
-    if (!media_playback_player_) {
-      media_playback_player_ = winrt::Windows::Media::Playback::MediaPlayer();
-      media_playback_player_.CommandManager().IsEnabled(false);
+    if (!media_transport_controls_) {
+      media_transport_controls_ = GetTransportControlsForWindow(GetHandle());
     }
 
-    auto controls = media_playback_player_.SystemMediaTransportControls();
+    auto controls = media_transport_controls_;
     controls.IsEnabled(true);
     controls.IsPlayEnabled(IsTrue(playback, "canPlay"));
     controls.IsPauseEnabled(IsTrue(playback, "canPause"));
@@ -1208,10 +1227,10 @@ bool FlutterWindow::ClearWindowsMediaPlayback() {
   }
 
   try {
-    if (!media_playback_player_) {
+    if (!media_transport_controls_) {
       return true;
     }
-    auto controls = media_playback_player_.SystemMediaTransportControls();
+    auto controls = media_transport_controls_;
     controls.IsEnabled(false);
     controls.IsPlayEnabled(false);
     controls.IsPauseEnabled(false);
@@ -1233,8 +1252,6 @@ bool FlutterWindow::ClearWindowsMediaPlayback() {
     display_updater.Update();
     controls.UpdateTimelineProperties(
         winrt::Windows::Media::SystemMediaTransportControlsTimelineProperties());
-    media_playback_player_.Close();
-    media_playback_player_ = nullptr;
   } catch (...) {
   }
 
