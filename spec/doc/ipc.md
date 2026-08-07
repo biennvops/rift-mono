@@ -733,7 +733,7 @@ Returns the locally cached mirrored notification inbox plus the current local no
       "bodyPreview": "See you at 6?",
       "postedAt": "2026-07-14T09:58:00Z",
       "isDismissible": true,
-      "isOpenable": true
+      "isOpenable": false
     }
   ],
   "observedApps": [
