@@ -11,6 +11,7 @@ class WindowsRemoteMediaPlaybackCoordinator {
   final JsonRpcRiftClient _client;
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  String? _localDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _postedSub;
   StreamSubscription<Map<String, dynamic>>? _updatedSub;
@@ -97,6 +98,7 @@ class WindowsRemoteMediaPlaybackCoordinator {
     if (!WindowsMediaPlayback.isSupported || !_client.isConnected) return;
 
     try {
+      await _ensureLocalDeviceId();
       final result = await _client.listMediaPlayback();
       final playbacks = List<Map<String, dynamic>>.from(
         (result['playbacks'] as List? ?? const <dynamic>[]).map(
@@ -106,7 +108,9 @@ class WindowsRemoteMediaPlaybackCoordinator {
       _playbacksByKey
         ..clear()
         ..addEntries(
-          playbacks.map((playback) => MapEntry(_keyFor(playback), playback)),
+          playbacks
+              .where(_isRemotePlayback)
+              .map((playback) => MapEntry(_keyFor(playback), playback)),
         );
       await _syncNativeState();
     } catch (error) {
@@ -114,7 +118,27 @@ class WindowsRemoteMediaPlaybackCoordinator {
     }
   }
 
+  Future<void> _ensureLocalDeviceId() async {
+    if (_localDeviceId != null) return;
+    final info = await _client.getDeviceInfo();
+    if (info is Map) {
+      final deviceId = info['deviceId']?.toString();
+      if (deviceId != null && deviceId.isNotEmpty) {
+        _localDeviceId = deviceId;
+      }
+    }
+  }
+
+  bool _isRemotePlayback(Map<String, dynamic> playback) {
+    final localDeviceId = _localDeviceId;
+    if (localDeviceId == null) return true;
+    return playback['sourceDeviceId']?.toString() != localDeviceId;
+  }
+
   void _upsertPlayback(Map<String, dynamic> playback) {
+    if (!_isRemotePlayback(playback)) {
+      return;
+    }
     _playbacksByKey[_keyFor(playback)] = Map<String, dynamic>.from(playback);
     unawaited(_syncNativeState());
   }
