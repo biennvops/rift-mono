@@ -345,6 +345,7 @@ void main() {
     );
     when(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
         notificationId: any(named: 'notificationId'),
         action: any(named: 'action'),
       ),
@@ -745,6 +746,7 @@ void main() {
       'rift.permissions',
       const MethodCall('notificationActivated', <String, Object?>{
         'route': 'history.notifications',
+        'sourceDeviceId': 'rift-source',
         'notificationId': 'notif-321',
         'notificationAction': 'open',
       }),
@@ -753,6 +755,7 @@ void main() {
 
     verify(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-source',
         notificationId: 'notif-321',
         action: 'open',
       ),
@@ -772,6 +775,7 @@ void main() {
       'rift.permissions',
       const MethodCall('notificationActivated', <String, Object?>{
         'route': 'history.notifications',
+        'sourceDeviceId': 'rift-source',
         'notificationId': 'notif-queued',
         'notificationAction': 'dismiss',
       }),
@@ -780,6 +784,7 @@ void main() {
 
     verifyNever(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
         notificationId: any(named: 'notificationId'),
         action: any(named: 'action'),
       ),
@@ -793,6 +798,7 @@ void main() {
 
     verify(
       () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-source',
         notificationId: 'notif-queued',
         action: 'dismiss',
       ),

@@ -583,11 +583,18 @@ public class RiftApiHandler : IRiftApi
     }
 
     [JsonRpcMethod("rift.performNotificationAction")]
-    public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action)
+    public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
+        string notificationId,
+        string action)
     {
         try
         {
-            return await _notificationSyncService.PerformNotificationActionAsync(notificationId, action, CancellationToken.None);
+            return await _notificationSyncService.PerformNotificationActionAsync(
+                sourceDeviceId,
+                notificationId,
+                action,
+                CancellationToken.None);
         }
         catch (NotificationSyncFailureException ex)
         {
@@ -869,7 +876,7 @@ public class RiftApiHandler : IRiftApi
 
         public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(string eventType, NotificationSyncRecord notification, string? removedAt, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
-        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string sourceDeviceId, string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 

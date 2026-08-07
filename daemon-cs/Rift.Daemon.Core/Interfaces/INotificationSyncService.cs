@@ -78,6 +78,7 @@ public sealed class ListNotificationsResult
 public sealed class PerformNotificationActionResult
 {
     public string OperationId { get; init; } = string.Empty;
+    public string SourceDeviceId { get; init; } = string.Empty;
     public string NotificationId { get; init; } = string.Empty;
     public string Action { get; init; } = string.Empty;
     public string State { get; init; } = string.Empty;
@@ -119,6 +120,7 @@ public interface INotificationSyncService
     Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken);
 
     Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
         string notificationId,
         string action,
         CancellationToken cancellationToken);

@@ -225,11 +225,25 @@ class _NotificationCardState extends State<_NotificationCard> {
   String? _pendingAction;
 
   Future<void> _perform(String action) async {
+    final sourceDeviceId = widget.notification['sourceDeviceId']?.toString();
+    final notificationId = widget.notification['notificationId']?.toString();
+    if (sourceDeviceId == null ||
+        sourceDeviceId.isEmpty ||
+        notificationId == null ||
+        notificationId.isEmpty) {
+      RiftSnackbar.show(
+        context: context,
+        message: 'This notification has no valid source identity.',
+        type: RiftSnackbarType.error,
+      );
+      return;
+    }
+
     setState(() => _pendingAction = action);
     try {
       await context.read<JsonRpcRiftClient>().performNotificationAction(
-            notificationId:
-                widget.notification['notificationId']?.toString() ?? '',
+            sourceDeviceId: sourceDeviceId,
+            notificationId: notificationId,
             action: action,
           );
     } catch (error) {

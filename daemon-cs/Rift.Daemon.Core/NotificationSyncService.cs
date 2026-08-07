@@ -171,11 +171,17 @@ public sealed class NotificationSyncService : INotificationSyncService
     }
 
     public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
         string notificationId,
         string action,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(sourceDeviceId))
+        {
+            throw new NotificationSyncFailureException("A notification sourceDeviceId is required.", -32009);
+        }
 
         if (string.IsNullOrWhiteSpace(notificationId))
         {
@@ -186,10 +192,15 @@ public sealed class NotificationSyncService : INotificationSyncService
         NotificationSyncRecord notification;
         lock (_gate)
         {
-            notification = _notifications.Values
-                .Where(record => !record.IsRemoved)
-                .FirstOrDefault(record => string.Equals(record.NotificationId, notificationId, StringComparison.Ordinal))
-                ?? throw new NotificationSyncFailureException($"Mirrored notification '{notificationId}' was not found.", -32009);
+            if (!_notifications.TryGetValue(GetNotificationKey(sourceDeviceId, notificationId), out var stored) ||
+                stored.IsRemoved)
+            {
+                throw new NotificationSyncFailureException(
+                    $"Mirrored notification '{notificationId}' from '{sourceDeviceId}' was not found.",
+                    -32009);
+            }
+
+            notification = stored;
         }
 
         EnsureActionAllowed(notification, normalizedAction);
@@ -238,6 +249,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         return new PerformNotificationActionResult
         {
             OperationId = operationId,
+            SourceDeviceId = notification.SourceDeviceId,
             NotificationId = notification.NotificationId,
             Action = normalizedAction,
             State = "Pending"
@@ -617,8 +629,10 @@ public sealed class NotificationSyncService : INotificationSyncService
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            IsDismissible = notification.IsDismissible,
-            IsOpenable = notification.IsOpenable,
+            // Desktop hosts have no native notification action executor, so locally
+            // originating records must not advertise actions this daemon cannot run.
+            IsDismissible = false,
+            IsOpenable = false,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)

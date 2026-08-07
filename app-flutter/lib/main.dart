@@ -800,12 +800,16 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   void _handleNotificationActionPayload(Map<String, dynamic> payload) {
     final route = payload['route']?.toString();
     final notificationAction = payload['notificationAction']?.toString();
+    final sourceDeviceId = payload['sourceDeviceId']?.toString();
     final notificationId = payload['notificationId']?.toString();
     if (notificationAction != null &&
+        sourceDeviceId != null &&
+        sourceDeviceId.isNotEmpty &&
         notificationId != null &&
         notificationId.isNotEmpty) {
       unawaited(
         _submitDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: notificationAction,
         ),
@@ -899,11 +903,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   void _queuePendingDesktopNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) {
     final alreadyQueued = _pendingDesktopNotificationActions.any(
       (candidate) =>
+          candidate['sourceDeviceId'] == sourceDeviceId &&
           candidate['notificationId'] == notificationId &&
           candidate['action'] == action,
     );
@@ -911,12 +917,14 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return;
     }
     _pendingDesktopNotificationActions.add(<String, String>{
+      'sourceDeviceId': sourceDeviceId,
       'notificationId': notificationId,
       'action': action,
     });
   }
 
   Future<bool> _submitDesktopNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
     bool queueIfUnavailable = true,
@@ -925,6 +933,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     if (!client.isConnected) {
       if (queueIfUnavailable) {
         _queuePendingDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: action,
         );
@@ -939,6 +948,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     try {
       await client.performNotificationAction(
+        sourceDeviceId: sourceDeviceId,
         notificationId: notificationId,
         action: action,
       );
@@ -949,6 +959,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       );
       if (queueIfUnavailable) {
         _queuePendingDesktopNotificationAction(
+          sourceDeviceId: sourceDeviceId,
           notificationId: notificationId,
           action: action,
         );
@@ -963,6 +974,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         _pendingDesktopNotificationActions.first,
       );
       final submitted = await _submitDesktopNotificationAction(
+        sourceDeviceId: action['sourceDeviceId'] ?? '',
         notificationId: action['notificationId'] ?? '',
         action: action['action'] ?? '',
         queueIfUnavailable: false,

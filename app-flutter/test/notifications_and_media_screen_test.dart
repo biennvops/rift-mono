@@ -93,6 +93,7 @@ class SyncUiClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> performNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) async {
