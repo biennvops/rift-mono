@@ -2158,6 +2158,59 @@ class RiftDaemon {
   Future<void> _handleNotificationSyncProtocolMessage(
     ProtocolMessage message,
   ) async {
+    try {
+      await _handleValidatedNotificationSyncProtocolMessage(message);
+    } on RiftException catch (error) {
+      final failureReason = error.code == -32010
+          ? 'ProtocolError'
+          : 'MalformedMessage';
+      RiftLog.warn(
+        '[NotificationSync] Dropping $failureReason from ${message.peerDeviceId}: $error',
+      );
+      await _trySendNotificationSyncPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on ArgumentError catch (error) {
+      await _trySendNotificationSyncPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    } on TypeError catch (error) {
+      await _trySendNotificationSyncPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    }
+  }
+
+  Future<void> _trySendNotificationSyncPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  Future<void> _handleValidatedNotificationSyncProtocolMessage(
+    ProtocolMessage message,
+  ) async {
     final type = message.payload['type'] as String?;
     if (type == null || !type.startsWith('notification.')) {
       return;
