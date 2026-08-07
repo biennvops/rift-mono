@@ -21,6 +21,7 @@ import 'src/ipc/android_background_entrypoint.dart';
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
+import 'src/trusted_peer_name_resolver.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
 import 'src/file_transfer/send_queue_controller.dart';
@@ -247,6 +248,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
   DeviceStatusPublisher? _deviceStatusPublisher;
+  TrustedPeerNameResolver? _trustedPeerNameResolver;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
   Future<String?>? _localDeviceIdFuture;
@@ -400,9 +402,24 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
         unawaited(_recoverPendingFileCommits());
+        unawaited(_refreshTrustedPeerNames());
         unawaited(_reapplyNotificationSyncPolicy(client));
       }
     });
+  }
+
+  Future<void> _refreshTrustedPeerNames() async {
+    final resolver = _trustedPeerNameResolver;
+    if (resolver == null) {
+      return;
+    }
+    try {
+      await resolver.refresh();
+    } catch (error) {
+      debugPrint(
+        '[Trusted Peer Names] Failed to refresh peer names: $error',
+      );
+    }
   }
 
   Future<void> _reapplyNotificationSyncPolicy(JsonRpcRiftClient client) async {
@@ -1248,13 +1265,18 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     final notificationTitle = (title != null && title.isNotEmpty)
         ? title
         : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
-    final notificationBody = [
-      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty) sourceDeviceId,
-      if (body != null && body.isNotEmpty) body,
-    ].join(' • ');
 
     unawaited(() async {
       try {
+        final sourceDeviceName = sourceDeviceId == null
+            ? null
+            : await _trustedPeerNameResolver!.resolve(sourceDeviceId);
+        final notificationBody = [
+          if (sourceDeviceName != null && sourceDeviceName.isNotEmpty)
+            sourceDeviceName,
+          if (body != null && body.isNotEmpty) body,
+        ].join(' • ');
+
         if (IOSNotifications.isSupported) {
           await IOSNotifications.show(
             title: notificationTitle,
@@ -1359,8 +1381,19 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   void _bindNotifications() {
     final client = context.read<JsonRpcRiftClient>();
+    _trustedPeerNameResolver = TrustedPeerNameResolver(
+      listTrustedPeers: () async {
+        final result = await client.listTrustedPeers();
+        if (result is Map) {
+          return Map<String, dynamic>.from(result);
+        }
+        return <String, dynamic>{};
+      },
+    );
+    unawaited(_refreshTrustedPeerNames());
 
     _trustChangedSub = client.onTrustChanged.listen((event) {
+      _trustedPeerNameResolver!.applyTrustChanged(event);
       final deviceId = event['deviceId']?.toString() ?? 'unknown device';
       final newState = event['newState']?.toString();
       final reason = event['reason']?.toString() ?? '';
