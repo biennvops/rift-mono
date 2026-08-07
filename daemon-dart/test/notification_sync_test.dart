@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:daemon_dart/src/daemon.dart';
+import 'package:daemon_dart/src/interfaces/trust_store.dart';
+import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -25,13 +27,16 @@ void main() {
 
     late Directory tempDir;
     late RiftDaemon daemon;
+    late List<Map<String, dynamic>> ipcEvents;
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('rift_notification_sync');
+      ipcEvents = <Map<String, dynamic>>[];
       daemon = RiftDaemon(
         storagePath: tempDir.path,
         port: 0,
         enableDiscovery: false,
+        onIpcEvent: ipcEvents.add,
       );
       await daemon.start();
     });
@@ -85,6 +90,93 @@ void main() {
         'packageNames': <String>[],
       });
     });
+
+    test('normalizes local Android capabilities for remote actions', () async {
+      await daemon.handleJsonRpcRequest({
+        'method': 'rift.notifyLocalNotificationEvent',
+        'params': {
+          'eventType': 'posted',
+          'notificationId': 'android-local-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'sourcePlatform': 'android',
+          'postedAt': '2026-07-15T08:30:00.000Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      });
+
+      final listed = await daemon.handleJsonRpcRequest({
+        'method': 'rift.listNotifications',
+      });
+      final notification =
+          (listed['notifications'] as List).single as Map<String, dynamic>;
+      expect(notification['isDismissible'], isTrue);
+      expect(notification['isOpenable'], isFalse);
+    });
+
+    test('notification actions require sourceDeviceId', () async {
+      await expectLater(
+        daemon.handleJsonRpcRequest({
+          'method': 'rift.performNotificationAction',
+          'params': {'notificationId': 'notification-1', 'action': 'dismiss'},
+        }),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test(
+      'valid incoming Android dismiss emits a native action request',
+      () async {
+        const peerDeviceId = 'rift-desktop';
+        final context =
+            SessionContext(peerDeviceId: peerDeviceId, isInitiator: false)
+              ..handshakeState = HandshakeState.established
+              ..trustState = TrustState.trusted
+              ..capabilityNegotiated = true
+              ..negotiatedCapabilities = [
+                Capability(name: 'notification.sync', version: 1),
+              ];
+        daemon.sessionManagerForTesting.injectContextForTesting(context);
+
+        await daemon.handleJsonRpcRequest({
+          'method': 'rift.notifyLocalNotificationEvent',
+          'params': {
+            'eventType': 'posted',
+            'notificationId': 'android-local-action',
+            'packageName': 'com.example.chat',
+            'appName': 'Example Chat',
+            'sourcePlatform': 'android',
+            'postedAt': '2026-07-15T08:30:00.000Z',
+            'isDismissible': true,
+            'isOpenable': false,
+          },
+        });
+
+        final localDeviceId = daemon.getDeviceInfo()['deviceId'];
+        await daemon.handleNotificationSyncProtocolMessageForTesting(
+          peerDeviceId,
+          {
+            'type': 'notification.actionRequest',
+            'payload': {
+              'notificationId': 'android-local-action',
+              'sourceDeviceId': localDeviceId,
+              'requestingDeviceId': peerDeviceId,
+              'action': 'dismiss',
+              'requestedAt': '2026-07-15T08:31:00.000Z',
+            },
+          },
+        );
+
+        final event = ipcEvents.singleWhere(
+          (event) => event['method'] == 'rift.onNotificationActionRequest',
+        );
+        expect(event['params']['notificationId'], 'android-local-action');
+        expect(event['params']['sourceDeviceId'], localDeviceId);
+        expect(event['params']['requestingDeviceId'], peerDeviceId);
+        expect(event['params']['action'], 'dismiss');
+      },
+    );
 
     test(
       'accepts legacy blacklist requests and keeps suppressed notifications local',

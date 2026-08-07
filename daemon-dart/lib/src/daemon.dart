@@ -514,6 +514,12 @@ class RiftDaemon {
   final Map<String, Map<String, dynamic>> _pendingIncomingMediaPlaybackActions =
       {};
   final Map<String, Timer> _pendingIncomingMediaPlaybackActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingNotificationActions = {};
+  final Map<String, String> _pendingNotificationActionKeys = {};
+  final Map<String, Timer> _pendingNotificationActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingIncomingNotificationActions =
+      {};
+  final Map<String, Timer> _pendingIncomingNotificationActionTimers = {};
   final Map<String, String> _notificationSyncObservedApps = {};
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
@@ -1277,6 +1283,280 @@ class RiftDaemon {
     };
   }
 
+  String _normalizeNotificationAction(String action) {
+    if (action == 'open' || action == 'dismiss') {
+      return action;
+    }
+    throw const RiftException(-32010, 'Unknown notification action');
+  }
+
+  String _notificationActionKey(
+    String sourceDeviceId,
+    String notificationId,
+    String action,
+  ) => '$sourceDeviceId\n$notificationId\n$action';
+
+  void _ensureNotificationActionAllowed(
+    Map<String, dynamic> notification,
+    String action,
+  ) {
+    final allowed = switch (action) {
+      'dismiss' => notification['isDismissible'] == true,
+      'open' => notification['isOpenable'] == true,
+      _ => false,
+    };
+    if (!allowed) {
+      throw const RiftException(
+        -32010,
+        'Notification does not allow the requested action',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _performNotificationAction(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final notificationId = RpcUtils.requireStringParam(
+      params,
+      'notificationId',
+    );
+    final action = _normalizeNotificationAction(
+      RpcUtils.requireStringParam(params, 'action'),
+    );
+    final notification =
+        _notificationSyncRecords[_notificationRecordKey(
+          sourceDeviceId,
+          notificationId,
+        )];
+    if (notification == null) {
+      throw const RiftException(-32009, 'Mirrored notification was not found');
+    }
+    _ensureNotificationActionAllowed(notification, action);
+
+    await _ensureTrustedSessionForPeer(sourceDeviceId);
+    try {
+      _sessionManager!.requireCapability(sourceDeviceId, 'notification.sync');
+    } catch (error) {
+      throw RiftException(-32003, error.toString());
+    }
+
+    final actionKey = _notificationActionKey(
+      sourceDeviceId,
+      notificationId,
+      action,
+    );
+    if (_pendingNotificationActionKeys.containsKey(actionKey)) {
+      throw const RiftException(
+        -32010,
+        'A matching notification action is pending',
+      );
+    }
+
+    final operationId = const Uuid().v4();
+    _operationManager!.createOperation(
+      operationId: operationId,
+      operationType: 'notification.$action',
+      sourceDeviceId: _identityManager!.deviceId,
+      destinationDeviceId: sourceDeviceId,
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.pending,
+      details: {
+        'sourceDeviceId': sourceDeviceId,
+        'notificationId': notificationId,
+        'action': action,
+      },
+    );
+    _pendingNotificationActions[operationId] = {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'notificationId': notificationId,
+      'action': action,
+      'actionKey': actionKey,
+    };
+    _pendingNotificationActionKeys[actionKey] = operationId;
+    _pendingNotificationActionTimers[operationId] = Timer(
+      mediaPlaybackActionTimeout,
+      () => _expirePendingNotificationAction(operationId),
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
+
+    try {
+      await _sessionManager!.sendMessage(sourceDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'notification.actionRequest',
+        'sourceDeviceId': _identityManager!.deviceId,
+        'destinationDeviceId': sourceDeviceId,
+        'payload': {
+          'notificationId': notificationId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': _identityManager!.deviceId,
+          'action': action,
+          'requestedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+    } catch (error) {
+      _removePendingNotificationAction(operationId);
+      _operationManager!.transitionOperation(
+        operationId,
+        OperationState.failed,
+        failureReason: 'PeerUnreachable',
+      );
+      throw RiftException(-32003, 'Failed to send notification action: $error');
+    }
+
+    return {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'notificationId': notificationId,
+      'action': action,
+      'state': 'Pending',
+    };
+  }
+
+  void _removePendingNotificationAction(String operationId) {
+    final pending = _pendingNotificationActions.remove(operationId);
+    _pendingNotificationActionTimers.remove(operationId)?.cancel();
+    if (pending == null) return;
+    final actionKey = pending['actionKey'] as String;
+    if (_pendingNotificationActionKeys[actionKey] == operationId) {
+      _pendingNotificationActionKeys.remove(actionKey);
+    }
+  }
+
+  void _emitNotificationActionResult(
+    Map<String, dynamic> pending, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) {
+    onIpcEvent?.call({
+      'jsonrpc': '2.0',
+      'method': 'rift.onNotificationActionResult',
+      'params': {
+        'notificationId': pending['notificationId'],
+        'sourceDeviceId': pending['sourceDeviceId'],
+        'action': pending['action'],
+        'operationId': pending['operationId'],
+        'state': success ? 'Done' : 'Failed',
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  void _expirePendingNotificationAction(String operationId) {
+    final pending = _pendingNotificationActions[operationId];
+    if (pending == null) return;
+    _removePendingNotificationAction(operationId);
+    _operationManager?.transitionOperation(
+      operationId,
+      OperationState.failed,
+      failureReason: 'Timeout',
+    );
+    _emitNotificationActionResult(
+      pending,
+      success: false,
+      failureReason: 'Timeout',
+      message: 'The remote notification action timed out.',
+    );
+  }
+
+  Future<Map<String, dynamic>> _reportLocalNotificationActionHandled(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final requestId = RpcUtils.requireStringParam(params, 'requestId');
+    final success = params['success'];
+    if (success is! bool) {
+      throw ArgumentError.value(success, 'success', 'must be a boolean');
+    }
+    final failureReason = _normalizeMediaPlaybackFailureReason(
+      success: success,
+      failureReason: params['failureReason'],
+      invalidCode: -32602,
+    );
+    final message = params['message'];
+    if (message != null && message is! String) {
+      throw ArgumentError.value(message, 'message', 'must be a string');
+    }
+    final pending = _pendingIncomingNotificationActions.remove(requestId);
+    if (pending == null) {
+      throw const RiftException(
+        -32009,
+        'Notification action request was not found',
+      );
+    }
+    _pendingIncomingNotificationActionTimers.remove(requestId)?.cancel();
+    await _sendNotificationActionResult(
+      pending,
+      success: success,
+      failureReason: failureReason,
+      message: message as String?,
+    );
+    return {
+      'requestId': requestId,
+      'notificationId': pending['notificationId'],
+      'action': pending['action'],
+      'success': success,
+    };
+  }
+
+  Future<void> _sendNotificationActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    final requestingDeviceId = request['requestingDeviceId'] as String;
+    await _sessionManager!.sendMessage(requestingDeviceId, {
+      'rift': '0.1-draft',
+      'messageId': const Uuid().v4(),
+      'type': 'notification.actionResult',
+      'sourceDeviceId': _identityManager!.deviceId,
+      'destinationDeviceId': requestingDeviceId,
+      'payload': {
+        'notificationId': request['notificationId'],
+        'sourceDeviceId': _identityManager!.deviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': request['action'],
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  Future<void> _expireIncomingNotificationAction(String requestId) async {
+    _pendingIncomingNotificationActionTimers.remove(requestId);
+    final pending = _pendingIncomingNotificationActions.remove(requestId);
+    if (pending == null) return;
+    try {
+      await _sendNotificationActionResult(
+        pending,
+        success: false,
+        failureReason: 'Timeout',
+        message:
+            'The local notification action client did not handle the request.',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Failed to expire incoming action $requestId: $error',
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> _performMediaPlaybackAction(
     Map<String, dynamic> params,
   ) async {
@@ -1732,8 +2012,9 @@ class RiftDaemon {
         'must be booleans',
       );
     }
-    record['isDismissible'] = isDismissible;
-    record['isOpenable'] = isOpenable;
+    final sourcePlatform = record['sourcePlatform'];
+    record['isDismissible'] = sourcePlatform == 'android' && isDismissible;
+    record['isOpenable'] = false;
     return record;
   }
 
@@ -1903,6 +2184,186 @@ class RiftDaemon {
     }
 
     switch (type) {
+      case 'notification.actionRequest':
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        final requestingDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'requestingDeviceId',
+        );
+        if (sourceDeviceId != _identityManager!.deviceId ||
+            requestingDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping action request from ${message.peerDeviceId}: identity mismatch',
+          );
+          return;
+        }
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final rawAction = RpcUtils.requireStringParam(payload, 'action');
+        final action = rawAction == 'open' || rawAction == 'dismiss'
+            ? rawAction
+            : rawAction;
+        final requestedAt = _optionalMediaPlaybackTimestamp(
+          payload,
+          'requestedAt',
+        );
+        final requestId = const Uuid().v4();
+        final request = <String, dynamic>{
+          'requestId': requestId,
+          'notificationId': notificationId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': requestingDeviceId,
+          'action': action,
+          'requestedAt': ?requestedAt,
+        };
+        final localNotification =
+            _notificationSyncRecords[_notificationRecordKey(
+              sourceDeviceId,
+              notificationId,
+            )];
+        if (action != 'open' && action != 'dismiss') {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'ProtocolError',
+            message: 'Unknown notification action.',
+          );
+          return;
+        }
+        if (localNotification == null) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'The local notification was not found.',
+          );
+          return;
+        }
+        if (action == 'open' ||
+            localNotification['sourcePlatform'] != 'android') {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'Remote Android notification open is not supported.',
+          );
+          return;
+        }
+        if (localNotification['isDismissible'] != true) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'PolicyDenied',
+            message: 'The local notification is not dismissible.',
+          );
+          return;
+        }
+        if (onIpcEvent == null) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'No local notification action client is connected.',
+          );
+          return;
+        }
+        _pendingIncomingNotificationActions[requestId] = request;
+        _pendingIncomingNotificationActionTimers[requestId] = Timer(
+          mediaPlaybackActionTimeout,
+          () => unawaited(_expireIncomingNotificationAction(requestId)),
+        );
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationActionRequest',
+          'params': request,
+        });
+        return;
+
+      case 'notification.actionResult':
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        if (sourceDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping action result from ${message.peerDeviceId}: source identity mismatch',
+          );
+          return;
+        }
+        final requestingDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'requestingDeviceId',
+        );
+        if (requestingDeviceId != _identityManager!.deviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping notification action result: requester identity mismatch',
+          );
+          return;
+        }
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final action = _normalizeNotificationAction(
+          RpcUtils.requireStringParam(payload, 'action'),
+        );
+        final success = payload['success'];
+        if (success is! bool) {
+          throw ArgumentError.value(success, 'success', 'must be a boolean');
+        }
+        final failureReason = _normalizeMediaPlaybackFailureReason(
+          success: success,
+          failureReason: payload['failureReason'],
+          invalidCode: -32010,
+        );
+        if (payload['message'] != null && payload['message'] is! String) {
+          throw ArgumentError.value(
+            payload['message'],
+            'message',
+            'must be a string',
+          );
+        }
+        final actionKey = _notificationActionKey(
+          sourceDeviceId,
+          notificationId,
+          action,
+        );
+        final operationId = _pendingNotificationActionKeys[actionKey];
+        final pending = operationId == null
+            ? null
+            : _pendingNotificationActions[operationId];
+        if (operationId == null || pending == null) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping unmatched action result from ${message.peerDeviceId}',
+          );
+          return;
+        }
+        _removePendingNotificationAction(operationId);
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.active,
+        );
+        _operationManager!.transitionOperation(
+          operationId,
+          success ? OperationState.done : OperationState.failed,
+          failureReason: failureReason,
+          details: payload['message'] is String
+              ? {'message': payload['message']}
+              : null,
+        );
+        _emitNotificationActionResult(
+          pending,
+          success: success,
+          failureReason: failureReason,
+          message: payload['message'] as String?,
+        );
+        return;
+
       case 'notification.posted':
       case 'notification.updated':
         final record = _normalizeNotificationRecord(
@@ -1972,6 +2433,14 @@ class RiftDaemon {
 
   @visibleForTesting
   SessionManager get sessionManagerForTesting => _sessionManager!;
+
+  @visibleForTesting
+  Future<void> handleNotificationSyncProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleNotificationSyncProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
 
   @visibleForTesting
   Future<void> handleDeviceStatusProtocolMessageForTesting(
@@ -2444,6 +2913,17 @@ class RiftDaemon {
       timer.cancel();
     }
     _pendingIncomingMediaPlaybackActionTimers.clear();
+    for (final timer in _pendingNotificationActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingNotificationActionTimers.clear();
+    for (final timer in _pendingIncomingNotificationActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingIncomingNotificationActionTimers.clear();
+    _pendingNotificationActions.clear();
+    _pendingNotificationActionKeys.clear();
+    _pendingIncomingNotificationActions.clear();
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
@@ -2868,8 +3348,14 @@ class RiftDaemon {
       case 'rift.performMediaPlaybackAction':
         return _performMediaPlaybackAction(params);
 
+      case 'rift.performNotificationAction':
+        return _performNotificationAction(params);
+
       case 'rift.reportLocalMediaPlaybackActionHandled':
         return _reportLocalMediaPlaybackActionHandled(params);
+
+      case 'rift.reportLocalNotificationActionHandled':
+        return _reportLocalNotificationActionHandled(params);
 
       case 'rift.updateNotificationSyncPolicy':
         final enabled = params['enabled'];
