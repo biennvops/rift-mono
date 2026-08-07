@@ -148,7 +148,8 @@ class FakeTransferJsonRpcClient extends JsonRpcRiftClient {
         'notifications': notifications,
         'policy': {
           'enabled': true,
-          'blacklistedPackages': <String>[],
+          'mode': 'all',
+          'packageNames': <String>[],
         },
       };
 

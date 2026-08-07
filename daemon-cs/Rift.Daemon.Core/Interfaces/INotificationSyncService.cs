@@ -1,9 +1,48 @@
 namespace Rift.Daemon.Core.Interfaces;
 
+public static class NotificationSyncPolicyModes
+{
+    public const string All = "all";
+    public const string Exclude = "exclude";
+    public const string Include = "include";
+
+    public static bool IsValid(string? mode) => mode is All or Exclude or Include;
+
+    public static string Validate(string? mode)
+    {
+        if (!IsValid(mode))
+        {
+            throw new NotificationSyncFailureException(
+                $"Notification sync policy mode must be '{All}', '{Exclude}', or '{Include}'.",
+                -32602);
+        }
+
+        return mode!;
+    }
+
+    public static IReadOnlyList<string> NormalizePackageNames(IEnumerable<string?> values)
+    {
+        if (values.Any(value => value is null))
+        {
+            throw new NotificationSyncFailureException(
+                "Notification sync policy packageNames must contain only strings.",
+                -32602);
+        }
+
+        return values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+    }
+}
+
 public sealed class NotificationSyncPolicy
 {
-    public bool Enabled { get; init; }
-    public IReadOnlyList<string> BlacklistedPackages { get; init; } = [];
+    public bool Enabled { get; init; } = true;
+    public string Mode { get; init; } = NotificationSyncPolicyModes.All;
+    public IReadOnlyList<string> PackageNames { get; init; } = [];
 }
 
 public sealed class NotificationSyncRecord
@@ -79,7 +118,8 @@ public interface INotificationSyncService
 
     Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
         bool enabled,
-        IReadOnlyList<string> blacklistedPackages,
+        string mode,
+        IReadOnlyList<string> packageNames,
         CancellationToken cancellationToken);
 
     Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken);

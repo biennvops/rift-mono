@@ -44,7 +44,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         _policy = policyStore?.Load() ?? new NotificationSyncPolicy
         {
             Enabled = true,
-            BlacklistedPackages = []
+            Mode = NotificationSyncPolicyModes.All,
+            PackageNames = []
         };
     }
 
@@ -108,8 +109,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         var normalizedNotification = NormalizeLocalNotification(notification);
         ValidateNotification(normalizedNotification);
 
-        var suppressed = IsNotificationSuppressed(normalizedNotification.PackageName);
-        if (suppressed &&
+        var shouldSync = ShouldSyncNotification(normalizedNotification.PackageName);
+        if (!shouldSync &&
             (string.Equals(normalizedEventType, "posted", StringComparison.Ordinal) ||
              string.Equals(normalizedEventType, "updated", StringComparison.Ordinal)))
         {
@@ -158,7 +159,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         {
             NotificationId = normalizedNotification.NotificationId,
             BroadcastTo = broadcastTo,
-            Suppressed = suppressed
+            Suppressed = !shouldSync
         };
     }
 
@@ -238,16 +239,14 @@ public sealed class NotificationSyncService : INotificationSyncService
 
     public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
         bool enabled,
-        IReadOnlyList<string> blacklistedPackages,
+        string mode,
+        IReadOnlyList<string> packageNames,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var normalized = blacklistedPackages
-            .Where(packageName => !string.IsNullOrWhiteSpace(packageName))
-            .Select(packageName => packageName.Trim())
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var normalizedMode = NotificationSyncPolicyModes.Validate(mode);
+        var normalizedPackageNames = NotificationSyncPolicyModes.NormalizePackageNames(packageNames);
 
         lock (_gate)
         {
@@ -255,7 +254,8 @@ public sealed class NotificationSyncService : INotificationSyncService
             var updated = new NotificationSyncPolicy
             {
                 Enabled = enabled,
-                BlacklistedPackages = normalized
+                Mode = normalizedMode,
+                PackageNames = normalizedPackageNames
             };
 
             _policy = updated;
@@ -571,12 +571,26 @@ public sealed class NotificationSyncService : INotificationSyncService
         return sentTo;
     }
 
-    private bool IsNotificationSuppressed(string packageName)
+    private bool ShouldSyncNotification(string packageName)
     {
         lock (_gate)
         {
-            return !_policy.Enabled ||
-                _policy.BlacklistedPackages.Contains(packageName, StringComparer.Ordinal);
+            if (!_policy.Enabled)
+            {
+                return false;
+            }
+
+            return _policy.Mode switch
+            {
+                NotificationSyncPolicyModes.All => true,
+                NotificationSyncPolicyModes.Exclude => !_policy.PackageNames.Contains(
+                    packageName,
+                    StringComparer.Ordinal),
+                NotificationSyncPolicyModes.Include => _policy.PackageNames.Contains(
+                    packageName,
+                    StringComparer.Ordinal),
+                _ => false
+            };
         }
     }
 
@@ -673,7 +687,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         return new NotificationSyncPolicy
         {
             Enabled = policy.Enabled,
-            BlacklistedPackages = policy.BlacklistedPackages.ToArray()
+            Mode = policy.Mode,
+            PackageNames = policy.PackageNames.ToArray()
         };
     }
 

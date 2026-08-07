@@ -702,7 +702,10 @@ public sealed class RiftApiHandlerTests : IDisposable
             "windows");
         var listed = await _handler.ListNotificationsAsync();
         var action = await _handler.PerformNotificationActionAsync("notif-1", "open");
-        var policy = await _handler.UpdateNotificationSyncPolicyAsync(true, ["com.bank.example"]);
+        var policy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            mode: NotificationSyncPolicyModes.Exclude,
+            packageNames: ["com.bank.example"]);
 
         Assert.Equal("notif-local-1", localEvent.NotificationId);
         Assert.Single(listed.Notifications);
@@ -710,7 +713,51 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Equal("operation-notification-1", action.OperationId);
         Assert.Equal("open", action.Action);
         Assert.True(policy.Enabled);
-        Assert.Equal(["com.bank.example"], policy.BlacklistedPackages);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, policy.Mode);
+        Assert.Equal(["com.bank.example"], policy.PackageNames);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_LegacyRequestIsProjectedToCanonicalPolicy()
+    {
+        var policy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            blacklistedPackages: [" com.foo ", "com.foo"]);
+
+        Assert.True(policy.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, policy.Mode);
+        Assert.Equal(["com.foo"], policy.PackageNames);
+
+        var emptyLegacyPolicy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            blacklistedPackages: []);
+        Assert.Equal(NotificationSyncPolicyModes.All, emptyLegacyPolicy.Mode);
+        Assert.Empty(emptyLegacyPolicy.PackageNames);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_RejectsAmbiguousRequest()
+    {
+        var exception = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.UpdateNotificationSyncPolicyAsync(
+                true,
+                mode: NotificationSyncPolicyModes.Include,
+                packageNames: ["com.foo"],
+                blacklistedPackages: ["com.bar"]));
+
+        Assert.Equal(-32602, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_RejectsInvalidMode()
+    {
+        var exception = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.UpdateNotificationSyncPolicyAsync(
+                true,
+                mode: "banana",
+                packageNames: []));
+
+        Assert.Equal(-32602, exception.ErrorCode);
     }
 
     [Fact]
@@ -810,7 +857,8 @@ public sealed class RiftApiHandlerTests : IDisposable
                 Policy = new NotificationSyncPolicy
                 {
                     Enabled = true,
-                    BlacklistedPackages = ["com.bank.example"]
+                    Mode = NotificationSyncPolicyModes.Exclude,
+                    PackageNames = ["com.bank.example"]
                 }
             });
         }
@@ -826,12 +874,13 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
-        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken)
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken)
         {
             return Task.FromResult(new NotificationSyncPolicy
             {
                 Enabled = enabled,
-                BlacklistedPackages = blacklistedPackages.ToArray()
+                Mode = mode,
+                PackageNames = packageNames.ToArray()
             });
         }
 

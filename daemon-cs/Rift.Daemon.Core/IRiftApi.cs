@@ -58,5 +58,9 @@ public interface IRiftApi
         string? removedAt = null);
     Task<ListNotificationsResult> ListNotificationsAsync();
     Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action);
-    Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string[] blacklistedPackages);
+    Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
+        bool enabled,
+        string? mode = null,
+        string[]? packageNames = null,
+        string[]? blacklistedPackages = null);
 }

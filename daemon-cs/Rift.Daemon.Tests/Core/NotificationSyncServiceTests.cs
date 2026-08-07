@@ -194,11 +194,160 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task NotificationPolicy_DefaultsToAll()
+    {
+        var result = await _service.ListNotificationsAsync(CancellationToken.None);
+
+        Assert.True(result.Policy.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, result.Policy.Mode);
+        Assert.Empty(result.Policy.PackageNames);
+    }
+
+    [Theory]
+    [InlineData(NotificationSyncPolicyModes.All, true, "com.example.other", false)]
+    [InlineData(NotificationSyncPolicyModes.Exclude, true, "com.blocked", true)]
+    [InlineData(NotificationSyncPolicyModes.Exclude, true, "com.example.other", false)]
+    [InlineData(NotificationSyncPolicyModes.Include, true, "com.blocked", false)]
+    [InlineData(NotificationSyncPolicyModes.Include, true, "com.example.other", true)]
+    [InlineData(NotificationSyncPolicyModes.Include, false, "com.allowed", true)]
+    public async Task HandleLocalNotificationEventAsync_AppliesAllPolicyModes(
+        string mode,
+        bool enabled,
+        string packageName,
+        bool expectedSuppressed)
+    {
+        await _service.UpdateNotificationSyncPolicyAsync(
+            enabled,
+            mode,
+            ["com.blocked"],
+            CancellationToken.None);
+
+        var result = await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            new NotificationSyncRecord
+            {
+                NotificationId = Guid.NewGuid().ToString("N"),
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                SourcePlatform = "windows",
+                PackageName = packageName,
+                AppName = "Example App",
+                PostedAt = "2026-07-16T10:00:00Z",
+                IsDismissible = false,
+                IsOpenable = false
+            },
+            null,
+            CancellationToken.None);
+
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+
+        Assert.Equal(expectedSuppressed, result.Suppressed);
+        Assert.Equal(expectedSuppressed ? 0 : 1, listed.Notifications.Count);
+        Assert.Empty(result.BroadcastTo);
+    }
+
+    [Fact]
+    public async Task NotificationPolicy_NormalizesPackageNamesDeterministically()
+    {
+        var result = await _service.UpdateNotificationSyncPolicyAsync(
+            true,
+            NotificationSyncPolicyModes.Exclude,
+            [" com.foo ", "com.bar", "com.foo", ""],
+            CancellationToken.None);
+
+        Assert.Equal(["com.bar", "com.foo"], result.PackageNames);
+    }
+
+    [Fact]
+    public async Task NotificationPolicy_IncludeWithEmptyPackageListSyncsNothing()
+    {
+        var policy = await _service.UpdateNotificationSyncPolicyAsync(
+            true,
+            NotificationSyncPolicyModes.Include,
+            [],
+            CancellationToken.None);
+
+        var result = await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            new NotificationSyncRecord
+            {
+                NotificationId = "include-empty",
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                SourcePlatform = "windows",
+                PackageName = "com.example.any",
+                AppName = "Example App",
+                PostedAt = "2026-07-16T10:00:00Z",
+                IsDismissible = false,
+                IsOpenable = false
+            },
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(NotificationSyncPolicyModes.Include, policy.Mode);
+        Assert.True(result.Suppressed);
+        Assert.Empty(result.BroadcastTo);
+    }
+
+    [Fact]
+    public async Task NotificationPolicy_RejectsInvalidMode()
+    {
+        var exception = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            _service.UpdateNotificationSyncPolicyAsync(
+                true,
+                "banana",
+                [],
+                CancellationToken.None));
+
+        Assert.Equal(-32602, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task HandleLocalNotificationEventAsync_RemovalIgnoresCurrentPolicy()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        var notification = new NotificationSyncRecord
+        {
+            NotificationId = "notif-policy-removal",
+            SourceDeviceId = _identityManager.GetDeviceId(),
+            SourcePlatform = "windows",
+            PackageName = "com.example.chat",
+            AppName = "Example Chat",
+            PostedAt = "2026-07-16T10:00:00Z",
+            IsDismissible = false,
+            IsOpenable = false
+        };
+
+        await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            notification,
+            null,
+            CancellationToken.None);
+        await _service.UpdateNotificationSyncPolicyAsync(
+            true,
+            NotificationSyncPolicyModes.Exclude,
+            ["com.example.chat"],
+            CancellationToken.None);
+
+        var result = await _service.HandleLocalNotificationEventAsync(
+            "removed",
+            notification,
+            "2026-07-16T10:01:00Z",
+            CancellationToken.None);
+
+        Assert.False(result.Suppressed);
+        Assert.Contains("rift-peer", result.BroadcastTo);
+        Assert.Contains(
+            _transport.SentMessages,
+            sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.removed");
+    }
+
+    [Fact]
     public async Task HandleLocalNotificationEventAsync_DoesNotStoreOrBroadcastSuppressedNotifications()
     {
         await _service.UpdateNotificationSyncPolicyAsync(
             enabled: true,
-            blacklistedPackages: ["dev.rift.desktop"],
+            mode: NotificationSyncPolicyModes.Exclude,
+            packageNames: ["dev.rift.desktop"],
             cancellationToken: CancellationToken.None);
 
         var result = await _service.HandleLocalNotificationEventAsync(
@@ -235,7 +384,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
             StoredPolicy = new NotificationSyncPolicy
             {
                 Enabled = false,
-                BlacklistedPackages = ["org.example.Secret"]
+                Mode = NotificationSyncPolicyModes.Exclude,
+                PackageNames = ["org.example.Secret"]
             }
         };
         var service = new NotificationSyncService(
@@ -251,14 +401,17 @@ public sealed class NotificationSyncServiceTests : IDisposable
         var initial = await service.ListNotificationsAsync(CancellationToken.None);
         await service.UpdateNotificationSyncPolicyAsync(
             enabled: true,
-            blacklistedPackages: [" org.example.Chat ", "org.example.Chat"],
+            mode: NotificationSyncPolicyModes.Exclude,
+            packageNames: [" org.example.Chat ", "org.example.Chat"],
             cancellationToken: CancellationToken.None);
 
         Assert.False(initial.Policy.Enabled);
-        Assert.Equal(["org.example.Secret"], initial.Policy.BlacklistedPackages);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, initial.Policy.Mode);
+        Assert.Equal(["org.example.Secret"], initial.Policy.PackageNames);
         Assert.NotNull(store.StoredPolicy);
         Assert.True(store.StoredPolicy.Enabled);
-        Assert.Equal(["org.example.Chat"], store.StoredPolicy.BlacklistedPackages);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, store.StoredPolicy.Mode);
+        Assert.Equal(["org.example.Chat"], store.StoredPolicy.PackageNames);
     }
 
     [Fact]
@@ -269,7 +422,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
             StoredPolicy = new NotificationSyncPolicy
             {
                 Enabled = true,
-                BlacklistedPackages = ["org.example.Secret"]
+                Mode = NotificationSyncPolicyModes.Exclude,
+                PackageNames = ["org.example.Secret"]
             },
             SaveException = new IOException("database is read-only")
         };
@@ -286,13 +440,15 @@ public sealed class NotificationSyncServiceTests : IDisposable
         var exception = await Assert.ThrowsAsync<IOException>(() =>
             service.UpdateNotificationSyncPolicyAsync(
                 enabled: false,
-                blacklistedPackages: ["org.example.Chat"],
+                mode: NotificationSyncPolicyModes.Exclude,
+                packageNames: ["org.example.Chat"],
                 cancellationToken: CancellationToken.None));
         var current = await service.ListNotificationsAsync(CancellationToken.None);
 
         Assert.Equal("database is read-only", exception.Message);
         Assert.True(current.Policy.Enabled);
-        Assert.Equal(["org.example.Secret"], current.Policy.BlacklistedPackages);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, current.Policy.Mode);
+        Assert.Equal(["org.example.Secret"], current.Policy.PackageNames);
     }
 
     public void Dispose()
@@ -330,7 +486,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public NotificationSyncPolicy StoredPolicy { get; set; } = new()
         {
             Enabled = true,
-            BlacklistedPackages = []
+            Mode = NotificationSyncPolicyModes.All,
+            PackageNames = []
         };
 
         public Exception? SaveException { get; init; }
@@ -338,7 +495,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public NotificationSyncPolicy Load() => new()
         {
             Enabled = StoredPolicy.Enabled,
-            BlacklistedPackages = StoredPolicy.BlacklistedPackages.ToArray()
+            Mode = StoredPolicy.Mode,
+            PackageNames = StoredPolicy.PackageNames.ToArray()
         };
 
         public void Save(NotificationSyncPolicy policy)
@@ -351,7 +509,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
             StoredPolicy = new NotificationSyncPolicy
             {
                 Enabled = policy.Enabled,
-                BlacklistedPackages = policy.BlacklistedPackages.ToArray()
+                Mode = policy.Mode,
+                PackageNames = policy.PackageNames.ToArray()
             };
         }
     }
