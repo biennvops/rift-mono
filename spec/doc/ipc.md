@@ -736,12 +736,21 @@ Returns the locally cached mirrored notification inbox plus the current local no
       "isOpenable": true
     }
   ],
+  "observedApps": [
+    {
+      "packageName": "com.example.chat",
+      "appName": "Example Chat"
+    }
+  ],
   "policy": {
     "enabled": true,
-    "blacklistedPackages": ["com.bank.example"]
+    "mode": "exclude",
+    "packageNames": ["com.bank.example"]
   }
 }
 ```
+
+`observedApps` contains locally observed app identifiers from notification posts/updates, including notifications suppressed by the current local policy. It is a convenience index for local settings; it does not represent mirrored inbox notifications.
 
 #### `rift.performNotificationAction`
 
@@ -769,23 +778,37 @@ Requests a remote action against a mirrored notification when the source marked 
 
 #### `rift.updateNotificationSyncPolicy`
 
-Updates the local notification-sync policy. In v1, the default policy is enabled with an application/package blacklist.
+Updates the local notification-sync policy. Filtering applies only to notification posts and updates originating on this device. Notification removals remain deliverable regardless of the current policy.
 
 **Params:**
 
-| Field                 | Type             | Required | Description                                   |
-| --------------------- | ---------------- | -------- | --------------------------------------------- |
-| `enabled`             | boolean          | Yes      | Whether local notification sync is enabled    |
-| `blacklistedPackages` | array of strings | Yes      | Android package names excluded from syncing   |
+Canonical requests contain all three canonical fields:
+
+| Field          | Type             | Required | Description                                                       |
+| -------------- | ---------------- | -------- | ----------------------------------------------------------------- |
+| `enabled`      | boolean          | Yes      | Whether local notification sync is enabled                        |
+| `mode`         | string           | Yes      | `all`, `exclude`, or `include`                                    |
+| `packageNames` | array of strings | Yes      | Exact, case-sensitive package/app identifiers used by the mode    |
+
+Mode semantics:
+
+- `all`: sync notifications from every app.
+- `exclude`: sync every app except identifiers in `packageNames`.
+- `include`: sync only identifiers in `packageNames`.
+
+Package identifiers are trimmed, empty values are removed, duplicates are removed, and the result is sorted using ordinal/string ordering. A legacy request containing `enabled` and `blacklistedPackages` is accepted as `exclude` (or `all` when the list is empty). Mixing canonical and legacy fields is invalid.
 
 **Result:**
 
 ```json
 {
   "enabled": true,
-  "blacklistedPackages": ["com.bank.example"]
+  "mode": "exclude",
+  "packageNames": ["com.bank.example"]
 }
 ```
+
+**Errors:** `-32602` for an invalid mode, package list, or ambiguous canonical/legacy request.
 
 #### `rift.notifyLocalNotificationEvent`
 

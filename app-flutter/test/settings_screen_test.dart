@@ -75,15 +75,27 @@ void main() {
     });
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
+    when(() => mockClient.listNotifications()).thenAnswer(
+      (_) async => <String, dynamic>{
+        'notifications': <dynamic>[],
+        'policy': <String, dynamic>{
+          'enabled': true,
+          'mode': 'all',
+          'packageNames': <String>[],
+        },
+      },
+    );
     when(
       () => mockClient.updateNotificationSyncPolicy(
         enabled: any(named: 'enabled'),
-        blacklistedPackages: any(named: 'blacklistedPackages'),
+        mode: any(named: 'mode'),
+        packageNames: any(named: 'packageNames'),
       ),
     ).thenAnswer(
       (_) async => {
         'enabled': true,
-        'blacklistedPackages': ['com.bank.example'],
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
       },
     );
     when(
@@ -419,30 +431,51 @@ void main() {
 
     final switches = find.byType(Switch);
     expect(switches, findsAtLeastNWidgets(2));
-    await tester.tap(switches.at(1)); // Android notification sync switch
+    await tester.tap(switches.at(1));
     await tester.pump();
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool(AppPrefs.notificationSyncEnabled), isFalse);
+    expect(prefs.getBool(AppPrefs.notificationSyncPolicyEnabledV2), isFalse);
     expect(
-      prefs.getStringList(AppPrefs.notificationSyncBlacklist),
+      prefs.getString(AppPrefs.notificationSyncPolicyModeV2),
+      'all',
+    );
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncPolicyPackagesV2),
       <String>[],
     );
 
+    await tester.tap(find.text('All except selected apps'));
+    await tester.pump();
     await tester.enterText(
-      find.byType(TextField),
+      find.byKey(const ValueKey('notification-package-input')),
       'com.bank.example',
     );
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
 
+    expect(
+      prefs.getString(AppPrefs.notificationSyncPolicyModeV2),
+      'exclude',
+    );
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncPolicyPackagesV2),
+      ['com.bank.example'],
+    );
     expect(
       prefs.getStringList(AppPrefs.notificationSyncBlacklist),
       ['com.bank.example'],
     );
+    verify(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: false,
+        mode: 'exclude',
+        packageNames: ['com.bank.example'],
+      ),
+    ).called(1);
   });
 
-  testWidgets('SettingsScreen debounces notification blacklist updates',
+  testWidgets('SettingsScreen adds notification packages immediately',
       (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -457,38 +490,146 @@ void main() {
     await pumpLoaded(tester);
     await tester.tap(find.text('Permissions'));
     await pumpLoaded(tester);
+    await tester.tap(find.text('All except selected apps'));
+    await tester.pump();
 
-    final blacklistField = find.byType(TextField);
+    final field = find.byKey(const ValueKey('notification-package-input'));
+    await tester.enterText(field, ' com.example.one ');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await tester.enterText(field, 'com.example.two');
+    await tester.tap(find.text('Add'));
+    await tester.pump();
+    await tester.enterText(field, 'com.example.one');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
 
-    await tester.enterText(blacklistField, 'com.example.one');
-    await tester.pump(const Duration(milliseconds: 100));
-    await tester.enterText(
-      blacklistField,
-      'com.example.one\ncom.example.two',
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncPolicyPackagesV2),
+      ['com.example.one', 'com.example.two'],
     );
-    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('App already selected.'), findsOneWidget);
+  });
 
-    verifyNever(
-      () => mockClient.updateNotificationSyncPolicy(
-        enabled: any(named: 'enabled'),
-        blacklistedPackages: any(named: 'blacklistedPackages'),
+  testWidgets('SettingsScreen migrates a legacy blacklist to exclude mode',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      AppPrefs.notificationSyncEnabled: true,
+      AppPrefs.notificationSyncBlacklist: ['com.legacy.app'],
+    });
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
       ),
     );
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
 
-    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('All except selected apps'), findsOneWidget);
+    expect(find.text('com.legacy.app'), findsOneWidget);
+  });
+
+  testWidgets('SettingsScreen shows the empty include warning',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
+      ),
+    );
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Only selected apps'));
     await tester.pump();
 
     expect(
-      (await SharedPreferences.getInstance())
-          .getStringList(AppPrefs.notificationSyncBlacklist),
-      ['com.example.one', 'com.example.two'],
+      find.text('No apps selected. Notifications will stay on this device.'),
+      findsOneWidget,
     );
-    verify(
-      () => mockClient.updateNotificationSyncPolicy(
-        enabled: true,
-        blacklistedPackages: ['com.example.one', 'com.example.two'],
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getString(AppPrefs.notificationSyncPolicyModeV2),
+      'include',
+    );
+  });
+
+  testWidgets('SettingsScreen offers recently seen local apps only',
+      (WidgetTester tester) async {
+    when(() => mockClient.listNotifications()).thenAnswer(
+      (_) async => <String, dynamic>{
+        'notifications': <dynamic>[
+          {
+            'sourceDeviceId': 'rift-peer',
+            'packageName': 'com.remote.app',
+            'appName': 'Remote App',
+          },
+        ],
+        'observedApps': <dynamic>[
+          {
+            'packageName': 'org.signal',
+            'appName': 'Signal',
+          },
+          {
+            'packageName': 'org.signal',
+            'appName': 'Signal',
+          },
+          {
+            'packageName': 'com.google.android.gm',
+            'appName': 'Gmail',
+          },
+          {
+            'packageName': 'dev.rift.app',
+            'appName': 'Rift',
+          },
+        ],
+        'policy': <String, dynamic>{
+          'enabled': true,
+          'mode': 'all',
+          'packageNames': <String>[],
+        },
+      },
+    );
+    await tester.binding.setSurfaceSize(const Size(1200, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      Provider<JsonRpcRiftClient>.value(
+        value: mockClient,
+        child: const MaterialApp(home: SettingsScreen()),
       ),
-    ).called(1);
+    );
+    await pumpLoaded(tester);
+    await tester.tap(find.text('Permissions'));
+    await pumpLoaded(tester);
+    await tester.tap(find.text('All except selected apps'));
+    await tester.pump();
+
+    expect(find.text('Recently seen apps'), findsOneWidget);
+    expect(find.text('Signal'), findsOneWidget);
+    expect(find.text('org.signal'), findsOneWidget);
+    expect(find.text('Gmail'), findsOneWidget);
+    expect(find.text('com.google.android.gm'), findsOneWidget);
+    expect(find.text('Remote App'), findsNothing);
+    expect(find.text('com.remote.app'), findsNothing);
+    expect(find.text('dev.rift.app'), findsNothing);
+
+    await tester.tap(find.byTooltip('Select Signal'));
+    await tester.pump();
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncPolicyPackagesV2),
+      ['org.signal'],
+    );
   });
 
   testWidgets('SettingsScreen exposes Android notification actions',

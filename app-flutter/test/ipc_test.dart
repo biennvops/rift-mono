@@ -156,9 +156,16 @@ class MockTransport implements IpcTransport {
         'IsOpenable': true,
       }
     ],
+    'ObservedApps': [
+      {
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+      }
+    ],
     'Policy': {
       'Enabled': true,
-      'BlacklistedPackages': ['com.bank.example'],
+      'Mode': 'exclude',
+      'PackageNames': ['com.bank.example'],
     }
   };
   Map<String, dynamic> listMediaPlaybackResult = {
@@ -192,7 +199,8 @@ class MockTransport implements IpcTransport {
   };
   Map<String, dynamic> updateNotificationSyncPolicyResult = {
     'Enabled': true,
-    'BlacklistedPackages': ['com.bank.example'],
+    'Mode': 'exclude',
+    'PackageNames': ['com.bank.example'],
   };
   Map<String, dynamic> notifyLocalNotificationEventResult = {
     'NotificationId': 'notif-1',
@@ -1055,21 +1063,43 @@ void main() {
       );
       final policyResult = await client.updateNotificationSyncPolicy(
         enabled: true,
-        blacklistedPackages: ['com.bank.example'],
+        mode: 'exclude',
+        packageNames: ['com.bank.example'],
       );
 
       expect(localEventResult['notificationId'], 'notif-1');
       expect((listed['notifications'] as List).single['notificationId'],
           'notif-1');
+      expect(listed['observedApps'], [
+        {
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+        }
+      ]);
       expect(listed['policy'], {
         'enabled': true,
-        'blacklistedPackages': ['com.bank.example'],
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
       });
       expect(actionResult['operationId'], 'operation-notification-1');
       expect(policyResult, {
         'enabled': true,
-        'blacklistedPackages': ['com.bank.example'],
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
       });
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.updateNotificationSyncPolicy',
+            )
+            .single['params'],
+        {
+          'enabled': true,
+          'mode': 'exclude',
+          'packageNames': ['com.bank.example'],
+        },
+      );
       expect(
         transport.requests
             .where(

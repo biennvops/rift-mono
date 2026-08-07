@@ -333,12 +333,14 @@ void main() {
     when(
       () => mockClient.updateNotificationSyncPolicy(
         enabled: any(named: 'enabled'),
-        blacklistedPackages: any(named: 'blacklistedPackages'),
+        mode: any(named: 'mode'),
+        packageNames: any(named: 'packageNames'),
       ),
     ).thenAnswer(
       (_) async => {
         'enabled': true,
-        'blacklistedPackages': ['com.bank.example'],
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
       },
     );
     when(
@@ -347,8 +349,10 @@ void main() {
         action: any(named: 'action'),
       ),
     ).thenAnswer((_) async => <String, Object?>{'success': true});
-    when(() => mockClient.onFileProgress).thenAnswer((_) => const Stream.empty());
-    when(() => mockClient.onFileCompleted).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileProgress)
+        .thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileCompleted)
+        .thenAnswer((_) => const Stream.empty());
     when(() => mockClient.onFileFailed).thenAnswer((_) => const Stream.empty());
     when(() => mockClient.connect()).thenAnswer((_) async {});
 
@@ -587,7 +591,8 @@ void main() {
     verifyNever(
       () => mockClient.updateNotificationSyncPolicy(
         enabled: any(named: 'enabled'),
-        blacklistedPackages: any(named: 'blacklistedPackages'),
+        mode: any(named: 'mode'),
+        packageNames: any(named: 'packageNames'),
       ),
     );
 
@@ -599,7 +604,8 @@ void main() {
     verify(
       () => mockClient.updateNotificationSyncPolicy(
         enabled: false,
-        blacklistedPackages: ['com.bank.example'],
+        mode: 'exclude',
+        packageNames: ['com.bank.example'],
       ),
     ).called(1);
   });

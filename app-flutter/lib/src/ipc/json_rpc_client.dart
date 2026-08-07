@@ -285,6 +285,7 @@ class JsonRpcRiftClient {
     'BroadcastTo': 'broadcastTo',
     'RequestId': 'requestId',
     'Notifications': 'notifications',
+    'ObservedApps': 'observedApps',
     'NotificationId': 'notificationId',
     'PackageName': 'packageName',
     'AppName': 'appName',
@@ -299,6 +300,8 @@ class JsonRpcRiftClient {
     'Action': 'action',
     'Success': 'success',
     'BlacklistedPackages': 'blacklistedPackages',
+    'Mode': 'mode',
+    'PackageNames': 'packageNames',
     'Enabled': 'enabled',
     'Policy': 'policy',
     'PlaybackId': 'playbackId',
@@ -1090,11 +1093,13 @@ class JsonRpcRiftClient {
 
   Future<dynamic> updateNotificationSyncPolicy({
     required bool enabled,
-    required List<String> blacklistedPackages,
+    required String mode,
+    required List<String> packageNames,
   }) async {
     return _sendRequest('rift.updateNotificationSyncPolicy', {
       'enabled': enabled,
-      'blacklistedPackages': blacklistedPackages,
+      'mode': mode,
+      'packageNames': packageNames,
     });
   }
 

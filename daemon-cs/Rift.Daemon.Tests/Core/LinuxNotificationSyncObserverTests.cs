@@ -160,7 +160,7 @@ public sealed class LinuxNotificationSyncObserverTests
 
         public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();

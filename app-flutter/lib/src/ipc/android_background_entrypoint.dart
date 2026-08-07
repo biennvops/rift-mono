@@ -14,6 +14,19 @@ import 'json_rpc_client.dart';
 const _backgroundBridgeChannel =
     MethodChannel('rift/android/background_bridge');
 
+Future<bool> restoreSavedNotificationSyncPolicyBeforeFlush(
+  JsonRpcRiftClient client,
+  Future<void> Function() flushNativeEvents,
+) async {
+  try {
+    await pushSavedNotificationSyncPolicy(client);
+    await flushNativeEvents();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 Future<void> runAndroidBackgroundMain() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -21,6 +34,7 @@ Future<void> runAndroidBackgroundMain() async {
   final client = JsonRpcRiftClient(transport);
   final pendingNativeEvents = <Map<String, dynamic>>[];
   var flushingNativeEvents = false;
+  var notificationPolicyReady = false;
 
   Future<void> flushNativeEvents() async {
     if (flushingNativeEvents || !client.isConnected) {
@@ -34,6 +48,12 @@ Future<void> runAndroidBackgroundMain() async {
         if (eventType == null || eventType.isEmpty) {
           pendingNativeEvents.removeAt(0);
           continue;
+        }
+        final isNotificationPostOrUpdate =
+            (eventType == 'posted' || eventType == 'updated') &&
+                event.containsKey('notificationId');
+        if (isNotificationPostOrUpdate && !notificationPolicyReady) {
+          return;
         }
         try {
           if (eventType == 'mediaPlaybackAction') {
@@ -153,11 +173,19 @@ Future<void> runAndroidBackgroundMain() async {
   });
 
   await client.connect();
-  try {
-    await pushSavedNotificationSyncPolicy(client);
-  } catch (_) {
-    // The daemon's default policy remains enabled if preferences are unavailable.
+  Future<void> restorePolicyAndFlushNativeEvents() async {
+    notificationPolicyReady = false;
+    final restored = await restoreSavedNotificationSyncPolicyBeforeFlush(
+      client,
+      () async {
+        notificationPolicyReady = true;
+        await flushNativeEvents();
+      },
+    );
+    notificationPolicyReady = restored;
   }
+
+  await restorePolicyAndFlushNativeEvents();
   transport.rawIncoming.listen((message) {
     unawaited(
       _backgroundBridgeChannel.invokeMethod<void>('daemonMessage', message),
@@ -167,7 +195,9 @@ Future<void> runAndroidBackgroundMain() async {
 
   client.onConnectionChanged.listen((isConnected) {
     if (isConnected) {
-      unawaited(flushNativeEvents());
+      unawaited(restorePolicyAndFlushNativeEvents());
+    } else {
+      notificationPolicyReady = false;
     }
   });
 

@@ -596,15 +596,65 @@ public class RiftApiHandler : IRiftApi
     }
 
     [JsonRpcMethod("rift.updateNotificationSyncPolicy")]
-    public async Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string[] blacklistedPackages)
+    public async Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
+        bool enabled,
+        string? mode = null,
+        string[]? packageNames = null,
+        string[]? blacklistedPackages = null)
     {
         try
         {
-            return await _notificationSyncService.UpdateNotificationSyncPolicyAsync(enabled, blacklistedPackages, CancellationToken.None);
+            var hasCanonicalMode = mode is not null;
+            var hasCanonicalPackageNames = packageNames is not null;
+            var hasLegacyPackages = blacklistedPackages is not null;
+            if (hasLegacyPackages && (hasCanonicalMode || hasCanonicalPackageNames))
+            {
+                throw new NotificationSyncFailureException(
+                    "Canonical and legacy notification sync policy fields cannot be mixed.",
+                    -32602);
+            }
+
+            if (hasCanonicalMode != hasCanonicalPackageNames)
+            {
+                throw new NotificationSyncFailureException(
+                    "Notification sync policy requires both mode and packageNames.",
+                    -32602);
+            }
+
+            string canonicalMode;
+            IReadOnlyList<string> canonicalPackageNames;
+            if (hasLegacyPackages)
+            {
+                canonicalPackageNames = NotificationSyncPolicyModes.NormalizePackageNames(blacklistedPackages!);
+                canonicalMode = canonicalPackageNames.Count == 0
+                    ? NotificationSyncPolicyModes.All
+                    : NotificationSyncPolicyModes.Exclude;
+            }
+            else if (hasCanonicalMode)
+            {
+                canonicalMode = NotificationSyncPolicyModes.Validate(mode);
+                canonicalPackageNames = NotificationSyncPolicyModes.NormalizePackageNames(packageNames!);
+            }
+            else
+            {
+                throw new NotificationSyncFailureException(
+                    "Notification sync policy requires canonical or legacy package fields.",
+                    -32602);
+            }
+
+            return await _notificationSyncService.UpdateNotificationSyncPolicyAsync(
+                enabled,
+                canonicalMode,
+                canonicalPackageNames,
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (NotificationSyncFailureException ex)
         {
             throw new LocalRpcException(ex.Message) { ErrorCode = ex.ErrorCode };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new LocalRpcException(ex.Message) { ErrorCode = -32602 };
         }
     }
 
@@ -821,7 +871,7 @@ public class RiftApiHandler : IRiftApi
 
         public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
-        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, IReadOnlyList<string> blacklistedPackages, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 
         public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw CreateNotConfiguredException();
 

@@ -84,18 +84,55 @@ class _DiscoveredPeerRecord {
       .toList(growable: false);
 }
 
+const String _notificationSyncModeAll = 'all';
+const String _notificationSyncModeExclude = 'exclude';
+const String _notificationSyncModeInclude = 'include';
+
+bool _isValidNotificationSyncMode(String? mode) =>
+    mode == _notificationSyncModeAll ||
+    mode == _notificationSyncModeExclude ||
+    mode == _notificationSyncModeInclude;
+
+String _validateNotificationSyncMode(Object? value) {
+  if (value is! String || !_isValidNotificationSyncMode(value)) {
+    throw ArgumentError.value(
+      value,
+      'mode',
+      'must be one of all, exclude, or include',
+    );
+  }
+  return value;
+}
+
+List<String> _normalizeNotificationSyncPackageNames(Iterable<String?> values) {
+  final normalized = <String>{};
+  for (final value in values) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      normalized.add(trimmed);
+    }
+  }
+  return normalized.toList(growable: false)..sort();
+}
+
 class _NotificationSyncPolicy {
   bool enabled;
-  List<String> blacklistedPackages;
+  String mode;
+  List<String> packageNames;
 
   _NotificationSyncPolicy({
     this.enabled = true,
-    List<String>? blacklistedPackages,
-  }) : blacklistedPackages = List<String>.from(blacklistedPackages ?? const []);
+    String mode = _notificationSyncModeAll,
+    List<String>? packageNames,
+  }) : mode = _validateNotificationSyncMode(mode),
+       packageNames = _normalizeNotificationSyncPackageNames(
+         packageNames ?? const [],
+       );
 
   Map<String, dynamic> toJson() => {
     'enabled': enabled,
-    'blacklistedPackages': List<String>.from(blacklistedPackages),
+    'mode': mode,
+    'packageNames': List<String>.from(packageNames),
   };
 }
 
@@ -477,6 +514,7 @@ class RiftDaemon {
   final Map<String, Map<String, dynamic>> _pendingIncomingMediaPlaybackActions =
       {};
   final Map<String, Timer> _pendingIncomingMediaPlaybackActionTimers = {};
+  final Map<String, String> _notificationSyncObservedApps = {};
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
@@ -843,42 +881,37 @@ class RiftDaemon {
     }
   }
 
-  List<String> _normalizeNotificationSyncBlacklist(Object? value) {
-    if (value == null) {
-      return const <String>[];
-    }
+  List<String> _parseNotificationSyncPackageNames(
+    Object? value,
+    String fieldName,
+  ) {
     if (value is! List) {
-      throw ArgumentError.value(
-        value,
-        'blacklistedPackages',
-        'must be a list of strings',
-      );
+      throw ArgumentError.value(value, fieldName, 'must be a list of strings');
     }
 
-    final normalized = <String>{};
+    final packageNames = <String?>[];
     for (final entry in value) {
       if (entry is! String) {
         throw ArgumentError.value(
           value,
-          'blacklistedPackages',
+          fieldName,
           'must be a list of strings',
         );
       }
-      final trimmed = entry.trim();
-      if (trimmed.isNotEmpty) {
-        normalized.add(trimmed);
-      }
+      packageNames.add(entry);
     }
-    return normalized.toList(growable: false)..sort();
+    return _normalizeNotificationSyncPackageNames(packageNames);
   }
 
   Future<Map<String, dynamic>> _updateNotificationSyncPolicy({
     required bool enabled,
-    required List<String> blacklistedPackages,
+    required String mode,
+    required List<String> packageNames,
   }) async {
     _notificationSyncPolicy = _NotificationSyncPolicy(
       enabled: enabled,
-      blacklistedPackages: blacklistedPackages,
+      mode: mode,
+      packageNames: packageNames,
     );
     return _notificationSyncPolicy.toJson();
   }
@@ -1651,8 +1684,17 @@ class RiftDaemon {
           final bPostedAt = b['postedAt'] as String? ?? '';
           return bPostedAt.compareTo(aPostedAt);
         });
+    final observedApps = _notificationSyncObservedApps.entries.toList()
+      ..sort((a, b) {
+        final byName = a.value.compareTo(b.value);
+        return byName != 0 ? byName : a.key.compareTo(b.key);
+      });
     return {
       'notifications': notifications,
+      'observedApps': [
+        for (final entry in observedApps)
+          {'packageName': entry.key, 'appName': entry.value},
+      ],
       'policy': _notificationSyncPolicy.toJson(),
     };
   }
@@ -1695,8 +1737,21 @@ class RiftDaemon {
     return record;
   }
 
-  bool _isNotificationBlacklisted(String packageName) {
-    return _notificationSyncPolicy.blacklistedPackages.contains(packageName);
+  bool _shouldSyncNotification(String packageName) {
+    if (!_notificationSyncPolicy.enabled) {
+      return false;
+    }
+
+    switch (_notificationSyncPolicy.mode) {
+      case _notificationSyncModeAll:
+        return true;
+      case _notificationSyncModeExclude:
+        return !_notificationSyncPolicy.packageNames.contains(packageName);
+      case _notificationSyncModeInclude:
+        return _notificationSyncPolicy.packageNames.contains(packageName);
+      default:
+        return false;
+    }
   }
 
   Future<List<String>> _broadcastNotificationSyncEnvelope({
@@ -1750,6 +1805,17 @@ class RiftDaemon {
           sourceDeviceId: localDeviceId,
         );
 
+        final packageName = record['packageName'] as String;
+        _notificationSyncObservedApps[packageName] =
+            record['appName'] as String;
+        if (!_shouldSyncNotification(packageName)) {
+          return {
+            'notificationId': notificationId,
+            'broadcastTo': const <String>[],
+            'suppressed': true,
+          };
+        }
+
         _notificationSyncRecords[_notificationRecordKey(
               localDeviceId,
               notificationId,
@@ -1764,24 +1830,17 @@ class RiftDaemon {
           'params': record,
         });
 
-        var broadcastTo = const <String>[];
-        final packageName = record['packageName'] as String;
-        if (_notificationSyncPolicy.enabled &&
-            !_isNotificationBlacklisted(packageName)) {
-          broadcastTo = await _broadcastNotificationSyncEnvelope(
-            messageType: eventType == 'posted'
-                ? 'notification.posted'
-                : 'notification.updated',
-            payload: record,
-          );
-        }
+        final broadcastTo = await _broadcastNotificationSyncEnvelope(
+          messageType: eventType == 'posted'
+              ? 'notification.posted'
+              : 'notification.updated',
+          payload: record,
+        );
 
         return {
           'notificationId': notificationId,
           'broadcastTo': broadcastTo,
-          'suppressed':
-              !_notificationSyncPolicy.enabled ||
-              _isNotificationBlacklisted(packageName),
+          'suppressed': false,
         };
       case 'removed':
         final removedPayload = <String, dynamic>{
@@ -2817,12 +2876,47 @@ class RiftDaemon {
         if (enabled is! bool) {
           throw ArgumentError.value(enabled, 'enabled', 'must be a boolean');
         }
-        final blacklist = _normalizeNotificationSyncBlacklist(
-          params['blacklistedPackages'],
-        );
+
+        final hasMode = params.containsKey('mode');
+        final hasPackageNames = params.containsKey('packageNames');
+        final hasLegacyPackages = params.containsKey('blacklistedPackages');
+        if (hasLegacyPackages && (hasMode || hasPackageNames)) {
+          throw ArgumentError(
+            'Canonical and legacy notification sync policy fields cannot be mixed',
+          );
+        }
+        if (hasMode != hasPackageNames) {
+          throw ArgumentError(
+            'Notification sync policy requires both mode and packageNames',
+          );
+        }
+
+        late final String mode;
+        late final List<String> packageNames;
+        if (hasLegacyPackages) {
+          packageNames = _parseNotificationSyncPackageNames(
+            params['blacklistedPackages'],
+            'blacklistedPackages',
+          );
+          mode = packageNames.isEmpty
+              ? _notificationSyncModeAll
+              : _notificationSyncModeExclude;
+        } else if (hasMode) {
+          mode = _validateNotificationSyncMode(params['mode']);
+          packageNames = _parseNotificationSyncPackageNames(
+            params['packageNames'],
+            'packageNames',
+          );
+        } else {
+          throw ArgumentError(
+            'Notification sync policy requires canonical or legacy package fields',
+          );
+        }
+
         return _updateNotificationSyncPolicy(
           enabled: enabled,
-          blacklistedPackages: blacklist,
+          mode: mode,
+          packageNames: packageNames,
         );
 
       case 'rift.listClipboardOffers':

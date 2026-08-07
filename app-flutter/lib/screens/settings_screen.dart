@@ -42,8 +42,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _activeTab = '';
-  static const Duration _notificationPolicyDebounce =
-      Duration(milliseconds: 300);
   static const _androidTestNotificationPackage = 'dev.rift.app';
   static const _androidTestNotificationAppName = 'Rift';
   static const _desktopTestNotificationPackage = 'dev.rift.desktop.test';
@@ -55,9 +53,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _notificationAccessStatus = 'unknown';
   bool _clipboardNotificationsEnabled = false;
   bool _notificationSyncEnabled = true;
-  final TextEditingController _notificationBlacklistController =
+  NotificationSyncPolicyMode _notificationSyncPolicyMode =
+      NotificationSyncPolicyMode.all;
+  List<String> _notificationSyncPackageNames = const <String>[];
+  List<NotificationSyncObservedApp> _recentlySeenNotificationApps =
+      const <NotificationSyncObservedApp>[];
+  final TextEditingController _notificationPackageController =
       TextEditingController();
-  Timer? _notificationPolicyDebounceTimer;
+  String? _notificationPackageMessage;
   StreamSubscription<bool>? _connectionSubscription;
   String? _defaultDownloadPath;
   double _sidebarWidth = 220.0;
@@ -80,8 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _connectionSubscription?.cancel();
-    _notificationPolicyDebounceTimer?.cancel();
-    _notificationBlacklistController.dispose();
+    _notificationPackageController.dispose();
     super.dispose();
   }
 
@@ -95,22 +97,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
       final data = await client.getDeviceInfo();
+      final deviceInfo =
+          data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
       final notificationStatus = await _loadNotificationPermissionStatus();
       final notificationAccessStatus = await _loadNotificationAccessStatus();
+      final policy = await loadNotificationSyncPolicyPreferences();
+      final recentlySeenApps = await _loadRecentlySeenNotificationApps(
+        client,
+        deviceInfo,
+      );
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
       setState(() {
-        _deviceInfo = data as Map<String, dynamic>?;
+        _deviceInfo = deviceInfo;
         _notificationPermissionStatus = notificationStatus;
         _notificationAccessStatus = notificationAccessStatus;
         _clipboardNotificationsEnabled =
             prefs.getBool(AppPrefs.clipboardNotificationsEnabled) ?? false;
-        _notificationSyncEnabled =
-            prefs.getBool(AppPrefs.notificationSyncEnabled) ?? true;
-        _notificationBlacklistController.text =
-            (prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
-                    const <String>[])
-                .join('\n');
+        _notificationSyncEnabled = policy.enabled;
+        _notificationSyncPolicyMode = policy.mode;
+        _notificationSyncPackageNames = policy.packageNames;
+        _recentlySeenNotificationApps = recentlySeenApps;
         _defaultDownloadPath = prefs.getString(AppPrefs.defaultDownloadPath);
         _isLoading = false;
       });
@@ -120,6 +127,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _error = JsonRpcRiftClient.formatDisplayError(e);
         _isLoading = false;
       });
+    }
+  }
+
+  Future<List<NotificationSyncObservedApp>> _loadRecentlySeenNotificationApps(
+    JsonRpcRiftClient client,
+    Map<String, dynamic> deviceInfo,
+  ) async {
+    final localDeviceId = deviceInfo['deviceId'];
+
+    try {
+      final result = await client.listNotifications();
+      if (result is! Map) {
+        return const <NotificationSyncObservedApp>[];
+      }
+
+      final appsByPackage = <String, NotificationSyncObservedApp>{};
+      void addObservedApp(Object? item) {
+        if (item is! Map) {
+          return;
+        }
+        final observed = Map<String, dynamic>.from(item);
+        final packageName = observed['packageName'];
+        if (packageName is! String ||
+            packageName.isEmpty ||
+            packageName == _androidTestNotificationPackage ||
+            packageName == _desktopTestNotificationPackage) {
+          return;
+        }
+        final appName = observed['appName'];
+        final app = NotificationSyncObservedApp(
+          packageName: packageName,
+          appName: appName is String && appName.trim().isNotEmpty
+              ? appName.trim()
+              : packageName,
+        );
+        final previous = appsByPackage[packageName];
+        if (previous == null || previous.appName == packageName) {
+          appsByPackage[packageName] = app;
+        }
+      }
+
+      final observedApps = result['observedApps'];
+      if (observedApps is List) {
+        for (final item in observedApps) {
+          addObservedApp(item);
+        }
+      } else if (localDeviceId is String &&
+          localDeviceId.isNotEmpty &&
+          result['notifications'] is List) {
+        // Compatibility fallback for daemons predating the observed-app index.
+        for (final item in result['notifications'] as List) {
+          if (item is Map && item['sourceDeviceId'] == localDeviceId) {
+            addObservedApp(item);
+          }
+        }
+      }
+
+      final apps = appsByPackage.values.toList();
+      apps.sort((a, b) {
+        final byName = a.appName.compareTo(b.appName);
+        return byName != 0 ? byName : a.packageName.compareTo(b.packageName);
+      });
+      return apps;
+    } catch (_) {
+      return const <NotificationSyncObservedApp>[];
     }
   }
 
@@ -319,20 +391,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  List<String> _notificationBlacklistPackages() {
-    return _notificationBlacklistController.text
-        .split(RegExp(r'[\n,]'))
-        .map((item) => item.trim())
-        .where((item) => item.isNotEmpty)
-        .toSet()
-        .toList(growable: false);
-  }
-
   Future<void> _persistNotificationSyncPolicy() async {
-    final blacklist = _notificationBlacklistPackages();
+    final packageNames = normalizeNotificationPackageNames(
+      _notificationSyncPackageNames,
+    );
     await persistNotificationSyncPolicyPreferences(
       enabled: _notificationSyncEnabled,
-      blacklistedPackages: blacklist,
+      mode: _notificationSyncPolicyMode,
+      packageNames: packageNames,
     );
     if (!mounted) {
       return;
@@ -344,7 +410,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await client.updateNotificationSyncPolicy(
         enabled: _notificationSyncEnabled,
-        blacklistedPackages: blacklist,
+        mode: notificationSyncPolicyModeToWire(_notificationSyncPolicyMode),
+        packageNames: packageNames,
       );
     } catch (error) {
       if (JsonRpcRiftClient.isMethodNotFoundError(error)) {
@@ -361,12 +428,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  void _scheduleNotificationSyncPolicyPersist() {
-    _notificationPolicyDebounceTimer?.cancel();
-    _notificationPolicyDebounceTimer = Timer(
-      _notificationPolicyDebounce,
-      _persistNotificationSyncPolicy,
-    );
+  Future<void> _setNotificationSyncPolicyMode(
+    NotificationSyncPolicyMode mode,
+  ) async {
+    if (!mounted) return;
+    setState(() {
+      _notificationSyncPolicyMode = mode;
+      _notificationPackageMessage = null;
+    });
+    await _persistNotificationSyncPolicy();
+  }
+
+  Future<void> _addNotificationPackage(String value) async {
+    final packageName = value.trim();
+    if (packageName.isEmpty) {
+      return;
+    }
+    if (_notificationSyncPackageNames.contains(packageName)) {
+      if (!mounted) return;
+      setState(() {
+        _notificationPackageMessage = 'App already selected.';
+      });
+      return;
+    }
+
+    setState(() {
+      _notificationSyncPackageNames = normalizeNotificationPackageNames([
+        ..._notificationSyncPackageNames,
+        packageName,
+      ]);
+      _notificationPackageMessage = null;
+    });
+    _notificationPackageController.clear();
+    await _persistNotificationSyncPolicy();
+  }
+
+  Future<void> _removeNotificationPackage(String packageName) async {
+    setState(() {
+      _notificationSyncPackageNames = _notificationSyncPackageNames
+          .where((value) => value != packageName)
+          .toList(growable: false);
+      _notificationPackageMessage = null;
+    });
+    await _persistNotificationSyncPolicy();
+  }
+
+  Future<void> _selectRecentlySeenApp(String packageName) async {
+    await _addNotificationPackage(packageName);
+  }
+
+  NotificationSyncObservedApp? _observedAppForPackage(String packageName) {
+    for (final app in _recentlySeenNotificationApps) {
+      if (app.packageName == packageName) {
+        return app;
+      }
+    }
+    return null;
   }
 
   bool get _canManageNotificationSettings =>
@@ -1001,10 +1118,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         _buildRow(
           theme: theme,
-          title: 'Android notification sync',
-          subtitle: _notificationAccessAuthorized
-              ? 'Mirror to trusted desktop devices'
-              : 'Enable Android notification access to sync',
+          title: 'Sync notifications',
+          subtitle: 'Send this device\'s notifications to trusted devices.',
           titleBadge: _buildAndroidBadge(theme),
           trailingBelow: false,
           trailing: Switch(
@@ -1017,62 +1132,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            border: Border(
-                bottom: BorderSide(
-                    color: theme.colorScheme.outlineVariant
-                        .withValues(alpha: 0.4))),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Notification blacklist',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    height: 24 / 16,
-                    color: theme.colorScheme.onSurface,
-                  )),
-              const SizedBox(height: 2),
-              Text('One package per line. Blocked apps stay local.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w400,
-                    height: 20 / 14,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  )),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _notificationBlacklistController,
-                minLines: 2,
-                maxLines: 4,
-                // Giữ mono cho dữ liệu kỹ thuật (package names)
-                style:
-                    const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 14),
-                onChanged: (_) => _scheduleNotificationSyncPolicyPersist(),
-                decoration: InputDecoration(
-                  filled: false,
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide:
-                          BorderSide(color: theme.colorScheme.outlineVariant)),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(
-                          color: theme.colorScheme.outlineVariant
-                              .withValues(alpha: 0.6))),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(4),
-                      borderSide: BorderSide(
-                          color: theme.colorScheme.primaryContainer, width: 2)),
-                  contentPadding: const EdgeInsets.all(12),
-                ),
-              ),
-            ],
-          ),
-        ),
+        _buildNotificationPolicyEditor(theme),
         if (AndroidShell.isSupported)
           Padding(
             padding: const EdgeInsets.only(top: 16),
@@ -1084,6 +1144,229 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _buildNotificationPolicyEditor(ThemeData theme) {
+    final selectedApps = _notificationSyncPackageNames;
+    final recentlySeenApps = _recentlySeenNotificationApps
+        .where((app) => !selectedApps.contains(app.packageName))
+        .toList(growable: false);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Apps to sync',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              height: 24 / 16,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 4),
+          RadioGroup<NotificationSyncPolicyMode>(
+            groupValue: _notificationSyncPolicyMode,
+            onChanged: (value) {
+              if (value != null) {
+                unawaited(_setNotificationSyncPolicyMode(value));
+              }
+            },
+            child: Column(
+              children: [
+                _buildNotificationPolicyModeOption(
+                  theme: theme,
+                  mode: NotificationSyncPolicyMode.all,
+                  title: 'All apps',
+                  description: 'Sync notifications from every app.',
+                ),
+                _buildNotificationPolicyModeOption(
+                  theme: theme,
+                  mode: NotificationSyncPolicyMode.exclude,
+                  title: 'All except selected apps',
+                  description:
+                      'Keep notifications from selected apps on this device.',
+                ),
+                _buildNotificationPolicyModeOption(
+                  theme: theme,
+                  mode: NotificationSyncPolicyMode.include,
+                  title: 'Only selected apps',
+                  description: 'Sync notifications only from selected apps.',
+                ),
+              ],
+            ),
+          ),
+          if (_notificationSyncPolicyMode !=
+              NotificationSyncPolicyMode.all) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Selected apps',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
+            if (selectedApps.isNotEmpty)
+              ...selectedApps.map(
+                (packageName) => _buildSelectedNotificationApp(
+                  theme,
+                  packageName,
+                ),
+              ),
+            if (_notificationSyncPolicyMode ==
+                    NotificationSyncPolicyMode.include &&
+                selectedApps.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'No apps selected. Notifications will stay on this device.',
+                  style: TextStyle(
+                    color: theme.colorScheme.error,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey('notification-package-input'),
+                    controller: _notificationPackageController,
+                    textInputAction: TextInputAction.done,
+                    style: const TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontSize: 14,
+                    ),
+                    onSubmitted: (value) =>
+                        unawaited(_addNotificationPackage(value)),
+                    decoration: InputDecoration(
+                      labelText: 'Package / app identifier',
+                      hintText: 'com.example.app',
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _buildPrimaryButton(
+                  theme: theme,
+                  label: 'Add',
+                  onPressed: () => unawaited(
+                    _addNotificationPackage(
+                      _notificationPackageController.text,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_notificationPackageMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  _notificationPackageMessage!,
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            if (recentlySeenApps.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Recently seen apps',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              ...recentlySeenApps.map(
+                (app) => Material(
+                  color: Colors.transparent,
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    leading: IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      tooltip: 'Select ${app.appName}',
+                      onPressed: () =>
+                          unawaited(_selectRecentlySeenApp(app.packageName)),
+                    ),
+                    title: Text(app.appName),
+                    subtitle: Text(
+                      app.packageName,
+                      style: const TextStyle(fontFamily: 'JetBrains Mono'),
+                    ),
+                    onTap: () =>
+                        unawaited(_selectRecentlySeenApp(app.packageName)),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNotificationPolicyModeOption({
+    required ThemeData theme,
+    required NotificationSyncPolicyMode mode,
+    required String title,
+    required String description,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: RadioListTile<NotificationSyncPolicyMode>(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        value: mode,
+        title: Text(title),
+        subtitle: Text(description),
+      ),
+    );
+  }
+
+  Widget _buildSelectedNotificationApp(
+    ThemeData theme,
+    String packageName,
+  ) {
+    final observed = _observedAppForPackage(packageName);
+    return Material(
+      color: Colors.transparent,
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        title: Text(observed?.appName ?? packageName),
+        subtitle: observed == null || observed.appName == packageName
+            ? null
+            : Text(
+                packageName,
+                style: const TextStyle(fontFamily: 'JetBrains Mono'),
+              ),
+        trailing: IconButton(
+          icon: const Icon(Icons.close),
+          tooltip: 'Remove ${observed?.appName ?? packageName}',
+          onPressed: () => unawaited(_removeNotificationPackage(packageName)),
+        ),
+      ),
     );
   }
 

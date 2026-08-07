@@ -96,7 +96,8 @@ public sealed class DatabaseContext
             CREATE TABLE IF NOT EXISTS NotificationSyncPolicy (
                 Id INTEGER NOT NULL PRIMARY KEY CHECK (Id = 1),
                 Enabled INTEGER NOT NULL,
-                BlacklistedPackagesJson TEXT NOT NULL
+                BlacklistedPackagesJson TEXT NOT NULL,
+                PolicyJson TEXT NULL
             );
 
             CREATE INDEX IF NOT EXISTS IX_SecurityEvents_Timestamp
@@ -121,6 +122,7 @@ public sealed class DatabaseContext
         EnsureColumnExists(connection, "Peers", "DisplayName", "TEXT NULL");
         EnsureColumnExists(connection, "Peers", "Platform", "TEXT NOT NULL DEFAULT 'unknown'");
         EnsureColumnExists(connection, "Peers", "TrustedEndpointsJson", "TEXT NULL");
+        EnsureColumnExists(connection, "NotificationSyncPolicy", "PolicyJson", "TEXT NULL");
     }
 
     public SqliteConnection CreateOpenConnection()
