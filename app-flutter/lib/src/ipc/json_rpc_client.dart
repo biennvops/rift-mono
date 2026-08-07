@@ -285,6 +285,7 @@ class JsonRpcRiftClient {
     'BroadcastTo': 'broadcastTo',
     'RequestId': 'requestId',
     'Notifications': 'notifications',
+    'ObservedApps': 'observedApps',
     'NotificationId': 'notificationId',
     'PackageName': 'packageName',
     'AppName': 'appName',

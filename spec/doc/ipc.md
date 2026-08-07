@@ -736,6 +736,12 @@ Returns the locally cached mirrored notification inbox plus the current local no
       "isOpenable": true
     }
   ],
+  "observedApps": [
+    {
+      "packageName": "com.example.chat",
+      "appName": "Example Chat"
+    }
+  ],
   "policy": {
     "enabled": true,
     "mode": "exclude",
@@ -743,6 +749,8 @@ Returns the locally cached mirrored notification inbox plus the current local no
   }
 }
 ```
+
+`observedApps` contains locally observed app identifiers from notification posts/updates, including notifications suppressed by the current local policy. It is a convenience index for local settings; it does not represent mirrored inbox notifications.
 
 #### `rift.performNotificationAction`
 

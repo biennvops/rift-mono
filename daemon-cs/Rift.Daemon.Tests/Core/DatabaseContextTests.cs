@@ -154,6 +154,25 @@ public sealed class DatabaseContextTests : IDisposable
     }
 
     [Fact]
+    public void NotificationSyncPolicyStore_FailsClosedForWhitespaceOnlyLegacyPackage()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson, PolicyJson) VALUES (1, 1, '[\"   \"]', NULL);";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, restored.Mode);
+        Assert.Empty(restored.PackageNames);
+    }
+
+    [Fact]
     public void NotificationSyncPolicyStore_FailsClosedForMalformedCanonicalPolicy()
     {
         _databaseContext.Initialize();

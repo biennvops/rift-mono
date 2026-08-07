@@ -217,6 +217,44 @@ void main() {
       expect((await notify('disabled', 'com.allowed'))['suppressed'], isTrue);
     });
 
+    test('records observed apps before include filtering', () async {
+      await daemon.handleJsonRpcRequest({
+        'jsonrpc': '2.0',
+        'id': 21,
+        'method': 'rift.updateNotificationSyncPolicy',
+        'params': {
+          'enabled': true,
+          'mode': 'include',
+          'packageNames': <String>[],
+        },
+      });
+      final posted = await daemon.handleJsonRpcRequest({
+        'jsonrpc': '2.0',
+        'id': 22,
+        'method': 'rift.notifyLocalNotificationEvent',
+        'params': {
+          'eventType': 'posted',
+          'notificationId': 'telegram-1',
+          'packageName': 'org.telegram.messenger',
+          'appName': 'Telegram',
+          'postedAt': '2026-07-15T08:30:00.000Z',
+          'isDismissible': true,
+          'isOpenable': false,
+        },
+      });
+
+      expect(posted['suppressed'], isTrue);
+      final listed = await daemon.handleJsonRpcRequest({
+        'jsonrpc': '2.0',
+        'id': 23,
+        'method': 'rift.listNotifications',
+      });
+      expect(listed['notifications'], isEmpty);
+      expect(listed['observedApps'], [
+        {'packageName': 'org.telegram.messenger', 'appName': 'Telegram'},
+      ]);
+    });
+
     test(
       'normalizes canonical policy package names and returns canonical JSON',
       () async {

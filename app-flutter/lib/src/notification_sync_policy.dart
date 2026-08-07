@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants.dart';
@@ -66,34 +68,38 @@ class NotificationSyncObservedApp {
   });
 }
 
+class _LegacyNotificationSyncPolicy {
+  final bool enabled;
+  final List<String> packageNames;
+  final bool isPresent;
+
+  const _LegacyNotificationSyncPolicy({
+    required this.enabled,
+    required this.packageNames,
+    required this.isPresent,
+  });
+}
+
 Future<NotificationSyncPolicyPreferences>
     loadNotificationSyncPolicyPreferences() async {
   final prefs = await SharedPreferences.getInstance();
   final v2 = _loadV2Preferences(prefs);
   if (v2 != null) {
+    final legacy = _loadLegacyPreferences(prefs);
+    final expectedLegacy =
+        _loadLegacyProjection(prefs) ?? _legacyProjectionForPolicy(v2);
+    if (legacy.isPresent && !_legacyPoliciesEqual(legacy, expectedLegacy)) {
+      final migrated = _policyFromLegacy(legacy);
+      await _persistPolicy(prefs, migrated);
+      return migrated;
+    }
+
     await _persistPolicy(prefs, v2);
     return v2;
   }
 
-  bool enabled = true;
-  List<String> legacyPackages = const <String>[];
-  try {
-    enabled = prefs.getBool(AppPrefs.notificationSyncEnabled) ?? true;
-    legacyPackages = prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
-        const <String>[];
-  } catch (_) {
-    enabled = true;
-    legacyPackages = const <String>[];
-  }
-
-  final normalizedPackages = normalizeNotificationPackageNames(legacyPackages);
-  final policy = NotificationSyncPolicyPreferences(
-    enabled: enabled,
-    mode: normalizedPackages.isEmpty
-        ? NotificationSyncPolicyMode.all
-        : NotificationSyncPolicyMode.exclude,
-    packageNames: normalizedPackages,
-  );
+  final legacy = _loadLegacyPreferences(prefs);
+  final policy = _policyFromLegacy(legacy);
   await _persistPolicy(prefs, policy);
   return policy;
 }
@@ -125,6 +131,101 @@ Future<void> pushSavedNotificationSyncPolicy(
     mode: notificationSyncPolicyModeToWire(policy.mode),
     packageNames: policy.packageNames,
   );
+}
+
+_LegacyNotificationSyncPolicy _loadLegacyPreferences(
+  SharedPreferences prefs,
+) {
+  final isPresent = prefs.containsKey(AppPrefs.notificationSyncEnabled) ||
+      prefs.containsKey(AppPrefs.notificationSyncBlacklist);
+  try {
+    return _LegacyNotificationSyncPolicy(
+      enabled: prefs.getBool(AppPrefs.notificationSyncEnabled) ?? true,
+      packageNames: normalizeNotificationPackageNames(
+        prefs.getStringList(AppPrefs.notificationSyncBlacklist) ??
+            const <String>[],
+      ),
+      isPresent: isPresent,
+    );
+  } catch (_) {
+    return _LegacyNotificationSyncPolicy(
+      enabled: true,
+      packageNames: const <String>[],
+      isPresent: isPresent,
+    );
+  }
+}
+
+NotificationSyncPolicyPreferences _policyFromLegacy(
+  _LegacyNotificationSyncPolicy legacy,
+) {
+  return NotificationSyncPolicyPreferences(
+    enabled: legacy.enabled,
+    mode: legacy.packageNames.isEmpty
+        ? NotificationSyncPolicyMode.all
+        : NotificationSyncPolicyMode.exclude,
+    packageNames: legacy.packageNames,
+  );
+}
+
+_LegacyNotificationSyncPolicy _legacyProjectionForPolicy(
+  NotificationSyncPolicyPreferences policy,
+) {
+  return _LegacyNotificationSyncPolicy(
+    enabled: policy.mode == NotificationSyncPolicyMode.include
+        ? false
+        : policy.enabled,
+    packageNames: policy.mode == NotificationSyncPolicyMode.exclude
+        ? policy.packageNames
+        : const <String>[],
+    isPresent: true,
+  );
+}
+
+bool _legacyPoliciesEqual(
+  _LegacyNotificationSyncPolicy first,
+  _LegacyNotificationSyncPolicy second,
+) {
+  if (first.enabled != second.enabled ||
+      first.packageNames.length != second.packageNames.length) {
+    return false;
+  }
+  for (var index = 0; index < first.packageNames.length; index++) {
+    if (first.packageNames[index] != second.packageNames[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+_LegacyNotificationSyncPolicy? _loadLegacyProjection(
+  SharedPreferences prefs,
+) {
+  try {
+    final raw =
+        prefs.getString(AppPrefs.notificationSyncPolicyLegacyProjectionV2);
+    if (raw == null) {
+      return null;
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map || decoded['enabled'] is! bool) {
+      return null;
+    }
+    final packageNames = decoded['blacklistedPackages'];
+    if (packageNames is! List ||
+        packageNames.any((value) => value is! String)) {
+      return null;
+    }
+    return _LegacyNotificationSyncPolicy(
+      enabled: decoded['enabled'] as bool,
+      packageNames: normalizeNotificationPackageNames(
+        packageNames.cast<String>(),
+      ),
+      isPresent: true,
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 NotificationSyncPolicyPreferences? _loadV2Preferences(
@@ -176,4 +277,11 @@ Future<void> _persistPolicy(
       : const <String>[];
   await prefs.setBool(AppPrefs.notificationSyncEnabled, legacyEnabled);
   await prefs.setStringList(AppPrefs.notificationSyncBlacklist, legacyPackages);
+  await prefs.setString(
+    AppPrefs.notificationSyncPolicyLegacyProjectionV2,
+    jsonEncode({
+      'enabled': legacyEnabled,
+      'blacklistedPackages': legacyPackages,
+    }),
+  );
 }

@@ -102,8 +102,12 @@ public sealed class SqliteNotificationSyncPolicyStore(DatabaseContext databaseCo
             return CreateFailClosedPolicy();
         }
 
-        var packageNames = JsonSerializer.Deserialize<List<string?>>(reader.GetString(1))
-            ?? throw new JsonException("Legacy notification sync blacklist must be an array.");
+        var packageNames = JsonSerializer.Deserialize<string[]>(reader.GetString(1));
+        if (packageNames is null || packageNames.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new JsonException("Legacy notification sync blacklist contains an invalid package name.");
+        }
+
         var normalizedPackageNames = NotificationSyncPolicyModes.NormalizePackageNames(packageNames);
         return new NotificationSyncPolicy
         {

@@ -156,6 +156,12 @@ class MockTransport implements IpcTransport {
         'IsOpenable': true,
       }
     ],
+    'ObservedApps': [
+      {
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+      }
+    ],
     'Policy': {
       'Enabled': true,
       'Mode': 'exclude',
@@ -1064,6 +1070,12 @@ void main() {
       expect(localEventResult['notificationId'], 'notif-1');
       expect((listed['notifications'] as List).single['notificationId'],
           'notif-1');
+      expect(listed['observedApps'], [
+        {
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+        }
+      ]);
       expect(listed['policy'], {
         'enabled': true,
         'mode': 'exclude',

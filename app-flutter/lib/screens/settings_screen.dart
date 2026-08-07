@@ -135,34 +135,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Map<String, dynamic> deviceInfo,
   ) async {
     final localDeviceId = deviceInfo['deviceId'];
-    if (localDeviceId is! String || localDeviceId.isEmpty) {
-      return const <NotificationSyncObservedApp>[];
-    }
 
     try {
       final result = await client.listNotifications();
-      if (result is! Map || result['notifications'] is! List) {
+      if (result is! Map) {
         return const <NotificationSyncObservedApp>[];
       }
 
       final appsByPackage = <String, NotificationSyncObservedApp>{};
-      for (final item in result['notifications'] as List) {
+      void addObservedApp(Object? item) {
         if (item is! Map) {
-          continue;
+          return;
         }
-        final notification = Map<String, dynamic>.from(item);
-        if (notification['sourceDeviceId'] != localDeviceId) {
-          continue;
-        }
-        final packageName = notification['packageName'];
+        final observed = Map<String, dynamic>.from(item);
+        final packageName = observed['packageName'];
         if (packageName is! String ||
             packageName.isEmpty ||
             packageName == _androidTestNotificationPackage ||
             packageName == _desktopTestNotificationPackage) {
-          continue;
+          return;
         }
-        final appName = notification['appName'];
-        final observed = NotificationSyncObservedApp(
+        final appName = observed['appName'];
+        final app = NotificationSyncObservedApp(
           packageName: packageName,
           appName: appName is String && appName.trim().isNotEmpty
               ? appName.trim()
@@ -170,7 +164,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         );
         final previous = appsByPackage[packageName];
         if (previous == null || previous.appName == packageName) {
-          appsByPackage[packageName] = observed;
+          appsByPackage[packageName] = app;
+        }
+      }
+
+      final observedApps = result['observedApps'];
+      if (observedApps is List) {
+        for (final item in observedApps) {
+          addObservedApp(item);
+        }
+      } else if (localDeviceId is String &&
+          localDeviceId.isNotEmpty &&
+          result['notifications'] is List) {
+        // Compatibility fallback for daemons predating the observed-app index.
+        for (final item in result['notifications'] as List) {
+          if (item is Map && item['sourceDeviceId'] == localDeviceId) {
+            addObservedApp(item);
+          }
         }
       }
 

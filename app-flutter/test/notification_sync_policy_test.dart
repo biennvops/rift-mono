@@ -50,10 +50,11 @@ void main() {
     expect(policy.packageNames, isEmpty);
   });
 
-  test('valid v2 preferences win over legacy state', () async {
+  test('valid v2 preferences win when the legacy mirror is unchanged',
+      () async {
     SharedPreferences.setMockInitialValues({
-      AppPrefs.notificationSyncEnabled: true,
-      AppPrefs.notificationSyncBlacklist: ['com.legacy'],
+      AppPrefs.notificationSyncEnabled: false,
+      AppPrefs.notificationSyncBlacklist: <String>[],
       AppPrefs.notificationSyncPolicyEnabledV2: true,
       AppPrefs.notificationSyncPolicyModeV2: 'include',
       AppPrefs.notificationSyncPolicyPackagesV2: ['com.current'],
@@ -64,6 +65,35 @@ void main() {
     expect(policy.enabled, isTrue);
     expect(policy.mode, NotificationSyncPolicyMode.include);
     expect(policy.packageNames, ['com.current']);
+  });
+
+  test('downgrade-era legacy edits migrate over stale v2 preferences',
+      () async {
+    await persistNotificationSyncPolicyPreferences(
+      enabled: true,
+      mode: NotificationSyncPolicyMode.include,
+      packageNames: ['com.signal'],
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(AppPrefs.notificationSyncEnabled, true);
+    await prefs.setStringList(
+      AppPrefs.notificationSyncBlacklist,
+      ['com.bank'],
+    );
+
+    final policy = await loadNotificationSyncPolicyPreferences();
+
+    expect(policy.enabled, isTrue);
+    expect(policy.mode, NotificationSyncPolicyMode.exclude);
+    expect(policy.packageNames, ['com.bank']);
+    expect(
+      prefs.getString(AppPrefs.notificationSyncPolicyModeV2),
+      'exclude',
+    );
+    expect(
+      prefs.getStringList(AppPrefs.notificationSyncPolicyPackagesV2),
+      ['com.bank'],
+    );
   });
 
   test('normalizes whitespace, duplicates, and empty package names', () async {

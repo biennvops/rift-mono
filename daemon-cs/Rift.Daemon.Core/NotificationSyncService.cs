@@ -19,6 +19,7 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly INotificationSyncPolicyStore? _policyStore;
     private readonly ILogger<NotificationSyncService> _logger;
     private readonly Dictionary<string, NotificationSyncRecord> _notifications = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NotificationSyncObservedApp> _observedAppsByPackage = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingNotificationAction> _pendingActionsByOperationId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _pendingActionKeys = new(StringComparer.Ordinal);
     private NotificationSyncPolicy _policy;
@@ -60,6 +61,11 @@ public sealed class NotificationSyncService : INotificationSyncService
                 Notifications = _notifications.Values
                     .Where(notification => !notification.IsRemoved)
                     .Select(CloneRecord)
+                    .ToArray(),
+                ObservedApps = _observedAppsByPackage.Values
+                    .OrderBy(app => app.AppName, StringComparer.Ordinal)
+                    .ThenBy(app => app.PackageName, StringComparer.Ordinal)
+                    .Select(CloneObservedApp)
                     .ToArray(),
                 Policy = ClonePolicy(_policy)
             });
@@ -108,6 +114,7 @@ public sealed class NotificationSyncService : INotificationSyncService
 
         var normalizedNotification = NormalizeLocalNotification(notification);
         ValidateNotification(normalizedNotification);
+        ObserveLocalNotificationApp(normalizedNotification);
 
         var shouldSync = ShouldSyncNotification(normalizedNotification.PackageName);
         if (!shouldSync &&
@@ -690,6 +697,24 @@ public sealed class NotificationSyncService : INotificationSyncService
             Mode = policy.Mode,
             PackageNames = policy.PackageNames.ToArray()
         };
+    }
+
+    private static NotificationSyncObservedApp CloneObservedApp(NotificationSyncObservedApp app) => new()
+    {
+        PackageName = app.PackageName,
+        AppName = app.AppName
+    };
+
+    private void ObserveLocalNotificationApp(NotificationSyncRecord notification)
+    {
+        lock (_gate)
+        {
+            _observedAppsByPackage[notification.PackageName] = new NotificationSyncObservedApp
+            {
+                PackageName = notification.PackageName,
+                AppName = notification.AppName
+            };
+        }
     }
 
     private static NotificationSyncRecord CloneRecord(NotificationSyncRecord notification)

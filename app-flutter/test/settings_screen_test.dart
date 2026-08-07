@@ -569,27 +569,25 @@ void main() {
       (_) async => <String, dynamic>{
         'notifications': <dynamic>[
           {
-            'sourceDeviceId': 'rift-test-device-id',
-            'packageName': 'org.signal',
-            'appName': 'Signal',
-          },
-          {
-            'sourceDeviceId': 'rift-test-device-id',
-            'packageName': 'org.signal',
-            'appName': 'Signal',
-          },
-          {
             'sourceDeviceId': 'rift-peer',
             'packageName': 'com.remote.app',
             'appName': 'Remote App',
           },
+        ],
+        'observedApps': <dynamic>[
           {
-            'sourceDeviceId': 'rift-test-device-id',
+            'packageName': 'org.signal',
+            'appName': 'Signal',
+          },
+          {
+            'packageName': 'org.signal',
+            'appName': 'Signal',
+          },
+          {
             'packageName': 'com.google.android.gm',
             'appName': 'Gmail',
           },
           {
-            'sourceDeviceId': 'rift-test-device-id',
             'packageName': 'dev.rift.app',
             'appName': 'Rift',
           },

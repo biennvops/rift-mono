@@ -62,9 +62,16 @@ public sealed class NotificationSyncRecord
     public IReadOnlyDictionary<string, object?>? Icon { get; init; }
 }
 
+public sealed class NotificationSyncObservedApp
+{
+    public string PackageName { get; init; } = string.Empty;
+    public string AppName { get; init; } = string.Empty;
+}
+
 public sealed class ListNotificationsResult
 {
     public IReadOnlyList<NotificationSyncRecord> Notifications { get; init; } = [];
+    public IReadOnlyList<NotificationSyncObservedApp> ObservedApps { get; init; } = [];
     public NotificationSyncPolicy Policy { get; init; } = new();
 }
 

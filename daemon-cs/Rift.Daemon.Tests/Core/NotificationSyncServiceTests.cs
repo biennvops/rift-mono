@@ -282,9 +282,15 @@ public sealed class NotificationSyncServiceTests : IDisposable
             null,
             CancellationToken.None);
 
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+
         Assert.Equal(NotificationSyncPolicyModes.Include, policy.Mode);
         Assert.True(result.Suppressed);
         Assert.Empty(result.BroadcastTo);
+        Assert.Empty(listed.Notifications);
+        var observedApp = Assert.Single(listed.ObservedApps);
+        Assert.Equal("com.example.any", observedApp.PackageName);
+        Assert.Equal("Example App", observedApp.AppName);
     }
 
     [Fact]

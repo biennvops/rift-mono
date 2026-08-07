@@ -514,6 +514,7 @@ class RiftDaemon {
   final Map<String, Map<String, dynamic>> _pendingIncomingMediaPlaybackActions =
       {};
   final Map<String, Timer> _pendingIncomingMediaPlaybackActionTimers = {};
+  final Map<String, String> _notificationSyncObservedApps = {};
   final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
   _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
@@ -1683,8 +1684,17 @@ class RiftDaemon {
           final bPostedAt = b['postedAt'] as String? ?? '';
           return bPostedAt.compareTo(aPostedAt);
         });
+    final observedApps = _notificationSyncObservedApps.entries.toList()
+      ..sort((a, b) {
+        final byName = a.value.compareTo(b.value);
+        return byName != 0 ? byName : a.key.compareTo(b.key);
+      });
     return {
       'notifications': notifications,
+      'observedApps': [
+        for (final entry in observedApps)
+          {'packageName': entry.key, 'appName': entry.value},
+      ],
       'policy': _notificationSyncPolicy.toJson(),
     };
   }
@@ -1796,6 +1806,8 @@ class RiftDaemon {
         );
 
         final packageName = record['packageName'] as String;
+        _notificationSyncObservedApps[packageName] =
+            record['appName'] as String;
         if (!_shouldSyncNotification(packageName)) {
           return {
             'notificationId': notificationId,

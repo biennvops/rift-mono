@@ -26,5 +26,7 @@ class AppPrefs {
       'notification_sync_policy_mode_v2';
   static const notificationSyncPolicyPackagesV2 =
       'notification_sync_policy_packages_v2';
+  static const notificationSyncPolicyLegacyProjectionV2 =
+      'notification_sync_policy_legacy_projection_v2';
   static const defaultDownloadPath = 'default_download_path';
 }
