@@ -255,6 +255,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   DeviceStatusPublisher? _deviceStatusPublisher;
   TrustedPeerNameResolver? _trustedPeerNameResolver;
   WindowsRemoteMediaPlaybackCoordinator? _windowsRemoteMediaPlayback;
+  DeviceStatusPublisher? _deviceStatusPublisher;
+  TrustedPeerNameResolver? _trustedPeerNameResolver;
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
   Future<String?>? _localDeviceIdFuture;
@@ -1092,6 +1094,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     unawaited(_macOSRemoteMediaPlayback?.dispose());
     unawaited(_deviceStatusPublisher?.dispose());
     unawaited(_windowsRemoteMediaPlayback?.dispose());
+    unawaited(_deviceStatusPublisher?.dispose());
     unawaited(_clipboardManager?.dispose());
     super.dispose();
   }
