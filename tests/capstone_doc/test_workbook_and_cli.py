@@ -13,13 +13,58 @@ from rift_doc.validators.workbook import _real_data_rows
 from .conftest import ROOT, SOURCE_TEMPLATES, create_docx
 
 
-def test_real_project_tracking_workbook_matches_observed_layout() -> None:
+def test_official_project_tracking_template_wbs_samples_fail_completed_content() -> None:
     path = SOURCE_TEMPLATES / "Report3_Project Tracking.xlsx"
     if not path.exists():
         return
     spec = CapstoneSpec.load(ROOT / "capstone-doc-spec.v0.1.yaml")
-    result = ValidationEngine(spec).validate(path, "report3_project_tracking")
-    assert not any(item.status == Status.FAIL for item in result.findings)
+    engine = ValidationEngine(spec)
+    workbook = engine.extract(path, "report3_project_tracking")
+    result = engine.validate_normalized(workbook, "report3_project_tracking")
+    wbs = next(sheet for sheet in workbook.sheets if sheet.name == "WBS")
+    rule = spec.workbook("report3_project_tracking")["sheets"]["WBS"]
+
+    assert wbs.rows[7][1].classification == ContentClass.SAMPLE_RESIDUE
+    assert _real_data_rows(wbs, [7], [], rule["allowed_values"]) == set()
+    assert any(
+        item.rule_id == "sheets[WBS].content" and item.status == Status.FAIL
+        for item in result.findings
+    )
+    assert any(
+        item.rule_id == "sample.residue"
+        and item.spec_path.endswith("sheets[WBS].sample_row_signatures")
+        for item in result.findings
+    )
+
+
+def test_genuine_wbs_row_counts_as_completed_content() -> None:
+    path = SOURCE_TEMPLATES / "Report3_Project Tracking.xlsx"
+    if not path.exists():
+        return
+    spec = CapstoneSpec.load(ROOT / "capstone-doc-spec.v0.1.yaml")
+    engine = ValidationEngine(spec)
+    workbook = engine.extract(path, "report3_project_tracking")
+    wbs = next(sheet for sheet in workbook.sheets if sheet.name == "WBS")
+    genuine_values = {
+        2: "Rift Home Screen",
+        3: "Continuity",
+        4: "Simple",
+        6: "Iteration 1",
+        7: "Pending",
+    }
+    for column, value in genuine_values.items():
+        cell = wbs.rows[7][column - 1]
+        cell.value = value
+        cell.original_text = str(value)
+
+    result = engine.validate_normalized(workbook, "report3_project_tracking")
+    rule = spec.workbook("report3_project_tracking")["sheets"]["WBS"]
+    assert wbs.rows[7][1].classification == ContentClass.REAL_CONTENT
+    assert _real_data_rows(wbs, [7], [], rule["allowed_values"]) == {8}
+    assert not any(
+        item.rule_id == "sheets[WBS].content" and item.status == Status.FAIL
+        for item in result.findings
+    )
 
 
 def test_real_data_rows_exclude_formula_and_sample_cells() -> None:
