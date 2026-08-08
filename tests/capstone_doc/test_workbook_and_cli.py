@@ -37,7 +37,7 @@ def test_official_project_tracking_template_wbs_samples_fail_completed_content()
     )
 
 
-def test_genuine_wbs_row_counts_as_completed_content() -> None:
+def test_customized_wbs_details_count_as_completed_content() -> None:
     path = SOURCE_TEMPLATES / "Report3_Project Tracking.xlsx"
     if not path.exists():
         return
@@ -45,17 +45,9 @@ def test_genuine_wbs_row_counts_as_completed_content() -> None:
     engine = ValidationEngine(spec)
     workbook = engine.extract(path, "report3_project_tracking")
     wbs = next(sheet for sheet in workbook.sheets if sheet.name == "WBS")
-    genuine_values = {
-        2: "Rift Home Screen",
-        3: "Continuity",
-        4: "Simple",
-        6: "Iteration 1",
-        7: "Pending",
-    }
-    for column, value in genuine_values.items():
-        cell = wbs.rows[7][column - 1]
-        cell.value = value
-        cell.original_text = str(value)
+    details = wbs.rows[7][4]
+    details.value = "Rift-specific screen behavior and acceptance details."
+    details.original_text = str(details.value)
 
     result = engine.validate_normalized(workbook, "report3_project_tracking")
     rule = spec.workbook("report3_project_tracking")["sheets"]["WBS"]

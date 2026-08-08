@@ -462,11 +462,23 @@ def _sample_signature_matches(
 ) -> bool:
     if not isinstance(signature, dict) or not signature:
         return False
+    specified_columns: set[int] = set()
     for field, expected in signature.items():
         column = header_columns.get(_normalize_header(str(field)))
         if column is None or column > len(row):
             return False
-        if row[column - 1].value != expected:
+        specified_columns.add(column)
+        cell = row[column - 1]
+        if expected is None:
+            if not cell.is_empty or cell.formula is not None:
+                return False
+        elif cell.value != expected:
+            return False
+    for column in header_columns.values():
+        if column in specified_columns:
+            continue
+        cell = row[column - 1]
+        if cell.formula is None and not cell.is_empty:
             return False
     return True
 

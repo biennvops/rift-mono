@@ -764,21 +764,21 @@ workbooks:
         sample_row_signatures:
           id: official_wbs_template_rows
           rows:
-            - {"#": 0, "Function/Screen": "Home Page", Feature: Common, "Level*": Medium, Planned: "Iteration 2", Status: Pending}
-            - {"#": 1, "Function/Screen": "User Login", Feature: Common, "Level*": Simple, Planned: "Iteration 1", Status: Pending}
-            - {"#": 2, "Function/Screen": "User Register", Feature: Common, "Level*": Simple, Planned: "Iteration 1", Status: Pending}
-            - {"#": 3, "Function/Screen": "Reset Password", Feature: Common, "Level*": Medium, Planned: "Iteration 4", Status: Pending}
-            - {"#": 4, "Function/Screen": "User Authorization", Feature: Common, "Level*": Complex, Planned: "Iteration 1", Status: Pending}
-            - {"#": 5, "Function/Screen": "User Profile", Feature: Common, "Level*": Simple, Planned: "Iteration 4", Status: Pending}
-            - {"#": 6, "Function/Screen": "Change Password", Feature: Common, "Level*": Simple, Planned: "Iteration 4", Status: Pending}
-            - {"#": 7, "Function/Screen": "Blogs List", Feature: Public, "Level*": Medium, Planned: "Iteration 1", Status: Pending}
-            - {"#": 8, "Function/Screen": "Blog Details", Feature: Public, "Level*": Simple, Planned: "Iteration 1", Status: Pending}
-            - {"#": 9, "Function/Screen": "Posts List", Feature: Marketing, "Level*": Medium, Planned: "Iteration 1", Status: Pending}
-            - {"#": 10, "Function/Screen": "Post Details", Feature: Marketing, "Level*": Medium, Planned: "Iteration 1", Status: Pending}
-            - {"#": 11, "Function/Screen": "Sliders List", Feature: Marketing, "Level*": Medium, Planned: "Iteration 2", Status: Pending}
-            - {"#": 12, "Function/Screen": "Slider Details", Feature: Marketing, "Level*": Simple, Planned: "Iteration 2", Status: Pending}
-            - {"#": 13, "Function/Screen": "Users List", Feature: Admin, "Level*": Simple, Planned: "Iteration 4", Status: Pending}
-            - {"#": 14, "Function/Screen": "User Details", Feature: Admin, "Level*": Simple, Planned: "Iteration 4", Status: Pending}
+            - {"#": 0, "Function/Screen": "Home Page", Feature: Common, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 2", Status: Pending}
+            - {"#": 1, "Function/Screen": "User Login", Feature: Common, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 2, "Function/Screen": "User Register", Feature: Common, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 3, "Function/Screen": "Reset Password", Feature: Common, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 4", Status: Pending}
+            - {"#": 4, "Function/Screen": "User Authorization", Feature: Common, "Level*": Complex, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 5, "Function/Screen": "User Profile", Feature: Common, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 4", Status: Pending}
+            - {"#": 6, "Function/Screen": "Change Password", Feature: Common, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 4", Status: Pending}
+            - {"#": 7, "Function/Screen": "Blogs List", Feature: Public, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 8, "Function/Screen": "Blog Details", Feature: Public, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 9, "Function/Screen": "Posts List", Feature: Marketing, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 10, "Function/Screen": "Post Details", Feature: Marketing, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 1", Status: Pending}
+            - {"#": 11, "Function/Screen": "Sliders List", Feature: Marketing, "Level*": Medium, "Function/Screen Details": null, Planned: "Iteration 2", Status: Pending}
+            - {"#": 12, "Function/Screen": "Slider Details", Feature: Marketing, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 2", Status: Pending}
+            - {"#": 13, "Function/Screen": "Users List", Feature: Admin, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 4", Status: Pending}
+            - {"#": 14, "Function/Screen": "User Details", Feature: Admin, "Level*": Simple, "Function/Screen Details": null, Planned: "Iteration 4", Status: Pending}
             - {"#": "(*) You can rate the functions' complexity based on the number of fields on the screens or the number of transactions in the function, with the details as below"}
             - {"Function/Screen": simple, Feature: "<=7 fields", "Level*": "<=3 transactions"}
             - {"Function/Screen": medium, Feature: "<=15 fields", "Level*": "<= 7 transactions"}
