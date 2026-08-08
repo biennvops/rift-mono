@@ -256,6 +256,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   Future<String?>? _localDeviceIdFuture;
   Future<MirroredNotificationRegistry>? _mirroredNotificationRegistryFuture;
   Future<void>? _reconciliationInFlight;
+  Future<void> _mirroredNotificationLifecycleQueue = Future<void>.value();
 
   bool get _enableDesktopShellIntegration =>
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
@@ -1263,6 +1264,29 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         MirroredNotificationRegistry.load();
   }
 
+  void _enqueueMirroredNotificationLifecycle(
+    Future<void> Function() operation,
+  ) {
+    final next = _mirroredNotificationLifecycleQueue.then<void>(
+      (_) => operation(),
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint(
+            '[Notification Mirror] Previous lifecycle operation failed: $error');
+        return operation();
+      },
+    );
+    _mirroredNotificationLifecycleQueue = next;
+    unawaited(
+      next.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint(
+              '[Notification Mirror] Lifecycle operation failed: $error');
+        },
+      ),
+    );
+  }
+
   Future<bool> _showNativeMirroredNotification({
     required String mirrorKey,
     required String title,
@@ -1711,15 +1735,21 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
 
     _notificationPostedSub = client.onNotificationPosted.listen((event) {
-      unawaited(_showOrUpdateMirroredNotificationPreview(event));
+      _enqueueMirroredNotificationLifecycle(
+        () => _showOrUpdateMirroredNotificationPreview(event),
+      );
     });
 
     _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
-      unawaited(_showOrUpdateMirroredNotificationPreview(event));
+      _enqueueMirroredNotificationLifecycle(
+        () => _showOrUpdateMirroredNotificationPreview(event),
+      );
     });
 
     _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
-      unawaited(_clearMirroredNotificationPreview(event));
+      _enqueueMirroredNotificationLifecycle(
+        () => _clearMirroredNotificationPreview(event),
+      );
     });
 
     _fileOfferSub = client.onFileOffer.listen((event) {

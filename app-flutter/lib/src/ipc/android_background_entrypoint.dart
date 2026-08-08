@@ -40,6 +40,30 @@ Future<void> runAndroidBackgroundMain() async {
   final mirroredNotificationRegistry =
       await MirroredNotificationRegistry.load();
   Future<String?>? localDeviceIdFuture;
+  Future<void> mirroredNotificationLifecycleQueue = Future<void>.value();
+
+  void enqueueMirroredNotificationLifecycle(
+    Future<void> Function() operation,
+  ) {
+    final next = mirroredNotificationLifecycleQueue.then<void>(
+      (_) => operation(),
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint(
+            '[Notification Mirror] Previous lifecycle operation failed: $error');
+        return operation();
+      },
+    );
+    mirroredNotificationLifecycleQueue = next;
+    unawaited(
+      next.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint(
+              '[Notification Mirror] Lifecycle operation failed: $error');
+        },
+      ),
+    );
+  }
 
   Future<String?> getLocalDeviceId() {
     return localDeviceIdFuture ??= () async {
@@ -363,12 +387,13 @@ Future<void> runAndroidBackgroundMain() async {
   }
 
   client.onNotificationPosted.listen((event) {
-    unawaited(showMirroredNotification(event));
+    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
   });
   client.onNotificationUpdated.listen((event) {
-    unawaited(showMirroredNotification(event));
+    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
   });
   client.onNotificationRemoved.listen((event) {
-    unawaited(clearMirroredNotification(event));
+    enqueueMirroredNotificationLifecycle(
+        () => clearMirroredNotification(event));
   });
 }
