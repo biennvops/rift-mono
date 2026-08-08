@@ -553,6 +553,9 @@ class MainActivity: FlutterActivity() {
         val intent =
             Intent(this, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (!notificationKey.isNullOrBlank()) {
+                    data = Uri.parse("rift://notification/$notificationKey")
+                }
                 putExtra(notificationIntentRouteKey, route)
                 if (!destinationPath.isNullOrBlank()) {
                     putExtra(notificationIntentDestinationPathKey, destinationPath)
@@ -571,7 +574,7 @@ class MainActivity: FlutterActivity() {
         val pendingIntent =
             PendingIntent.getActivity(
                 this,
-                route.hashCode(),
+                notificationKey?.hashCode() ?: route.hashCode(),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )

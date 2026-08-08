@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -279,6 +280,9 @@ class RiftDaemonService : Service() {
         val notificationKey = args["notificationKey"] as? String
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (!notificationKey.isNullOrBlank()) {
+                data = Uri.parse("rift://notification/$notificationKey")
+            }
             putExtra("rift.notification.route", route)
             payload?.forEach { (key, value) ->
                 val name = key as? String ?: return@forEach
@@ -292,7 +296,7 @@ class RiftDaemonService : Service() {
         }
         val pendingIntent = PendingIntent.getActivity(
             this,
-            (route + title + body).hashCode(),
+            notificationKey?.hashCode() ?: (route + title + body).hashCode(),
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
