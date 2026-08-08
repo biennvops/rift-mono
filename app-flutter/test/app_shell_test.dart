@@ -873,8 +873,59 @@ void main() {
     expect((await MirroredNotificationRegistry.load()).entries, [active]);
   });
 
+  testWidgets('mirrored notification reconciliation shares the lifecycle queue',
+      (WidgetTester tester) async {
+    final entry = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-race',
+        notificationId: 'notification-race',
+      ),
+      sourceDeviceId: 'rift-peer-race',
+      notificationId: 'notification-race',
+    );
+    final registry = await MirroredNotificationRegistry.load();
+    await registry.remember(entry);
+
+    final listResult = Completer<dynamic>();
+    when(() => mockClient.listNotifications())
+        .thenAnswer((_) => listResult.future);
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump();
+    verify(() => mockClient.listNotifications());
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': entry.notificationId,
+      'sourceDeviceId': entry.sourceDeviceId,
+      'sourcePlatform': 'linux',
+      'appName': 'Messages',
+      'title': 'Reposted',
+      'bodyPreview': 'Fresh content',
+    });
+    await tester.pump();
+    expect(
+      macOsCalls.where((call) => call.method == 'notification.show'),
+      isEmpty,
+    );
+
+    listResult.complete({'notifications': []});
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    expect(clearCalls, hasLength(1));
+    expect(showCalls, hasLength(1));
+    expect((await MirroredNotificationRegistry.load()).entries, [entry]);
+  });
+
   testWidgets(
-      'mirrored notification updates and removals reuse the native identity',
+      'mirrored notification updates avoid Apple re-alerts and removals reuse the native identity',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildRiftApp(mockClient));
     await tester.pump();
@@ -916,9 +967,8 @@ void main() {
     final clearCalls = macOsCalls
         .where((call) => call.method == 'notification.clear')
         .toList();
-    expect(showCalls, hasLength(2));
+    expect(showCalls, hasLength(1));
     expect(postedCall.arguments['notificationKey'], expectedKey);
-    expect(showCalls[1].arguments['notificationKey'], expectedKey);
     expect(clearCalls, hasLength(1));
     expect(clearCalls.single.arguments, {'notificationKey': expectedKey});
   });

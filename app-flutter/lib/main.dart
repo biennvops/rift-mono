@@ -23,6 +23,7 @@ import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
 import 'src/notification_mirror_identity.dart';
 import 'src/mirrored_notification_registry.dart';
+import 'src/mirrored_notification_reconciliation.dart';
 import 'src/trusted_peer_name_resolver.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
@@ -1264,7 +1265,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         MirroredNotificationRegistry.load();
   }
 
-  void _enqueueMirroredNotificationLifecycle(
+  Future<void> _enqueueMirroredNotificationLifecycle(
     Future<void> Function() operation,
   ) {
     final next = _mirroredNotificationLifecycleQueue.then<void>(
@@ -1285,6 +1286,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         },
       ),
     );
+    return next;
   }
 
   Future<bool> _showNativeMirroredNotification({
@@ -1294,7 +1296,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     required Map<String, Object?> payload,
     required List<DesktopNotificationAction> actions,
     required Map<String, dynamic> event,
+    required bool isUpdate,
   }) async {
+    // Replacing a delivered UNNotificationRequest alerts again on Apple.
+    if (isUpdate &&
+        (IOSNotifications.isSupported ||
+            MacOSNotifications.supportsPendingShareHandoff)) {
+      return false;
+    }
+
     try {
       if (IOSNotifications.isSupported) {
         return await IOSNotifications.show(
@@ -1379,8 +1389,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   }
 
   Future<void> _showOrUpdateMirroredNotificationPreview(
-    Map<String, dynamic> event,
-  ) async {
+    Map<String, dynamic> event, {
+    required bool isUpdate,
+  }) async {
     final notificationId = event['notificationId']?.toString();
     final sourceDeviceId = event['sourceDeviceId']?.toString();
     if (notificationId == null ||
@@ -1431,6 +1442,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         payload: mirroredPayload,
         actions: mirroredActions,
         event: event,
+        isUpdate: isUpdate,
       );
       if (shown) {
         await (await _getMirroredNotificationRegistry()).remember(
@@ -1476,63 +1488,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   Future<void> _performMirroredNotificationReconciliation() async {
     final client = context.read<JsonRpcRiftClient>();
-    if (!client.isConnected) {
-      return;
-    }
-
-    final localDeviceId = await _getLocalDeviceId();
-    if (localDeviceId == null) {
-      debugPrint(
-        '[Notification Mirror] Cannot reconcile without the local device ID.',
-      );
-      return;
-    }
-
     final registry = await _getMirroredNotificationRegistry();
-    await registry.reload();
-
-    dynamic result;
-    try {
-      result = await client.listNotifications();
-    } catch (error) {
-      debugPrint('[Notification Mirror] Failed to list notifications: $error');
-      return;
-    }
-    if (result is! Map || result['notifications'] is! List) {
-      debugPrint('[Notification Mirror] Invalid listNotifications response.');
-      return;
-    }
-
-    final activeKeys = <String>{};
-    for (final value in result['notifications'] as List) {
-      if (value is! Map) {
-        continue;
-      }
-      final sourceDeviceId = value['sourceDeviceId']?.toString();
-      final notificationId = value['notificationId']?.toString();
-      if (sourceDeviceId == null ||
-          sourceDeviceId.isEmpty ||
-          notificationId == null ||
-          notificationId.isEmpty ||
-          sourceDeviceId == localDeviceId) {
-        continue;
-      }
-      activeKeys.add(
-        mirroredNotificationKey(
-          sourceDeviceId: sourceDeviceId,
-          notificationId: notificationId,
-        ),
-      );
-    }
-
-    final staleEntries = registry.entries
-        .where((entry) => !activeKeys.contains(entry.mirrorKey))
-        .toList(growable: false);
-    for (final entry in staleEntries) {
-      if (await _clearNativeMirroredNotification(entry.mirrorKey)) {
-        await registry.forget(entry.mirrorKey);
-      }
-    }
+    await reconcileMirroredNotificationPreviews(
+      client: client,
+      registry: registry,
+      getLocalDeviceId: _getLocalDeviceId,
+      clearNativeNotification: _clearNativeMirroredNotification,
+    );
   }
 
   Future<void> _reconcileMirroredNotificationPreviews() {
@@ -1541,7 +1503,9 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       return existing;
     }
 
-    final future = _performMirroredNotificationReconciliation();
+    final future = _enqueueMirroredNotificationLifecycle(
+      _performMirroredNotificationReconciliation,
+    );
     _reconciliationInFlight = future;
     unawaited(
       future.then<void>(
@@ -1736,13 +1700,19 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     _notificationPostedSub = client.onNotificationPosted.listen((event) {
       _enqueueMirroredNotificationLifecycle(
-        () => _showOrUpdateMirroredNotificationPreview(event),
+        () => _showOrUpdateMirroredNotificationPreview(
+          event,
+          isUpdate: false,
+        ),
       );
     });
 
     _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
       _enqueueMirroredNotificationLifecycle(
-        () => _showOrUpdateMirroredNotificationPreview(event),
+        () => _showOrUpdateMirroredNotificationPreview(
+          event,
+          isUpdate: true,
+        ),
       );
     });
 

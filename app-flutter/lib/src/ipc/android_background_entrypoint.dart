@@ -8,6 +8,7 @@ import '../media_playback/android_remote_media_playback_coordinator.dart';
 import '../notification_sync_policy.dart';
 import '../notification_mirror_identity.dart';
 import '../mirrored_notification_registry.dart';
+import '../mirrored_notification_reconciliation.dart';
 import '../platform/android_shell.dart';
 import '../platform/notification_route.dart';
 import 'android_daemon_isolate_transport.dart';
@@ -42,7 +43,7 @@ Future<void> runAndroidBackgroundMain() async {
   Future<String?>? localDeviceIdFuture;
   Future<void> mirroredNotificationLifecycleQueue = Future<void>.value();
 
-  void enqueueMirroredNotificationLifecycle(
+  Future<void> enqueueMirroredNotificationLifecycle(
     Future<void> Function() operation,
   ) {
     final next = mirroredNotificationLifecycleQueue.then<void>(
@@ -63,6 +64,7 @@ Future<void> runAndroidBackgroundMain() async {
         },
       ),
     );
+    return next;
   }
 
   Future<String?> getLocalDeviceId() {
@@ -80,6 +82,23 @@ Future<void> runAndroidBackgroundMain() async {
       }
       return null;
     }();
+  }
+
+  Future<bool> clearNativeMirroredNotification(String mirrorKey) async {
+    try {
+      return await AndroidShell.clearNotification(mirrorKey);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> reconcileBackgroundMirroredNotificationPreviews() {
+    return reconcileMirroredNotificationPreviews(
+      client: client,
+      registry: mirroredNotificationRegistry,
+      getLocalDeviceId: getLocalDeviceId,
+      clearNativeNotification: clearNativeMirroredNotification,
+    );
   }
 
   Future<void> flushNativeEvents() async {
@@ -295,6 +314,11 @@ Future<void> runAndroidBackgroundMain() async {
   client.onConnectionChanged.listen((isConnected) {
     if (isConnected) {
       unawaited(restorePolicyAndFlushNativeEvents());
+      unawaited(
+        enqueueMirroredNotificationLifecycle(
+          reconcileBackgroundMirroredNotificationPreviews,
+        ),
+      );
     } else {
       notificationPolicyReady = false;
     }
@@ -378,7 +402,7 @@ Future<void> runAndroidBackgroundMain() async {
       notificationId: notificationId,
     );
     try {
-      if (await AndroidShell.clearNotification(mirrorKey)) {
+      if (await clearNativeMirroredNotification(mirrorKey)) {
         await mirroredNotificationRegistry.forget(mirrorKey);
       }
     } catch (_) {
@@ -396,4 +420,10 @@ Future<void> runAndroidBackgroundMain() async {
     enqueueMirroredNotificationLifecycle(
         () => clearMirroredNotification(event));
   });
+
+  unawaited(
+    enqueueMirroredNotificationLifecycle(
+      reconcileBackgroundMirroredNotificationPreviews,
+    ),
+  );
 }
