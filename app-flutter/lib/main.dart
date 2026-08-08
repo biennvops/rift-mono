@@ -21,6 +21,7 @@ import 'src/ipc/android_background_entrypoint.dart';
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
+import 'src/notification_icon.dart';
 import 'src/notification_mirror_identity.dart';
 import 'src/mirrored_notification_registry.dart';
 import 'src/mirrored_notification_reconciliation.dart';
@@ -1297,6 +1298,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     required List<DesktopNotificationAction> actions,
     required Map<String, dynamic> event,
     required bool isUpdate,
+    Uint8List? iconBytes,
   }) async {
     // Replacing a delivered UNNotificationRequest alerts again on Apple.
     if (isUpdate &&
@@ -1328,6 +1330,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           route: NotificationRoute.historyNotifications,
           payload: payload,
           notificationKey: mirrorKey,
+          iconBytes: iconBytes,
         );
       }
       if (Platform.isWindows) {
@@ -1337,6 +1340,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           route: NotificationRoute.historyNotifications,
           payload: payload,
           notificationKey: mirrorKey,
+          iconBytes: iconBytes,
         );
       }
       if (MacOSNotifications.supportsPendingShareHandoff) {
@@ -1357,6 +1361,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
           payload: payload,
           actions: actions,
           notificationKey: mirrorKey,
+          iconBytes: iconBytes,
         );
       }
     } catch (error) {
@@ -1422,6 +1427,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       'isDismissible': event['isDismissible'] == true,
     };
     final mirroredActions = _buildMirroredNotificationActions(event);
+    final iconBytes = parseNotificationIcon(event['icon'])?.bytes;
     final notificationTitle = (title != null && title.isNotEmpty)
         ? title
         : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
@@ -1443,6 +1449,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         actions: mirroredActions,
         event: event,
         isUpdate: isUpdate,
+        iconBytes: iconBytes,
       );
       if (shown) {
         await (await _getMirroredNotificationRegistry()).remember(

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../src/notification_icon.dart';
 import '../src/ui/theme.dart';
 import '../widgets/rift_snackbar.dart';
 
@@ -275,10 +276,9 @@ class _NotificationCardState extends State<_NotificationCard> {
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  foregroundColor: theme.colorScheme.onPrimaryContainer,
-                  child: const Icon(Icons.notifications_outlined, size: 20),
+                NotificationAppIcon(
+                  metadata: item['icon'],
+                  size: 44,
                 ),
                 const SizedBox(width: 12),
                 Expanded(

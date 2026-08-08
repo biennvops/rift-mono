@@ -20,6 +20,7 @@ class LinuxNotifications {
     Map<String, Object?>? payload,
     List<DesktopNotificationAction>? actions,
     String? notificationKey,
+    Uint8List? iconBytes,
   }) async {
     if (!isSupported) {
       return false;
@@ -33,6 +34,7 @@ class LinuxNotifications {
       if (actions != null)
         'actions': actions.map((action) => action.toMap()).toList(),
       if (notificationKey != null) 'notificationKey': notificationKey,
+      if (iconBytes != null) 'iconBytes': iconBytes,
     });
     return result ?? false;
   }

@@ -41,6 +41,8 @@ constexpr UINT kRiftShellNotifyId = 1;
 constexpr ULONG_PTR kRiftSendFilesCopyDataId = 0x52465446;  // 'RFTF'
 constexpr int kClipboardOpenAttempts = 10;
 constexpr DWORD kClipboardOpenRetryDelayMs = 25;
+constexpr size_t kMaxNotificationIconBytes = 131072;
+constexpr UINT kMaxNotificationIconDimension = 128;
 
 std::wstring Utf16FromUtf8(const std::string& utf8_string);
 
@@ -211,7 +213,9 @@ bool ReadDibAsPng(HGLOBAL handle, std::vector<uint8_t>* png_bytes) {
   return success;
 }
 
-HGLOBAL CreateDibV5FromPng(const std::vector<uint8_t>& png_bytes) {
+HGLOBAL CreateDibV5FromPng(
+    const std::vector<uint8_t>& png_bytes,
+    UINT max_dimension = 0) {
   if (png_bytes.empty() ||
       png_bytes.size() > std::numeric_limits<DWORD>::max()) {
     return nullptr;
@@ -251,6 +255,8 @@ HGLOBAL CreateDibV5FromPng(const std::vector<uint8_t>& png_bytes) {
   UINT width = 0;
   UINT height = 0;
   if (FAILED(converter->GetSize(&width, &height)) || width == 0 || height == 0 ||
+      (max_dimension != 0 &&
+       (width > max_dimension || height > max_dimension)) ||
       width > static_cast<UINT>(std::numeric_limits<LONG>::max()) ||
       height > static_cast<UINT>(std::numeric_limits<LONG>::max())) {
     return nullptr;
@@ -303,6 +309,61 @@ HGLOBAL CreateDibV5FromPng(const std::vector<uint8_t>& png_bytes) {
   }
 
   return memory;
+}
+
+HICON CreateHiconFromPng(const std::vector<uint8_t>& png_bytes) {
+  if (png_bytes.empty() || png_bytes.size() > kMaxNotificationIconBytes) {
+    return nullptr;
+  }
+
+  HGLOBAL dib_memory =
+      CreateDibV5FromPng(png_bytes, kMaxNotificationIconDimension);
+  if (dib_memory == nullptr) {
+    return nullptr;
+  }
+
+  auto* header = static_cast<BITMAPV5HEADER*>(GlobalLock(dib_memory));
+  if (header == nullptr) {
+    GlobalFree(dib_memory);
+    return nullptr;
+  }
+
+  const LONG width = header->bV5Width;
+  const LONG height = header->bV5Height < 0 ? -header->bV5Height : header->bV5Height;
+  const size_t image_size = static_cast<size_t>(width) *
+                            static_cast<size_t>(height) * 4;
+  HDC screen_dc = GetDC(nullptr);
+  void* pixels = nullptr;
+  HBITMAP color_bitmap = CreateDIBSection(
+      screen_dc,
+      reinterpret_cast<const BITMAPINFO*>(header),
+      DIB_RGB_COLORS,
+      &pixels,
+      nullptr,
+      0);
+  ReleaseDC(nullptr, screen_dc);
+
+  HICON icon = nullptr;
+  if (color_bitmap != nullptr && pixels != nullptr) {
+    std::memcpy(
+        pixels,
+        reinterpret_cast<const uint8_t*>(header) + sizeof(BITMAPV5HEADER),
+        image_size);
+    HBITMAP mask_bitmap = CreateBitmap(width, height, 1, 1, nullptr);
+    if (mask_bitmap != nullptr) {
+      ICONINFO icon_info = {};
+      icon_info.fIcon = TRUE;
+      icon_info.hbmColor = color_bitmap;
+      icon_info.hbmMask = mask_bitmap;
+      icon = CreateIconIndirect(&icon_info);
+      DeleteObject(mask_bitmap);
+    }
+    DeleteObject(color_bitmap);
+  }
+
+  GlobalUnlock(dib_memory);
+  GlobalFree(dib_memory);
+  return icon;
 }
 
 }  // namespace
@@ -797,10 +858,19 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
               notification_key = *value;
             }
           }
+          std::vector<uint8_t> icon_bytes;
+          const auto icon_bytes_it =
+              arguments->find(flutter::EncodableValue("iconBytes"));
+          if (icon_bytes_it != arguments->end()) {
+            if (const auto* value =
+                    std::get_if<std::vector<uint8_t>>(&icon_bytes_it->second)) {
+              icon_bytes = *value;
+            }
+          }
           shown = ShowNotification(Utf16FromUtf8(*title), Utf16FromUtf8(*body),
                                    route, payload,
                                    Utf16FromUtf8(destination),
-                                   notification_key);
+                                   notification_key, icon_bytes);
         }
         result->Success(flutter::EncodableValue(shown));
       });
@@ -888,6 +958,10 @@ void FlutterWindow::InitializeShellNotificationIcon() {
 
 void FlutterWindow::CleanupShellNotificationIcon() {
   if (!shell_notification_icon_registered_ || GetHandle() == nullptr) {
+    if (current_native_notification_icon_ != nullptr) {
+      DestroyIcon(current_native_notification_icon_);
+      current_native_notification_icon_ = nullptr;
+    }
     current_native_notification_key_.clear();
     return;
   }
@@ -900,6 +974,10 @@ void FlutterWindow::CleanupShellNotificationIcon() {
   icon_data.uCallbackMessage = kTrayManagerNotifyMessage;
   Shell_NotifyIconW(NIM_MODIFY, &icon_data);
   shell_notification_icon_registered_ = false;
+  if (current_native_notification_icon_ != nullptr) {
+    DestroyIcon(current_native_notification_icon_);
+    current_native_notification_icon_ = nullptr;
+  }
   current_native_notification_key_.clear();
 }
 
@@ -908,7 +986,7 @@ bool FlutterWindow::ShowTransferNotification(
     const std::wstring& body,
     const std::wstring& destination_path) {
   return ShowNotification(title, body, "history.transfer_activity",
-                          flutter::EncodableMap(), destination_path, "");
+                          flutter::EncodableMap(), destination_path, "", {});
 }
 
 bool FlutterWindow::ShowNotification(
@@ -917,10 +995,12 @@ bool FlutterWindow::ShowNotification(
     const std::string& route,
     const flutter::EncodableMap& payload,
     const std::wstring& destination_path,
-    const std::string& notification_key) {
+    const std::string& notification_key,
+    const std::vector<uint8_t>& icon_bytes) {
   if (GetHandle() == nullptr) {
     return false;
   }
+  CleanupShellNotificationIcon();
   InitializeShellNotificationIcon();
   if (!shell_notification_icon_registered_) {
     return false;
@@ -937,10 +1017,19 @@ bool FlutterWindow::ShowNotification(
   icon_data.uID = kRiftShellNotifyId;
   icon_data.uFlags = NIF_INFO;
   icon_data.dwInfoFlags = NIIF_USER | NIIF_NOSOUND;
+  HICON custom_icon = CreateHiconFromPng(icon_bytes);
+  if (custom_icon != nullptr) {
+    icon_data.hBalloonIcon = custom_icon;
+  }
   wcsncpy_s(icon_data.szInfoTitle, title.c_str(), _TRUNCATE);
   wcsncpy_s(icon_data.szInfo, body.c_str(), _TRUNCATE);
   const bool shown = Shell_NotifyIconW(NIM_MODIFY, &icon_data) == TRUE;
-  if (!shown) {
+  if (shown) {
+    current_native_notification_icon_ = custom_icon;
+  } else {
+    if (custom_icon != nullptr) {
+      DestroyIcon(custom_icon);
+    }
     CleanupShellNotificationIcon();
   }
   return shown;

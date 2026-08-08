@@ -87,6 +87,50 @@ class _DiscoveredPeerRecord {
 const String _notificationSyncModeAll = 'all';
 const String _notificationSyncModeExclude = 'exclude';
 const String _notificationSyncModeInclude = 'include';
+const int notificationIconMaxRawBytes = 131072;
+const int notificationIconMaxBase64Characters =
+    ((notificationIconMaxRawBytes + 2) ~/ 3) * 4;
+final _notificationIconSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+
+Map<String, dynamic>? normalizeNotificationIcon(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
+
+  final mediaType = value['mediaType'];
+  final dataBase64 = value['dataBase64'];
+  final byteSize = value['byteSize'];
+  final sha256Value = value['sha256'];
+  if (mediaType != 'image/png' ||
+      dataBase64 is! String ||
+      dataBase64.length > notificationIconMaxBase64Characters ||
+      byteSize is! int ||
+      byteSize < 0 ||
+      byteSize > notificationIconMaxRawBytes ||
+      sha256Value is! String ||
+      !_notificationIconSha256Pattern.hasMatch(sha256Value)) {
+    return null;
+  }
+
+  Uint8List bytes;
+  try {
+    bytes = Uint8List.fromList(base64Decode(dataBase64));
+  } catch (_) {
+    return null;
+  }
+  if (bytes.length > notificationIconMaxRawBytes ||
+      bytes.length != byteSize ||
+      sha256.convert(bytes).toString() != sha256Value) {
+    return null;
+  }
+
+  return <String, dynamic>{
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(bytes),
+    'byteSize': bytes.length,
+    'sha256': sha256Value,
+  };
+}
 
 bool _isValidNotificationSyncMode(String? mode) =>
     mode == _notificationSyncModeAll ||
@@ -2020,6 +2064,17 @@ class RiftDaemon {
         ? sourcePlatform == 'android' && isDismissible
         : isDismissible;
     record['isOpenable'] = isLocalSource ? false : isOpenable;
+
+    final normalizedIcon = normalizeNotificationIcon(params['icon']);
+    if (params['icon'] != null && normalizedIcon == null) {
+      RiftLog.warn(
+        '[NotificationSync] Ignoring malformed notification icon for '
+        '${record['notificationId']}',
+      );
+    }
+    if (normalizedIcon != null) {
+      record['icon'] = normalizedIcon;
+    }
     return record;
   }
 

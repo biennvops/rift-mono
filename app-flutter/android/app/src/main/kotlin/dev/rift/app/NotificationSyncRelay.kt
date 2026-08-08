@@ -133,21 +133,87 @@ object NotificationSyncRelay {
         }
     }
 
-    private fun mapToJsonObject(payload: Map<String, Any?>): JSONObject {
+    internal fun mapToJsonObject(payload: Map<String, Any?>): JSONObject {
         val obj = JSONObject()
-        payload.forEach { (key, value) -> obj.put(key, value) }
+        mapToJsonCompatible(payload).forEach { (key, value) ->
+            obj.put(key, toJsonValue(value))
+        }
         return obj
     }
 
-    private fun jsonObjectToMap(obj: JSONObject): Map<String, Any?> {
+    internal fun jsonObjectToMap(obj: JSONObject): Map<String, Any?> {
         val result = linkedMapOf<String, Any?>()
         val keys = obj.keys()
         while (keys.hasNext()) {
             val key = keys.next()
-            val value = obj.opt(key)
-            result[key] = if (value == JSONObject.NULL) null else value
+            result[key] = fromJsonValue(obj.opt(key))
         }
         return result
+    }
+
+    internal fun mapToJsonCompatible(payload: Map<String, Any?>): Map<String, Any?> =
+        payload.mapValuesTo(linkedMapOf()) { (_, value) -> toJsonCompatibleValue(value) }
+
+    internal fun jsonCompatibleToMap(payload: Map<String, Any?>): Map<String, Any?> =
+        payload.mapValuesTo(linkedMapOf()) { (_, value) -> fromJsonCompatibleValue(value) }
+
+    private fun toJsonCompatibleValue(value: Any?): Any? = when (value) {
+        null -> null
+        is JSONObject -> jsonObjectToMap(value)
+        is JSONArray -> buildList {
+            for (index in 0 until value.length()) {
+                add(fromJsonValue(value.opt(index)))
+            }
+        }
+        is Map<*, *> -> linkedMapOf<String, Any?>().also { map ->
+            value.forEach { (key, nestedValue) ->
+                if (key is String) {
+                    map[key] = toJsonCompatibleValue(nestedValue)
+                }
+            }
+        }
+        is Iterable<*> -> value.map { toJsonCompatibleValue(it) }
+        is String, is Boolean, is Number -> value
+        else -> null
+    }
+
+    private fun fromJsonCompatibleValue(value: Any?): Any? = when (value) {
+        is Map<*, *> -> linkedMapOf<String, Any?>().also { map ->
+            value.forEach { (key, nestedValue) ->
+                if (key is String) {
+                    map[key] = fromJsonCompatibleValue(nestedValue)
+                }
+            }
+        }
+        is Iterable<*> -> value.map { fromJsonCompatibleValue(it) }
+        else -> value
+    }
+
+    private fun toJsonValue(value: Any?): Any? = when (value) {
+        null -> JSONObject.NULL
+        is Map<*, *> -> JSONObject().also { obj ->
+            value.forEach { (key, nestedValue) ->
+                if (key is String) {
+                    obj.put(key, toJsonValue(nestedValue))
+                }
+            }
+        }
+        is Iterable<*> -> JSONArray().also { array ->
+            value.forEach { array.put(toJsonValue(it)) }
+        }
+        is String, is Boolean, is Number -> value
+        else -> JSONObject.NULL
+    }
+
+    private fun fromJsonValue(value: Any?): Any? = when (value) {
+        null, JSONObject.NULL -> null
+        is JSONObject -> jsonObjectToMap(value)
+        is JSONArray -> buildList {
+            for (index in 0 until value.length()) {
+                add(fromJsonValue(value.opt(index)))
+            }
+        }
+        else -> value
     }
 
     // A posted/updated event carries `postedAt`; a removed event carries `removedAt`.

@@ -3,11 +3,22 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:daemon_dart/src/daemon.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
+
+Map<String, dynamic> buildNotificationIcon(List<int> bytes) {
+  final data = Uint8List.fromList(bytes);
+  return {
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(data),
+    'byteSize': data.length,
+    'sha256': sha256.convert(data).toString(),
+  };
+}
 
 class RecordingNotificationTransport implements Transport {
   final _onMessage = StreamController<TransportMessage>.broadcast();
@@ -160,6 +171,98 @@ void main() {
       });
     });
 
+    test(
+      'preserves valid notification icons in local and listed records',
+      () async {
+        final icon = buildNotificationIcon([1, 2, 3, 4]);
+        await daemon.handleJsonRpcRequest({
+          'method': 'rift.notifyLocalNotificationEvent',
+          'params': {
+            'eventType': 'posted',
+            'notificationId': 'android-icon-1',
+            'packageName': 'com.example.chat',
+            'appName': 'Example Chat',
+            'sourcePlatform': 'android',
+            'postedAt': '2026-07-15T08:30:00.000Z',
+            'isDismissible': true,
+            'isOpenable': false,
+            'icon': icon,
+          },
+        });
+
+        final listed = await daemon.handleJsonRpcRequest({
+          'method': 'rift.listNotifications',
+        });
+        final notification =
+            (listed['notifications'] as List).single as Map<String, dynamic>;
+        expect(notification['icon'], icon);
+        expect(
+          ipcEvents.singleWhere(
+            (event) => event['method'] == 'rift.onNotificationPosted',
+          )['params']['icon'],
+          icon,
+        );
+      },
+    );
+
+    test(
+      'drops malformed notification icons without dropping the record',
+      () async {
+        final icon = buildNotificationIcon([1, 2, 3])..['sha256'] = '0' * 64;
+        await daemon.handleJsonRpcRequest({
+          'method': 'rift.notifyLocalNotificationEvent',
+          'params': {
+            'eventType': 'posted',
+            'notificationId': 'android-invalid-icon',
+            'packageName': 'com.example.chat',
+            'appName': 'Example Chat',
+            'sourcePlatform': 'android',
+            'postedAt': '2026-07-15T08:30:00.000Z',
+            'isDismissible': true,
+            'isOpenable': false,
+            'icon': icon,
+          },
+        });
+
+        final listed = await daemon.handleJsonRpcRequest({
+          'method': 'rift.listNotifications',
+        });
+        final notification =
+            (listed['notifications'] as List).single as Map<String, dynamic>;
+        expect(notification.containsKey('icon'), isFalse);
+      },
+    );
+
+    test('updated notification replaces its previous icon', () async {
+      final firstIcon = buildNotificationIcon([1, 2, 3]);
+      final secondIcon = buildNotificationIcon([4, 5, 6]);
+      Future<void> notify(String eventType, Map<String, dynamic> icon) async {
+        await daemon.handleJsonRpcRequest({
+          'method': 'rift.notifyLocalNotificationEvent',
+          'params': {
+            'eventType': eventType,
+            'notificationId': 'android-icon-update',
+            'packageName': 'com.example.chat',
+            'appName': 'Example Chat',
+            'sourcePlatform': 'android',
+            'postedAt': '2026-07-15T08:30:00.000Z',
+            'isDismissible': true,
+            'isOpenable': false,
+            'icon': icon,
+          },
+        });
+      }
+
+      await notify('posted', firstIcon);
+      await notify('updated', secondIcon);
+      final listed = await daemon.handleJsonRpcRequest({
+        'method': 'rift.listNotifications',
+      });
+      final notification =
+          (listed['notifications'] as List).single as Map<String, dynamic>;
+      expect(notification['icon'], secondIcon);
+    });
+
     test('normalizes local Android capabilities for remote actions', () async {
       await daemon.handleJsonRpcRequest({
         'method': 'rift.notifyLocalNotificationEvent',
@@ -210,6 +313,7 @@ void main() {
               'postedAt': '2026-07-15T08:30:00.000Z',
               'isDismissible': true,
               'isOpenable': true,
+              'icon': buildNotificationIcon([7, 8, 9]),
             },
           },
         );
@@ -222,6 +326,7 @@ void main() {
         expect(notification['sourceDeviceId'], peerDeviceId);
         expect(notification['isDismissible'], isTrue);
         expect(notification['isOpenable'], isTrue);
+        expect(notification['icon'], buildNotificationIcon([7, 8, 9]));
       },
     );
 

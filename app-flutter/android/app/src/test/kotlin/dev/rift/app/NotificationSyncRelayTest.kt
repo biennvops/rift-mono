@@ -1,6 +1,7 @@
 package dev.rift.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotificationSyncRelayTest {
@@ -46,5 +47,27 @@ class NotificationSyncRelayTest {
                 emptySet(),
             ),
         )
+    }
+
+    @Test
+    fun nestedIconSurvivesQueueJsonRoundTrip() {
+        val payload: Map<String, Any?> = mapOf(
+            "eventType" to "posted",
+            "notificationId" to "n1",
+            "postedAt" to "2026-07-15T08:30:00.000Z",
+            "icon" to mapOf(
+                "mediaType" to "image/png",
+                "dataBase64" to "AQID",
+                "byteSize" to 3,
+                "sha256" to "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        )
+
+        val restored = NotificationSyncRelay.jsonCompatibleToMap(
+            NotificationSyncRelay.mapToJsonCompatible(payload),
+        )
+
+        assertEquals(payload, restored)
+        assertTrue(restored["icon"] is Map<*, *>)
     }
 }

@@ -521,12 +521,61 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 bodyPreview = "See you at 6?",
                 postedAt = "2026-07-14T10:00:00Z",
                 isDismissible = true,
-                isOpenable = true
+                isOpenable = true,
+                icon = new
+                {
+                    mediaType = "image/png",
+                    dataBase64 = "AQID",
+                    byteSize = 3,
+                    sha256 = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+                }
             }),
             CancellationToken.None);
 
         var notifications = await _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
-        Assert.Contains(notifications.Notifications, notification => notification.NotificationId == "notif-router-1");
+        var notification = Assert.Single(
+            notifications.Notifications,
+            notification => notification.NotificationId == "notif-router-1");
+        Assert.Equal("AQID", notification.Icon!["dataBase64"]);
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationPosted_DropsMalformedIconOnly()
+    {
+        _trustStore.SavePeer(new PeerIdentity
+        {
+            DeviceId = "rift-peer-invalid-icon",
+            Ed25519PublicKey = new byte[32],
+            State = TrustState.Trusted,
+            LastStateTransitionAt = DateTimeOffset.UtcNow
+        });
+
+        await _router.HandleMessageAsync(
+            CreateSession("rift-peer-invalid-icon", ["notification.sync", "presence.basic", "operation.lifecycle", "security.event_log"]),
+            CreateEnvelope("rift-peer-invalid-icon", "notification.posted", new
+            {
+                notificationId = "notif-router-invalid-icon",
+                sourceDeviceId = "rift-peer-invalid-icon",
+                packageName = "com.example.chat",
+                appName = "Example Chat",
+                postedAt = "2026-07-14T10:00:00Z",
+                isDismissible = true,
+                isOpenable = false,
+                icon = new
+                {
+                    mediaType = "image/png",
+                    dataBase64 = "AQID",
+                    byteSize = 3,
+                    sha256 = new string('0', 64)
+                }
+            }),
+            CancellationToken.None);
+
+        var notifications = await _notificationSyncService.ListNotificationsAsync(CancellationToken.None);
+        var notification = Assert.Single(
+            notifications.Notifications,
+            notification => notification.NotificationId == "notif-router-invalid-icon");
+        Assert.Null(notification.Icon);
     }
 
     [Fact]

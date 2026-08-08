@@ -95,6 +95,26 @@ void main() {
     });
   });
 
+  test('desktop bridges forward binary icon bytes', () async {
+    final iconBytes = Uint8List.fromList([1, 2, 3]);
+
+    await LinuxNotifications.show(
+      title: 'Linux',
+      body: 'Mirror',
+      route: 'history.notifications',
+      iconBytes: iconBytes,
+    );
+    await WindowsShell.showNotification(
+      title: 'Windows',
+      body: 'Mirror',
+      route: 'history.notifications',
+      iconBytes: iconBytes,
+    );
+
+    expect(linuxCalls.single.arguments['iconBytes'], iconBytes);
+    expect(windowsCalls.single.arguments['iconBytes'], iconBytes);
+  });
+
   test('desktop bridges forward keyed clear requests', () async {
     expect(await LinuxNotifications.clearNotification('linux-key'), isTrue);
     expect(await WindowsShell.clearNotification('windows-key'), isTrue);

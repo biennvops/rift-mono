@@ -733,7 +733,13 @@ Returns the locally cached mirrored notification inbox plus the current local no
       "bodyPreview": "See you at 6?",
       "postedAt": "2026-07-14T09:58:00Z",
       "isDismissible": true,
-      "isOpenable": false
+      "isOpenable": false,
+      "icon": {
+        "mediaType": "image/png",
+        "dataBase64": "<Base64-encoded PNG bytes>",
+        "byteSize": 38142,
+        "sha256": "64-lowercase-hex"
+      }
     }
   ],
   "observedApps": [
@@ -829,6 +835,8 @@ Package identifiers are trimmed, empty values are removed, duplicates are remove
 Submits a locally observed or locally generated notification event into the daemon so it can update the local inbox and mirror the event to trusted peers, including desktop and Android sinks.
 
 `posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
+
+`icon` is optional presentation metadata. When present, its canonical shape is `{ "mediaType": "image/png", "dataBase64": "...", "byteSize": 38142, "sha256": "64-lowercase-hex" }`; decoded bytes are capped at 131072 and the Base64 string is rejected above 174764 characters before decoding. The digest covers the exact PNG bytes. The IPC client receives lowerCamelCase fields. Invalid or oversized icons are ignored without rejecting the notification.
 
 #### `rift.listMediaPlayback`
 

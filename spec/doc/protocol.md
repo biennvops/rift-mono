@@ -365,11 +365,24 @@ The v1 notification record fields are:
 | `postedAt`        | Yes      | RFC 3339 UTC string | Audit timestamp for the Android-side post/update event                |
 | `isDismissible`   | Yes      | boolean             | Whether remote `dismiss` is currently allowed                         |
 | `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed                            |
-| `icon`            | No       | object              | Optional metadata for an icon payload; implementations MAY omit icons |
+| `icon`            | No       | object              | Optional presentation metadata; when present it MUST use the bounded PNG schema below |
+
+When present, `icon` MUST contain exactly the canonical v1 presentation fields below. Senders MUST normalize source artwork to PNG before transport:
+
+```json
+{
+  "mediaType": "image/png",
+  "dataBase64": "<Base64-encoded PNG bytes>",
+  "byteSize": 38142,
+  "sha256": "64-lowercase-hex"
+}
+```
+
+`mediaType` MUST be `image/png`. The decoded PNG bytes MUST be at most 131072 bytes, `byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase SHA-256 digest of those exact bytes. Receivers MUST reject an icon before decoding when the Base64 string exceeds 174764 characters (the encoded bound for 131072 raw bytes), and MUST ignore malformed, oversized, or hash-mismatched icon metadata while retaining the notification. SVG, animated GIF, WebP, JPEG, resource IDs, local paths, content URIs, and remote URLs are not supported. Icons are presentation metadata only and MUST NOT be used as authorization, identity, or notification lifecycle inputs.
 
 `notification.posted` payload fields: the full notification record above.
 
-`notification.updated` payload fields: the full notification record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, notificationId)` tuple.
+`notification.updated` payload fields: the full notification record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, notificationId)` tuple, including replacing the icon with the updated record's icon or removing it when absent.
 
 `notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
 

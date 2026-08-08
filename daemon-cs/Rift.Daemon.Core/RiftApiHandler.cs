@@ -554,7 +554,8 @@ public class RiftApiHandler : IRiftApi
         bool? isDismissible = null,
         bool? isOpenable = null,
         string? sourcePlatform = null,
-        string? removedAt = null)
+        string? removedAt = null,
+        Dictionary<string, object?>? icon = null)
     {
         try
         {
@@ -571,7 +572,8 @@ public class RiftApiHandler : IRiftApi
                     BodyPreview = bodyPreview,
                     PostedAt = postedAt ?? string.Empty,
                     IsDismissible = isDismissible ?? false,
-                    IsOpenable = isOpenable ?? false
+                    IsOpenable = isOpenable ?? false,
+                    Icon = icon
                 },
                 removedAt,
                 CancellationToken.None);
