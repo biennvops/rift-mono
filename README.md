@@ -25,7 +25,8 @@ not in repo markdown.
 - `app-flutter/` - Flutter client and transport-agnostic JSON-RPC consumer
 - `tests-conformance/` - cross-implementation protocol conformance harness
 - `tests-interop/` - interoperability harness and runbook material
-- `docs/` - curated project documentation
+- `docs/` - curated project documentation, including deterministic capstone document validation
+- `rift_doc/` - Python CLI and normalized-model tooling for SEP490 capstone documents
 
 ## Documentation Rules
 

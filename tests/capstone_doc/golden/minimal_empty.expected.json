@@ -1,0 +1,11 @@
+{
+  "document": "synthetic-empty.docx",
+  "report": "demo",
+  "must_fail_rules": [
+    "required.content"
+  ],
+  "must_have_statuses": {
+    "required.content": "FAIL",
+    "should.content": "WARNING"
+  }
+}
