@@ -22,11 +22,13 @@ class StructuralValidator:
         headings: dict[str, int] = {}
         for rule in self.spec.iter_section_rules(report_id):
             title = rule.data.get("title")
-            if isinstance(title, str):
-                headings[title] = int(rule.data.get("level", _default_heading_level(title)))
+            if not isinstance(title, str):
+                continue
+            level = int(rule.data.get("level", _default_heading_level(title)))
+            headings[title] = level
             for alias in rule.data.get("aliases", []):
                 if isinstance(alias, str):
-                    headings[alias] = int(rule.data.get("level", _default_heading_level(alias)))
+                    headings[alias] = level
         return headings
 
     def validate(self, document: Document, report_id: str) -> ValidationResult:
@@ -201,12 +203,12 @@ class StructuralValidator:
         minimum = int(data.get("min_occurrences", 1 if repeatable else 1))
 
         if not candidates:
-            if bool(data.get("allow_explicit_na")) and self._has_explicit_na(document, parent_sections):
+            if bool(data.get("allow_explicit_na")) and self._has_explicit_na(rule, context_section):
                 self._add_not_applicable(
                     result,
                     rule,
                     "Required content is explicitly marked not applicable with a rationale.",
-                    parent_sections,
+                    [context_section] if context_section else [],
                     context_section,
                 )
             elif requirement == "CONDITIONAL":
@@ -552,14 +554,36 @@ class StructuralValidator:
             return any(section.normalized_title == target for section in document.all_sections())
         return None
 
-    def _has_explicit_na(self, document: Document, parents: list[Section]) -> bool:
-        if not parents:
-            text = "\n".join(block.text for block in document.raw_blocks)
-            return _looks_like_na_rationale(text)
-        return any(self._section_has_explicit_na(parent) for parent in parents)
+    def _has_explicit_na(self, rule: SectionRule, parent: Section | None) -> bool:
+        """Find only N/A text anchored to a missing child rule's parent.
+
+        A missing root section has no safe document-level anchor.  For a
+        missing child, a direct parent paragraph may waive it only when the
+        paragraph's rationale names the child rule (or one of its aliases).
+        Sibling sections and descendant sections are intentionally excluded.
+        """
+
+        if parent is None:
+            return False
+        accepted_titles = [rule.data.get("title"), *rule.data.get("aliases", [])]
+        normalized_titles = [
+            normalize_heading(str(title))
+            for title in accepted_titles
+            if isinstance(title, str) and normalize_heading(title)
+        ]
+        for block in parent.blocks:
+            if block.kind == "heading" or not _looks_like_na_rationale(block.text):
+                continue
+            text = " ".join(block.text.split()).casefold()
+            if any(re.search(rf"(?<!\w){re.escape(title)}(?!\w)", text) for title in normalized_titles):
+                return True
+        return False
 
     def _section_has_explicit_na(self, section: Section) -> bool:
-        return _looks_like_na_rationale("\n".join(block.text for block in section.all_blocks()))
+        return any(
+            block.kind != "heading" and _looks_like_na_rationale(block.text)
+            for block in section.blocks
+        )
 
     def _section_has_substantive_content(self, document: Document, section: Section) -> bool:
         paths = {item.path for item in section.all_sections()}
@@ -621,7 +645,7 @@ class StructuralValidator:
     def _na_evidence(self, sections: list[Section]) -> list[Any]:
         evidence: list[Any] = []
         for section in sections:
-            for block in section.all_blocks():
+            for block in section.blocks:
                 if block.kind != "heading" and _looks_like_na_rationale(block.text):
                     evidence.append({
                         "text": block.original_text,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from docx import Document as WordDocument
 
 from rift_doc.engine import ValidationEngine
@@ -9,7 +10,79 @@ from rift_doc.extractors.docx import extract_docx
 from rift_doc.results import Status
 from rift_doc.spec import CapstoneSpec
 
-from .conftest import create_docx
+from .conftest import ROOT, create_docx
+
+
+def _create_report1_fixture(path: Path, *, manual_headings: bool) -> Path:
+    document = WordDocument()
+
+    def heading(text: str, level: int) -> None:
+        if manual_headings:
+            document.add_paragraph(text)
+        else:
+            document.add_heading(text, level=level)
+
+    def content(text: str) -> None:
+        document.add_paragraph(text)
+
+    def table() -> None:
+        value = document.add_table(rows=2, cols=2)
+        value.cell(0, 0).text = "Header"
+        value.cell(0, 1).text = "Value"
+        value.cell(1, 0).text = "Project"
+        value.cell(1, 1).text = "Completed"
+
+    heading("I. Record of Changes", 1)
+    table()
+    heading("II. Project Introduction", 1)
+    heading("1. Overview", 2)
+    heading("1.1 Project Information", 3)
+    content("The project information describes the completed project context.")
+    heading("1.2 Project Team", 3)
+    content("The project team and its responsibilities are documented.")
+    table()
+    heading("2. Product Background", 2)
+    content("The product background explains the project need.")
+    heading("3. Existing Systems", 2)
+    content("Existing systems and their relevant capabilities are compared.")
+    heading("3.1 Existing System", 3)
+    content("The first existing system is documented for comparison.")
+    heading("3.2 Existing System", 3)
+    content("The second existing system is documented for comparison.")
+    heading("4. Business Opportunity", 2)
+    content("The business opportunity explains the expected value.")
+    heading("5. Software Product Vision", 2)
+    content("The product vision describes the intended outcome.")
+    heading("6. Project Scope & Limitations", 2)
+    heading("6.1 Major Features", 3)
+    content("The major features define the planned project scope.")
+    heading("6.2 Limitations & Exclusions", 3)
+    content("The limitations and exclusions define the project boundaries.")
+    document.save(path)
+    return path
+
+
+@pytest.mark.parametrize("manual_headings", [False, True], ids=["styled", "manually-numbered"])
+def test_report1_sections_are_nested_for_styled_and_manual_headings(
+    manual_headings: bool,
+    tmp_path: Path,
+) -> None:
+    path = _create_report1_fixture(tmp_path / "report1.docx", manual_headings=manual_headings)
+    spec = CapstoneSpec.load(ROOT / "capstone-doc-spec.v0.1.yaml")
+    engine = ValidationEngine(spec)
+    document = engine.extract(path, "report1")
+    introduction = next(section for section in document.sections if section.normalized_title == "project introduction")
+    assert [section.normalized_title for section in introduction.children] == [
+        "overview",
+        "product background",
+        "existing systems",
+        "business opportunity",
+        "software product vision",
+        "project scope & limitations",
+    ]
+    assert engine.structural.known_headings("report1")["Project Introduction"] == 1
+    result = engine.validate_normalized(document, "report1")
+    assert not any(item.status == Status.FAIL for item in result.findings)
 
 
 def _engine(minimal_spec_path: Path) -> ValidationEngine:
@@ -104,7 +177,7 @@ def test_conditional_true_missing_section_fails(minimal_spec_path: Path, tmp_pat
     assert conditional.status == Status.FAIL
 
 
-def test_conditional_explicit_na_is_not_applicable(minimal_spec_path: Path, tmp_path: Path) -> None:
+def test_unrelated_explicit_na_does_not_waive_missing_conditional(minimal_spec_path: Path, tmp_path: Path) -> None:
     document = WordDocument()
     document.add_heading("Required Section", level=1)
     document.add_paragraph("Completed content")
@@ -113,8 +186,8 @@ def test_conditional_explicit_na_is_not_applicable(minimal_spec_path: Path, tmp_
     document.save(path)
     result = _engine(minimal_spec_path).validate(path, "demo")
     conditional = next(item for item in result.findings if item.rule_id == "conditional")
-    assert conditional.status == Status.NOT_APPLICABLE
-    assert conditional.evidence[0]["text"].startswith("The conditional section")
+    assert conditional.status == Status.REVIEW_REQUIRED
+    assert conditional.status != Status.NOT_APPLICABLE
 
 
 def test_image_presence_is_pass_but_semantics_remain_reviewable(minimal_spec_path: Path, tmp_path: Path) -> None:
