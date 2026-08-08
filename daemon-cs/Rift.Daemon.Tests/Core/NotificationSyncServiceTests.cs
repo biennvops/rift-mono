@@ -123,6 +123,54 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PerformNotificationActionAsync_RejectsDuplicateAndExpiresLostResult()
+    {
+        var service = new NotificationSyncService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            NullLogger<NotificationSyncService>.Instance,
+            actionTimeout: TimeSpan.FromMilliseconds(500));
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+
+        var first = await service.PerformNotificationActionAsync(
+            "rift-peer",
+            "notif-1",
+            "dismiss",
+            CancellationToken.None);
+        var duplicate = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32010, duplicate.ErrorCode);
+        Assert.Equal("Dispatched", _operationService.GetOperation(first.OperationId).State);
+        Assert.Single(_transport.SentMessages, sent => sent.Type == "notification.actionRequest");
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_operationService.GetOperation(first.OperationId).State != "Expired" && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        var expired = _operationService.GetOperation(first.OperationId);
+        Assert.Equal("Expired", expired.State);
+        Assert.Equal("Timeout", expired.FailureReason);
+
+        var retry = await service.PerformNotificationActionAsync(
+            "rift-peer",
+            "notif-1",
+            "dismiss",
+            CancellationToken.None);
+        await service.HandleNotificationActionResultAsync(CreateActionResult(), CancellationToken.None);
+
+        Assert.Equal("Done", _operationService.GetOperation(retry.OperationId).State);
+    }
+
+    [Fact]
     public async Task PerformNotificationActionAsync_RejectsWhenPeerLacksCapability()
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["presence.basic"]);
