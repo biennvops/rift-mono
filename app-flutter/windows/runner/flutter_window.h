@@ -49,7 +49,9 @@ class FlutterWindow : public Win32Window {
       const std::wstring& body,
       const std::string& route,
       const flutter::EncodableMap& payload,
-      const std::wstring& destination_path);
+      const std::wstring& destination_path,
+      const std::string& notification_key);
+  bool ClearNotification(const std::string& notification_key);
   void DispatchPendingNotificationAction();
 
   // The project to run.
@@ -74,6 +76,7 @@ class FlutterWindow : public Win32Window {
   std::wstring pending_notification_destination_path_;
   std::string pending_notification_route_;
   flutter::EncodableMap pending_notification_payload_;
+  std::string current_native_notification_key_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

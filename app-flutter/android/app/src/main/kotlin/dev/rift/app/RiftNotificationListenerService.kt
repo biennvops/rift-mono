@@ -32,7 +32,26 @@ class RiftNotificationListenerService : NotificationListenerService() {
         super.onListenerConnected()
         activeInstance = this
         Log.i(tag, "Notification listener connected")
-        getActiveNotifications()?.forEach(::onNotificationPosted)
+
+        val activeNotifications = getActiveNotifications()
+        if (activeNotifications == null) {
+            Log.w(tag, "Active notifications unavailable; skipping reconnect reconciliation")
+            return
+        }
+
+        val trackedNotificationIds = NotificationSyncRelay.activeNotificationIds(this)
+        val eligibleActiveNotificationIds = activeNotifications
+            .asSequence()
+            .filter(::isEligibleForSync)
+            .map { it.key }
+            .toSet()
+        val staleNotificationIds = NotificationSyncRelay.staleNotificationIds(
+            trackedNotificationIds,
+            eligibleActiveNotificationIds,
+        )
+        staleNotificationIds.forEach(::emitRemovedNotification)
+
+        activeNotifications.forEach(::onNotificationPosted)
     }
 
     override fun onListenerDisconnected() {
@@ -78,6 +97,13 @@ class RiftNotificationListenerService : NotificationListenerService() {
 
         emitRemovedNotification(sbn.key)
         Log.d(tag, "Notification removed from ${sbn.packageName} key=${sbn.key}")
+    }
+
+    private fun isEligibleForSync(sbn: StatusBarNotification): Boolean {
+        if (isIgnoredOwnNotification(sbn) || shouldIgnoreNotification(sbn)) {
+            return false
+        }
+        return sbn.notification.extras != null
     }
 
     private fun shouldIgnoreNotification(sbn: StatusBarNotification): Boolean {

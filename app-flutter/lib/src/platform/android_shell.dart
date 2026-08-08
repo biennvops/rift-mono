@@ -16,6 +16,7 @@ class AndroidShell {
     required String route,
     String? destinationPath,
     Map<String, Object?>? payload,
+    String? notificationKey,
   }) async {
     if (!isSupported) {
       return false;
@@ -26,6 +27,17 @@ class AndroidShell {
       'route': route,
       if (destinationPath != null) 'destinationPath': destinationPath,
       if (payload != null) 'payload': payload,
+      if (notificationKey != null) 'notificationKey': notificationKey,
+    });
+    return result ?? false;
+  }
+
+  static Future<bool> clearNotification(String notificationKey) async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('clearNotification', {
+      'notificationKey': notificationKey,
     });
     return result ?? false;
   }

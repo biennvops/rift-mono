@@ -73,9 +73,13 @@ object NotificationSyncRelay {
     }
 
     fun hasSeenNotification(context: Context, notificationId: String): Boolean {
+        return activeNotificationIds(context).contains(notificationId)
+    }
+
+    fun activeNotificationIds(context: Context): Set<String> {
         val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
-        return prefs.getStringSet(activeNotificationIdsKey, emptySet())
-            ?.contains(notificationId) == true
+        return prefs.getStringSet(activeNotificationIdsKey, emptySet())?.toSet()
+            ?: emptySet()
     }
 
     fun markNotificationActive(context: Context, notificationId: String) {
@@ -85,6 +89,11 @@ object NotificationSyncRelay {
     fun markNotificationRemoved(context: Context, notificationId: String) {
         mutateActiveNotificationIds(context) { ids -> ids -= notificationId }
     }
+
+    internal fun staleNotificationIds(
+        trackedNotificationIds: Set<String>,
+        eligibleActiveNotificationIds: Set<String>,
+    ): Set<String> = trackedNotificationIds - eligibleActiveNotificationIds
 
     private fun mutateActiveNotificationIds(
         context: Context,

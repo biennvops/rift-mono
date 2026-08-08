@@ -50,6 +50,7 @@ void main() {
         DesktopNotificationAction(id: 'open', title: 'Open'),
         DesktopNotificationAction(id: 'dismiss', title: 'Dismiss'),
       ],
+      notificationKey: 'rift.mirror.v1.linux',
     );
 
     expect(shown, isTrue);
@@ -57,6 +58,7 @@ void main() {
       'title': 'Mirror',
       'body': 'Remote ping',
       'route': 'history.notifications',
+      'notificationKey': 'rift.mirror.v1.linux',
       'payload': const <String, Object?>{
         'notificationId': 'notif-1',
       },
@@ -67,7 +69,8 @@ void main() {
     });
   });
 
-  test('WindowsShell forwards mirrored notification payload unchanged', () async {
+  test('WindowsShell forwards mirrored notification payload unchanged',
+      () async {
     final shown = await WindowsShell.showNotification(
       title: 'Mirror',
       body: 'Remote ping',
@@ -76,6 +79,7 @@ void main() {
         'notificationId': 'notif-2',
         'sourceDeviceId': 'rift-peer-2',
       },
+      notificationKey: 'rift.mirror.v1.windows',
     );
 
     expect(shown, isTrue);
@@ -83,10 +87,21 @@ void main() {
       'title': 'Mirror',
       'body': 'Remote ping',
       'route': 'history.notifications',
+      'notificationKey': 'rift.mirror.v1.windows',
       'payload': const <String, Object?>{
         'notificationId': 'notif-2',
         'sourceDeviceId': 'rift-peer-2',
       },
     });
+  });
+
+  test('desktop bridges forward keyed clear requests', () async {
+    expect(await LinuxNotifications.clearNotification('linux-key'), isTrue);
+    expect(await WindowsShell.clearNotification('windows-key'), isTrue);
+
+    expect(linuxCalls.single.method, 'clearNotification');
+    expect(linuxCalls.single.arguments, {'notificationKey': 'linux-key'});
+    expect(windowsCalls.single.method, 'clearNotification');
+    expect(windowsCalls.single.arguments, {'notificationKey': 'windows-key'});
   });
 }

@@ -6,6 +6,9 @@ import 'package:flutter/widgets.dart';
 import '../device_status/device_status_publisher.dart';
 import '../media_playback/android_remote_media_playback_coordinator.dart';
 import '../notification_sync_policy.dart';
+import '../notification_mirror_identity.dart';
+import '../mirrored_notification_registry.dart';
+import '../mirrored_notification_reconciliation.dart';
 import '../platform/android_shell.dart';
 import '../platform/notification_route.dart';
 import 'android_daemon_isolate_transport.dart';
@@ -35,6 +38,68 @@ Future<void> runAndroidBackgroundMain() async {
   final pendingNativeEvents = <Map<String, dynamic>>[];
   var flushingNativeEvents = false;
   var notificationPolicyReady = false;
+  final mirroredNotificationRegistry =
+      await MirroredNotificationRegistry.load();
+  Future<String?>? localDeviceIdFuture;
+  Future<void> mirroredNotificationLifecycleQueue = Future<void>.value();
+
+  Future<void> enqueueMirroredNotificationLifecycle(
+    Future<void> Function() operation,
+  ) {
+    final next = mirroredNotificationLifecycleQueue.then<void>(
+      (_) => operation(),
+      onError: (Object error, StackTrace stackTrace) {
+        debugPrint(
+            '[Notification Mirror] Previous lifecycle operation failed: $error');
+        return operation();
+      },
+    );
+    mirroredNotificationLifecycleQueue = next;
+    unawaited(
+      next.then<void>(
+        (_) {},
+        onError: (Object error, StackTrace stackTrace) {
+          debugPrint(
+              '[Notification Mirror] Lifecycle operation failed: $error');
+        },
+      ),
+    );
+    return next;
+  }
+
+  Future<String?> getLocalDeviceId() {
+    return localDeviceIdFuture ??= () async {
+      try {
+        final result = await client.getDeviceInfo();
+        if (result is Map) {
+          final deviceId = result['deviceId']?.toString();
+          if (deviceId != null && deviceId.isNotEmpty) {
+            return deviceId;
+          }
+        }
+      } catch (_) {
+        localDeviceIdFuture = null;
+      }
+      return null;
+    }();
+  }
+
+  Future<bool> clearNativeMirroredNotification(String mirrorKey) async {
+    try {
+      return await AndroidShell.clearNotification(mirrorKey);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> reconcileBackgroundMirroredNotificationPreviews() {
+    return reconcileMirroredNotificationPreviews(
+      client: client,
+      registry: mirroredNotificationRegistry,
+      getLocalDeviceId: getLocalDeviceId,
+      clearNativeNotification: clearNativeMirroredNotification,
+    );
+  }
 
   Future<void> flushNativeEvents() async {
     if (flushingNativeEvents || !client.isConnected) {
@@ -249,6 +314,11 @@ Future<void> runAndroidBackgroundMain() async {
   client.onConnectionChanged.listen((isConnected) {
     if (isConnected) {
       unawaited(restorePolicyAndFlushNativeEvents());
+      unawaited(
+        enqueueMirroredNotificationLifecycle(
+          reconcileBackgroundMirroredNotificationPreviews,
+        ),
+      );
     } else {
       notificationPolicyReady = false;
     }
@@ -260,15 +330,32 @@ Future<void> runAndroidBackgroundMain() async {
   final remoteMedia = AndroidRemoteMediaPlaybackCoordinator(client);
   unawaited(remoteMedia.start());
 
-  client.onNotificationPosted.listen((event) {
+  Future<void> showMirroredNotification(Map<String, dynamic> event) async {
     if (event['sourcePlatform']?.toString() == 'android') {
       return;
     }
+    final notificationId = event['notificationId']?.toString();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    if (notificationId == null ||
+        notificationId.isEmpty ||
+        sourceDeviceId == null ||
+        sourceDeviceId.isEmpty) {
+      return;
+    }
+    final localDeviceId = await getLocalDeviceId();
+    if (localDeviceId == null || localDeviceId == sourceDeviceId) {
+      return;
+    }
+
+    final mirrorKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
+    );
     final title = event['title']?.toString().trim();
     final body = event['bodyPreview']?.toString().trim();
     final appName = event['appName']?.toString().trim();
-    unawaited(
-      AndroidShell.showNotification(
+    try {
+      final shown = await AndroidShell.showNotification(
         title: title?.isNotEmpty == true
             ? title!
             : (appName?.isNotEmpty == true ? appName! : 'Notification'),
@@ -276,11 +363,67 @@ Future<void> runAndroidBackgroundMain() async {
             ? body!
             : 'Notification from a trusted device.',
         route: NotificationRoute.historyNotifications,
+        notificationKey: mirrorKey,
         payload: {
-          'notificationId': event['notificationId']?.toString(),
-          'sourceDeviceId': event['sourceDeviceId']?.toString(),
+          'notificationId': notificationId,
+          'sourceDeviceId': sourceDeviceId,
         },
-      ),
+      );
+      if (shown) {
+        await mirroredNotificationRegistry.remember(
+          MirroredNotificationEntry(
+            mirrorKey: mirrorKey,
+            sourceDeviceId: sourceDeviceId,
+            notificationId: notificationId,
+          ),
+        );
+      }
+    } catch (_) {
+      // Best-effort native preview.
+    }
+  }
+
+  Future<void> clearMirroredNotification(Map<String, dynamic> event) async {
+    final notificationId = event['notificationId']?.toString();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    if (notificationId == null ||
+        notificationId.isEmpty ||
+        sourceDeviceId == null ||
+        sourceDeviceId.isEmpty) {
+      return;
+    }
+    final localDeviceId = await getLocalDeviceId();
+    if (localDeviceId == null || localDeviceId == sourceDeviceId) {
+      return;
+    }
+
+    final mirrorKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
     );
+    try {
+      if (await clearNativeMirroredNotification(mirrorKey)) {
+        await mirroredNotificationRegistry.forget(mirrorKey);
+      }
+    } catch (_) {
+      // Keep the registry entry for a later reconciliation.
+    }
+  }
+
+  client.onNotificationPosted.listen((event) {
+    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
   });
+  client.onNotificationUpdated.listen((event) {
+    enqueueMirroredNotificationLifecycle(() => showMirroredNotification(event));
+  });
+  client.onNotificationRemoved.listen((event) {
+    enqueueMirroredNotificationLifecycle(
+        () => clearMirroredNotification(event));
+  });
+
+  unawaited(
+    enqueueMirroredNotificationLifecycle(
+      reconcileBackgroundMirroredNotificationPreviews,
+    ),
+  );
 }

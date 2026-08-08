@@ -19,6 +19,7 @@ class LinuxNotifications {
     String? destinationPath,
     Map<String, Object?>? payload,
     List<DesktopNotificationAction>? actions,
+    String? notificationKey,
   }) async {
     if (!isSupported) {
       return false;
@@ -31,6 +32,17 @@ class LinuxNotifications {
       if (payload != null) 'payload': payload,
       if (actions != null)
         'actions': actions.map((action) => action.toMap()).toList(),
+      if (notificationKey != null) 'notificationKey': notificationKey,
+    });
+    return result ?? false;
+  }
+
+  static Future<bool> clearNotification(String notificationKey) async {
+    if (!isSupported) {
+      return false;
+    }
+    final result = await _channel.invokeMethod<bool>('clearNotification', {
+      'notificationKey': notificationKey,
     });
     return result ?? false;
   }
