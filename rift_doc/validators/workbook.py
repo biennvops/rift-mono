@@ -40,6 +40,10 @@ class WorkbookValidator:
         ignored_names = {
             name for name, rule in configured_sheets.items() if isinstance(rule, dict) and rule.get("ignore_for_content")
         }
+        patterns = contract.get("sheet_patterns", [])
+        for sheet in workbook.sheets:
+            for rule in _rules_for_sheet(sheet.name, configured_sheets, patterns):
+                _mark_sample_rows(sheet, rule)
 
         for name in required_names:
             if name not in sheets_by_name:
@@ -70,7 +74,6 @@ class WorkbookValidator:
                         spec_path=f"workbooks.{workbook_id}.required_sheets",
                     )
                 )
-        patterns = contract.get("sheet_patterns", [])
         if isinstance(patterns, list):
             for index, pattern_rule in enumerate(patterns):
                 if not isinstance(pattern_rule, dict) or not pattern_rule.get("pattern"):
@@ -367,6 +370,8 @@ class WorkbookValidator:
             ContentClass.SAMPLE_RESIDUE: ("sample.residue", "Known official sample residue remains", "classification.sample_fingerprints"),
         }
         rule_id, label, classification_path = labels[cell.classification]
+        if cell.metadata.get("sample_row_signature"):
+            classification_path = f"workbooks.{workbook_id}.sheets[{sheet.name}].sample_row_signatures"
         result.add(
             Finding(
                 status=Status.FAIL,
@@ -391,6 +396,79 @@ def _normalize_header(value: str) -> str:
 
 def _non_empty_cells(sheet: Sheet) -> list[Cell]:
     return [cell for row in sheet.rows for cell in row if not cell.is_empty]
+
+
+def _rules_for_sheet(
+    sheet_name: str,
+    configured_sheets: dict[str, Any],
+    pattern_rules: Any,
+) -> list[dict[str, Any]]:
+    named_rule = configured_sheets.get(sheet_name)
+    if isinstance(named_rule, dict):
+        return [named_rule]
+    if not isinstance(pattern_rules, list):
+        return []
+    rules: list[dict[str, Any]] = []
+    for rule in pattern_rules:
+        if not isinstance(rule, dict) or not rule.get("pattern"):
+            continue
+        try:
+            if re.search(str(rule["pattern"]), sheet_name, re.IGNORECASE):
+                rules.append(rule)
+        except re.error:
+            continue
+    return rules
+
+
+def _mark_sample_rows(sheet: Sheet, rule: dict[str, Any]) -> None:
+    signature_config = rule.get("sample_row_signatures")
+    if not isinstance(signature_config, dict):
+        return
+    signatures = signature_config.get("rows")
+    if not isinstance(signatures, list):
+        return
+    header_rows = [int(value) for value in rule.get("header_rows", []) if isinstance(value, int)]
+    header_columns: dict[str, int] = {}
+    for row_number in header_rows:
+        for cell in sheet.rows[row_number - 1] if 1 <= row_number <= len(sheet.rows) else []:
+            if not cell.is_empty:
+                header_columns[_normalize_header(str(cell.value))] = cell.column
+    first_header = min(header_rows) if header_rows else 0
+    signature_id = str(signature_config.get("id", "configured_sample_row"))
+    for row_number, row in enumerate(sheet.rows, start=1):
+        if row_number <= first_header:
+            continue
+        if not any(_sample_signature_matches(row, signature, header_columns) for signature in signatures):
+            continue
+        for cell in row:
+            if cell.is_empty:
+                continue
+            cell.classification = ContentClass.SAMPLE_RESIDUE
+            cell.metadata["sample_row_signature"] = signature_id
+            matches = cell.metadata.setdefault("classification_matches", [])
+            matches.append(
+                {
+                    "category": ContentClass.SAMPLE_RESIDUE.value,
+                    "pattern_id": signature_id,
+                    "matched_text": cell.original_text,
+                }
+            )
+
+
+def _sample_signature_matches(
+    row: list[Cell],
+    signature: Any,
+    header_columns: dict[str, int],
+) -> bool:
+    if not isinstance(signature, dict) or not signature:
+        return False
+    for field, expected in signature.items():
+        column = header_columns.get(_normalize_header(str(field)))
+        if column is None or column > len(row):
+            return False
+        if row[column - 1].value != expected:
+            return False
+    return True
 
 
 def _real_data_rows(
