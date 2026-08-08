@@ -25,6 +25,7 @@ reference material, not sprint history.
 - `../spec/vectors/README.md` - deterministic conformance vectors
 - `clipboard-file-transfer-boundary.md` - implementation boundary and rollout order for clipboard, file transfer, and later continuity extensions
 - `desktop-pair-runbook.md` - real two-machine desktop pair qualification procedure
+- `capstone-document-validation.md` - deterministic SEP490 document extraction and structural validation
 - `../tests-conformance/README.md` - conformance harness overview
 - `../tests-interop/README.md` - interoperability harness overview
 - `../app-flutter/DESIGN.md` - Flutter design system guidance

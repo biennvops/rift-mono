@@ -1,0 +1,979 @@
+$schema: capstone-doc-spec.schema.json
+spec_version: "0.1.0"
+contract_name: "Rift Capstone Documentation Structural Contract"
+source:
+  authority: "SEP490 Student Guide Fall 2023 and the supplied official templates"
+  documents:
+    - "capstone-documents/source-templates/SEP490 StudentGuide_Fall 2023.docx"
+    - "capstone-documents/source-templates/Report1_Project Introduction.docx"
+    - "capstone-documents/source-templates/Report2_Project Management Plan.docx"
+    - "capstone-documents/source-templates/Report3_Software Requirement Specification.docx"
+    - "capstone-documents/source-templates/Report4_Software Design Document.docx"
+    - "capstone-documents/source-templates/Report5_Test Documentation.docx"
+    - "capstone-documents/source-templates/Report5_Unit Test.xls"
+    - "capstone-documents/source-templates/Report5_Test Report.xlsx"
+    - "capstone-documents/source-templates/Report6_Software User Guides.docx"
+    - "capstone-documents/source-templates/Report7_Final Project Report.docx"
+    - "capstone-documents/source-templates/Report3_Project Tracking.xlsx"
+    - "capstone-documents/source-templates/Project Weekly Report_GroupName.xlsx"
+    - "capstone-documents/source-templates/Report2_Sample Project Schedule.pdf"
+    - "capstone-documents/source-templates/Report2_Sample Project Schedule.pod"
+  inspection_notes: >-
+    Report 5 workbook schemas were inspected directly from the supplied originals.
+    The contract records visible labels, sheet layout, merged regions, and
+    explicitly visible enumerations only; it does not infer hidden business rules.
+source_catalog:
+  course_regulations:
+    - id: student_guide
+      file: "SEP490 StudentGuide_Fall 2023.docx"
+      role: "Course regulations, report purposes, and tracking-template purposes"
+  individual_report_templates:
+    - report1: "Report1_Project Introduction.docx"
+    - report2: "Report2_Project Management Plan.docx"
+    - report3: "Report3_Software Requirement Specification.docx"
+    - report4: "Report4_Software Design Document.docx"
+    - report5: "Report5_Test Documentation.docx"
+    - report6: "Report6_Software User Guides.docx"
+    - report7: "Report7_Final Project Report.docx"
+  tracking_templates:
+    - "Report3_Project Tracking.xlsx"
+    - "Project Weekly Report_GroupName.xlsx"
+    - "Report5_Unit Test.xls"
+    - "Report5_Test Report.xlsx"
+  samples:
+    - id: report2_sample_schedule
+      file: "Report2_Sample Project Schedule.pdf"
+      role: "Illustrative schedule sample; not a report requirement"
+    - id: report2_sample_schedule_source
+      file: "Report2_Sample Project Schedule.pod"
+      role: "Paired schedule sample source; not a report requirement"
+    - id: report5_unit_test_example_sheet
+      file: "Report5_Unit Test.xls"
+      role: "Example sheet; not a Rift requirement"
+classification:
+  placeholder_patterns:
+    - id: double_angle_placeholder
+      pattern: '<<[^<>\n]{1,200}>>'
+    - id: single_angle_placeholder
+      pattern: '(?<!<)<\s*[A-Za-z][^<>\n]{0,160}>\s*(?!>)'
+    - id: placeholder_token
+      pattern: '\b(?:TBD|TODO|TO BE COMPLETED|FILL[- ]?IN)\b'
+  instruction_patterns:
+    - id: official_bracketed_instruction
+      pattern: '\[\s*(?:Describe|Provide|List|Add|Write|Fill|Include|Define|Prepare|Create|Draw|Replace|Identify|The section|This section|An actor|A use case)[\s\S]{0,1200}?\]'
+    - id: official_angle_instruction
+      pattern: '<\s*(?:List|Describe|Provide|Add|Write|Fill|Include|Define|Prepare|Create|Draw|Replace|Date when)[^<>\n]{0,240}>'
+    - id: official_ellipsis
+      pattern: '^\s*(?:…|\.\.\.)\s*$'
+      multiline: true
+  sample_fingerprints:
+    - id: sample_marker
+      pattern: '<<\s*Sample\s*:'
+      applies_to: [report1, report3, report7]
+      rationale: "The official templates mark illustrative sample passages explicitly."
+    - id: cafeteria_ordering_system_sample
+      pattern: '\bCafeteria Ordering System\b'
+      applies_to: [report1, report3, report7]
+      rationale: "Named sample project in the supplied official templates."
+    - id: process_impact_sample
+      pattern: '\bProcess Impact\b'
+      applies_to: [report1, report3, report7]
+      rationale: "Named sample organization in the supplied official templates."
+reports:
+  report1:
+    title: "Project Introduction"
+    short_name: "Report 1"
+    source_file: "Report1_Project Introduction.docx"
+    source_requirement: >-
+      The report describes the developer group, initial project idea, similar
+      existing solutions, business outline, product vision, scope, and limitations.
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        source_requirement: "The report uses the supplied record-of-changes table."
+        content: false
+        evidence:
+          - type: table
+            required: true
+            description: "Record of change table"
+      project_introduction:
+        title: "II. Project Introduction"
+        aliases: ["Project Introduction"]
+        requirement: MUST
+        content: false
+        children:
+          overview:
+            title: "1. Overview"
+            requirement: MUST
+            content: false
+            children:
+              project_information:
+                title: "1.1 Project Information"
+                requirement: MUST
+                content: true
+              project_team:
+                title: "1.2 Project Team"
+                requirement: MUST
+                content: true
+                evidence:
+                  - type: table
+                    required: true
+      product_background:
+        title: "2. Product Background"
+        requirement: MUST
+        content: true
+      existing_systems:
+        title: "3. Existing Systems"
+        requirement: MUST
+        content: true
+        children:
+          system_1:
+            title: "3.1 Existing System"
+            requirement: SHOULD
+            match:
+              regex: '^\s*3\.1\s+.+$'
+            content: true
+          system_2:
+            title: "3.2 Existing System"
+            requirement: SHOULD
+            match:
+              regex: '^\s*3\.2\s+.+$'
+            content: true
+      business_opportunity:
+        title: "4. Business Opportunity"
+        requirement: MUST
+        content: true
+      software_product_vision:
+        title: "5. Software Product Vision"
+        requirement: MUST
+        content: true
+      scope_limitations:
+        title: "6. Project Scope & Limitations"
+        aliases: ["6. Project Scope and Limitations"]
+        requirement: MUST
+        content: false
+        children:
+          major_features:
+            title: "6.1 Major Features"
+            requirement: MUST
+            content: true
+          limitations_exclusions:
+            title: "6.2 Limitations & Exclusions"
+            aliases: ["6.2 Limitations and Exclusions"]
+            requirement: MUST
+            content: true
+  report2:
+    title: "Project Management Plan"
+    short_name: "Report 2"
+    source_file: "Report2_Project Management Plan.docx"
+    source_requirement: "The report describes the detailed management plan for the project."
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        content: false
+        evidence: [{type: table, required: true}]
+      project_management_plan:
+        title: "II. Project Management Plan"
+        aliases: ["Software Project Management Plan", "SPMP"]
+        requirement: MUST
+        content: false
+        children:
+          overview:
+            title: "1. Overview"
+            requirement: MUST
+            content: false
+            children:
+              scope_estimation:
+                title: "1.1 Scope & Estimation"
+                aliases: ["1.1 Scope and Estimation"]
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              objectives:
+                title: "1.2 Project Objectives"
+                requirement: MUST
+                content: true
+              risks:
+                title: "1.3 Project Risks"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+          management_approach:
+            title: "2. Management Approach"
+            requirement: MUST
+            content: false
+            children:
+              project_process:
+                title: "2.1 Project Process"
+                requirement: MUST
+                content: true
+                evidence: [{type: image, required: true, semantic_review: true}]
+              quality_management:
+                title: "2.2 Quality Management"
+                requirement: MUST
+                content: true
+              training_plan:
+                title: "2.3 Training Plan"
+                requirement: SHOULD
+                content: true
+          project_deliverables:
+            title: "3. Project Deliverables"
+            requirement: MUST
+            content: true
+            evidence: [{type: table, required: true}]
+          responsibility_assignments:
+            title: "4. Responsibility Assignments"
+            requirement: MUST
+            content: true
+            evidence: [{type: table, required: true}]
+          project_communications:
+            title: "5. Project Communications"
+            requirement: MUST
+            content: true
+            evidence: [{type: table, required: true}]
+          configuration_management:
+            title: "6. Configuration Management"
+            requirement: MUST
+            content: false
+            children:
+              document_management:
+                title: "6.1 Document Management"
+                requirement: MUST
+                content: true
+              source_code_management:
+                title: "6.2 Source Code Management"
+                requirement: MUST
+                content: true
+              tools_infrastructures:
+                title: "6.3 Tools & Infrastructures"
+                aliases: ["6.3 Tools and Infrastructures"]
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+  report3:
+    title: "Software Requirement Specification"
+    short_name: "Report 3"
+    source_file: "Report3_Software Requirement Specification.docx"
+    source_files: ["Report3_Project Tracking.xlsx"]
+    source_requirement: >-
+      User requirements and software requirements are specified so stakeholders
+      understand what the team will create.
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        content: false
+        evidence: [{type: table, required: true}]
+      software_requirement_specification:
+        title: "II. Software Requirement Specification"
+        aliases: ["II. System Requirement Specification", "System Requirement Specification"]
+        requirement: MUST
+        content: false
+        children:
+          product_overview:
+            title: "1. Product Overview"
+            requirement: MUST
+            content: true
+            evidence: [{type: image, required: true, semantic_review: true}]
+          user_requirements:
+            title: "2. User Requirements"
+            requirement: MUST
+            content: false
+            children:
+              actors:
+                title: "2.1 Actors"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              use_cases:
+                title: "2.2 Use Cases"
+                requirement: MUST
+                content: false
+                children:
+                  use_case_diagrams:
+                    title: "2.2.1 Diagram(s)"
+                    aliases: ["2.2.1 Diagrams", "Use Case Diagrams"]
+                    requirement: MUST
+                    content: false
+                    evidence: [{type: image, required: true, semantic_review: true}]
+                  use_case_descriptions:
+                    title: "2.2.2 Descriptions"
+                    requirement: MUST
+                    content: true
+                    evidence: [{type: table, required: true}]
+          functional_requirements:
+            title: "3. Functional Requirements"
+            requirement: MUST
+            content: false
+            children:
+              system_functional_overview:
+                title: "3.1 System Functional Overview"
+                requirement: MUST
+                content: false
+                children:
+                  screens_flow:
+                    title: "3.1.1 Screens Flow"
+                    requirement: MUST
+                    content: false
+                    evidence: [{type: image, required: true, semantic_review: true}]
+                  screen_descriptions:
+                    title: "3.1.2 Screen Descriptions"
+                    requirement: MUST
+                    content: true
+                    evidence: [{type: table, required: true}]
+                  screen_authorization:
+                    title: "3.1.3 Screen Authorization"
+                    requirement: MUST
+                    content: true
+                    evidence: [{type: table, required: true}]
+                  non_screen_functions:
+                    title: "3.1.4 Non-Screen Functions"
+                    aliases: ["3.1.4 Non Screen Functions"]
+                    requirement: MUST
+                    content: true
+                  entity_relationship_diagram:
+                    title: "3.1.5 Entity Relationship Diagram"
+                    aliases: ["3.1.5 ERD"]
+                    requirement: CONDITIONAL
+                    condition:
+                      type: unknown
+                      rationale: "Whether the product has persistent relational entities is semantic."
+                    allow_explicit_na: true
+                    content: false
+                    evidence:
+                      - type: image
+                        required: true
+                        semantic_review: true
+                      - type: table
+                        required: true
+              feature_requirements:
+                title: "Feature Requirements"
+                requirement: MUST
+                match:
+                  regex: '^\s*3\.(?:[2-9]|[1-9][0-9]+)\s+.+$'
+                  exclude_prefixes: ["3.1"]
+                repeatable: true
+                per_feature_required: true
+                min_occurrences: 1
+                content: true
+                source_requirement: "Each project feature/function needs its functional details; the validator only decides whether configured structural evidence exists."
+          non_functional_requirements:
+            title: "4. Non-Functional Requirements"
+            requirement: MUST
+            content: false
+            children:
+              external_interfaces:
+                title: "4.1 External Interfaces"
+                requirement: MUST
+                content: true
+              quality_attributes:
+                title: "4.2 Quality Attributes"
+                requirement: MUST
+                content: false
+                children:
+                  usability:
+                    title: "4.2.1 Usability"
+                    requirement: MUST
+                    content: true
+                  reliability:
+                    title: "4.2.2 Reliability"
+                    requirement: MUST
+                    content: true
+                  performance:
+                    title: "4.2.3 Performance"
+                    requirement: MUST
+                    content: true
+                  other_quality_attributes:
+                    title: "4.2.4 Other Quality Attributes"
+                    aliases: ["4.2.4 …", "4.2.4 ..."]
+                    requirement: SHOULD
+                    content: true
+          requirement_appendix:
+            title: "5. Requirement Appendix"
+            requirement: MUST
+            content: false
+            children:
+              business_rules:
+                title: "5.1 Business Rules"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              common_requirements:
+                title: "5.2 Common Requirements"
+                requirement: SHOULD
+                content: true
+              application_messages:
+                title: "5.3 Application Messages List"
+                requirement: SHOULD
+                content: true
+                evidence: [{type: table, required: true}]
+              other_requirements:
+                title: "5.4 Other Requirements"
+                aliases: ["5.4 Other Requirements…", "5.4 Other Requirements..."]
+                requirement: MAY
+                content: true
+  report4:
+    title: "Software Design Document"
+    short_name: "Report 4"
+    source_file: "Report4_Software Design Document.docx"
+    source_requirement: "The document provides architecture, detailed design, and database design."
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        content: false
+        evidence: [{type: table, required: true}]
+      software_design_document:
+        title: "II. Software Design Document"
+        requirement: MUST
+        content: false
+        children:
+          system_design:
+            title: "1. System Design"
+            requirement: MUST
+            content: false
+            children:
+              system_architecture:
+                title: "1.1 System Architecture"
+                requirement: MUST
+                content: true
+                evidence:
+                  - type: image
+                    required: true
+                    semantic_review: true
+                    description: "Architecture diagram; image semantics remain reviewable."
+              package_diagram:
+                title: "1.2 Package Diagram"
+                requirement: MUST
+                content: true
+                evidence:
+                  - type: image
+                    required: true
+                    semantic_review: true
+                  - type: table
+                    required: true
+          database_design:
+            title: "2. Database Design"
+            requirement: CONDITIONAL
+            condition:
+              type: unknown
+              rationale: "Whether database design is applicable cannot be decided from structure alone."
+            allow_explicit_na: true
+            content: true
+            evidence: [{type: table, required: true}]
+          detailed_design:
+            title: "3. Detailed Design"
+            requirement: MUST
+            content: false
+            children:
+              feature_design:
+                title: "Feature/Function Design"
+                requirement: MUST
+                match:
+                  regex: '^\s*3\.\d+\s+.+$'
+                repeatable: true
+                per_feature_required: true
+                min_occurrences: 1
+                content: true
+                evidence:
+                  - type: image
+                    required: true
+                    semantic_review: true
+                    description: "Class/sequence design diagrams; semantic identity is reviewable."
+                source_requirement: >-
+                  Each feature/function includes class diagrams, class specifications,
+                  and sequence diagrams. Class specifications are validated as content
+                  within the feature section because the official skeleton has no
+                  dedicated class-specification heading.
+  report5:
+    title: "Software Test Documentation"
+    short_name: "Report 5"
+    source_file: "Report5_Test Documentation.docx"
+    source_requirement: "Testing plan and consolidation of project testing information."
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        content: false
+        evidence: [{type: table, required: true}]
+      testing_documentation:
+        title: "II. Testing Documentation"
+        requirement: MUST
+        content: false
+        children:
+          scope_of_testing:
+            title: "1. Scope of Testing"
+            requirement: MUST
+            content: true
+          test_strategy:
+            title: "2. Test Strategy"
+            requirement: MUST
+            content: false
+            children:
+              testing_types:
+                title: "2.1 Testing Types"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              test_levels:
+                title: "2.2 Test Levels"
+                requirement: MUST
+                content: true
+              supporting_tools:
+                title: "2.3 Supporting Tools"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+          test_plan:
+            title: "3. Test Plan"
+            requirement: MUST
+            content: false
+            children:
+              human_resources:
+                title: "3.1 Human Resources"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              test_environment:
+                title: "3.2 Test Environment"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+              test_milestones:
+                title: "3.3 Test Milestones"
+                requirement: MUST
+                content: true
+                evidence: [{type: table, required: true}]
+          test_cases:
+            title: "4. Test Cases"
+            requirement: MUST
+            content: true
+          test_reports:
+            title: "5. Test Reports"
+            requirement: MUST
+            content: true
+  report6:
+    title: "Software User Guides"
+    short_name: "Report 6"
+    source_file: "Report6_Software User Guides.docx"
+    source_requirement: "Deliverable package, installation guides, and software user manual."
+    sections:
+      record_of_changes:
+        title: "I. Record of Changes"
+        requirement: MUST
+        content: false
+        evidence: [{type: table, required: true}]
+      release_package_user_guides:
+        title: "II. Release Package & User Guides"
+        aliases: ["Release Package and User Guides"]
+        requirement: MUST
+        content: false
+        children:
+          deliverable_package:
+            title: "1. Deliverable Package"
+            requirement: MUST
+            content: true
+            evidence: [{type: table, required: true}]
+          installation_guides:
+            title: "2. Installation Guides"
+            requirement: MUST
+            content: false
+            children:
+              system_requirements:
+                title: "2.1 System Requirements"
+                requirement: MUST
+                content: true
+              installation_instruction:
+                title: "2.2 Installation Instruction"
+                aliases: ["2.2 Installation Instructions"]
+                requirement: MUST
+                content: true
+          user_manual:
+            title: "3. User Manual"
+            requirement: MUST
+            content: false
+            children:
+              manual_overview:
+                title: "3.1 Overview"
+                requirement: MUST
+                content: true
+              workflow_1:
+                title: "3.2 Workflow 1"
+                requirement: MUST
+                content: true
+              workflow_2:
+                title: "3.3 Workflow 2"
+                requirement: SHOULD
+                content: true
+  report7:
+    title: "Final Project Report"
+    short_name: "Report 7"
+    source_file: "Report7_Final Project Report.docx"
+    final_state: true
+    source_requirement: >-
+      The final report includes the final updated project outputs from Parts 1–6.
+      Phase 1 validates only this report's own structure and evidence; it does not
+      compare it with Reports 1–6.
+    sections:
+      acknowledgement:
+        title: "Acknowledgement"
+        requirement: SHOULD
+        content: true
+      definitions_acronyms:
+        title: "Definition and Acronyms"
+        aliases: ["Definitions and Acronyms"]
+        requirement: SHOULD
+        content: true
+      project_introduction:
+        title: "I. Project Introduction"
+        requirement: MUST
+        content: false
+        children:
+          overview:
+            title: "1. Overview"
+            requirement: MUST
+            content: false
+            children:
+              project_information: {title: "1.1 Project Information", requirement: MUST, content: true}
+              project_team: {title: "1.2 Project Team", requirement: MUST, content: true, evidence: [{type: table, required: true}]}
+          product_background: {title: "2. Product Background", requirement: MUST, content: true}
+          existing_systems: {title: "3. Existing Systems", requirement: MUST, content: true}
+          business_opportunity: {title: "4. Business Opportunity", requirement: MUST, content: true}
+          software_product_vision: {title: "5. Software Product Vision", requirement: MUST, content: true}
+          scope_limitations:
+            title: "6. Project Scope & Limitations"
+            aliases: ["6. Project Scope and Limitations"]
+            requirement: MUST
+            content: false
+            children:
+              major_features: {title: "6.1 Major Features", requirement: MUST, content: true}
+              limitations_exclusions: {title: "6.2 Limitations & Exclusions", requirement: MUST, content: true}
+      project_management_plan:
+        title: "II. Project Management Plan"
+        aliases: ["Software Project Management Plan", "SPMP"]
+        requirement: MUST
+        content: false
+        children:
+          overview:
+            title: "1. Overview"
+            requirement: MUST
+            content: false
+            children:
+              scope_estimation: {title: "1.1 Scope & Estimation", requirement: MUST, content: true}
+              objectives: {title: "1.2 Project Objectives", requirement: MUST, content: true}
+              risks: {title: "1.3 Project Risks", requirement: MUST, content: true}
+          management_approach:
+            title: "2. Management Approach"
+            requirement: MUST
+            content: false
+            children:
+              project_process: {title: "2.1 Project Process", requirement: MUST, content: true}
+              quality_management: {title: "2.2 Quality Management", requirement: MUST, content: true}
+              training_plan: {title: "2.3 Training Plan", requirement: SHOULD, content: true}
+          project_deliverables: {title: "3. Project Deliverables", requirement: MUST, content: true}
+          responsibility_assignments: {title: "4. Responsibility Assignments", requirement: MUST, content: true}
+          project_communications: {title: "5. Project Communications", requirement: MUST, content: true}
+          configuration_management:
+            title: "6. Configuration Management"
+            requirement: MUST
+            content: false
+            children:
+              document_management: {title: "6.1 Document Management", requirement: MUST, content: true}
+              source_code_management: {title: "6.2 Source Code Management", requirement: MUST, content: true}
+              tools_infrastructures: {title: "6.3 Tools & Infrastructures", requirement: MUST, content: true}
+      software_requirement_specification:
+        title: "III. Software Requirement Specification"
+        aliases: ["III. System Requirement Specification"]
+        requirement: MUST
+        content: false
+        children:
+          product_overview: {title: "1. Product Overview", requirement: MUST, content: true}
+          user_requirements: {title: "2. User Requirements", requirement: MUST, content: true}
+          functional_requirements:
+            title: "3. Functional Requirements"
+            requirement: MUST
+            content: false
+            children:
+              system_functional_overview: {title: "3.1 System Functional Overview", requirement: MUST, content: true}
+              feature_requirements:
+                title: "Feature Requirements"
+                requirement: MUST
+                match: {regex: '^\s*3\.(?:[2-9]|[1-9][0-9]+)\s+.+$', exclude_prefixes: ["3.1"]}
+                repeatable: true
+                per_feature_required: true
+                min_occurrences: 1
+                content: true
+          non_functional_requirements: {title: "4. Non-Functional Requirements", requirement: MUST, content: true}
+          requirement_appendix: {title: "5. Requirement Appendix", requirement: MUST, content: true}
+      software_design_description:
+        title: "IV. Software Design Description"
+        aliases: ["IV. Software Design Document"]
+        requirement: MUST
+        content: false
+        children:
+          system_design: {title: "1. System Design", requirement: MUST, content: true}
+          database_design: {title: "2. Database Design", requirement: CONDITIONAL, condition: {type: unknown, rationale: "Database applicability is semantic."}, allow_explicit_na: true, content: true}
+          detailed_design:
+            title: "3. Detailed Design"
+            requirement: MUST
+            content: false
+            children:
+              feature_design:
+                title: "Feature/Function Design"
+                requirement: MUST
+                match: {regex: '^\s*3\.\d+\s+.+$'}
+                repeatable: true
+                per_feature_required: true
+                min_occurrences: 1
+                content: true
+      software_testing_documentation:
+        title: "V. Software Testing Documentation"
+        requirement: MUST
+        content: false
+        children:
+          scope_of_testing: {title: "1. Scope of Testing", requirement: MUST, content: true}
+          test_strategy: {title: "2. Test Strategy", requirement: MUST, content: true}
+          test_plan: {title: "3. Test Plan", requirement: MUST, content: true}
+          test_cases: {title: "4. Test Cases", requirement: MUST, content: true}
+          test_reports: {title: "5. Test Reports", requirement: MUST, content: true}
+      release_package_user_guides:
+        title: "VI. Release Package & User Guides"
+        aliases: ["VI. Release Package and User Guides"]
+        requirement: MUST
+        content: false
+        children:
+          deliverable_package: {title: "1. Deliverable Package", requirement: MUST, content: true}
+          installation_guides: {title: "2. Installation Guides", requirement: MUST, content: true}
+          user_manual: {title: "3. User Manual", requirement: MUST, content: true}
+workbooks:
+  report3_project_tracking:
+    short_name: "Project Tracking"
+    source_file: "Report3_Project Tracking.xlsx"
+    purpose: "Tracking WBS, project issues, product defects, and project questions and answers."
+    required_sheets: [WBS, Issues, Defects, Q&A]
+    sheets:
+      WBS:
+        required: true
+        header_rows: [7]
+        required_columns: ["#", "Function/Screen", "Feature", "Level*", "Function/Screen Details", "Planned", "Status"]
+        min_real_data_rows: 1
+        content_required: true
+        allowed_values: {"Level*": [Simple, Medium, Complex], Status: [Pending]}
+      Issues:
+        required: true
+        header_rows: [3]
+        required_columns: ["#", Issue, "Potential Impact", Priority, Owner, "Open Date", "Close Date", Status, Notes]
+        min_real_data_rows: 1
+        content_required: true
+        allowed_values: {Priority: [Medium], Status: [Open]}
+      Defects:
+        required: true
+        header_rows: [3]
+        required_columns: [Feature, "Function/Screen", Tester, "Defect Description", "Assign To", Status, Notes]
+        min_real_data_rows: 1
+        content_required: true
+        allowed_values: {Status: [Pending]}
+      Q&A:
+        required: true
+        header_rows: [3]
+        required_columns: [Date, Question, By, Priority, Status, "Note (answer, other notes)"]
+        min_real_data_rows: 1
+        content_required: true
+        allowed_values: {Priority: [Medium], Status: [Open]}
+    observed_schema:
+      sheet_names: [WBS, Issues, Defects, Q&A]
+      notes: "The visible template uses sample WBS rows and blank tracking rows; no hidden semantics were inferred."
+  report5_unit_test:
+    short_name: "Report5 Unit Test"
+    source_file: "Report5_Unit Test.xls"
+    purpose: "Unit-test case specification and tracking."
+    required_sheets: [Cover, Functions, Statistics]
+    optional_sheets: [Guideline, Example]
+    sheet_patterns:
+      - id: function_sheets
+        pattern: '^Function\s*\d+$'
+        min: 1
+        required: true
+        header_rows: [9, 10, 39, 40, 41, 42]
+        required_labels: ["Function Code", "Function Name", "Created By", "Executed By", "Lines of code", "Test requirement", Passed, Failed, Untested, "N/A/B", "Total Test Cases", Condition, Confirm, Exception, "Log message", Result, "Type(N : Normal, A : Abnormal, B : Boundary)", "Passed/Failed", "Executed Date", "Defect ID"]
+        min_real_data_rows: 1
+        content_required: true
+    sheets:
+      Guideline:
+        required: false
+        ignore_for_content: true
+      Cover:
+        required: true
+        required_labels: ["Project Name", "Project Code", "Document Code", Creator, "Issue Date", Version, "Record of change", "Effective Date", "Change Item", "*A,D,M", "Change description", Reference]
+        label_rows: [4, 5, 6, 9, 10]
+        content_required: false
+        merged_regions: [B2:F2, B4:D4, B5:D5, B6:D6]
+      Functions:
+        required: true
+        header_rows: [10]
+        required_columns: ["No", "Requirement\nName", "Class Name", "Function Name", "Function Code(Optional)", "Sheet Name", Description, "Pre-Condition"]
+        required_labels: ["Project Name", "Project Code", "Normal number of Test cases/KLOC", "Test Environment Setup Description"]
+        label_rows: [4, 5, 6, 7]
+        min_real_data_rows: 1
+        content_required: true
+        merged_regions: [A7:D7, A4:D4, A5:D5, E4:H4, E5:H5, E7:H7, A6:D6]
+      Statistics:
+        required: true
+        header_rows: [11]
+        required_columns: ["No", "Function code", Passed, Failed, Untested, N, A, B, "Total Test Cases"]
+        required_labels: ["Project Name", "Project Code", "Document Code", Creator, "Reviewer/Approver", "Issue Date", Notes, "Sub total", "Test coverage", "Test successful coverage", "Normal case", "Abnormal case", "Boundary case"]
+        label_rows: [4, 5, 6, 7, 17, 19, 20, 21, 22, 23]
+        min_real_data_rows: 1
+        content_required: true
+        merged_regions: [A2:I2, B4:C4, D4:E4, B5:C5, D5:E5, F4:I4, F5:I5, F6:I6, B6:C6, D6:E6, B7:I7]
+      Example:
+        required: false
+        ignore_for_content: true
+    observed_schema:
+      sheet_names: [Guideline, Cover, Functions, Statistics, "Function 1", "Function 2", Function3, Example]
+      header_rows:
+        Functions: 10
+        Statistics: 11
+        function_sheets: [9, 10, 39, 40, 41, 42]
+      required_columns:
+        Functions: ["No", "Requirement\nName", "Class Name", "Function Name", "Function Code(Optional)", "Sheet Name", Description, "Pre-Condition"]
+        Statistics: ["No", "Function code", Passed, Failed, Untested, N, A, B, "Total Test Cases"]
+      explicit_enumerations:
+        Statistics: [Passed, Failed, Untested, N, A, B]
+        function_result: [P, F]
+        function_type: [N, A, B]
+      merged_header_structures:
+        Cover: [B2:F2, B4:D4, B5:D5, B6:D6]
+        Functions: [A7:D7, A4:D4, A5:D5, E4:H4, E5:H5, E7:H7, A6:D6]
+        Statistics: [A2:I2, B4:C4, D4:E4, B5:C5, D5:E5, F4:I4, F5:I5, F6:I6, B6:C6, D6:E6, B7:I7]
+      layout_notes:
+        - "Function sheets use a matrix with test-case IDs across columns F:T and result rows near 39:42."
+        - "Guideline and Example are instructional/sample material, not Rift requirements."
+  report5_test_report:
+    short_name: "Report5 Test Report"
+    source_file: "Report5_Test Report.xlsx"
+    purpose: "Integration, system, and acceptance test case and tracking."
+    required_sheets: [Cover, "Test Cases", "Test Statistics"]
+    optional_sheets: []
+    sheet_patterns:
+      - id: feature_sheets
+        pattern: '^Feature\s+\d+$'
+        min: 1
+        required: true
+        header_rows: [2, 3, 4, 5, 10]
+        required_labels: [Feature, "Test requirement", "Number of TCs", "Testing Round", Passed, Failed, Pending, "N/A", "Test Case ID", "Test Case Description", "Test Case Procedure", "Expected Results", "Pre-conditions", "Test date", Tester, Note]
+        min_real_data_rows: 1
+        content_required: true
+    sheets:
+      Cover:
+        required: true
+        required_labels: ["Project Name", "Project Code", Creator, "Issue Date", "Document Code", Version, "Record of change", "Effective Date", "Change Item", "*A,D,M", "Change description", Reference]
+        label_rows: [4, 5, 6, 9, 10]
+        content_required: false
+        merged_regions: [B2:F2, B6:D6, B5:D5, B4:D4]
+      "Test Cases":
+        required: true
+        header_rows: [8]
+        required_columns: ["No", "Function Name", "Sheet Name", Description, "Pre-Condition"]
+        required_labels: ["Project Name", "Project Code", "Test Environment Setup Description"]
+        label_rows: [3, 4, 5]
+        min_real_data_rows: 1
+        content_required: true
+        merged_regions: [D5:F5, B3:C3, B5:C5, D4:F4, D3:F3, B4:C4]
+      "Test Statistics":
+        required: true
+        header_rows: [10]
+        required_columns: ["No", "Module code", Passed, Failed, Pending, "N/A", "Number of  test cases"]
+        required_labels: ["Project Name", "Project Code", "Document Code", "Reviewer/Approver", "Issue Date", Notes, "Sub total", "Test coverage", "Test successful coverage"]
+        label_rows: [3, 4, 5, 6, 10, 14, 16, 17]
+        min_real_data_rows: 1
+        content_required: true
+        merged_regions: [E4:F4, C6:H6, B1:H1, C5:D5, E5:F5, C3:D3, E3:F3, C4:D4]
+    observed_schema:
+      sheet_names: [Cover, "Test Cases", "Test Statistics", "Feature 1", "Feature 2"]
+      header_rows:
+        "Test Cases": 8
+        "Test Statistics": 10
+        feature_sheets: [2, 3, 4, 5, 10]
+      required_columns:
+        "Test Cases": ["No", "Function Name", "Sheet Name", Description, "Pre-Condition"]
+        "Test Statistics": ["No", "Module code", Passed, Failed, Pending, "N/A", "Number of  test cases"]
+        feature_sheets: ["Test Case ID", "Test Case Description", "Test Case Procedure", "Expected Results", "Pre-conditions", "Round 1", "Test date", Tester, "Round 2", "Round 3", Note]
+      explicit_enumerations:
+        feature_status: [Passed, Failed, Pending, "N/A"]
+      merged_header_structures:
+        Cover: [B2:F2, B6:D6, B5:D5, B4:D4]
+        "Test Cases": [D5:F5, B3:C3, B5:C5, D4:F4, D3:F3, B4:C4]
+        "Test Statistics": [E4:F4, C6:H6, B1:H1, C5:D5, E5:F5, C3:D3, E3:F3, C4:D4]
+        feature_sheets: [B2:E2, B3:E3, B4:E4]
+      layout_notes:
+        - "The supplied file is XLSX even though the Report 5 DOCX instruction calls the other test workbook .xls."
+        - "Feature sheets use rows 2:5 for metadata and row 10 for test-case columns."
+  weekly_report:
+    short_name: "Weekly Report"
+    source_file: "Project Weekly Report_GroupName.xlsx"
+    purpose: "Weekly project status, issues, next-week plan, and other suggestions."
+    required_sheets: [Wx]
+    sheets:
+      Wx:
+        required: true
+        header_rows: [5, 11, 17, 23]
+        required_labels: ["PROJECT REPORT", Group, Week, "I. Status Report", "Project Task", "In-charge", Status, "II. Project Issues", "Project Issue", Owner, "III. Next Week Plan", "Project Work Item", Deadline, "IV. Other Project Masters/Suggestions"]
+        content_required: true
+        merged_regions: []
+    observed_schema:
+      sheet_names: [Wx]
+      header_rows: [5, 11, 17, 23]
+      required_columns:
+        status: ["#", "Project Task", "In-charge", Status, "Notes (Work Item in Details)"]
+        issues: ["#", "Project Issue", Owner, Status, "Notes (Solution, Suggestion, etc.)"]
+        next_week: ["#", "Project Work Item", "In-charge", Deadline, "Notes (Task Details, etc.)"]
+        other: ["#", "Project Matter/Suggestions", "Raised By", Date, Notes]
+source_ambiguities:
+  - id: OPEN-001
+    status: resolved
+    resolution: >-
+      Direct inspection of Report5_Unit Test.xls found sheets Guideline, Cover,
+      Functions, Statistics, Function 1, Function 2, Function3, and Example;
+      Functions row 10 and Statistics row 11 are the visible tabular headers.
+      Function-sheet result/type headers and merged structures are recorded under
+      workbooks.report5_unit_test.observed_schema. No unobserved columns are required.
+    source: "Report5_Unit Test.xls"
+  - id: OPEN-002
+    status: resolved
+    resolution: >-
+      Direct inspection of Report5_Test Report.xlsx found sheets Cover, Test Cases,
+      Test Statistics, Feature 1, and Feature 2; Test Cases row 8, Test Statistics
+      row 10, and feature-sheet row 10 are the visible test-case headers. Required
+      columns, explicit status values, merged structures, and the XLSX filename are
+      recorded under workbooks.report5_test_report.observed_schema.
+    source: "Report5_Test Report.xlsx"
+  - id: report5_test_report_extension_typo
+    status: resolved
+    resolution: "Use the supplied Report5_Test Report.xlsx workbook; the Report 5 DOCX instruction's .xls spelling is not used to reject the actual XLSX source."
+    source: "Report5_Test Documentation.docx and Report5_Test Report.xlsx"
+  - id: report7_naming_inconsistency
+    status: resolved
+    resolution: >-
+      Accept the supplied Report7_Final Project Report title and the Student Guide's
+      Software Product naming as equivalent report identity; the final-state report
+      remains report7 and is not rejected for that source naming difference.
+    source: "Student Guide section III.1.7 and Report7 template"
+  - id: report3_toc_body_mismatch
+    status: resolved
+    resolution: "Use detected body section structure and configured aliases; a source TOC discrepancy is not itself a finding."
+    source: "Report3 template"
+  - id: report3_business_rules_placement_mismatch
+    status: resolved
+    resolution: "Accept Business Rules under 5. Requirement Appendix at 5.1, as shown by the body template."
+    source: "Report3 template"
+  - id: report6_version_instruction_vs_sample_columns
+    status: resolved
+    resolution: "Validate deliverable evidence and content without requiring a particular version-column spelling from inconsistent examples."
+    source: "Report6 template"
+  - id: report4_class_specifications_no_skeleton_heading
+    status: resolved
+    resolution: "Class specifications are content evidence within each detailed feature/function; no dedicated heading is required."
+    source: "Report4 template prose"

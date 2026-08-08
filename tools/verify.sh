@@ -8,7 +8,7 @@ mkdir -p "$log_dir"
 usage() {
   printf '%s\n' \
     "Usage: tools/verify.sh <target>" \
-    "Targets: daemon-cs daemon-dart app-flutter tests-conformance tests-interop changed all"
+    "Targets: daemon-cs daemon-dart app-flutter tests-conformance tests-interop capstone-doc changed all"
 }
 
 run_step() {
@@ -114,6 +114,11 @@ run_tools_checks() {
   bash -n "$repo_root/tools/verify.sh"
 }
 
+run_capstone_doc_tests() {
+  cd "$repo_root"
+  "${RIFT_DOC_PYTHON:-python3}" -m pytest
+}
+
 run_changed() {
   local base_ref="${RIFT_VERIFY_BASE:-origin/main}"
   local merge_base
@@ -121,6 +126,7 @@ run_changed() {
   local path
   local failed=0
   local tools_changed=0
+  local capstone_doc_changed=0
   local daemon_cs_changed=0
   local daemon_dart_changed=0
   local rift_app_changed=0
@@ -146,6 +152,9 @@ run_changed() {
 
   while IFS= read -r path; do
     case "$path" in
+      capstone-doc-spec*|capstone-documents/*|rift_doc/*|tests/capstone_doc/*|pyproject.toml|docs/capstone-document-validation.md)
+        capstone_doc_changed=1
+        ;;
       spec/*)
         daemon_cs_changed=1
         daemon_dart_changed=1
@@ -186,6 +195,9 @@ run_changed() {
 
   if [[ "$tools_changed" -eq 1 ]]; then
     run_step tools-shell run_tools_checks || failed=1
+  fi
+  if [[ "$capstone_doc_changed" -eq 1 ]]; then
+    run_target capstone-doc || failed=1
   fi
   if [[ "$daemon_cs_changed" -eq 1 ]]; then
     run_target daemon-cs || failed=1
@@ -248,11 +260,14 @@ run_target() {
       }
       run_step tests-interop run_interop_tests || failed=1
       ;;
+    capstone-doc)
+      run_step capstone-doc-tests run_capstone_doc_tests || failed=1
+      ;;
     changed)
       run_changed || failed=1
       ;;
     all)
-      for target in daemon-cs daemon-dart app-flutter tests-conformance tests-interop; do
+      for target in daemon-cs daemon-dart app-flutter tests-conformance tests-interop capstone-doc; do
         run_target "$target" || failed=1
       done
       ;;

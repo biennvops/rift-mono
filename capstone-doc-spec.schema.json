@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rift.local/spec/capstone-doc-spec.schema.json",
+  "title": "Rift Capstone Documentation Contract",
+  "type": "object",
+  "required": [
+    "spec_version",
+    "source",
+    "classification",
+    "reports",
+    "workbooks",
+    "source_ambiguities"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "spec_version": { "type": "string", "minLength": 1 },
+    "source": { "$ref": "#/$defs/source" },
+    "source_catalog": { "type": "object", "additionalProperties": true },
+    "classification": { "$ref": "#/$defs/classification" },
+    "reports": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/report" }
+    },
+    "workbooks": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/workbook" }
+    },
+    "source_ambiguities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ambiguity" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["authority", "documents"],
+      "properties": {
+        "authority": { "type": "string", "minLength": 1 },
+        "documents": { "type": "array", "items": { "type": "string" } },
+        "inspection_notes": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "placeholder_patterns": { "$ref": "#/$defs/patterns" },
+        "instruction_patterns": { "$ref": "#/$defs/patterns" },
+        "sample_fingerprints": { "$ref": "#/$defs/patterns" }
+      },
+      "additionalProperties": true
+    },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "required": ["id", "pattern"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "pattern": { "type": "string", "minLength": 1 },
+              "regex": { "type": "string" },
+              "multiline": { "type": "boolean" },
+              "dotall": { "type": "boolean" },
+              "applies_to": { "type": "array", "items": { "type": "string" } },
+              "rationale": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    },
+    "report": {
+      "type": "object",
+      "required": ["title", "sections"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "short_name": { "type": "string" },
+        "source_file": { "type": "string" },
+        "source_files": { "type": "array", "items": { "type": "string" } },
+        "source_requirement": { "type": "string" },
+        "final_state": { "type": "boolean" },
+        "sections": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/section" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "section": {
+      "type": "object",
+      "required": ["title", "requirement"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "level": { "type": "integer", "minimum": 1 },
+        "requirement": { "enum": ["MUST", "SHOULD", "MAY", "CONDITIONAL"] },
+        "source_requirement": { "type": "string" },
+        "heading_required": { "type": "boolean" },
+        "content": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "$ref": "#/$defs/content_rule" }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              { "$ref": "#/$defs/evidence_rule" }
+            ]
+          }
+        },
+        "repeatable": { "type": "boolean" },
+        "per_feature_required": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "object", "additionalProperties": true }
+          ]
+        },
+        "match": { "type": "object", "additionalProperties": true },
+        "condition": { "type": "object", "additionalProperties": true },
+        "allow_explicit_na": { "type": "boolean" },
+        "min_occurrences": { "type": "integer", "minimum": 0 },
+        "children": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/section" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "content_rule": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "allow_explicit_na": { "type": "boolean" },
+        "scope": { "enum": ["section", "subtree"] }
+      },
+      "additionalProperties": true
+    },
+    "evidence_rule": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "required": { "type": "boolean" },
+        "semantic_review": { "type": "boolean" },
+        "description": { "type": "string" },
+        "min": { "type": "integer", "minimum": 0 },
+        "source_requirement": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "workbook": {
+      "type": "object",
+      "required": ["source_file", "purpose", "sheets"],
+      "properties": {
+        "source_file": { "type": "string" },
+        "short_name": { "type": "string" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "required_sheets": { "type": "array", "items": { "type": "string" } },
+        "sheets": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/sheet_rule" }
+        },
+        "observed_schema": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "sheet_rule": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "header_rows": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "required_columns": { "type": "array", "items": { "type": "string" } },
+        "required_labels": { "type": "array", "items": { "type": "string" } },
+        "label_rows": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "min_real_data_rows": { "type": "integer", "minimum": 0 },
+        "content_required": { "type": "boolean" },
+        "ignore_for_content": { "type": "boolean" },
+        "allowed_values": { "type": "object", "additionalProperties": { "type": "array" } },
+        "merged_regions": { "type": "array", "items": { "type": "string" } },
+        "layout": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    },
+    "ambiguity": {
+      "type": "object",
+      "required": ["id", "status", "resolution"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["open", "resolved", "informational"] },
+        "resolution": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}
