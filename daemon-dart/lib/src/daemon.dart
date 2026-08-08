@@ -1398,6 +1398,7 @@ class RiftDaemon {
         'sourceDeviceId': _identityManager!.deviceId,
         'destinationDeviceId': sourceDeviceId,
         'payload': {
+          'operationId': operationId,
           'notificationId': notificationId,
           'sourceDeviceId': sourceDeviceId,
           'requestingDeviceId': _identityManager!.deviceId,
@@ -1527,6 +1528,7 @@ class RiftDaemon {
       'sourceDeviceId': _identityManager!.deviceId,
       'destinationDeviceId': requestingDeviceId,
       'payload': {
+        'operationId': request['operationId'],
         'notificationId': request['notificationId'],
         'sourceDeviceId': _identityManager!.deviceId,
         'requestingDeviceId': requestingDeviceId,
@@ -2242,6 +2244,7 @@ class RiftDaemon {
 
     switch (type) {
       case 'notification.actionRequest':
+        final operationId = RpcUtils.requireStringParam(payload, 'operationId');
         final sourceDeviceId = RpcUtils.requireStringParam(
           payload,
           'sourceDeviceId',
@@ -2272,6 +2275,7 @@ class RiftDaemon {
         final requestId = const Uuid().v4();
         final request = <String, dynamic>{
           'requestId': requestId,
+          'operationId': operationId,
           'notificationId': notificationId,
           'sourceDeviceId': sourceDeviceId,
           'requestingDeviceId': requestingDeviceId,
@@ -2342,6 +2346,7 @@ class RiftDaemon {
         return;
 
       case 'notification.actionResult':
+        final operationId = RpcUtils.requireStringParam(payload, 'operationId');
         final sourceDeviceId = RpcUtils.requireStringParam(
           payload,
           'sourceDeviceId',
@@ -2385,16 +2390,11 @@ class RiftDaemon {
             'must be a string',
           );
         }
-        final actionKey = _notificationActionKey(
-          sourceDeviceId,
-          notificationId,
-          action,
-        );
-        final operationId = _pendingNotificationActionKeys[actionKey];
-        final pending = operationId == null
-            ? null
-            : _pendingNotificationActions[operationId];
-        if (operationId == null || pending == null) {
+        final pending = _pendingNotificationActions[operationId];
+        if (pending == null ||
+            pending['sourceDeviceId'] != sourceDeviceId ||
+            pending['notificationId'] != notificationId ||
+            pending['action'] != action) {
           RiftLog.warn(
             '[NotificationSync] Dropping unmatched action result from ${message.peerDeviceId}',
           );
@@ -2491,6 +2491,9 @@ class RiftDaemon {
 
   @visibleForTesting
   SessionManager get sessionManagerForTesting => _sessionManager!;
+
+  @visibleForTesting
+  TrustStore get trustStoreForTesting => _trustStore!;
 
   @visibleForTesting
   Future<void> handleNotificationSyncProtocolMessageForTesting(

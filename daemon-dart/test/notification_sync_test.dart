@@ -1,9 +1,62 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:daemon_dart/src/daemon.dart';
+import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
+
+class RecordingNotificationTransport implements Transport {
+  final _onMessage = StreamController<TransportMessage>.broadcast();
+  final _onDisconnect = StreamController<String>.broadcast();
+  final List<Map<String, dynamic>> sentMessages = [];
+
+  @override
+  Stream<TransportMessage> get onMessageReceived => _onMessage.stream;
+
+  @override
+  Stream<String> get onPeerDisconnected => _onDisconnect.stream;
+
+  @override
+  Future<String> connectTo(
+    String host,
+    int port, {
+    String? expectedDeviceId,
+    bool forceFreshSession = false,
+  }) async => expectedDeviceId ?? 'rift-peer';
+
+  @override
+  void disconnect(String peerDeviceId) {
+    _onDisconnect.add(peerDeviceId);
+  }
+
+  @override
+  Uint8List? getPeerCert(String peerDeviceId) => Uint8List(32);
+
+  @override
+  PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId) =>
+      const PeerSocketEndpoint(address: '127.0.0.1', port: 1);
+
+  @override
+  Future<void> sendMessage(String deviceId, Uint8List message) async {
+    sentMessages.add(json.decode(utf8.decode(message)) as Map<String, dynamic>);
+  }
+
+  @override
+  void setPeerAuthenticated(String peerDeviceId) {}
+
+  @override
+  Future<void> startServer() async {}
+
+  @override
+  Future<void> stopServer() async {
+    await _onMessage.close();
+    await _onDisconnect.close();
+  }
+}
 
 void main() {
   group('RiftDaemon notification sync', () {
@@ -28,15 +81,19 @@ void main() {
     late Directory tempDir;
     late RiftDaemon daemon;
     late List<Map<String, dynamic>> ipcEvents;
+    late RecordingNotificationTransport transport;
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('rift_notification_sync');
       ipcEvents = <Map<String, dynamic>>[];
+      transport = RecordingNotificationTransport();
       daemon = RiftDaemon(
         storagePath: tempDir.path,
         port: 0,
         enableDiscovery: false,
         onIpcEvent: ipcEvents.add,
+        peerTransport: transport,
+        mediaPlaybackActionTimeout: const Duration(milliseconds: 50),
       );
       await daemon.start();
     });
@@ -47,6 +104,18 @@ void main() {
         await tempDir.delete(recursive: true);
       }
     });
+
+    void configureNotificationPeer(String peerDeviceId) {
+      final context =
+          SessionContext(peerDeviceId: peerDeviceId, isInitiator: false)
+            ..handshakeState = HandshakeState.established
+            ..trustState = TrustState.trusted
+            ..capabilityNegotiated = true
+            ..negotiatedCapabilities = [
+              Capability(name: 'notification.sync', version: 1),
+            ];
+      daemon.sessionManagerForTesting.injectContextForTesting(context);
+    }
 
     test('stores local posted notifications and returns inbox state', () async {
       final result = await daemon.handleJsonRpcRequest({
@@ -167,6 +236,97 @@ void main() {
     });
 
     test(
+      'correlates late notification action results by operationId',
+      () async {
+        const peerDeviceId = 'rift-peer';
+        configureNotificationPeer(peerDeviceId);
+        await daemon.trustStoreForTesting.upsertPeer(
+          PeerRecord(
+            deviceId: peerDeviceId,
+            certDer: Uint8List(32),
+            state: TrustState.trusted,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+        await daemon.handleNotificationSyncProtocolMessageForTesting(
+          peerDeviceId,
+          {
+            'type': 'notification.posted',
+            'payload': {
+              'notificationId': 'late-result-notification',
+              'sourceDeviceId': peerDeviceId,
+              'packageName': 'com.example.chat',
+              'appName': 'Example Chat',
+              'postedAt': '2026-07-15T08:30:00.000Z',
+              'isDismissible': true,
+              'isOpenable': false,
+            },
+          },
+        );
+
+        final first = await daemon.handleJsonRpcRequest({
+          'method': 'rift.performNotificationAction',
+          'params': {
+            'sourceDeviceId': peerDeviceId,
+            'notificationId': 'late-result-notification',
+            'action': 'dismiss',
+          },
+        });
+        final firstOperationId = first['operationId'] as String;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final expired = await daemon.handleJsonRpcRequest({
+          'method': 'rift.getOperation',
+          'params': {'operationId': firstOperationId},
+        });
+        expect(expired['state'], 'Failed');
+        expect(expired['failureReason'], 'Timeout');
+
+        final retry = await daemon.handleJsonRpcRequest({
+          'method': 'rift.performNotificationAction',
+          'params': {
+            'sourceDeviceId': peerDeviceId,
+            'notificationId': 'late-result-notification',
+            'action': 'dismiss',
+          },
+        });
+        final retryOperationId = retry['operationId'] as String;
+        expect(retryOperationId, isNot(firstOperationId));
+        final localDeviceId = daemon.getDeviceInfo()['deviceId'];
+        final actionRequests = transport.sentMessages.where(
+          (message) => message['type'] == 'notification.actionRequest',
+        );
+        expect(actionRequests, hasLength(2));
+
+        Future<void> deliverResult(String operationId) => daemon
+            .handleNotificationSyncProtocolMessageForTesting(peerDeviceId, {
+              'type': 'notification.actionResult',
+              'payload': {
+                'operationId': operationId,
+                'notificationId': 'late-result-notification',
+                'sourceDeviceId': peerDeviceId,
+                'requestingDeviceId': localDeviceId,
+                'action': 'dismiss',
+                'success': true,
+              },
+            });
+
+        await deliverResult(firstOperationId);
+        final stillPending = await daemon.handleJsonRpcRequest({
+          'method': 'rift.getOperation',
+          'params': {'operationId': retryOperationId},
+        });
+        expect(stillPending['state'], 'Dispatched');
+
+        await deliverResult(retryOperationId);
+        final completed = await daemon.handleJsonRpcRequest({
+          'method': 'rift.getOperation',
+          'params': {'operationId': retryOperationId},
+        });
+        expect(completed['state'], 'Done');
+      },
+    );
+
+    test(
       'valid incoming Android dismiss emits a native action request',
       () async {
         const peerDeviceId = 'rift-desktop';
@@ -200,6 +360,7 @@ void main() {
           {
             'type': 'notification.actionRequest',
             'payload': {
+              'operationId': 'operation-android-local-action',
               'notificationId': 'android-local-action',
               'sourceDeviceId': localDeviceId,
               'requestingDeviceId': peerDeviceId,
@@ -212,10 +373,26 @@ void main() {
         final event = ipcEvents.singleWhere(
           (event) => event['method'] == 'rift.onNotificationActionRequest',
         );
+        expect(
+          event['params']['operationId'],
+          'operation-android-local-action',
+        );
         expect(event['params']['notificationId'], 'android-local-action');
         expect(event['params']['sourceDeviceId'], localDeviceId);
         expect(event['params']['requestingDeviceId'], peerDeviceId);
         expect(event['params']['action'], 'dismiss');
+        final requestId = event['params']['requestId'];
+        await daemon.handleJsonRpcRequest({
+          'method': 'rift.reportLocalNotificationActionHandled',
+          'params': {'requestId': requestId, 'success': true},
+        });
+        final actionResult = transport.sentMessages.singleWhere(
+          (message) => message['type'] == 'notification.actionResult',
+        );
+        expect(
+          actionResult['payload']['operationId'],
+          'operation-android-local-action',
+        );
       },
     );
 

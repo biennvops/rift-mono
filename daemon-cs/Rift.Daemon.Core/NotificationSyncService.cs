@@ -250,6 +250,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             "notification.actionRequest",
             new
             {
+                operationId,
                 notificationId = notification.NotificationId,
                 sourceDeviceId = notification.SourceDeviceId,
                 requestingDeviceId = _identityManager.GetDeviceId(),
@@ -454,18 +455,29 @@ public sealed class NotificationSyncService : INotificationSyncService
             throw new InvalidOperationException("notification.actionResult requestingDeviceId did not match the local device identity.");
         }
 
+        if (string.IsNullOrWhiteSpace(result.OperationId))
+        {
+            throw new InvalidOperationException("notification.actionResult operationId is required.");
+        }
+
         var action = NormalizeAction(result.Action);
         PendingNotificationAction pending;
         lock (_gate)
         {
-            var pendingKey = GetPendingActionKey(result.SourceDeviceId, result.NotificationId, action);
-            if (!_pendingActionKeys.TryGetValue(pendingKey, out var operationId) ||
-                !_pendingActionsByOperationId.TryGetValue(operationId, out pending!))
+            if (!_pendingActionsByOperationId.TryGetValue(result.OperationId, out pending!))
             {
-                throw new InvalidOperationException($"No pending notification action exists for '{result.NotificationId}' ({action}).");
+                throw new InvalidOperationException($"No pending notification action exists for operation '{result.OperationId}'.");
             }
 
-            _pendingActionsByOperationId.Remove(operationId);
+            if (!string.Equals(pending.SourceDeviceId, result.SourceDeviceId, StringComparison.Ordinal) ||
+                !string.Equals(pending.NotificationId, result.NotificationId, StringComparison.Ordinal) ||
+                !string.Equals(pending.Action, action, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Notification action result did not match pending operation '{result.OperationId}'.");
+            }
+
+            var pendingKey = GetPendingActionKey(pending.SourceDeviceId, pending.NotificationId, pending.Action);
+            _pendingActionsByOperationId.Remove(result.OperationId);
             _pendingActionKeys.Remove(pendingKey);
         }
         pending.ExpiryTimer?.Dispose();

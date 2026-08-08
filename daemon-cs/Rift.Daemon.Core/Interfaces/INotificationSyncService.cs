@@ -100,6 +100,7 @@ public sealed class NotificationRemovedRecord
 
 public sealed class NotificationActionResultRecord
 {
+    public string OperationId { get; init; } = string.Empty;
     public string NotificationId { get; init; } = string.Empty;
     public string SourceDeviceId { get; init; } = string.Empty;
     public string RequestingDeviceId { get; init; } = string.Empty;

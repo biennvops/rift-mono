@@ -102,6 +102,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
         var requestPayload = Assert.Single(
             _transport.Payloads,
             sent => sent.Type == "notification.actionRequest").Payload;
+        Assert.Equal(result.OperationId, requestPayload.GetProperty("operationId").GetString());
         Assert.Equal("notif-1", requestPayload.GetProperty("notificationId").GetString());
         Assert.Equal("rift-peer", requestPayload.GetProperty("sourceDeviceId").GetString());
         Assert.Equal(_identityManager.GetDeviceId(), requestPayload.GetProperty("requestingDeviceId").GetString());
@@ -110,6 +111,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         await _service.HandleNotificationActionResultAsync(new NotificationActionResultRecord
         {
+            OperationId = result.OperationId,
             NotificationId = "notif-1",
             SourceDeviceId = "rift-peer",
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -165,8 +167,15 @@ public sealed class NotificationSyncServiceTests : IDisposable
             "notif-1",
             "dismiss",
             CancellationToken.None);
-        await service.HandleNotificationActionResultAsync(CreateActionResult(), CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.HandleNotificationActionResultAsync(
+                CreateActionResult(operationId: first.OperationId),
+                CancellationToken.None));
+        Assert.Equal("Dispatched", _operationService.GetOperation(retry.OperationId).State);
 
+        await service.HandleNotificationActionResultAsync(
+            CreateActionResult(operationId: retry.OperationId),
+            CancellationToken.None);
         Assert.Equal("Done", _operationService.GetOperation(retry.OperationId).State);
     }
 
@@ -291,7 +300,9 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         Assert.Equal("Dispatched", _operationService.GetOperation(pending.OperationId).State);
 
-        await _service.HandleNotificationActionResultAsync(CreateActionResult(), CancellationToken.None);
+        await _service.HandleNotificationActionResultAsync(
+            CreateActionResult(operationId: pending.OperationId),
+            CancellationToken.None);
 
         Assert.Equal("Done", _operationService.GetOperation(pending.OperationId).State);
     }
@@ -345,8 +356,12 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         var actionTask = service.PerformNotificationActionAsync("rift-peer", "notif-race", "open", CancellationToken.None);
         await delayedTransport.WaitForSendStartedAsync();
+        var operationId = Assert.Single(
+            delayedTransport.Payloads,
+            sent => sent.Type == "notification.actionRequest").Payload.GetProperty("operationId").GetString();
         await service.HandleNotificationActionResultAsync(new NotificationActionResultRecord
         {
+            OperationId = operationId!,
             NotificationId = "notif-race",
             SourceDeviceId = "rift-peer",
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -690,6 +705,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     private NotificationActionResultRecord CreateActionResult(
+        string? operationId = null,
         string notificationId = "notif-1",
         string sourceDeviceId = "rift-peer",
         string? requestingDeviceId = null,
@@ -700,6 +716,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     {
         return new NotificationActionResultRecord
         {
+            OperationId = operationId ?? "operation-1",
             NotificationId = notificationId,
             SourceDeviceId = sourceDeviceId,
             RequestingDeviceId = requestingDeviceId ?? _identityManager.GetDeviceId(),

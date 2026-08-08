@@ -373,9 +373,9 @@ The v1 notification record fields are:
 
 `notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
 
-`notification.actionRequest` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
+`notification.actionRequest` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `operationId` identifies the requester's operation and MUST be echoed unchanged by the corresponding result. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
 
-`notification.actionResult` payload fields: `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
+`notification.actionResult` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `operationId` MUST identify the corresponding action request; receivers MUST correlate results by this identifier and MUST NOT reuse notification identity fields as the result correlation key. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
 ### 7.5A Media Playback Sync
 
