@@ -277,7 +277,12 @@ class WorkbookValidator:
 
         if rule.get("content_required"):
             minimum = int(rule.get("min_real_data_rows", 1))
-            data_rows = _real_data_rows(sheet, header_rows, [int(value) for value in rule.get("label_rows", []) if isinstance(value, int)])
+            data_rows = _real_data_rows(
+                sheet,
+                header_rows,
+                [int(value) for value in rule.get("label_rows", []) if isinstance(value, int)],
+                rule.get("allowed_values") if isinstance(rule.get("allowed_values"), dict) else None,
+            )
             if len(data_rows) < minimum:
                 result.add(
                     Finding(
@@ -388,13 +393,40 @@ def _non_empty_cells(sheet: Sheet) -> list[Cell]:
     return [cell for row in sheet.rows for cell in row if not cell.is_empty]
 
 
-def _real_data_rows(sheet: Sheet, header_rows: list[int], label_rows: list[int]) -> set[int]:
+def _real_data_rows(
+    sheet: Sheet,
+    header_rows: list[int],
+    label_rows: list[int],
+    allowed_values: dict[str, Any] | None = None,
+) -> set[int]:
     skip = set(header_rows) | set(label_rows)
     first_header = min(header_rows) if header_rows else 0
+    allowed_columns = _allowed_value_columns(sheet, header_rows, allowed_values or {})
     rows: set[int] = set()
     for row_number, row in enumerate(sheet.rows, start=1):
         if row_number in skip or row_number <= first_header:
             continue
-        if any(not cell.is_empty and cell.classification == ContentClass.REAL_CONTENT for cell in row):
+        real_cells = [
+            cell
+            for cell in row
+            if not cell.is_empty
+            and cell.formula is None
+            and cell.classification == ContentClass.REAL_CONTENT
+        ]
+        if real_cells and (not allowed_columns or any(cell.column not in allowed_columns for cell in real_cells)):
             rows.add(row_number)
     return rows
+
+
+def _allowed_value_columns(
+    sheet: Sheet,
+    header_rows: list[int],
+    allowed_values: dict[str, Any],
+) -> set[int]:
+    columns: set[int] = set()
+    targets = {_normalize_header(str(field)) for field in allowed_values}
+    for row_number in header_rows:
+        for cell in sheet.rows[row_number - 1] if 1 <= row_number <= len(sheet.rows) else []:
+            if _normalize_header(str(cell.value)) in targets:
+                columns.add(cell.column)
+    return columns

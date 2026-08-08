@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 from typing import Any, Iterator
 
 
@@ -79,6 +80,10 @@ class CapstoneSpec:
                 location = _schema_path(error.absolute_path)
                 formatted.append(f"{location}: {error.message}")
             raise SpecValidationError(formatted)
+
+        regex_errors = _contract_regex_errors(data)
+        if regex_errors:
+            raise SpecValidationError(regex_errors)
         return cls(path=spec_path, data=data, schema_path=resolved_schema)
 
     @staticmethod
@@ -203,3 +208,66 @@ def _schema_path(path: Any) -> str:
         else:
             result += f".{part}"
     return result
+
+
+def _contract_regex_errors(data: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+
+    def check(value: Any, path: str) -> None:
+        if not isinstance(value, str):
+            return
+        try:
+            re.compile(value)
+        except re.error as exc:
+            errors.append(f"{path}: invalid regular expression: {exc}")
+
+    classification = data.get("classification", {})
+    if isinstance(classification, dict):
+        for key in ("placeholder_patterns", "instruction_patterns", "sample_fingerprints"):
+            patterns = classification.get(key, [])
+            if not isinstance(patterns, list):
+                continue
+            for index, item in enumerate(patterns):
+                if isinstance(item, str):
+                    check(item, f"$.classification.{key}[{index}]")
+                elif isinstance(item, dict):
+                    expression_key = "pattern" if "pattern" in item else "regex"
+                    check(item.get(expression_key), f"$.classification.{key}[{index}].{expression_key}")
+
+    def walk_sections(items: Any, path: str) -> None:
+        if not isinstance(items, dict):
+            return
+        for rule_id, rule in items.items():
+            if not isinstance(rule, dict):
+                continue
+            rule_path = f"{path}.{rule_id}"
+            match = rule.get("match")
+            if isinstance(match, dict):
+                check(match.get("regex"), f"{rule_path}.match.regex")
+            condition = rule.get("condition")
+            if isinstance(condition, dict):
+                check(condition.get("pattern"), f"{rule_path}.condition.pattern")
+                patterns = condition.get("patterns", [])
+                if isinstance(patterns, list):
+                    for index, pattern in enumerate(patterns):
+                        check(pattern, f"{rule_path}.condition.patterns[{index}]")
+            walk_sections(rule.get("children"), f"{rule_path}.children")
+
+    reports = data.get("reports", {})
+    if isinstance(reports, dict):
+        for report_id, report in reports.items():
+            if isinstance(report, dict):
+                walk_sections(report.get("sections"), f"$.reports.{report_id}.sections")
+
+    workbooks = data.get("workbooks", {})
+    if isinstance(workbooks, dict):
+        for workbook_id, workbook in workbooks.items():
+            if not isinstance(workbook, dict):
+                continue
+            patterns = workbook.get("sheet_patterns", [])
+            if isinstance(patterns, list):
+                for index, pattern_rule in enumerate(patterns):
+                    if isinstance(pattern_rule, dict):
+                        check(pattern_rule.get("pattern"), f"$.workbooks.{workbook_id}.sheet_patterns[{index}].pattern")
+
+    return errors

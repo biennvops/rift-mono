@@ -119,50 +119,50 @@ reports:
                 evidence:
                   - type: table
                     required: true
-      product_background:
-        title: "2. Product Background"
-        requirement: MUST
-        content: true
-      existing_systems:
-        title: "3. Existing Systems"
-        requirement: MUST
-        content: true
-        children:
-          system_1:
-            title: "3.1 Existing System"
-            requirement: SHOULD
-            match:
-              regex: '^\s*3\.1\s+.+$'
-            content: true
-          system_2:
-            title: "3.2 Existing System"
-            requirement: SHOULD
-            match:
-              regex: '^\s*3\.2\s+.+$'
-            content: true
-      business_opportunity:
-        title: "4. Business Opportunity"
-        requirement: MUST
-        content: true
-      software_product_vision:
-        title: "5. Software Product Vision"
-        requirement: MUST
-        content: true
-      scope_limitations:
-        title: "6. Project Scope & Limitations"
-        aliases: ["6. Project Scope and Limitations"]
-        requirement: MUST
-        content: false
-        children:
-          major_features:
-            title: "6.1 Major Features"
+          product_background:
+            title: "2. Product Background"
             requirement: MUST
             content: true
-          limitations_exclusions:
-            title: "6.2 Limitations & Exclusions"
-            aliases: ["6.2 Limitations and Exclusions"]
+          existing_systems:
+            title: "3. Existing Systems"
             requirement: MUST
             content: true
+            children:
+              system_1:
+                title: "3.1 Existing System"
+                requirement: SHOULD
+                match:
+                  regex: '^\s*3\.1\s+.+$'
+                content: true
+              system_2:
+                title: "3.2 Existing System"
+                requirement: SHOULD
+                match:
+                  regex: '^\s*3\.2\s+.+$'
+                content: true
+          business_opportunity:
+            title: "4. Business Opportunity"
+            requirement: MUST
+            content: true
+          software_product_vision:
+            title: "5. Software Product Vision"
+            requirement: MUST
+            content: true
+          scope_limitations:
+            title: "6. Project Scope & Limitations"
+            aliases: ["6. Project Scope and Limitations"]
+            requirement: MUST
+            content: false
+            children:
+              major_features:
+                title: "6.1 Major Features"
+                requirement: MUST
+                content: true
+              limitations_exclusions:
+                title: "6.2 Limitations & Exclusions"
+                aliases: ["6.2 Limitations and Exclusions"]
+                requirement: MUST
+                content: true
   report2:
     title: "Project Management Plan"
     short_name: "Report 2"
@@ -765,22 +765,16 @@ workbooks:
         required: true
         header_rows: [3]
         required_columns: ["#", Issue, "Potential Impact", Priority, Owner, "Open Date", "Close Date", Status, Notes]
-        min_real_data_rows: 1
-        content_required: true
         allowed_values: {Priority: [Medium], Status: [Open]}
       Defects:
         required: true
         header_rows: [3]
         required_columns: [Feature, "Function/Screen", Tester, "Defect Description", "Assign To", Status, Notes]
-        min_real_data_rows: 1
-        content_required: true
         allowed_values: {Status: [Pending]}
       Q&A:
         required: true
         header_rows: [3]
         required_columns: [Date, Question, By, Priority, Status, "Note (answer, other notes)"]
-        min_real_data_rows: 1
-        content_required: true
         allowed_values: {Priority: [Medium], Status: [Open]}
     observed_schema:
       sheet_names: [WBS, Issues, Defects, Q&A]

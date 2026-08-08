@@ -5,8 +5,10 @@ from pathlib import Path
 from rift_doc.cli import main
 from rift_doc.engine import ValidationEngine
 from rift_doc.output import render_json, render_text
+from rift_doc.model import Cell, ContentClass, Sheet
 from rift_doc.results import Finding, Status, ValidationResult
 from rift_doc.spec import CapstoneSpec
+from rift_doc.validators.workbook import _real_data_rows
 
 from .conftest import ROOT, SOURCE_TEMPLATES, create_docx
 
@@ -18,6 +20,21 @@ def test_real_project_tracking_workbook_matches_observed_layout() -> None:
     spec = CapstoneSpec.load(ROOT / "capstone-doc-spec.v0.1.yaml")
     result = ValidationEngine(spec).validate(path, "report3_project_tracking")
     assert not any(item.status == Status.FAIL for item in result.findings)
+
+
+def test_real_data_rows_exclude_formula_and_sample_cells() -> None:
+    rows = [
+        [
+            Cell(value="Header", row=1, column=1, classification=ContentClass.REAL_CONTENT),
+            Cell(value="Status", row=1, column=2, classification=ContentClass.REAL_CONTENT),
+        ],
+        [Cell(value="cached formula", row=2, column=1, formula="=1+1", classification=ContentClass.REAL_CONTENT)],
+        [Cell(value="official example", row=3, column=1, classification=ContentClass.SAMPLE_RESIDUE)],
+        [Cell(value="Project row", row=4, column=1, classification=ContentClass.REAL_CONTENT)],
+        [Cell(value="Pending", row=5, column=2, classification=ContentClass.REAL_CONTENT)],
+    ]
+    sheet = Sheet(name="Data", rows=rows)
+    assert _real_data_rows(sheet, [1], [], {"Status": ["Pending"]}) == {4}
 
 
 def test_report5_schema_headers_are_driven_by_yaml() -> None:

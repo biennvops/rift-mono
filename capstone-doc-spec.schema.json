@@ -56,20 +56,24 @@
       "type": "array",
       "items": {
         "oneOf": [
-          { "type": "string" },
+          { "type": "string", "minLength": 1 },
           {
             "type": "object",
-            "required": ["id", "pattern"],
+            "required": ["id"],
             "properties": {
               "id": { "type": "string", "minLength": 1 },
               "pattern": { "type": "string", "minLength": 1 },
-              "regex": { "type": "string" },
+              "regex": { "type": "string", "minLength": 1 },
               "multiline": { "type": "boolean" },
               "dotall": { "type": "boolean" },
               "applies_to": { "type": "array", "items": { "type": "string" } },
               "rationale": { "type": "string" }
             },
-            "additionalProperties": true
+            "oneOf": [
+              { "required": ["pattern"] },
+              { "required": ["regex"] }
+            ],
+            "additionalProperties": false
           }
         ]
       }
@@ -123,8 +127,8 @@
             { "type": "object", "additionalProperties": true }
           ]
         },
-        "match": { "type": "object", "additionalProperties": true },
-        "condition": { "type": "object", "additionalProperties": true },
+        "match": { "$ref": "#/$defs/match_rule" },
+        "condition": { "$ref": "#/$defs/condition" },
         "allow_explicit_na": { "type": "boolean" },
         "min_occurrences": { "type": "integer", "minimum": 0 },
         "children": {
@@ -132,7 +136,7 @@
           "additionalProperties": { "$ref": "#/$defs/section" }
         }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "content_rule": {
       "type": "object",
@@ -164,17 +168,25 @@
         "short_name": { "type": "string" },
         "purpose": { "type": "string", "minLength": 1 },
         "required_sheets": { "type": "array", "items": { "type": "string" } },
+        "optional_sheets": { "type": "array", "items": { "type": "string" } },
+        "sheet_patterns": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/sheet_pattern" }
+        },
         "sheets": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/sheet_rule" }
         },
         "observed_schema": { "type": "object", "additionalProperties": true }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
     "sheet_rule": {
       "type": "object",
       "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "pattern": { "type": "string", "minLength": 1 },
+        "min": { "type": "integer", "minimum": 0 },
         "required": { "type": "boolean" },
         "header_rows": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
         "required_columns": { "type": "array", "items": { "type": "string" } },
@@ -183,12 +195,87 @@
         "min_real_data_rows": { "type": "integer", "minimum": 0 },
         "content_required": { "type": "boolean" },
         "ignore_for_content": { "type": "boolean" },
-        "allowed_values": { "type": "object", "additionalProperties": { "type": "array" } },
+        "enforce_allowed_values": { "type": "boolean" },
+        "allowed_values": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": ["string", "number", "boolean", "null"] }
+          }
+        },
         "merged_regions": { "type": "array", "items": { "type": "string" } },
         "layout": { "type": "object", "additionalProperties": true }
       },
-      "additionalProperties": true
+      "additionalProperties": false
     },
+    "sheet_pattern": {
+      "allOf": [
+        { "$ref": "#/$defs/sheet_rule" },
+        { "type": "object", "required": ["pattern"] }
+      ]
+    },
+    "match_rule": {
+      "type": "object",
+      "required": ["regex"],
+      "properties": {
+        "regex": { "type": "string", "minLength": 1 },
+        "exclude_prefixes": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "condition": {
+      "oneOf": [
+        { "$ref": "#/$defs/boolean_condition" },
+        { "$ref": "#/$defs/text_condition" },
+        { "$ref": "#/$defs/section_present_condition" },
+        { "$ref": "#/$defs/unknown_condition" }
+      ]
+    },
+    "boolean_condition": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["true", "always_true", "false", "always_false"] }
+      },
+      "additionalProperties": false
+    },
+    "text_condition": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["document_contains_any", "document_contains", "document_contains_none", "document_not_contains"] },
+        "pattern": { "type": "string", "minLength": 1 },
+        "patterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "anyOf": [
+        { "required": ["pattern"] },
+        { "required": ["patterns"] }
+      ],
+      "additionalProperties": false
+    },
+    "section_present_condition": {
+      "type": "object",
+      "required": ["type", "title"],
+      "properties": {
+        "type": { "const": "section_present" },
+        "title": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "unknown_condition": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "unknown" },
+        "rationale": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
     "ambiguity": {
       "type": "object",
       "required": ["id", "status", "resolution"],
