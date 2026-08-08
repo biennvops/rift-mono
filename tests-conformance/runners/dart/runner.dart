@@ -62,6 +62,9 @@ Future<void> _runCase(
     case 'envelope-validation':
       _runEnvelopeValidation(testCase);
       return;
+    case 'notification-action-correlation':
+      _runNotificationActionCorrelation(testCase);
+      return;
     default:
       throw UnsupportedError('Unknown conformance suite: $suiteName');
   }
@@ -121,6 +124,86 @@ void _runClipboardHash(Map<String, dynamic> testCase) {
   _expectEquals(content.length, expected['byteSize']);
   _expectEquals(_bytesToHex(digest), expected['sha256Hex']);
   _expectEquals(base64Encode(content), expected['contentBase64']);
+}
+
+void _runNotificationActionCorrelation(Map<String, dynamic> testCase) {
+  final input = Map<String, dynamic>.from(testCase['input'] as Map);
+  final expected = Map<String, dynamic>.from(testCase['expected'] as Map);
+  final initialRequest = Map<String, dynamic>.from(input['initialRequest'] as Map);
+  final retryRequest = Map<String, dynamic>.from(input['retryRequest'] as Map);
+  final lateResult = Map<String, dynamic>.from(input['lateResult'] as Map);
+  final retryResult = Map<String, dynamic>.from(input['retryResult'] as Map);
+
+  _validateNotificationActionPayload(initialRequest, isResult: false);
+  _validateNotificationActionPayload(retryRequest, isResult: false);
+  _validateNotificationActionPayload(lateResult, isResult: true);
+  _validateNotificationActionPayload(retryResult, isResult: true);
+  _expectEquals(lateResult['operationId'], initialRequest['operationId']);
+  _expectEquals(retryResult['operationId'], retryRequest['operationId']);
+  if (initialRequest['operationId'] == retryRequest['operationId']) {
+    throw StateError('retry must use a distinct operationId');
+  }
+
+  final pending = <String, Map<String, dynamic>>{
+    initialRequest['operationId'] as String: initialRequest,
+  };
+  final states = <String, String>{
+    initialRequest['operationId'] as String: 'Expired',
+    retryRequest['operationId'] as String: 'Dispatched',
+  };
+  pending.remove(initialRequest['operationId']);
+  pending[retryRequest['operationId'] as String] = retryRequest;
+
+  _applyNotificationActionResult(pending, states, lateResult);
+  _expectEquals(states[retryRequest['operationId']], expected['stateAfterLateResult']);
+
+  _applyNotificationActionResult(pending, states, retryResult);
+  _expectEquals(states[retryRequest['operationId']], expected['finalState']);
+  _expectEquals(expected['result'], 'accept');
+}
+
+void _validateNotificationActionPayload(
+  Map<String, dynamic> payload, {
+  required bool isResult,
+}) {
+  for (final field in [
+    'operationId',
+    'notificationId',
+    'sourceDeviceId',
+    'requestingDeviceId',
+    'action',
+  ]) {
+    if (payload[field] is! String || (payload[field] as String).isEmpty) {
+      throw StateError('$field is required');
+    }
+  }
+  if (payload['action'] != 'open' && payload['action'] != 'dismiss') {
+    throw StateError('unknown notification action');
+  }
+  if (isResult && payload['success'] is! bool) {
+    throw StateError('success is required on action results');
+  }
+}
+
+void _applyNotificationActionResult(
+  Map<String, Map<String, dynamic>> pending,
+  Map<String, String> states,
+  Map<String, dynamic> result,
+) {
+  final operationId = result['operationId'] as String;
+  final request = pending.remove(operationId);
+  if (request == null) {
+    return;
+  }
+  for (final field in [
+    'notificationId',
+    'sourceDeviceId',
+    'requestingDeviceId',
+    'action',
+  ]) {
+    _expectEquals(result[field], request[field]);
+  }
+  states[operationId] = result['success'] == true ? 'Done' : 'Failed';
 }
 
 void _runEnvelopeValidation(Map<String, dynamic> testCase) {

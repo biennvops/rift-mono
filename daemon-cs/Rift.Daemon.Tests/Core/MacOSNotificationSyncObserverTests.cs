@@ -184,7 +184,7 @@ public sealed class MacOSNotificationSyncObserverTests
         }
 
         public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string sourceDeviceId, string notificationId, string action, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();

@@ -220,6 +220,18 @@ class RiftDaemonService : Service() {
                     )
                 }
             }
+            "performNotificationAction" -> {
+                val args = arguments as? Map<*, *>
+                val notificationId = args?.get("notificationId") as? String
+                val action = args?.get("action") as? String
+                if (notificationId == null || action == null) {
+                    result.error("invalid_args", "notificationId and action are required", null)
+                } else {
+                    result.success(
+                        RiftNotificationListenerService.performAction(notificationId, action),
+                    )
+                }
+            }
             else -> result.notImplemented()
         }
     }

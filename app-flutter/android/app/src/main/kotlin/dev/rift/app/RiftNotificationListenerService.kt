@@ -13,12 +13,41 @@ class RiftNotificationListenerService : NotificationListenerService() {
     companion object {
         private const val tag = "RiftNotifListener"
         private const val syncTestExtraKey = "dev.rift.app.SYNC_TEST_NOTIFICATION"
+
+        @Volatile
+        private var activeInstance: RiftNotificationListenerService? = null
+
+        fun performAction(notificationId: String, action: String): Map<String, Any?> {
+            val listener = activeInstance
+                ?: return mapOf(
+                    "success" to false,
+                    "failureReason" to "CapabilityUnavailable",
+                    "message" to "Android notification listener is unavailable.",
+                )
+            return listener.executeAction(notificationId, action)
+        }
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
+        activeInstance = this
         Log.i(tag, "Notification listener connected")
         getActiveNotifications()?.forEach(::onNotificationPosted)
+    }
+
+    override fun onListenerDisconnected() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        super.onListenerDisconnected()
+        Log.i(tag, "Notification listener disconnected")
+    }
+
+    override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
+        super.onDestroy()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -131,8 +160,48 @@ class RiftNotificationListenerService : NotificationListenerService() {
             "bodyPreview" to body,
             "postedAt" to formatUtcTimestamp(sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()),
             "isDismissible" to sbn.isClearable,
-            "isOpenable" to (sbn.notification.contentIntent != null),
+            "isOpenable" to false,
         )
+    }
+
+    private fun executeAction(notificationId: String, action: String): Map<String, Any?> {
+        if (action == "open") {
+            return mapOf(
+                "success" to false,
+                "failureReason" to "CapabilityUnavailable",
+                "message" to "Android remote notification open is not supported.",
+            )
+        }
+        if (action != "dismiss") {
+            return mapOf(
+                "success" to false,
+                "failureReason" to "ProtocolError",
+                "message" to "Unknown notification action.",
+            )
+        }
+        val notification = getActiveNotifications()?.firstOrNull { it.key == notificationId }
+            ?: return mapOf(
+                "success" to false,
+                "failureReason" to "CapabilityUnavailable",
+                "message" to "Android notification no longer exists.",
+            )
+        if (!notification.isClearable) {
+            return mapOf(
+                "success" to false,
+                "failureReason" to "PolicyDenied",
+                "message" to "Android notification is not clearable.",
+            )
+        }
+        return try {
+            cancelNotification(notification.key)
+            mapOf("success" to true)
+        } catch (_: Exception) {
+            mapOf(
+                "success" to false,
+                "failureReason" to "PeerRejected",
+                "message" to "Android notification dismiss failed.",
+            )
+        }
     }
 
     private fun isSyncTestNotification(sbn: StatusBarNotification): Boolean =

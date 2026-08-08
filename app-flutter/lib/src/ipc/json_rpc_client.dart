@@ -73,6 +73,11 @@ class JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onNotificationRemoved =>
       _notificationRemovedController.stream;
 
+  late final _notificationActionRequestController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onNotificationActionRequest =>
+      _notificationActionRequestController.stream;
+
   late final _notificationActionResultController =
       StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get onNotificationActionResult =>
@@ -660,6 +665,21 @@ class JsonRpcRiftClient {
           requiredStringKeys: const ['notificationId', 'sourceDeviceId'],
         );
       });
+      _client!.registerMethod('rift.onNotificationActionRequest',
+          (json_rpc.Parameters params) {
+        _emitIfValid(
+          'rift.onNotificationActionRequest',
+          _asMap(params),
+          _notificationActionRequestController,
+          requiredStringKeys: const [
+            'requestId',
+            'notificationId',
+            'sourceDeviceId',
+            'requestingDeviceId',
+            'action',
+          ],
+        );
+      });
       _client!.registerMethod('rift.onNotificationActionResult',
           (json_rpc.Parameters params) {
         _emitIfValid(
@@ -668,6 +688,7 @@ class JsonRpcRiftClient {
           _notificationActionResultController,
           requiredStringKeys: const [
             'notificationId',
+            'sourceDeviceId',
             'action',
             'operationId',
             'state',
@@ -961,6 +982,7 @@ class JsonRpcRiftClient {
     await _notificationPostedController.close();
     await _notificationUpdatedController.close();
     await _notificationRemovedController.close();
+    await _notificationActionRequestController.close();
     await _notificationActionResultController.close();
     await _deviceStatusUpdatedController.close();
     await _mediaPlaybackPostedController.close();
@@ -1082,12 +1104,28 @@ class JsonRpcRiftClient {
   }
 
   Future<dynamic> performNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) async {
     return _sendRequest('rift.performNotificationAction', {
+      'sourceDeviceId': sourceDeviceId,
       'notificationId': notificationId,
       'action': action,
+    });
+  }
+
+  Future<dynamic> reportLocalNotificationActionHandled({
+    required String requestId,
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    return _sendRequest('rift.reportLocalNotificationActionHandled', {
+      'requestId': requestId,
+      'success': success,
+      if (failureReason != null) 'failureReason': failureReason,
+      if (message != null) 'message': message,
     });
   }
 

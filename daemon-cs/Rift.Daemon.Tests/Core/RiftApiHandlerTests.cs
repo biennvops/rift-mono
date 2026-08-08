@@ -701,7 +701,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             false,
             "windows");
         var listed = await _handler.ListNotificationsAsync();
-        var action = await _handler.PerformNotificationActionAsync("notif-1", "open");
+        var action = await _handler.PerformNotificationActionAsync("rift-source", "notif-1", "open");
         var policy = await _handler.UpdateNotificationSyncPolicyAsync(
             true,
             mode: NotificationSyncPolicyModes.Exclude,
@@ -711,6 +711,8 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Single(listed.Notifications);
         Assert.Equal("notif-1", listed.Notifications[0].NotificationId);
         Assert.Equal("operation-notification-1", action.OperationId);
+        Assert.Equal("rift-source", action.SourceDeviceId);
+        Assert.Equal("notif-1", action.NotificationId);
         Assert.Equal("open", action.Action);
         Assert.True(policy.Enabled);
         Assert.Equal(NotificationSyncPolicyModes.Exclude, policy.Mode);
@@ -863,11 +865,12 @@ public sealed class RiftApiHandlerTests : IDisposable
             });
         }
 
-        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action, CancellationToken cancellationToken)
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string sourceDeviceId, string notificationId, string action, CancellationToken cancellationToken)
         {
             return Task.FromResult(new PerformNotificationActionResult
             {
                 OperationId = "operation-notification-1",
+                SourceDeviceId = sourceDeviceId,
                 NotificationId = notificationId,
                 Action = action,
                 State = "Pending"

@@ -698,6 +698,7 @@ void main() {
       });
       transport.emitNotification('rift.onNotificationActionResult', {
         'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
         'OperationId': 'operation-notification-1',
         'Action': 'open',
         'State': 'Done',
@@ -733,6 +734,7 @@ void main() {
       });
       expect(await actionFuture, {
         'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
         'operationId': 'operation-notification-1',
         'action': 'open',
         'state': 'Done',
@@ -1058,6 +1060,7 @@ void main() {
       );
       final listed = await client.listNotifications();
       final actionResult = await client.performNotificationAction(
+        sourceDeviceId: 'rift-source',
         notificationId: 'notif-1',
         action: 'open',
       );
@@ -1125,6 +1128,7 @@ void main() {
             )
             .single['params'],
         {
+          'sourceDeviceId': 'rift-source',
           'notificationId': 'notif-1',
           'action': 'open',
         },

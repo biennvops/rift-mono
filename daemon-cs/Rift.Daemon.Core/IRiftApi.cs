@@ -57,7 +57,10 @@ public interface IRiftApi
         string? sourcePlatform = null,
         string? removedAt = null);
     Task<ListNotificationsResult> ListNotificationsAsync();
-    Task<PerformNotificationActionResult> PerformNotificationActionAsync(string notificationId, string action);
+    Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
+        string notificationId,
+        string action);
     Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
         bool enabled,
         string? mode = null,

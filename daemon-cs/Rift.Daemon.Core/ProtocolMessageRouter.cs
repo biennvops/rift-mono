@@ -331,6 +331,7 @@ public sealed class ProtocolMessageRouter(
             await notificationSyncService.HandleNotificationActionResultAsync(
                 new NotificationActionResultRecord
                 {
+                    OperationId = notificationPayload.GetProperty("operationId").GetString() ?? string.Empty,
                     NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
                     SourceDeviceId = payloadSourceDeviceId,
                     RequestingDeviceId = notificationPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty,

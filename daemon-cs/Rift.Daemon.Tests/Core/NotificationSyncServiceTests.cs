@@ -94,13 +94,24 @@ public sealed class NotificationSyncServiceTests : IDisposable
         _transport.ActivePeers.Add("rift-peer");
         await _service.HandleNotificationPostedAsync(CreateNotification("notif-1", isOpenable: true), CancellationToken.None);
 
-        var result = await _service.PerformNotificationActionAsync("notif-1", "open", CancellationToken.None);
+        var result = await _service.PerformNotificationActionAsync("rift-peer", "notif-1", "open", CancellationToken.None);
 
         Assert.Equal("notif-1", result.NotificationId);
+        Assert.Equal("rift-peer", result.SourceDeviceId);
         Assert.Contains(_transport.SentMessages, sent => sent.PeerDeviceId == "rift-peer" && sent.Type == "notification.actionRequest");
+        var requestPayload = Assert.Single(
+            _transport.Payloads,
+            sent => sent.Type == "notification.actionRequest").Payload;
+        Assert.Equal(result.OperationId, requestPayload.GetProperty("operationId").GetString());
+        Assert.Equal("notif-1", requestPayload.GetProperty("notificationId").GetString());
+        Assert.Equal("rift-peer", requestPayload.GetProperty("sourceDeviceId").GetString());
+        Assert.Equal(_identityManager.GetDeviceId(), requestPayload.GetProperty("requestingDeviceId").GetString());
+        Assert.Equal("open", requestPayload.GetProperty("action").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(requestPayload.GetProperty("requestedAt").GetString()));
 
         await _service.HandleNotificationActionResultAsync(new NotificationActionResultRecord
         {
+            OperationId = result.OperationId,
             NotificationId = "notif-1",
             SourceDeviceId = "rift-peer",
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -114,6 +125,61 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PerformNotificationActionAsync_RejectsDuplicateAndExpiresLostResult()
+    {
+        var service = new NotificationSyncService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            NullLogger<NotificationSyncService>.Instance,
+            actionTimeout: TimeSpan.FromMilliseconds(500));
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+
+        var first = await service.PerformNotificationActionAsync(
+            "rift-peer",
+            "notif-1",
+            "dismiss",
+            CancellationToken.None);
+        var duplicate = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32010, duplicate.ErrorCode);
+        Assert.Equal("Dispatched", _operationService.GetOperation(first.OperationId).State);
+        Assert.Single(_transport.SentMessages, sent => sent.Type == "notification.actionRequest");
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (_operationService.GetOperation(first.OperationId).State != "Expired" && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        var expired = _operationService.GetOperation(first.OperationId);
+        Assert.Equal("Expired", expired.State);
+        Assert.Equal("Timeout", expired.FailureReason);
+
+        var retry = await service.PerformNotificationActionAsync(
+            "rift-peer",
+            "notif-1",
+            "dismiss",
+            CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.HandleNotificationActionResultAsync(
+                CreateActionResult(operationId: first.OperationId),
+                CancellationToken.None));
+        Assert.Equal("Dispatched", _operationService.GetOperation(retry.OperationId).State);
+
+        await service.HandleNotificationActionResultAsync(
+            CreateActionResult(operationId: retry.OperationId),
+            CancellationToken.None);
+        Assert.Equal("Done", _operationService.GetOperation(retry.OperationId).State);
+    }
+
+    [Fact]
     public async Task PerformNotificationActionAsync_RejectsWhenPeerLacksCapability()
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["presence.basic"]);
@@ -121,9 +187,155 @@ public sealed class NotificationSyncServiceTests : IDisposable
         await _service.HandleNotificationPostedAsync(CreateNotification("notif-1", isDismissible: true), CancellationToken.None);
 
         var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
-            _service.PerformNotificationActionAsync("notif-1", "dismiss", CancellationToken.None));
+            _service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
 
         Assert.Equal(-32003, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PerformNotificationActionAsync_TargetsExactSourceDeviceForSharedNotificationIds()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _presenceService.UpdatePeerPresence("rift-other", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        _transport.ActivePeers.Add("rift-other");
+        await _service.HandleNotificationPostedAsync(CreateNotification("shared-id"), CancellationToken.None);
+        await _service.HandleNotificationPostedAsync(
+            CreateNotification("shared-id", sourceDeviceId: "rift-other"),
+            CancellationToken.None);
+
+        var result = await _service.PerformNotificationActionAsync(
+            "rift-other",
+            "shared-id",
+            "dismiss",
+            CancellationToken.None);
+
+        Assert.Equal("rift-other", result.SourceDeviceId);
+        var request = Assert.Single(_transport.SentMessages, sent => sent.Type == "notification.actionRequest");
+        Assert.Equal("rift-other", request.PeerDeviceId);
+    }
+
+    [Theory]
+    [InlineData("", "notif-1")]
+    [InlineData("   ", "notif-1")]
+    [InlineData("rift-peer", "")]
+    [InlineData("rift-peer", "   ")]
+    public async Task PerformNotificationActionAsync_RequiresCompositeIdentity(string sourceDeviceId, string notificationId)
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            _service.PerformNotificationActionAsync(sourceDeviceId, notificationId, "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32009, ex.ErrorCode);
+        Assert.DoesNotContain(_transport.SentMessages, sent => sent.Type == "notification.actionRequest");
+    }
+
+    [Fact]
+    public async Task PerformNotificationActionAsync_RejectsUnknownCompositeIdentity()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            _service.PerformNotificationActionAsync("rift-unknown", "notif-1", "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32009, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PerformNotificationActionAsync_RejectsRemovedNotification()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+        await _service.HandleNotificationRemovedAsync(new NotificationRemovedRecord
+        {
+            NotificationId = "notif-1",
+            SourceDeviceId = "rift-peer"
+        }, CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            _service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32009, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PerformNotificationActionAsync_RejectsActionThatIsNotAdvertised()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(
+            CreateNotification("notif-1", isDismissible: false),
+            CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            _service.PerformNotificationActionAsync("rift-peer", "notif-1", "dismiss", CancellationToken.None));
+
+        Assert.Equal(-32010, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionResultAsync_IgnoresMismatchedCorrelations()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleNotificationPostedAsync(CreateNotification("notif-1"), CancellationToken.None);
+        var pending = await _service.PerformNotificationActionAsync(
+            "rift-peer",
+            "notif-1",
+            "dismiss",
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.HandleNotificationActionResultAsync(CreateActionResult(sourceDeviceId: "rift-other"), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.HandleNotificationActionResultAsync(CreateActionResult(requestingDeviceId: "rift-someone-else"), CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.HandleNotificationActionResultAsync(CreateActionResult(action: "open"), CancellationToken.None));
+
+        Assert.Equal("Dispatched", _operationService.GetOperation(pending.OperationId).State);
+
+        await _service.HandleNotificationActionResultAsync(
+            CreateActionResult(operationId: pending.OperationId),
+            CancellationToken.None);
+
+        Assert.Equal("Done", _operationService.GetOperation(pending.OperationId).State);
+    }
+
+    [Fact]
+    public async Task HandleLocalNotificationEventAsync_DoesNotAdvertiseUnsupportedDesktopActions()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+
+        await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            new NotificationSyncRecord
+            {
+                NotificationId = "desktop-actionable",
+                SourceDeviceId = _identityManager.GetDeviceId(),
+                SourcePlatform = "macos",
+                PackageName = "dev.rift.desktop",
+                AppName = "Rift Desktop",
+                PostedAt = "2026-07-16T10:00:00Z",
+                IsDismissible = true,
+                IsOpenable = true
+            },
+            null,
+            CancellationToken.None);
+
+        var payload = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.posted").Payload;
+        Assert.False(payload.GetProperty("isDismissible").GetBoolean());
+        Assert.False(payload.GetProperty("isOpenable").GetBoolean());
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+        var stored = Assert.Single(listed.Notifications);
+        Assert.False(stored.IsDismissible);
+        Assert.False(stored.IsOpenable);
     }
 
     [Fact]
@@ -142,10 +354,14 @@ public sealed class NotificationSyncServiceTests : IDisposable
         delayedTransport.ActivePeers.Add("rift-peer");
         await service.HandleNotificationPostedAsync(CreateNotification("notif-race", isOpenable: true), CancellationToken.None);
 
-        var actionTask = service.PerformNotificationActionAsync("notif-race", "open", CancellationToken.None);
+        var actionTask = service.PerformNotificationActionAsync("rift-peer", "notif-race", "open", CancellationToken.None);
         await delayedTransport.WaitForSendStartedAsync();
+        var operationId = Assert.Single(
+            delayedTransport.Payloads,
+            sent => sent.Type == "notification.actionRequest").Payload.GetProperty("operationId").GetString();
         await service.HandleNotificationActionResultAsync(new NotificationActionResultRecord
         {
+            OperationId = operationId!,
             NotificationId = "notif-race",
             SourceDeviceId = "rift-peer",
             RequestingDeviceId = _identityManager.GetDeviceId(),
@@ -471,12 +687,13 @@ public sealed class NotificationSyncServiceTests : IDisposable
         string? title = "Title",
         string? bodyPreview = "Body",
         bool isDismissible = true,
-        bool isOpenable = false)
+        bool isOpenable = false,
+        string sourceDeviceId = "rift-peer")
     {
         return new NotificationSyncRecord
         {
             NotificationId = notificationId,
-            SourceDeviceId = "rift-peer",
+            SourceDeviceId = sourceDeviceId,
             PackageName = "com.example.chat",
             AppName = "Example Chat",
             Title = title,
@@ -484,6 +701,29 @@ public sealed class NotificationSyncServiceTests : IDisposable
             PostedAt = "2026-07-14T10:00:00Z",
             IsDismissible = isDismissible,
             IsOpenable = isOpenable
+        };
+    }
+
+    private NotificationActionResultRecord CreateActionResult(
+        string? operationId = null,
+        string notificationId = "notif-1",
+        string sourceDeviceId = "rift-peer",
+        string? requestingDeviceId = null,
+        string action = "dismiss",
+        bool success = true,
+        string? failureReason = null,
+        string? message = null)
+    {
+        return new NotificationActionResultRecord
+        {
+            OperationId = operationId ?? "operation-1",
+            NotificationId = notificationId,
+            SourceDeviceId = sourceDeviceId,
+            RequestingDeviceId = requestingDeviceId ?? _identityManager.GetDeviceId(),
+            Action = action,
+            Success = success,
+            FailureReason = failureReason,
+            Message = message
         };
     }
 

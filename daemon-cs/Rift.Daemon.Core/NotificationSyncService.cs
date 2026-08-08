@@ -9,6 +9,7 @@ namespace Rift.Daemon.Core;
 public sealed class NotificationSyncService : INotificationSyncService
 {
     private const string RequiredCapability = "notification.sync";
+    private static readonly TimeSpan DefaultActionTimeout = TimeSpan.FromSeconds(30);
     private readonly Lock _gate = new();
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
@@ -18,6 +19,7 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly IIpcNotificationService? _ipcNotificationService;
     private readonly INotificationSyncPolicyStore? _policyStore;
     private readonly ILogger<NotificationSyncService> _logger;
+    private readonly TimeSpan _actionTimeout;
     private readonly Dictionary<string, NotificationSyncRecord> _notifications = new(StringComparer.Ordinal);
     private readonly Dictionary<string, NotificationSyncObservedApp> _observedAppsByPackage = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingNotificationAction> _pendingActionsByOperationId = new(StringComparer.Ordinal);
@@ -32,7 +34,8 @@ public sealed class NotificationSyncService : INotificationSyncService
         ISecurityEventLog securityEventLog,
         IIpcNotificationService? ipcNotificationService = null,
         ILogger<NotificationSyncService>? logger = null,
-        INotificationSyncPolicyStore? policyStore = null)
+        INotificationSyncPolicyStore? policyStore = null,
+        TimeSpan? actionTimeout = null)
     {
         _transport = transport;
         _presenceService = presenceService;
@@ -42,6 +45,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         _ipcNotificationService = ipcNotificationService;
         _policyStore = policyStore;
         _logger = logger ?? NullLogger<NotificationSyncService>.Instance;
+        _actionTimeout = actionTimeout ?? DefaultActionTimeout;
         _policy = policyStore?.Load() ?? new NotificationSyncPolicy
         {
             Enabled = true,
@@ -171,11 +175,17 @@ public sealed class NotificationSyncService : INotificationSyncService
     }
 
     public async Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
         string notificationId,
         string action,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (string.IsNullOrWhiteSpace(sourceDeviceId))
+        {
+            throw new NotificationSyncFailureException("A notification sourceDeviceId is required.", -32009);
+        }
 
         if (string.IsNullOrWhiteSpace(notificationId))
         {
@@ -186,10 +196,15 @@ public sealed class NotificationSyncService : INotificationSyncService
         NotificationSyncRecord notification;
         lock (_gate)
         {
-            notification = _notifications.Values
-                .Where(record => !record.IsRemoved)
-                .FirstOrDefault(record => string.Equals(record.NotificationId, notificationId, StringComparison.Ordinal))
-                ?? throw new NotificationSyncFailureException($"Mirrored notification '{notificationId}' was not found.", -32009);
+            if (!_notifications.TryGetValue(GetNotificationKey(sourceDeviceId, notificationId), out var stored) ||
+                stored.IsRemoved)
+            {
+                throw new NotificationSyncFailureException(
+                    $"Mirrored notification '{notificationId}' from '{sourceDeviceId}' was not found.",
+                    -32009);
+            }
+
+            notification = stored;
         }
 
         EnsureActionAllowed(notification, normalizedAction);
@@ -197,25 +212,45 @@ public sealed class NotificationSyncService : INotificationSyncService
 
         var operationId = Guid.NewGuid().ToString("D");
         var operationType = normalizedAction == "open" ? "notification.open" : "notification.dismiss";
-        _operationService.CreateOperation(operationId, operationType, _identityManager.GetDeviceId(), notification.SourceDeviceId);
-        _operationService.TransitionOperation(operationId, OperationState.Pending, details: CreateOperationDetails(notification, normalizedAction));
-        var pending = new PendingNotificationAction(
-            operationId,
-            notification.NotificationId,
-            notification.SourceDeviceId,
-            normalizedAction);
-
+        var actionKey = GetPendingActionKey(notification.SourceDeviceId, notification.NotificationId, normalizedAction);
         lock (_gate)
         {
-            _pendingActionsByOperationId[operationId] = pending;
-            _pendingActionKeys[GetPendingActionKey(notification.SourceDeviceId, notification.NotificationId, normalizedAction)] = operationId;
+            if (_pendingActionKeys.ContainsKey(actionKey))
+            {
+                throw new NotificationSyncFailureException("A matching notification action is pending.", -32010);
+            }
+
+            _pendingActionKeys[actionKey] = operationId;
         }
-        _operationService.TransitionOperation(operationId, OperationState.Dispatched);
+
+        try
+        {
+            _operationService.CreateOperation(operationId, operationType, _identityManager.GetDeviceId(), notification.SourceDeviceId);
+            _operationService.TransitionOperation(operationId, OperationState.Pending, details: CreateOperationDetails(notification, normalizedAction));
+            var pending = new PendingNotificationAction(
+                operationId,
+                notification.NotificationId,
+                notification.SourceDeviceId,
+                normalizedAction);
+
+            lock (_gate)
+            {
+                _pendingActionsByOperationId[operationId] = pending;
+            }
+            _operationService.TransitionOperation(operationId, OperationState.Dispatched);
+            pending.ExpiryTimer = new Timer(_ => ExpirePendingAction(operationId), null, _actionTimeout, Timeout.InfiniteTimeSpan);
+        }
+        catch
+        {
+            RemovePendingAction(operationId, notification.SourceDeviceId, notification.NotificationId, normalizedAction)?.ExpiryTimer?.Dispose();
+            throw;
+        }
 
         var envelope = CreateEnvelope(
             "notification.actionRequest",
             new
             {
+                operationId,
                 notificationId = notification.NotificationId,
                 sourceDeviceId = notification.SourceDeviceId,
                 requestingDeviceId = _identityManager.GetDeviceId(),
@@ -230,14 +265,19 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
         catch (Exception ex)
         {
-            RemovePendingAction(operationId, notification.SourceDeviceId, notification.NotificationId, normalizedAction);
-            _operationService.TransitionOperation(operationId, OperationState.Failed, "PeerUnreachable");
+            var pending = RemovePendingAction(operationId, notification.SourceDeviceId, notification.NotificationId, normalizedAction);
+            pending?.ExpiryTimer?.Dispose();
+            if (pending is not null)
+            {
+                _operationService.TransitionOperation(operationId, OperationState.Failed, "PeerUnreachable");
+            }
             throw new NotificationSyncFailureException($"Failed to send notification action request: {ex.Message}", -32003);
         }
 
         return new PerformNotificationActionResult
         {
             OperationId = operationId,
+            SourceDeviceId = notification.SourceDeviceId,
             NotificationId = notification.NotificationId,
             Action = normalizedAction,
             State = "Pending"
@@ -415,20 +455,32 @@ public sealed class NotificationSyncService : INotificationSyncService
             throw new InvalidOperationException("notification.actionResult requestingDeviceId did not match the local device identity.");
         }
 
+        if (string.IsNullOrWhiteSpace(result.OperationId))
+        {
+            throw new InvalidOperationException("notification.actionResult operationId is required.");
+        }
+
         var action = NormalizeAction(result.Action);
         PendingNotificationAction pending;
         lock (_gate)
         {
-            var pendingKey = GetPendingActionKey(result.SourceDeviceId, result.NotificationId, action);
-            if (!_pendingActionKeys.TryGetValue(pendingKey, out var operationId) ||
-                !_pendingActionsByOperationId.TryGetValue(operationId, out pending!))
+            if (!_pendingActionsByOperationId.TryGetValue(result.OperationId, out pending!))
             {
-                throw new InvalidOperationException($"No pending notification action exists for '{result.NotificationId}' ({action}).");
+                throw new InvalidOperationException($"No pending notification action exists for operation '{result.OperationId}'.");
             }
 
-            _pendingActionsByOperationId.Remove(operationId);
+            if (!string.Equals(pending.SourceDeviceId, result.SourceDeviceId, StringComparison.Ordinal) ||
+                !string.Equals(pending.NotificationId, result.NotificationId, StringComparison.Ordinal) ||
+                !string.Equals(pending.Action, action, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Notification action result did not match pending operation '{result.OperationId}'.");
+            }
+
+            var pendingKey = GetPendingActionKey(pending.SourceDeviceId, pending.NotificationId, pending.Action);
+            _pendingActionsByOperationId.Remove(result.OperationId);
             _pendingActionKeys.Remove(pendingKey);
         }
+        pending.ExpiryTimer?.Dispose();
 
         TryTransitionActive(pending.OperationId);
         if (result.Success)
@@ -617,8 +669,10 @@ public sealed class NotificationSyncService : INotificationSyncService
             Title = notification.Title,
             BodyPreview = notification.BodyPreview,
             PostedAt = notification.PostedAt,
-            IsDismissible = notification.IsDismissible,
-            IsOpenable = notification.IsOpenable,
+            // Desktop hosts have no native notification action executor, so locally
+            // originating records must not advertise actions this daemon cannot run.
+            IsDismissible = false,
+            IsOpenable = false,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
             Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)
@@ -741,9 +795,12 @@ public sealed class NotificationSyncService : INotificationSyncService
         string OperationId,
         string NotificationId,
         string SourceDeviceId,
-        string Action);
+        string Action)
+    {
+        public Timer? ExpiryTimer { get; set; }
+    }
 
-    private void RemovePendingAction(
+    private PendingNotificationAction? RemovePendingAction(
         string operationId,
         string sourceDeviceId,
         string notificationId,
@@ -751,8 +808,44 @@ public sealed class NotificationSyncService : INotificationSyncService
     {
         lock (_gate)
         {
-            _pendingActionsByOperationId.Remove(operationId);
-            _pendingActionKeys.Remove(GetPendingActionKey(sourceDeviceId, notificationId, action));
+            _pendingActionsByOperationId.Remove(operationId, out var pending);
+            var actionKey = GetPendingActionKey(sourceDeviceId, notificationId, action);
+            if (_pendingActionKeys.GetValueOrDefault(actionKey) == operationId)
+            {
+                _pendingActionKeys.Remove(actionKey);
+            }
+
+            return pending;
+        }
+    }
+
+    private void ExpirePendingAction(string operationId)
+    {
+        PendingNotificationAction? pending;
+        lock (_gate)
+        {
+            if (!_pendingActionsByOperationId.Remove(operationId, out pending))
+            {
+                return;
+            }
+
+            var actionKey = GetPendingActionKey(pending.SourceDeviceId, pending.NotificationId, pending.Action);
+            if (_pendingActionKeys.GetValueOrDefault(actionKey) == operationId)
+            {
+                _pendingActionKeys.Remove(actionKey);
+            }
+        }
+
+        pending.ExpiryTimer?.Dispose();
+        try
+        {
+            _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+        }
+        catch (Exception ex)
+        {
+            // Timer-thread callback: an unhandled exception here would crash the
+            // whole daemon process, so expiry bookkeeping failures are logged only.
+            _logger.LogWarning(ex, "Failed to expire pending notification action {OperationId}.", operationId);
         }
     }
 }

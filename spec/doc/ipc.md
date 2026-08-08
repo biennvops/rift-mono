@@ -733,7 +733,7 @@ Returns the locally cached mirrored notification inbox plus the current local no
       "bodyPreview": "See you at 6?",
       "postedAt": "2026-07-14T09:58:00Z",
       "isDismissible": true,
-      "isOpenable": true
+      "isOpenable": false
     }
   ],
   "observedApps": [
@@ -758,23 +758,37 @@ Requests a remote action against a mirrored notification when the source marked 
 
 **Params:**
 
-| Field            | Type   | Required | Description                                 |
-| ---------------- | ------ | -------- | ------------------------------------------- |
-| `notificationId` | string | Yes      | Android-origin stable notification ID       |
-| `action`         | string | Yes      | Closed vocabulary: `open` or `dismiss`      |
+| Field            | Type          | Required | Description                                 |
+| ---------------- | ------------- | -------- | ------------------------------------------- |
+| `sourceDeviceId` | device ID     | Yes      | Device that originated the notification     |
+| `notificationId` | string        | Yes      | Source-scoped stable notification ID        |
+| `action`         | string        | Yes      | Closed vocabulary: `open` or `dismiss`      |
+
+`sourceDeviceId` is required because `notificationId` is only unique within its source device. Actions are always resolved through the composite `(sourceDeviceId, notificationId)` identity.
+
+Action availability is controlled by the mirrored record's `isDismissible` and `isOpenable` flags. Android-origin records currently advertise only `dismiss`; remote `open` is not supported for Android sources.
 
 **Result:**
 
 ```json
 {
   "operationId": "018f2f9a-8b7c-4a4b-9c0d-666666666667",
+  "sourceDeviceId": "rift-abcdefghijklmnopqrstuvwxyz234567",
   "notificationId": "android:com.example.chat:42",
-  "action": "open",
+  "action": "dismiss",
   "state": "Pending"
 }
 ```
 
-**Errors:** `-32003` if `notification.sync` is unavailable, `-32009` if the mirrored notification no longer exists, `-32010` if local policy denies the action.
+**Errors:** `-32003` if the source peer cannot currently perform notification sync or actions, `-32009` if `(sourceDeviceId, notificationId)` does not exist, `-32010` if the notification does not allow the requested action.
+
+#### `rift.reportLocalNotificationActionHandled`
+
+Reports the outcome of an action previously delivered through `rift.onNotificationActionRequest`.
+
+**Params:** `requestId` string, `success` boolean, optional `failureReason` failure reason, optional `message` string.
+
+**Errors:** `-32009` if `requestId` is unknown or already completed.
 
 #### `rift.updateNotificationSyncPolicy`
 
@@ -1033,7 +1047,8 @@ Notifications are unsolicited daemon → client messages with no `id` field. The
 | `rift.onNotificationPosted`  | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification posted         |
 | `rift.onNotificationUpdated` | `{ "notificationId", "sourceDeviceId", "packageName", "appName", "title?", "bodyPreview?", "postedAt", "isDismissible", "isOpenable", "icon?" }` | Mirrored notification updated        |
 | `rift.onNotificationRemoved` | `{ "notificationId", "sourceDeviceId", "removedAt?" }`                                | Mirrored notification removed        |
-| `rift.onNotificationActionResult` | `{ "notificationId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
+| `rift.onNotificationActionRequest` | `{ "requestId", "operationId", "notificationId", "sourceDeviceId", "requestingDeviceId", "action", "requestedAt?" }` | Local notification action requested by a peer |
+| `rift.onNotificationActionResult` | `{ "notificationId", "sourceDeviceId", "operationId", "action", "state", "success?", "failureReason?", "message?" }` | Remote notification action result |
 | `rift.onDeviceStatusUpdated` | `{ "sourceDeviceId", "sourcePlatform?", "batteryPresent?", "batteryPercent?", "chargingState?", "powerSource?", "lowPowerMode?", "observedAt", "isStale?" }` | Device power status changed |
 | `rift.onMediaPlaybackPosted` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback posted |
 | `rift.onMediaPlaybackUpdated` | `{ "playbackId", "sourceDeviceId", "appId", "appName", "title?", "artist?", "album?", "playbackState", "positionMs", "durationMs?", "canPlay", "canPause", "canSkipNext", "canSkipPrevious", "canSeek", "updatedAt", "artwork?" }` | Mirrored playback updated |

@@ -22,6 +22,7 @@ class SyncUiClient extends JsonRpcRiftClient {
   final removedMedia = StreamController<Map<String, dynamic>>.broadcast();
 
   String? notificationAction;
+  String? notificationSourceDeviceId;
   String? mediaAction;
 
   @override
@@ -93,10 +94,12 @@ class SyncUiClient extends JsonRpcRiftClient {
 
   @override
   Future<dynamic> performNotificationAction({
+    required String sourceDeviceId,
     required String notificationId,
     required String action,
   }) async {
     notificationAction = action;
+    notificationSourceDeviceId = sourceDeviceId;
     return {'operationId': 'operation-1'};
   }
 
@@ -146,6 +149,7 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Open'));
     await tester.pumpAndSettle();
     expect(client.notificationAction, 'open');
+    expect(client.notificationSourceDeviceId, 'rift-peer-1');
 
     client.updatedNotifications.add({
       'notificationId': 'notification-1',

@@ -4,6 +4,7 @@
     "extension-der.json",
     "certificate-parsing.json",
     "clipboard-hash.json",
-    "envelope-validation.json"
+    "envelope-validation.json",
+    "notification-action-correlation.json"
   ]
 }

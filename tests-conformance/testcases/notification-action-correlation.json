@@ -1,0 +1,47 @@
+{
+  "suite": "notification-action-correlation",
+  "description": "Require notification action results to correlate by operationId (protocol.md §7.5)",
+  "testCases": [
+    {
+      "id": "late-result-after-retry-001",
+      "description": "A late result for an expired operation must not complete its retry",
+      "input": {
+        "initialRequest": {
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "action": "dismiss"
+        },
+        "retryRequest": {
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "action": "dismiss"
+        },
+        "lateResult": {
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-aaaaaaaaaaaa",
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "action": "dismiss",
+          "success": true
+        },
+        "retryResult": {
+          "operationId": "018f2f9a-8b7c-4a4b-9c0d-bbbbbbbbbbbb",
+          "notificationId": "android:com.example.chat:42",
+          "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+          "requestingDeviceId": "rift-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "action": "dismiss",
+          "success": true
+        }
+      },
+      "expected": {
+        "result": "accept",
+        "stateAfterLateResult": "Dispatched",
+        "finalState": "Done"
+      }
+    }
+  ]
+}
