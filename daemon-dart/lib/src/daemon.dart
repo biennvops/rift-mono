@@ -1986,6 +1986,7 @@ class RiftDaemon {
     Map<String, dynamic> params, {
     required String notificationId,
     required String sourceDeviceId,
+    required bool isLocalSource,
   }) {
     final record = <String, dynamic>{
       'notificationId': notificationId,
@@ -2013,8 +2014,10 @@ class RiftDaemon {
       );
     }
     final sourcePlatform = record['sourcePlatform'];
-    record['isDismissible'] = sourcePlatform == 'android' && isDismissible;
-    record['isOpenable'] = false;
+    record['isDismissible'] = isLocalSource
+        ? sourcePlatform == 'android' && isDismissible
+        : isDismissible;
+    record['isOpenable'] = isLocalSource ? false : isOpenable;
     return record;
   }
 
@@ -2084,6 +2087,7 @@ class RiftDaemon {
           params,
           notificationId: notificationId,
           sourceDeviceId: localDeviceId,
+          isLocalSource: true,
         );
 
         final packageName = record['packageName'] as String;
@@ -2429,6 +2433,7 @@ class RiftDaemon {
             payload,
             'sourceDeviceId',
           ),
+          isLocalSource: false,
         );
         if (record['sourceDeviceId'] != message.peerDeviceId) {
           RiftLog.warn(

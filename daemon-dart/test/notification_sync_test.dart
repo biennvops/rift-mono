@@ -115,6 +115,47 @@ void main() {
       expect(notification['isOpenable'], isFalse);
     });
 
+    test(
+      'preserves peer-advertised capabilities when sourcePlatform is omitted',
+      () async {
+        const peerDeviceId = 'rift-peer';
+        final context =
+            SessionContext(peerDeviceId: peerDeviceId, isInitiator: false)
+              ..handshakeState = HandshakeState.established
+              ..trustState = TrustState.trusted
+              ..capabilityNegotiated = true
+              ..negotiatedCapabilities = [
+                Capability(name: 'notification.sync', version: 1),
+              ];
+        daemon.sessionManagerForTesting.injectContextForTesting(context);
+
+        await daemon.handleNotificationSyncProtocolMessageForTesting(
+          peerDeviceId,
+          {
+            'type': 'notification.posted',
+            'payload': {
+              'notificationId': 'peer-notification-1',
+              'sourceDeviceId': peerDeviceId,
+              'packageName': 'com.example.chat',
+              'appName': 'Example Chat',
+              'postedAt': '2026-07-15T08:30:00.000Z',
+              'isDismissible': true,
+              'isOpenable': true,
+            },
+          },
+        );
+
+        final listed = await daemon.handleJsonRpcRequest({
+          'method': 'rift.listNotifications',
+        });
+        final notification =
+            (listed['notifications'] as List).single as Map<String, dynamic>;
+        expect(notification['sourceDeviceId'], peerDeviceId);
+        expect(notification['isDismissible'], isTrue);
+        expect(notification['isOpenable'], isTrue);
+      },
+    );
+
     test('notification actions require sourceDeviceId', () async {
       await expectLater(
         daemon.handleJsonRpcRequest({
