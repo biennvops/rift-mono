@@ -29,6 +29,7 @@ class IOSNotifications {
     String? route,
     String? destinationPath,
     Map<String, Object?>? payload,
+    String? notificationKey,
   }) async {
     if (!isSupported) return false;
     final shown = await _channel.invokeMethod<bool>('showNotification', {
@@ -37,8 +38,17 @@ class IOSNotifications {
       if (route != null) 'route': route,
       if (destinationPath != null) 'destinationPath': destinationPath,
       if (payload != null) 'payload': payload,
+      if (notificationKey != null) 'notificationKey': notificationKey,
     });
     return shown ?? false;
+  }
+
+  static Future<bool> clearNotification(String notificationKey) async {
+    if (!isSupported) return false;
+    final cleared = await _channel.invokeMethod<bool>('clearNotification', {
+      'notificationKey': notificationKey,
+    });
+    return cleared ?? false;
   }
 
   static Future<bool> openSettings() async {

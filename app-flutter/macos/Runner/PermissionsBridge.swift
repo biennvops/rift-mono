@@ -118,6 +118,8 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       requestNotification(result: result)
     case "notification.show":
       showNotification(args: call.arguments, result: result)
+    case "notification.clear":
+      clearNotification(args: call.arguments, result: result)
     case "share.consumePendingItems":
       result(SharedTransferInbox.consumePendingPayload())
     default:
@@ -187,8 +189,9 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       supportsDismiss: actionIds.contains(Self.mirroredNotificationDismissAction)
     )
 
+    let identifier = dict?["notificationKey"] as? String ?? UUID().uuidString
     let request = UNNotificationRequest(
-      identifier: UUID().uuidString,
+      identifier: identifier,
       content: content,
       trigger: nil
     )
@@ -206,6 +209,26 @@ final class PermissionsBridge: NSObject, UNUserNotificationCenterDelegate {
       }
       result(true)
     }
+  }
+
+  private func clearNotification(args: Any?, result: @escaping FlutterResult) {
+    guard let dict = args as? [String: Any],
+          let notificationKey = dict["notificationKey"] as? String,
+          !notificationKey.isEmpty else {
+      result(
+        FlutterError(
+          code: "invalid_args",
+          message: "notificationKey is required.",
+          details: nil
+        )
+      )
+      return
+    }
+
+    let center = UNUserNotificationCenter.current()
+    center.removePendingNotificationRequests(withIdentifiers: [notificationKey])
+    center.removeDeliveredNotifications(withIdentifiers: [notificationKey])
+    result(true)
   }
 
   func userNotificationCenter(

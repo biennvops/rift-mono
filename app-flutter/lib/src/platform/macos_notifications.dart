@@ -46,6 +46,7 @@ class MacOSNotifications {
     String? route,
     Map<String, Object?>? payload,
     List<DesktopNotificationAction>? actions,
+    String? notificationKey,
   }) async {
     if (!_isMacOS) return true;
     final res = await _channel.invokeMethod<bool>('notification.show', {
@@ -55,13 +56,23 @@ class MacOSNotifications {
       if (payload != null) 'payload': payload,
       if (actions != null)
         'actions': actions.map((action) => action.toMap()).toList(),
+      if (notificationKey != null) 'notificationKey': notificationKey,
     });
     return res ?? false;
   }
 
+  static Future<bool> clearNotification(String notificationKey) async {
+    if (!_isMacOS) return false;
+    final result = await _channel.invokeMethod<bool>('notification.clear', {
+      'notificationKey': notificationKey,
+    });
+    return result ?? false;
+  }
+
   static Future<Map<String, dynamic>?> consumePendingShareItems() async {
     if (!_isMacOS) return null;
-    final res = await _channel.invokeMethod<Object>('share.consumePendingItems');
+    final res =
+        await _channel.invokeMethod<Object>('share.consumePendingItems');
     if (res is Map) {
       return Map<String, dynamic>.from(res);
     }

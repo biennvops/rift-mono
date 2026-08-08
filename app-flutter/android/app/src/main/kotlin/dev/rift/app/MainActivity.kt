@@ -47,6 +47,7 @@ class MainActivity: FlutterActivity() {
         private const val shareSendRoute = "history.send"
         private const val shareClipboardRoute = "history.clipboard"
         private const val notificationPermissionRequestCode = 4107
+        private const val mirroredNotificationId = 4110
         @JvmStatic
         var isClipboardRelayReady: Boolean = false
     }
@@ -273,6 +274,7 @@ class MainActivity: FlutterActivity() {
                         val route = args?.get("route") as? String
                         val destinationPath = args?.get("destinationPath") as? String
                         val payload = args?.get("payload") as? Map<*, *>
+                        val notificationKey = args?.get("notificationKey") as? String
                         if (title.isNullOrBlank() || body.isNullOrBlank() || route.isNullOrBlank()) {
                             result.error("invalid_args", "title, body, and route are required", null)
                         } else {
@@ -283,8 +285,18 @@ class MainActivity: FlutterActivity() {
                                     route = route,
                                     destinationPath = destinationPath,
                                     payload = payload,
+                                    notificationKey = notificationKey,
                                 )
                             )
+                        }
+                    }
+                    "clearNotification" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val notificationKey = args?.get("notificationKey") as? String
+                        if (notificationKey.isNullOrBlank()) {
+                            result.error("invalid_args", "notificationKey is required", null)
+                        } else {
+                            result.success(clearNotification(notificationKey))
                         }
                     }
                     "showToast" -> {
@@ -535,6 +547,7 @@ class MainActivity: FlutterActivity() {
         route: String,
         destinationPath: String?,
         payload: Map<*, *>?,
+        notificationKey: String? = null,
         isSyncTestNotification: Boolean = false,
     ): Boolean {
         val intent =
@@ -571,6 +584,7 @@ class MainActivity: FlutterActivity() {
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setOnlyAlertOnce(!notificationKey.isNullOrBlank())
                 .setContentIntent(pendingIntent)
                 .addExtras(
                     Bundle().apply {
@@ -580,15 +594,25 @@ class MainActivity: FlutterActivity() {
                 .build()
 
         return try {
-            NotificationManagerCompat.from(this).notify(
-                (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-                notification,
-            )
+            val manager = NotificationManagerCompat.from(this)
+            if (notificationKey.isNullOrBlank()) {
+                manager.notify(
+                    (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+                    notification,
+                )
+            } else {
+                manager.notify(notificationKey, mirroredNotificationId, notification)
+            }
             true
         } catch (e: SecurityException) {
             Log.w(tag, "Notification permission denied", e)
             false
         }
+    }
+
+    private fun clearNotification(notificationKey: String): Boolean {
+        NotificationManagerCompat.from(this).cancel(notificationKey, mirroredNotificationId)
+        return true
     }
 
     private fun handleNotificationIntent(intent: Intent?) {

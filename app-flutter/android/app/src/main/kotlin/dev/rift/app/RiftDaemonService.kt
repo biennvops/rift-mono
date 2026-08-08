@@ -26,6 +26,7 @@ class RiftDaemonService : Service() {
         private const val channelId = "rift.daemon"
         private const val channelName = "Rift background sync"
         private const val notificationId = 4108
+        private const val mirroredNotificationId = 4110
         private const val actionStart = "dev.rift.app.action.START_DAEMON_SERVICE"
         private const val actionStop = "dev.rift.app.action.STOP_DAEMON_SERVICE"
         internal const val preferencesName = "rift_background_sync"
@@ -189,6 +190,15 @@ class RiftDaemonService : Service() {
             "showNotification" -> {
                 result.success(showActivityNotification(arguments))
             }
+            "clearNotification" -> {
+                val notificationKey =
+                    (arguments as? Map<*, *>)?.get("notificationKey") as? String
+                if (notificationKey.isNullOrBlank()) {
+                    result.error("invalid_args", "notificationKey is required", null)
+                } else {
+                    result.success(clearActivityNotification(notificationKey))
+                }
+            }
             "showMediaPlayback" -> {
                 val playback = (arguments as? Map<*, *>)?.get("playback") as? Map<*, *>
                 if (playback == null) {
@@ -266,6 +276,7 @@ class RiftDaemonService : Service() {
         val body = args["body"] as? String ?: return false
         val route = args["route"] as? String ?: return false
         val payload = args["payload"] as? Map<*, *>
+        val notificationKey = args["notificationKey"] as? String
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("rift.notification.route", route)
@@ -285,22 +296,32 @@ class RiftDaemonService : Service() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notificationId = (payload?.get("notificationId")?.toString() ?: "$route:$title:$body").hashCode()
+        val notificationId =
+            (payload?.get("notificationId")?.toString() ?: "$route:$title:$body").hashCode()
+        val notification = NotificationCompat.Builder(this, "rift.events")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(!notificationKey.isNullOrBlank())
+            .build()
         return try {
-            NotificationManagerCompat.from(this).notify(
-                notificationId,
-                NotificationCompat.Builder(this, "rift.events")
-                    .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle(title)
-                    .setContentText(body)
-                    .setContentIntent(pendingIntent)
-                    .setAutoCancel(true)
-                    .build(),
-            )
+            val manager = NotificationManagerCompat.from(this)
+            if (notificationKey.isNullOrBlank()) {
+                manager.notify(notificationId, notification)
+            } else {
+                manager.notify(notificationKey, mirroredNotificationId, notification)
+            }
             true
         } catch (_: SecurityException) {
             false
         }
+    }
+
+    private fun clearActivityNotification(notificationKey: String): Boolean {
+        NotificationManagerCompat.from(this).cancel(notificationKey, mirroredNotificationId)
+        return true
     }
 
     private fun createChannel() {

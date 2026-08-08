@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:rift/constants.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/notification_mirror_identity.dart';
+import 'package:rift/src/mirrored_notification_registry.dart';
 import 'package:rift/src/platform/ios_notifications.dart';
 import 'package:rift/src/platform/notification_route.dart';
 import 'package:rift/src/platform/windows_shell.dart';
@@ -292,6 +294,8 @@ void main() {
         .thenAnswer((_) async => {'commits': []});
     when(() => mockClient.listMediaPlayback())
         .thenAnswer((_) async => {'playbacks': []});
+    when(() => mockClient.listNotifications())
+        .thenAnswer((_) async => {'notifications': []});
     when(() => mockClient.confirmFileCommit(
           transferId: any(named: 'transferId'),
           destinationPath: any(named: 'destinationPath'),
@@ -375,6 +379,8 @@ void main() {
           case 'notification.getStatus':
             return 'authorized';
           case 'notification.request':
+            return true;
+          case 'notification.clear':
             return true;
         }
         return null;
@@ -646,6 +652,13 @@ void main() {
       showCall.arguments as Map<Object?, Object?>,
     );
     expect(arguments['route'], 'history.notifications');
+    expect(
+      arguments['notificationKey'],
+      mirroredNotificationKey(
+        sourceDeviceId: 'device-1234567890',
+        notificationId: 'notif-123',
+      ),
+    );
     expect(arguments['title'], 'Alice');
     expect(arguments['body'], 'Work Laptop • Ping');
     expect(arguments['payload'], <String, Object?>{
@@ -731,6 +744,13 @@ void main() {
       showCall.arguments as Map<Object?, Object?>,
     );
     expect(arguments['route'], NotificationRoute.historyNotifications);
+    expect(
+      arguments['notificationKey'],
+      mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-1',
+        notificationId: 'notif-ios',
+      ),
+    );
     expect(arguments['title'], 'Alice');
     expect(arguments['body'], 'rift-peer-1 • Hello iPhone');
   });
@@ -806,32 +826,100 @@ void main() {
   });
 
   testWidgets(
-      'mirrored notification updates and removals do not emit duplicate native popups',
+      'reconnect reconciliation clears stale mirrors without replaying active ones',
+      (WidgetTester tester) async {
+    final stale = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-stale',
+        notificationId: 'notification-stale',
+      ),
+      sourceDeviceId: 'rift-peer-stale',
+      notificationId: 'notification-stale',
+    );
+    final active = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-active',
+        notificationId: 'notification-active',
+      ),
+      sourceDeviceId: 'rift-peer-active',
+      notificationId: 'notification-active',
+    );
+    final registry = await MirroredNotificationRegistry.load();
+    await registry.remember(stale);
+    await registry.remember(active);
+    when(() => mockClient.listNotifications()).thenAnswer(
+      (_) async => {
+        'notifications': [
+          {
+            'sourceDeviceId': active.sourceDeviceId,
+            'notificationId': active.notificationId,
+          },
+        ],
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    expect(clearCalls, hasLength(1));
+    expect(clearCalls.single.arguments, {'notificationKey': stale.mirrorKey});
+    expect(showCalls, isEmpty);
+    expect((await MirroredNotificationRegistry.load()).entries, [active]);
+  });
+
+  testWidgets(
+      'mirrored notification updates and removals reuse the native identity',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildRiftApp(mockClient));
     await tester.pump();
     clearInteractions(mockClient);
 
-    notificationPostedController.add(<String, dynamic>{
-      'notificationId': 'notif-dup',
+    const sourceDeviceId = 'rift-peer-notification';
+    const notificationId = 'notif-dup';
+    final expectedKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
+    );
+    final posted = <String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      'sourcePlatform': 'linux',
+      'appName': 'Messages',
       'title': 'Posted',
-    });
+      'bodyPreview': 'Original',
+    };
+    notificationPostedController.add(posted);
     await tester.pump();
-    final showCountAfterPost =
-        macOsCalls.where((call) => call.method == 'notification.show').length;
+    final postedCall =
+        macOsCalls.lastWhere((call) => call.method == 'notification.show');
 
     notificationUpdatedController.add(<String, dynamic>{
-      'notificationId': 'notif-dup',
+      ...posted,
       'title': 'Updated',
+      'bodyPreview': 'Changed',
     });
+    await tester.pump();
     notificationRemovedController.add(<String, dynamic>{
-      'notificationId': 'notif-dup',
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
     });
     await tester.pump();
 
-    final showCountFinal =
-        macOsCalls.where((call) => call.method == 'notification.show').length;
-    expect(showCountAfterPost, 1);
-    expect(showCountFinal, 1);
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    expect(showCalls, hasLength(2));
+    expect(postedCall.arguments['notificationKey'], expectedKey);
+    expect(showCalls[1].arguments['notificationKey'], expectedKey);
+    expect(clearCalls, hasLength(1));
+    expect(clearCalls.single.arguments, {'notificationKey': expectedKey});
   });
 }

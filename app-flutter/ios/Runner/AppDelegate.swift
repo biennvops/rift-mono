@@ -644,8 +644,10 @@ private typealias MobileGestaltCopyAnswer = @convention(c) (CFString) -> Unmanag
           userInfo["destinationPath"] = destinationPath
         }
         content.userInfo = userInfo
+        let identifier = (arguments["notificationKey"] as? String)
+          ?? UUID().uuidString.lowercased()
         let request = UNNotificationRequest(
-          identifier: UUID().uuidString.lowercased(),
+          identifier: identifier,
           content: content,
           trigger: nil
         )
@@ -658,6 +660,16 @@ private typealias MobileGestaltCopyAnswer = @convention(c) (CFString) -> Unmanag
             }
           }
         }
+      case "clearNotification":
+        guard let arguments = call.arguments as? [String: Any],
+              let notificationKey = arguments["notificationKey"] as? String,
+              !notificationKey.isEmpty else {
+          result(FlutterError(code: "invalid_args", message: "notificationKey is required.", details: nil))
+          return
+        }
+        notificationCenter.removePendingNotificationRequests(withIdentifiers: [notificationKey])
+        notificationCenter.removeDeliveredNotifications(withIdentifiers: [notificationKey])
+        result(true)
       case "openSettings":
         guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
           result(false)

@@ -21,6 +21,8 @@ import 'src/ipc/android_background_entrypoint.dart';
 import 'src/ipc/json_rpc_client.dart';
 import 'src/ipc/transport_factory.dart';
 import 'src/notification_sync_policy.dart';
+import 'src/notification_mirror_identity.dart';
+import 'src/mirrored_notification_registry.dart';
 import 'src/trusted_peer_name_resolver.dart';
 import 'src/clipboard/desktop_clipboard_manager.dart';
 import 'src/file_transfer/file_storage.dart';
@@ -252,6 +254,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   String? _lastExternalClipboardFingerprint;
   DateTime? _lastExternalClipboardAt;
   Future<String?>? _localDeviceIdFuture;
+  Future<MirroredNotificationRegistry>? _mirroredNotificationRegistryFuture;
+  Future<void>? _reconciliationInFlight;
 
   bool get _enableDesktopShellIntegration =>
       (Platform.isWindows || Platform.isLinux || Platform.isMacOS) &&
@@ -402,8 +406,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         unawaited(_flushPendingDesktopNotificationActions());
         unawaited(_flushPendingSharedSendItems());
         unawaited(_recoverPendingFileCommits());
-        unawaited(_refreshTrustedPeerNames());
-        unawaited(_reapplyNotificationSyncPolicy(client));
+        unawaited(_handleConnectionRestored(client));
       }
     });
   }
@@ -433,6 +436,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         '[Notification Sync] Failed to reapply saved policy after reconnect: $error',
       );
     }
+  }
+
+  Future<void> _handleConnectionRestored(JsonRpcRiftClient client) async {
+    await _reapplyNotificationSyncPolicy(client);
+    await _refreshTrustedPeerNames();
+    await _reconcileMirroredNotificationPreviews();
   }
 
   Future<dynamic> _handlePlatformNotificationMethodCall(MethodCall call) async {
@@ -1249,26 +1258,130 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     }();
   }
 
-  Future<void> _showMirroredNotificationPreview(
+  Future<MirroredNotificationRegistry> _getMirroredNotificationRegistry() {
+    return _mirroredNotificationRegistryFuture ??=
+        MirroredNotificationRegistry.load();
+  }
+
+  Future<bool> _showNativeMirroredNotification({
+    required String mirrorKey,
+    required String title,
+    required String body,
+    required Map<String, Object?> payload,
+    required List<DesktopNotificationAction> actions,
+    required Map<String, dynamic> event,
+  }) async {
+    try {
+      if (IOSNotifications.isSupported) {
+        return await IOSNotifications.show(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyNotifications,
+          payload: payload,
+          notificationKey: mirrorKey,
+        );
+      }
+      if (Platform.isAndroid) {
+        final sourcePlatform = event['sourcePlatform']?.toString();
+        if (sourcePlatform != 'windows' &&
+            sourcePlatform != 'macos' &&
+            sourcePlatform != 'linux') {
+          return false;
+        }
+        return await AndroidShell.showNotification(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyNotifications,
+          payload: payload,
+          notificationKey: mirrorKey,
+        );
+      }
+      if (Platform.isWindows) {
+        return await WindowsShell.showNotification(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyNotifications,
+          payload: payload,
+          notificationKey: mirrorKey,
+        );
+      }
+      if (MacOSNotifications.supportsPendingShareHandoff) {
+        return await MacOSNotifications.show(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyNotifications,
+          payload: payload,
+          actions: actions,
+          notificationKey: mirrorKey,
+        );
+      }
+      if (Platform.isLinux) {
+        return await LinuxNotifications.show(
+          title: title,
+          body: body,
+          route: NotificationRoute.historyNotifications,
+          payload: payload,
+          actions: actions,
+          notificationKey: mirrorKey,
+        );
+      }
+    } catch (error) {
+      debugPrint('[Notification Mirror] Native show failed: $error');
+    }
+    return false;
+  }
+
+  Future<bool> _clearNativeMirroredNotification(String mirrorKey) async {
+    try {
+      if (IOSNotifications.isSupported) {
+        return await IOSNotifications.clearNotification(mirrorKey);
+      }
+      if (Platform.isAndroid) {
+        return await AndroidShell.clearNotification(mirrorKey);
+      }
+      if (Platform.isWindows) {
+        return await WindowsShell.clearNotification(mirrorKey);
+      }
+      if (MacOSNotifications.supportsPendingShareHandoff) {
+        return await MacOSNotifications.clearNotification(mirrorKey);
+      }
+      if (Platform.isLinux) {
+        return await LinuxNotifications.clearNotification(mirrorKey);
+      }
+    } catch (error) {
+      debugPrint('[Notification Mirror] Native clear failed: $error');
+    }
+    return false;
+  }
+
+  Future<void> _showOrUpdateMirroredNotificationPreview(
     Map<String, dynamic> event,
   ) async {
     final notificationId = event['notificationId']?.toString();
-    if (notificationId == null || notificationId.isEmpty) {
-      return;
-    }
     final sourceDeviceId = event['sourceDeviceId']?.toString();
-    final localDeviceId = await _getLocalDeviceId();
-    if (localDeviceId != null && sourceDeviceId == localDeviceId) {
+    if (notificationId == null ||
+        notificationId.isEmpty ||
+        sourceDeviceId == null ||
+        sourceDeviceId.isEmpty) {
       return;
     }
+
+    final localDeviceId = await _getLocalDeviceId();
+    if (localDeviceId == null || sourceDeviceId == localDeviceId) {
+      return;
+    }
+
+    final mirrorKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
+    );
     final title = event['title']?.toString().trim();
     final body = event['bodyPreview']?.toString().trim();
     final appName = event['appName']?.toString().trim();
     final mirroredPayload = <String, Object?>{
       'route': NotificationRoute.historyNotifications,
       'notificationId': notificationId,
-      if (sourceDeviceId != null && sourceDeviceId.isNotEmpty)
-        'sourceDeviceId': sourceDeviceId,
+      'sourceDeviceId': sourceDeviceId,
       if (appName != null && appName.isNotEmpty) 'appName': appName,
       'isOpenable': event['isOpenable'] == true,
       'isDismissible': event['isDismissible'] == true,
@@ -1278,73 +1391,150 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
         ? title
         : ((appName != null && appName.isNotEmpty) ? appName : 'Notification');
 
-    unawaited(() async {
-      try {
-        final sourceDeviceName = sourceDeviceId == null
-            ? null
-            : await _trustedPeerNameResolver!.resolve(sourceDeviceId);
-        final notificationBody = [
-          if (sourceDeviceName != null && sourceDeviceName.isNotEmpty)
-            sourceDeviceName,
-          if (body != null && body.isNotEmpty) body,
-        ].join(' • ');
-
-        if (IOSNotifications.isSupported) {
-          await IOSNotifications.show(
-            title: notificationTitle,
-            body: notificationBody,
-            route: NotificationRoute.historyNotifications,
-            payload: mirroredPayload,
-          );
-          return;
-        }
-        if (Platform.isAndroid) {
-          final sourcePlatform = event['sourcePlatform']?.toString();
-          if (sourcePlatform != 'windows' &&
-              sourcePlatform != 'macos' &&
-              sourcePlatform != 'linux') {
-            return;
-          }
-          await AndroidShell.showNotification(
-            title: notificationTitle,
-            body: notificationBody,
-            route: NotificationRoute.historyNotifications,
-            payload: mirroredPayload,
-          );
-          return;
-        }
-        if (Platform.isWindows) {
-          await WindowsShell.showNotification(
-            title: notificationTitle,
-            body: notificationBody,
-            route: NotificationRoute.historyNotifications,
-            payload: mirroredPayload,
-          );
-          return;
-        }
-        if (MacOSNotifications.supportsPendingShareHandoff) {
-          await MacOSNotifications.show(
-            title: notificationTitle,
-            body: notificationBody,
-            route: NotificationRoute.historyNotifications,
-            payload: mirroredPayload,
-            actions: mirroredActions,
-          );
-          return;
-        }
-        if (Platform.isLinux) {
-          await LinuxNotifications.show(
-            title: notificationTitle,
-            body: notificationBody,
-            route: NotificationRoute.historyNotifications,
-            payload: mirroredPayload,
-            actions: mirroredActions,
-          );
-        }
-      } catch (_) {
-        // Best-effort: depends on user permission and runner support.
+    try {
+      final resolver = _trustedPeerNameResolver;
+      final sourceDeviceName =
+          resolver == null ? null : await resolver.resolve(sourceDeviceId);
+      final notificationBody = [
+        if (sourceDeviceName != null && sourceDeviceName.isNotEmpty)
+          sourceDeviceName,
+        if (body != null && body.isNotEmpty) body,
+      ].join(' • ');
+      final shown = await _showNativeMirroredNotification(
+        mirrorKey: mirrorKey,
+        title: notificationTitle,
+        body: notificationBody,
+        payload: mirroredPayload,
+        actions: mirroredActions,
+        event: event,
+      );
+      if (shown) {
+        await (await _getMirroredNotificationRegistry()).remember(
+          MirroredNotificationEntry(
+            mirrorKey: mirrorKey,
+            sourceDeviceId: sourceDeviceId,
+            notificationId: notificationId,
+          ),
+        );
       }
-    }());
+    } catch (error) {
+      debugPrint(
+          '[Notification Mirror] Failed to show mirrored preview: $error');
+    }
+  }
+
+  Future<void> _clearMirroredNotificationPreview(
+    Map<String, dynamic> event,
+  ) async {
+    final notificationId = event['notificationId']?.toString();
+    final sourceDeviceId = event['sourceDeviceId']?.toString();
+    if (notificationId == null ||
+        notificationId.isEmpty ||
+        sourceDeviceId == null ||
+        sourceDeviceId.isEmpty) {
+      return;
+    }
+
+    final localDeviceId = await _getLocalDeviceId();
+    if (localDeviceId == null || sourceDeviceId == localDeviceId) {
+      return;
+    }
+
+    final mirrorKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
+    );
+    final cleared = await _clearNativeMirroredNotification(mirrorKey);
+    if (cleared) {
+      await (await _getMirroredNotificationRegistry()).forget(mirrorKey);
+    }
+  }
+
+  Future<void> _performMirroredNotificationReconciliation() async {
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) {
+      return;
+    }
+
+    final localDeviceId = await _getLocalDeviceId();
+    if (localDeviceId == null) {
+      debugPrint(
+        '[Notification Mirror] Cannot reconcile without the local device ID.',
+      );
+      return;
+    }
+
+    final registry = await _getMirroredNotificationRegistry();
+    await registry.reload();
+
+    dynamic result;
+    try {
+      result = await client.listNotifications();
+    } catch (error) {
+      debugPrint('[Notification Mirror] Failed to list notifications: $error');
+      return;
+    }
+    if (result is! Map || result['notifications'] is! List) {
+      debugPrint('[Notification Mirror] Invalid listNotifications response.');
+      return;
+    }
+
+    final activeKeys = <String>{};
+    for (final value in result['notifications'] as List) {
+      if (value is! Map) {
+        continue;
+      }
+      final sourceDeviceId = value['sourceDeviceId']?.toString();
+      final notificationId = value['notificationId']?.toString();
+      if (sourceDeviceId == null ||
+          sourceDeviceId.isEmpty ||
+          notificationId == null ||
+          notificationId.isEmpty ||
+          sourceDeviceId == localDeviceId) {
+        continue;
+      }
+      activeKeys.add(
+        mirroredNotificationKey(
+          sourceDeviceId: sourceDeviceId,
+          notificationId: notificationId,
+        ),
+      );
+    }
+
+    final staleEntries = registry.entries
+        .where((entry) => !activeKeys.contains(entry.mirrorKey))
+        .toList(growable: false);
+    for (final entry in staleEntries) {
+      if (await _clearNativeMirroredNotification(entry.mirrorKey)) {
+        await registry.forget(entry.mirrorKey);
+      }
+    }
+  }
+
+  Future<void> _reconcileMirroredNotificationPreviews() {
+    final existing = _reconciliationInFlight;
+    if (existing != null) {
+      return existing;
+    }
+
+    final future = _performMirroredNotificationReconciliation();
+    _reconciliationInFlight = future;
+    unawaited(
+      future.then<void>(
+        (_) {
+          if (identical(_reconciliationInFlight, future)) {
+            _reconciliationInFlight = null;
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (identical(_reconciliationInFlight, future)) {
+            _reconciliationInFlight = null;
+          }
+          debugPrint('[Notification Mirror] Reconciliation failed: $error');
+        },
+      ),
+    );
+    return future;
   }
 
   @override
@@ -1521,17 +1711,15 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     });
 
     _notificationPostedSub = client.onNotificationPosted.listen((event) {
-      unawaited(_showMirroredNotificationPreview(event));
+      unawaited(_showOrUpdateMirroredNotificationPreview(event));
     });
 
     _notificationUpdatedSub = client.onNotificationUpdated.listen((event) {
-      // History UI refreshes from its own stream binding; updates do not raise a
-      // second native popup to avoid noisy duplicates.
+      unawaited(_showOrUpdateMirroredNotificationPreview(event));
     });
 
     _notificationRemovedSub = client.onNotificationRemoved.listen((event) {
-      // Native notifications are best-effort previews; removal only updates the
-      // in-app history state.
+      unawaited(_clearMirroredNotificationPreview(event));
     });
 
     _fileOfferSub = client.onFileOffer.listen((event) {
@@ -1558,6 +1746,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
     if (client.isConnected) {
       unawaited(_recoverPendingFileCommits());
+      unawaited(_reconcileMirroredNotificationPreviews());
     }
 
     _fileFailedSub = client.onFileTransferFailed.listen((event) {

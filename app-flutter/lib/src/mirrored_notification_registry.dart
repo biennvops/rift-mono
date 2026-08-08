@@ -160,7 +160,7 @@ class MirroredNotificationRegistry {
         }
         entries[entry.mirrorKey] = entry;
       }
-      final boundedEntries = LinkedHashMap<String, MirroredNotificationEntry>();
+      final boundedEntries = <String, MirroredNotificationEntry>{};
       final skipCount =
           entries.length > maxEntries ? entries.length - maxEntries : 0;
       for (final entry in entries.entries.skip(skipCount)) {

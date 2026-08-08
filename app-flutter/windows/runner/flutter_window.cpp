@@ -711,7 +711,8 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
                  result) {
         const auto method_name = call.method_name();
         if (method_name != "showTransferNotification" &&
-            method_name != "showNotification") {
+            method_name != "showNotification" &&
+            method_name != "clearNotification") {
           result->NotImplemented();
           return;
         }
@@ -720,6 +721,20 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
             std::get_if<flutter::EncodableMap>(call.arguments());
         if (arguments == nullptr) {
           result->Error("invalid_args", "Expected map arguments.");
+          return;
+        }
+
+        if (method_name == "clearNotification") {
+          const auto key_it = arguments->find(
+              flutter::EncodableValue("notificationKey"));
+          const auto* key = key_it == arguments->end()
+                                ? nullptr
+                                : std::get_if<std::string>(&key_it->second);
+          if (key == nullptr || key->empty()) {
+            result->Error("invalid_args", "notificationKey is required.");
+            return;
+          }
+          result->Success(flutter::EncodableValue(ClearNotification(*key)));
           return;
         }
 
@@ -773,9 +788,19 @@ void FlutterWindow::RegisterWindowsShellMethodChannel() {
               payload = *payload_map;
             }
           }
+          std::string notification_key;
+          const auto notification_key_it =
+              arguments->find(flutter::EncodableValue("notificationKey"));
+          if (notification_key_it != arguments->end()) {
+            if (const auto* value =
+                    std::get_if<std::string>(&notification_key_it->second)) {
+              notification_key = *value;
+            }
+          }
           shown = ShowNotification(Utf16FromUtf8(*title), Utf16FromUtf8(*body),
                                    route, payload,
-                                   Utf16FromUtf8(destination));
+                                   Utf16FromUtf8(destination),
+                                   notification_key);
         }
         result->Success(flutter::EncodableValue(shown));
       });
@@ -863,6 +888,7 @@ void FlutterWindow::InitializeShellNotificationIcon() {
 
 void FlutterWindow::CleanupShellNotificationIcon() {
   if (!shell_notification_icon_registered_ || GetHandle() == nullptr) {
+    current_native_notification_key_.clear();
     return;
   }
 
@@ -874,6 +900,7 @@ void FlutterWindow::CleanupShellNotificationIcon() {
   icon_data.uCallbackMessage = kTrayManagerNotifyMessage;
   Shell_NotifyIconW(NIM_MODIFY, &icon_data);
   shell_notification_icon_registered_ = false;
+  current_native_notification_key_.clear();
 }
 
 bool FlutterWindow::ShowTransferNotification(
@@ -881,7 +908,7 @@ bool FlutterWindow::ShowTransferNotification(
     const std::wstring& body,
     const std::wstring& destination_path) {
   return ShowNotification(title, body, "history.transfer_activity",
-                          flutter::EncodableMap(), destination_path);
+                          flutter::EncodableMap(), destination_path, "");
 }
 
 bool FlutterWindow::ShowNotification(
@@ -889,7 +916,8 @@ bool FlutterWindow::ShowNotification(
     const std::wstring& body,
     const std::string& route,
     const flutter::EncodableMap& payload,
-    const std::wstring& destination_path) {
+    const std::wstring& destination_path,
+    const std::string& notification_key) {
   if (GetHandle() == nullptr) {
     return false;
   }
@@ -901,6 +929,7 @@ bool FlutterWindow::ShowNotification(
   pending_notification_route_ = route;
   pending_notification_payload_ = payload;
   pending_notification_destination_path_ = destination_path;
+  current_native_notification_key_ = notification_key;
 
   NOTIFYICONDATAW icon_data = {};
   icon_data.cbSize = sizeof(icon_data);
@@ -915,6 +944,14 @@ bool FlutterWindow::ShowNotification(
     CleanupShellNotificationIcon();
   }
   return shown;
+}
+
+bool FlutterWindow::ClearNotification(const std::string& notification_key) {
+  if (notification_key != current_native_notification_key_) {
+    return true;
+  }
+  CleanupShellNotificationIcon();
+  return true;
 }
 
 void FlutterWindow::DispatchPendingNotificationAction() {

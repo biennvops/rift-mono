@@ -581,6 +581,8 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
       fl_value_lookup_string(args, "destinationPath");
   FlValue* payload_value = fl_value_lookup_string(args, "payload");
   FlValue* actions_value = fl_value_lookup_string(args, "actions");
+  FlValue* notification_key_value =
+      fl_value_lookup_string(args, "notificationKey");
   if (title_value == nullptr || body_value == nullptr || route_value == nullptr ||
       fl_value_get_type(title_value) != FL_VALUE_TYPE_STRING ||
       fl_value_get_type(body_value) != FL_VALUE_TYPE_STRING ||
@@ -596,6 +598,11 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
       destination_path_value != nullptr &&
               fl_value_get_type(destination_path_value) == FL_VALUE_TYPE_STRING
           ? fl_value_get_string(destination_path_value)
+          : nullptr;
+  const gchar* notification_key =
+      notification_key_value != nullptr &&
+              fl_value_get_type(notification_key_value) == FL_VALUE_TYPE_STRING
+          ? fl_value_get_string(notification_key_value)
           : nullptr;
 
   std::string encoded_payload =
@@ -645,9 +652,14 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
           g_variant_new_string(action_payload.c_str()));
     }
   }
-  g_autofree gchar* notification_id = g_uuid_string_random();
-  g_application_send_notification(
-      G_APPLICATION(self), notification_id, notification);
+  if (notification_key != nullptr && *notification_key != '\0') {
+    g_application_send_notification(
+        G_APPLICATION(self), notification_key, notification);
+  } else {
+    g_autofree gchar* notification_id = g_uuid_string_random();
+    g_application_send_notification(
+        G_APPLICATION(self), notification_id, notification);
+  }
 
   return FL_METHOD_RESPONSE(
       fl_method_success_response_new(fl_value_new_bool(TRUE)));
@@ -662,6 +674,23 @@ static void linux_notifications_method_call_cb(FlMethodChannel* channel,
 
   if (strcmp(method, "showNotification") == 0) {
     response = show_linux_notification(self, fl_method_call_get_args(method_call));
+  } else if (strcmp(method, "clearNotification") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    FlValue* notification_key =
+        args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP
+            ? nullptr
+            : fl_value_lookup_string(args, "notificationKey");
+    if (notification_key == nullptr ||
+        fl_value_get_type(notification_key) != FL_VALUE_TYPE_STRING ||
+        fl_value_get_string(notification_key)[0] == '\0') {
+      response = FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "invalid_args", "notificationKey is required.", nullptr));
+    } else {
+      g_application_withdraw_notification(
+          G_APPLICATION(self), fl_value_get_string(notification_key));
+      response = FL_METHOD_RESPONSE(
+          fl_method_success_response_new(fl_value_new_bool(TRUE)));
+    }
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }
