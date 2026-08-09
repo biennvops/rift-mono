@@ -106,10 +106,48 @@ Image presence can PASS while also producing `REVIEW_REQUIRED`, because Phase 1
 cannot prove that an image is the requested diagram or that its semantics are
 correct.
 
-`CrossDocumentValidator` is deliberately empty in Phase 1. Later traceability,
-repository evidence, and semantic validators can consume the same normalized
-model and finding format without adding format-specific parsing to the rule
-engine.
+The Phase 2 `CrossDocumentValidator` consumes the same normalized models and
+source locations. It builds deterministic trace entities and a graph before
+executing the contract's `cross_document_traceability` rules. Explicit IDs are
+matched first, then exact normalized names; conflicting or ambiguous matches
+become `REVIEW_REQUIRED`. No DOCX/XLS file is parsed a second time and no
+network or LLM service is used.
+
+Validate one audit set with a manifest (paths may retain their original names):
+
+```bash
+rift-doc validate-set --spec capstone-doc-spec.v0.1.yaml --manifest capstone.yaml
+rift-doc trace --spec capstone-doc-spec.v0.1.yaml --manifest capstone.yaml --format json --show-graph
+```
+
+A minimal manifest can use the original filenames directly:
+
+```yaml
+project: Rift
+reports:
+  report1: path/to/Report1_Project Introduction.docx
+  report2: path/to/Report2_Project Management Plan.docx
+  report3: path/to/Report3_Software Requirement Specification.docx
+  report4: path/to/Report4_Software Design Document.docx
+  report5: path/to/Report5_Test Documentation.docx
+  report6: path/to/Report6_Software User Guides.docx
+  report7: path/to/Report7_Final Project Report.docx
+tracking:
+  - path/to/Report3_Project Tracking.xlsx
+tests:
+  unit: path/to/Report5_Unit Test.xls
+  other: path/to/Report5_Test Report.xlsx
+```
+
+A manifest may omit reports while an audit is being assembled. Missing inputs
+are retained as explicit cross-document findings. If a logical report has
+multiple candidates, mark one candidate `selected: true`, provide a
+`resolutions` entry, or configure `latest_version`/`latest_modified`; otherwise
+selection remains `REVIEW_REQUIRED`. The supported rule shape is typed by
+`CapstoneSpec.iter_trace_rules()`. Unknown handler names are reported as
+configuration failures rather than ignored. `DocumentSet`, `TraceEntity`, and
+`TraceGraph` are public models so later repository-evidence phases can reuse
+stable claims and source evidence.
 
 ## Tests
 

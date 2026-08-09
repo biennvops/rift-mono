@@ -26,6 +26,22 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/workbook" }
     },
+    "cross_document_traceability": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/trace_rule" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/trace_rule" }
+        }
+      ]
+    },
+    "cross_document_orphan_checks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/orphan_rule" }
+    },
     "source_ambiguities": {
       "type": "array",
       "items": { "$ref": "#/$defs/ambiguity" }
@@ -88,6 +104,7 @@
         "source_files": { "type": "array", "items": { "type": "string" } },
         "source_requirement": { "type": "string" },
         "final_state": { "type": "boolean" },
+        "trace_entities": { "type": "object", "additionalProperties": true },
         "sections": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/section" }
@@ -180,6 +197,70 @@
         "observed_schema": { "type": "object", "additionalProperties": true }
       },
       "additionalProperties": false
+    },
+    "trace_rule": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "handler": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "minLength": 1 },
+        "source_domain": { "type": "string", "minLength": 1 },
+        "source_report": { "type": "string", "minLength": 1 },
+        "source_kind": { "type": ["string", "array"] },
+        "source_kinds": { "type": "array", "items": { "type": "string" } },
+        "entity_kind": { "type": ["string", "array"] },
+        "targets": {
+          "oneOf": [
+            { "type": "array", "items": { "oneOf": [{ "type": "string" }, { "$ref": "#/$defs/trace_target" }] } },
+            { "type": "object", "additionalProperties": true }
+          ]
+        },
+        "target_domains": { "type": ["array", "object"] },
+        "requirement": { "enum": ["MUST", "SHOULD", "MAY", "CONDITIONAL"] },
+        "freshness": { "type": ["boolean", "object"] },
+        "target_domain": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "trace_target": {
+      "type": "object",
+      "required": ["domain"],
+      "properties": {
+        "domain": { "type": "string", "minLength": 1 },
+        "target_domain": { "type": "string", "minLength": 1 },
+        "report": { "type": "string", "minLength": 1 },
+        "kind": { "type": ["string", "array"] },
+        "kinds": { "type": "array", "items": { "type": "string" } },
+        "target_kind": { "type": ["string", "array"] },
+        "requirement": { "enum": ["MUST", "SHOULD", "MAY", "CONDITIONAL"] },
+        "condition": {},
+        "applicability": {},
+        "allow_explicit_na": { "type": "boolean" },
+        "role": { "type": "string" },
+        "stage": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "orphan_rule": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "source": { "type": "string" },
+        "source_domain": { "type": "string" },
+        "source_report": { "type": "string" },
+        "source_kind": { "type": ["string", "array"] },
+        "source_kinds": { "type": "array", "items": { "type": "string" } },
+        "target": { "type": "string" },
+        "target_domain": { "type": "string" },
+        "target_report": { "type": "string" },
+        "target_kind": { "type": ["string", "array"] },
+        "target_kinds": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string" },
+        "severity": { "type": "string" }
+      },
+      "additionalProperties": true
     },
     "sheet_rule": {
       "type": "object",

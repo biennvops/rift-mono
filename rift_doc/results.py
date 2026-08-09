@@ -32,6 +32,10 @@ class Finding:
     source_requirement: str | None = None
     spec_path: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    validator: str = "structural"
+    source_entity: Any = None
+    target_domain: str | None = None
+    candidate_entities: list[Any] = field(default_factory=list)
 
     @classmethod
     def from_location(
@@ -48,6 +52,10 @@ class Finding:
         source_requirement: str | None = None,
         spec_path: str | None = None,
         metadata: dict[str, Any] | None = None,
+        validator: str = "structural",
+        source_entity: Any = None,
+        target_domain: str | None = None,
+        candidate_entities: Iterable[Any] = (),
     ) -> "Finding":
         if isinstance(location, SourceLocation):
             display_location = location.display()
@@ -65,6 +73,10 @@ class Finding:
             source_requirement=source_requirement,
             spec_path=spec_path,
             metadata=metadata or {},
+            validator=validator,
+            source_entity=source_entity,
+            target_domain=target_domain,
+            candidate_entities=list(candidate_entities),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -80,6 +92,10 @@ class Finding:
             "source_requirement": self.source_requirement,
             "spec_path": self.spec_path,
             "metadata": _json_value(self.metadata),
+            "validator": self.validator,
+            "source_entity": _json_value(self.source_entity),
+            "target_domain": self.target_domain,
+            "candidate_entities": [_json_value(item) for item in self.candidate_entities],
         }
 
 

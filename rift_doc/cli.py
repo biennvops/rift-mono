@@ -25,6 +25,24 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
     validate.add_argument("path", nargs="?", type=Path, help="one DOCX/XLSX/XLS path")
 
+    validate_set = subparsers.add_parser(
+        "validate-set",
+        aliases=["trace"],
+        help="validate cross-document traceability for a manifest",
+    )
+    validate_set.add_argument("--manifest", required=True, type=Path, help="document-set YAML manifest")
+    validate_set.add_argument(
+        "--spec",
+        type=Path,
+        default=Path("capstone-doc-spec.v0.1.yaml"),
+        help="capstone YAML contract (defaults to the repository contract)",
+    )
+    validate_set.add_argument("--format", choices=("text", "json"), default="text")
+    validate_set.add_argument("--rule", action="append", help="only show one or more trace rule IDs")
+    validate_set.add_argument("--entity", help="only show findings for an entity ID or exact normalized name")
+    validate_set.add_argument("--show-graph", action="store_true", help="include a compact graph section in text output")
+    validate_set.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
+
     inspect = subparsers.add_parser("inspect", help="print the normalized document structure")
     inspect.add_argument("path", type=Path)
     inspect.add_argument("--spec", type=Path, help="optional contract used for heading matching")
@@ -39,6 +57,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         if args.command == "validate":
             return _run_validate(args)
+        if args.command in {"validate-set", "trace"}:
+            return _run_validate_set(args)
         if args.command == "inspect":
             return _run_inspect(args)
         parser.error(f"unknown command {args.command}")
@@ -73,6 +93,50 @@ def _run_validate(args: argparse.Namespace) -> int:
     if args.strict:
         return 1 if any(result.has_strict_issues for result in results) else 0
     return 1 if any(result.has_errors for result in results) else 0
+
+
+def _run_validate_set(args: argparse.Namespace) -> int:
+    spec = CapstoneSpec.load(args.spec)
+    engine = ValidationEngine(spec)
+    result = engine.validate_set(args.manifest)
+    _filter_trace_result(result, args.rule, args.entity)
+    if args.format == "json":
+        print(render_json([result]))
+    else:
+        text = render_text([result])
+        if args.show_graph:
+            graph = result.metadata.get("trace_graph", {})
+            nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+            edges = graph.get("edges", []) if isinstance(graph, dict) else []
+            if text:
+                text += "\n"
+            text += "Trace graph: " + str(len(nodes)) + " node(s), " + str(len(edges)) + " edge(s)"
+            for edge in edges[:20]:
+                text += "\n  " + str(edge.get("from_entity")) + " -> " + str(edge.get("to_entity")) + " [" + str(edge.get("rule_id")) + "]"
+        print(text)
+    if args.strict:
+        return 1 if result.has_strict_issues else 0
+    return 1 if result.has_errors else 0
+
+
+def _filter_trace_result(result: ValidationResult, rule_ids: list[str] | None, entity_query: str | None) -> None:
+    if rule_ids:
+        allowed = {str(rule_id).casefold() for rule_id in rule_ids}
+        result.findings = [finding for finding in result.findings if finding.rule_id.casefold() in allowed]
+        coverage = result.metadata.get("coverage")
+        if isinstance(coverage, dict):
+            result.metadata["coverage"] = {key: value for key, value in coverage.items() if key.casefold() in allowed}
+    if entity_query:
+        from .trace_model import normalize_name
+
+        query = normalize_name(entity_query)
+        def matches(finding: object) -> bool:
+            source = getattr(finding, "source_entity", None)
+            if isinstance(source, dict):
+                values = [source.get("entity_id"), source.get("canonical_name"), *(source.get("aliases", []) or [])]
+                return any(query == normalize_name(str(value)) or query in normalize_name(str(value)) for value in values if value)
+            return query in normalize_name(str(getattr(finding, "message", "")))
+        result.findings = [finding for finding in result.findings if matches(finding)]
 
 
 def _run_inspect(args: argparse.Namespace) -> int:
