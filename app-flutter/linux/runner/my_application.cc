@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #include <flutter_linux/flutter_linux.h>
+#include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #ifdef GDK_WINDOWING_X11
@@ -581,6 +582,7 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
       fl_value_lookup_string(args, "destinationPath");
   FlValue* payload_value = fl_value_lookup_string(args, "payload");
   FlValue* actions_value = fl_value_lookup_string(args, "actions");
+  FlValue* icon_bytes_value = fl_value_lookup_string(args, "iconBytes");
   FlValue* notification_key_value =
       fl_value_lookup_string(args, "notificationKey");
   if (title_value == nullptr || body_value == nullptr || route_value == nullptr ||
@@ -610,6 +612,20 @@ static FlMethodResponse* show_linux_notification(MyApplication* self,
 
   g_autoptr(GNotification) notification = g_notification_new(title);
   g_notification_set_body(notification, body);
+  if (icon_bytes_value != nullptr &&
+      fl_value_get_type(icon_bytes_value) == FL_VALUE_TYPE_UINT8_LIST &&
+      fl_value_get_length(icon_bytes_value) > 0 &&
+      fl_value_get_length(icon_bytes_value) <= 131072) {
+    const auto* icon_bytes = fl_value_get_uint8_list(icon_bytes_value);
+    const size_t icon_length = fl_value_get_length(icon_bytes_value);
+    GBytes* bytes = g_bytes_new(icon_bytes, icon_length);
+    GIcon* icon = g_bytes_icon_new(bytes);
+    g_bytes_unref(bytes);
+    if (icon != nullptr) {
+      g_notification_set_icon(notification, icon);
+      g_object_unref(icon);
+    }
+  }
   g_notification_set_default_action_and_target_value(
       notification,
       "app.notificationActivated",

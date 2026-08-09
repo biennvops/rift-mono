@@ -67,6 +67,14 @@ class SyncUiClient extends JsonRpcRiftClient {
             'postedAt': '2026-07-29T00:00:00Z',
             'isOpenable': true,
             'isDismissible': true,
+            'icon': {
+              'mediaType': 'image/png',
+              'dataBase64':
+                  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+              'byteSize': 68,
+              'sha256':
+                  '431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460',
+            },
           }
         ],
       };
@@ -145,6 +153,7 @@ void main() {
     expect(find.text('Messages'), findsOneWidget);
     expect(find.text('Pixel'), findsOneWidget);
     expect(find.text('Hello'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
 
     await tester.tap(find.widgetWithText(FilledButton, 'Open'));
     await tester.pumpAndSettle();
@@ -164,6 +173,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Updated message'), findsOneWidget);
     expect(find.text('Hello'), findsNothing);
+    expect(find.byType(Image), findsNothing);
 
     client.removedNotifications.add({
       'notificationId': 'notification-1',

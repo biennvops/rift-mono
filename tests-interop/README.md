@@ -19,9 +19,11 @@ README.
 - `mobile-device-matrix.md` - manual real-device test matrix for mobile pairs
 - `pubspec.*` - Dart package metadata for the harness
 
-The tests in this package run two in-memory **Dart** daemon session stacks
-against each other. They validate Android-side protocol behavior, not
-desktop-to-desktop interoperability.
+Most tests in this package run two in-memory **Dart** daemon session stacks
+against each other. Notification icon/update coverage additionally runs the
+production C# icon normalizer through `runners/dotnet/`, then applies those
+C#-parsed wire records to a Dart daemon inbox. The remaining tests validate
+Android-side protocol behavior, not desktop-to-desktop interoperability.
 
 ## Desktop-to-Desktop Interop
 
@@ -51,6 +53,8 @@ Run from `tests-interop/`:
 flutter pub get
 flutter test
 ```
+
+The notification interop test also requires the .NET SDK used by `daemon-cs`.
 
 Use this directory for reproducible interop procedures and evidence templates.
 Do not treat it as the project roadmap or source of current completion status.

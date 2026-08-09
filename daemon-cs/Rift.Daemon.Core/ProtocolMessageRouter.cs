@@ -577,10 +577,16 @@ public sealed class ProtocolMessageRouter(
     private static NotificationSyncRecord ParseNotificationRecord(JsonElement notificationPayload)
     {
         IReadOnlyDictionary<string, object?>? icon = null;
-        if (notificationPayload.TryGetProperty("icon", out var iconElement) &&
-            iconElement.ValueKind == JsonValueKind.Object)
+        if (notificationPayload.TryGetProperty("icon", out var iconElement))
         {
-            icon = JsonSerializer.Deserialize<Dictionary<string, object?>>(iconElement.GetRawText());
+            if (iconElement.ValueKind == JsonValueKind.Object)
+            {
+                icon = JsonSerializer.Deserialize<Dictionary<string, object?>>(iconElement.GetRawText());
+            }
+            else if (iconElement.ValueKind != JsonValueKind.Null)
+            {
+                icon = new Dictionary<string, object?>();
+            }
         }
 
         return new NotificationSyncRecord

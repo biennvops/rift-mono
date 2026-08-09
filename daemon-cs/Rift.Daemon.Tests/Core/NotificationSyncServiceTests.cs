@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -68,6 +69,67 @@ public sealed class NotificationSyncServiceTests : IDisposable
         Assert.Equal("New", notification.Title);
         Assert.Equal("Updated", notification.BodyPreview);
         Assert.Contains(_ipcNotificationService.Events, evt => evt.Method == "rift.onNotificationUpdated");
+    }
+
+    [Fact]
+    public async Task NotificationIcon_SurvivesStorageIpcAndBroadcast()
+    {
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        var icon = CreateIcon();
+
+        await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            CreateNotification(
+                "notif-icon",
+                sourceDeviceId: _identityManager.GetDeviceId(),
+                icon: icon),
+            null,
+            CancellationToken.None);
+
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+        Assert.Equal(icon, Assert.Single(listed.Notifications).Icon);
+        var ipcNotification = Assert.IsType<NotificationSyncRecord>(
+            Assert.Single(_ipcNotificationService.Events, evt => evt.Method == "rift.onNotificationPosted").Payload);
+        Assert.Equal(icon, ipcNotification.Icon);
+        var broadcast = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.posted");
+        Assert.Equal("image/png", broadcast.Payload.GetProperty("icon").GetProperty("mediaType").GetString());
+    }
+
+    [Fact]
+    public async Task MalformedNotificationIcon_IsDroppedWithoutDroppingNotification()
+    {
+        var icon = CreateIcon();
+        icon["sha256"] = new string('0', 64);
+
+        await _service.HandleNotificationPostedAsync(
+            CreateNotification("notif-invalid-icon", icon: icon),
+            CancellationToken.None);
+
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+        Assert.Null(Assert.Single(listed.Notifications).Icon);
+    }
+
+    [Fact]
+    public async Task HandleNotificationRemovedAsync_DeletesIconBearingRecordFromMemory()
+    {
+        await _service.HandleNotificationPostedAsync(
+            CreateNotification("notif-icon-removed", icon: CreateIcon()),
+            CancellationToken.None);
+
+        await _service.HandleNotificationRemovedAsync(new NotificationRemovedRecord
+        {
+            NotificationId = "notif-icon-removed",
+            SourceDeviceId = "rift-peer"
+        }, CancellationToken.None);
+
+        var field = typeof(NotificationSyncService).GetField(
+            "_notifications",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var records = Assert.IsType<Dictionary<string, NotificationSyncRecord>>(
+            field!.GetValue(_service));
+
+        Assert.DoesNotContain("rift-peer\nnotif-icon-removed", records.Keys);
     }
 
     [Fact]
@@ -688,7 +750,8 @@ public sealed class NotificationSyncServiceTests : IDisposable
         string? bodyPreview = "Body",
         bool isDismissible = true,
         bool isOpenable = false,
-        string sourceDeviceId = "rift-peer")
+        string sourceDeviceId = "rift-peer",
+        IReadOnlyDictionary<string, object?>? icon = null)
     {
         return new NotificationSyncRecord
         {
@@ -700,7 +763,21 @@ public sealed class NotificationSyncServiceTests : IDisposable
             BodyPreview = bodyPreview,
             PostedAt = "2026-07-14T10:00:00Z",
             IsDismissible = isDismissible,
-            IsOpenable = isOpenable
+            IsOpenable = isOpenable,
+            Icon = icon
+        };
+    }
+
+    private static Dictionary<string, object?> CreateIcon()
+    {
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
+        return new Dictionary<string, object?>
+        {
+            ["mediaType"] = "image/png",
+            ["dataBase64"] = Convert.ToBase64String(bytes),
+            ["byteSize"] = bytes.Length,
+            ["sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant()
         };
     }
 

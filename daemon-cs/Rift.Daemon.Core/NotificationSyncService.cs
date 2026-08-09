@@ -323,66 +323,42 @@ public sealed class NotificationSyncService : INotificationSyncService
     public async Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateNotification(notification);
+        var normalizedNotification = NormalizeNotificationRecord(notification);
+        ValidateNotification(normalizedNotification);
 
         lock (_gate)
         {
-            var stored = CloneRecord(notification);
-            stored = new NotificationSyncRecord
-            {
-                NotificationId = stored.NotificationId,
-                SourceDeviceId = stored.SourceDeviceId,
-                SourcePlatform = stored.SourcePlatform,
-                PackageName = stored.PackageName,
-                AppName = stored.AppName,
-                Title = stored.Title,
-                BodyPreview = stored.BodyPreview,
-                PostedAt = stored.PostedAt,
-                IsDismissible = stored.IsDismissible,
-                IsOpenable = stored.IsOpenable,
-                Icon = stored.Icon is null ? null : new Dictionary<string, object?>(stored.Icon)
-            };
-            _notifications[GetNotificationKey(notification.SourceDeviceId, notification.NotificationId)] = stored;
+            _notifications[GetNotificationKey(
+                normalizedNotification.SourceDeviceId,
+                normalizedNotification.NotificationId)] = CloneRecord(normalizedNotification);
         }
 
-        await NotifyIpcAsync("rift.onNotificationPosted", notification).ConfigureAwait(false);
-        await LogEventAsync(SecurityEventTypes.NotificationSynced, notification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
+        await NotifyIpcAsync("rift.onNotificationPosted", normalizedNotification).ConfigureAwait(false);
+        await LogEventAsync(SecurityEventTypes.NotificationSynced, normalizedNotification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
         {
-            ["notificationId"] = notification.NotificationId,
-            ["packageName"] = notification.PackageName
+            ["notificationId"] = normalizedNotification.NotificationId,
+            ["packageName"] = normalizedNotification.PackageName
         }).ConfigureAwait(false);
     }
 
     public async Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateNotification(notification);
+        var normalizedNotification = NormalizeNotificationRecord(notification);
+        ValidateNotification(normalizedNotification);
 
         lock (_gate)
         {
-            var stored = CloneRecord(notification);
-            stored = new NotificationSyncRecord
-            {
-                NotificationId = stored.NotificationId,
-                SourceDeviceId = stored.SourceDeviceId,
-                SourcePlatform = stored.SourcePlatform,
-                PackageName = stored.PackageName,
-                AppName = stored.AppName,
-                Title = stored.Title,
-                BodyPreview = stored.BodyPreview,
-                PostedAt = stored.PostedAt,
-                IsDismissible = stored.IsDismissible,
-                IsOpenable = stored.IsOpenable,
-                Icon = stored.Icon is null ? null : new Dictionary<string, object?>(stored.Icon)
-            };
-            _notifications[GetNotificationKey(notification.SourceDeviceId, notification.NotificationId)] = stored;
+            _notifications[GetNotificationKey(
+                normalizedNotification.SourceDeviceId,
+                normalizedNotification.NotificationId)] = CloneRecord(normalizedNotification);
         }
 
-        await NotifyIpcAsync("rift.onNotificationUpdated", notification).ConfigureAwait(false);
-        await LogEventAsync(SecurityEventTypes.NotificationSynced, notification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
+        await NotifyIpcAsync("rift.onNotificationUpdated", normalizedNotification).ConfigureAwait(false);
+        await LogEventAsync(SecurityEventTypes.NotificationSynced, normalizedNotification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
         {
-            ["notificationId"] = notification.NotificationId,
-            ["packageName"] = notification.PackageName,
+            ["notificationId"] = normalizedNotification.NotificationId,
+            ["packageName"] = normalizedNotification.PackageName,
             ["updated"] = true
         }).ConfigureAwait(false);
     }
@@ -396,53 +372,23 @@ public sealed class NotificationSyncService : INotificationSyncService
             throw new InvalidOperationException("Notification removal requires both sourceDeviceId and notificationId.");
         }
 
-        NotificationSyncRecord updated;
+        var removedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O");
         lock (_gate)
         {
-            var key = GetNotificationKey(notification.SourceDeviceId, notification.NotificationId);
-            if (_notifications.TryGetValue(key, out var existing))
-            {
-                updated = new NotificationSyncRecord
-                {
-                    NotificationId = existing.NotificationId,
-                    SourceDeviceId = existing.SourceDeviceId,
-                    SourcePlatform = existing.SourcePlatform,
-                    PackageName = existing.PackageName,
-                    AppName = existing.AppName,
-                    Title = existing.Title,
-                    BodyPreview = existing.BodyPreview,
-                    PostedAt = existing.PostedAt,
-                    IsDismissible = existing.IsDismissible,
-                    IsOpenable = existing.IsOpenable,
-                    IsRemoved = true,
-                    RemovedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O"),
-                    Icon = existing.Icon is null ? null : new Dictionary<string, object?>(existing.Icon)
-                };
-            }
-            else
-            {
-                updated = new NotificationSyncRecord
-                {
-                    NotificationId = notification.NotificationId,
-                    SourceDeviceId = notification.SourceDeviceId,
-                    PostedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O"),
-                    IsRemoved = true,
-                    RemovedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O")
-                };
-            }
-
-            _notifications[key] = updated;
+            _notifications.Remove(GetNotificationKey(
+                notification.SourceDeviceId,
+                notification.NotificationId));
         }
 
         await NotifyIpcAsync("rift.onNotificationRemoved", new
         {
-            notificationId = updated.NotificationId,
-            sourceDeviceId = updated.SourceDeviceId,
-            removedAt = updated.RemovedAt
+            notificationId = notification.NotificationId,
+            sourceDeviceId = notification.SourceDeviceId,
+            removedAt
         }).ConfigureAwait(false);
-        await LogEventAsync(SecurityEventTypes.NotificationRemoved, updated.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
+        await LogEventAsync(SecurityEventTypes.NotificationRemoved, notification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
         {
-            ["notificationId"] = updated.NotificationId
+            ["notificationId"] = notification.NotificationId
         }).ConfigureAwait(false);
     }
 
@@ -547,6 +493,46 @@ public sealed class NotificationSyncService : INotificationSyncService
                 $"Capability '{RequiredCapability}' is not available for peer '{deviceId}'.",
                 -32003);
         }
+    }
+
+    private NotificationSyncRecord NormalizeNotificationRecord(NotificationSyncRecord notification)
+    {
+        return new NotificationSyncRecord
+        {
+            NotificationId = notification.NotificationId,
+            SourceDeviceId = notification.SourceDeviceId,
+            SourcePlatform = notification.SourcePlatform,
+            PackageName = notification.PackageName,
+            AppName = notification.AppName,
+            Title = notification.Title,
+            BodyPreview = notification.BodyPreview,
+            PostedAt = notification.PostedAt,
+            IsDismissible = notification.IsDismissible,
+            IsOpenable = notification.IsOpenable,
+            IsRemoved = notification.IsRemoved,
+            RemovedAt = notification.RemovedAt,
+            Icon = NormalizeNotificationIcon(notification.Icon, notification.NotificationId)
+        };
+    }
+
+    private IReadOnlyDictionary<string, object?>? NormalizeNotificationIcon(
+        IReadOnlyDictionary<string, object?>? icon,
+        string notificationId)
+    {
+        if (icon is null)
+        {
+            return null;
+        }
+
+        var normalized = NotificationIconNormalizer.Normalize(icon);
+        if (normalized is null)
+        {
+            _logger.LogWarning(
+                "Ignoring malformed notification icon for notification {NotificationId}.",
+                notificationId);
+        }
+
+        return normalized;
     }
 
     private static void ValidateNotification(NotificationSyncRecord notification)
@@ -675,7 +661,7 @@ public sealed class NotificationSyncService : INotificationSyncService
             IsOpenable = false,
             IsRemoved = notification.IsRemoved,
             RemovedAt = notification.RemovedAt,
-            Icon = notification.Icon is null ? null : new Dictionary<string, object?>(notification.Icon)
+            Icon = NormalizeNotificationIcon(notification.Icon, notification.NotificationId)
         };
     }
 

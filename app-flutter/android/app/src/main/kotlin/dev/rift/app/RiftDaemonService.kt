@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
@@ -278,6 +280,7 @@ class RiftDaemonService : Service() {
         val route = args["route"] as? String ?: return false
         val payload = args["payload"] as? Map<*, *>
         val notificationKey = args["notificationKey"] as? String
+        val icon = decodeNotificationIcon(args["iconBytes"])
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             if (!notificationKey.isNullOrBlank()) {
@@ -302,14 +305,17 @@ class RiftDaemonService : Service() {
         )
         val notificationId =
             (payload?.get("notificationId")?.toString() ?: "$route:$title:$body").hashCode()
-        val notification = NotificationCompat.Builder(this, "rift.events")
+        val builder = NotificationCompat.Builder(this, "rift.events")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(body)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setOnlyAlertOnce(!notificationKey.isNullOrBlank())
-            .build()
+        if (icon != null) {
+            builder.setLargeIcon(icon)
+        }
+        val notification = builder.build()
         return try {
             val manager = NotificationManagerCompat.from(this)
             if (notificationKey.isNullOrBlank()) {
@@ -326,6 +332,30 @@ class RiftDaemonService : Service() {
     private fun clearActivityNotification(notificationKey: String): Boolean {
         NotificationManagerCompat.from(this).cancel(notificationKey, mirroredNotificationId)
         return true
+    }
+
+    private fun decodeNotificationIcon(value: Any?): Bitmap? {
+        val bytes = value as? ByteArray ?: return null
+        if (bytes.isEmpty() || bytes.size > NotificationIconLimits.maxRawBytes) {
+            return null
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null
+        }
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > NotificationIconLimits.renderSize ||
+            bounds.outHeight / sampleSize > NotificationIconLimits.renderSize) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 
     private fun createChannel() {

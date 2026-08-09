@@ -50,7 +50,8 @@ class FlutterWindow : public Win32Window {
       const std::string& route,
       const flutter::EncodableMap& payload,
       const std::wstring& destination_path,
-      const std::string& notification_key);
+      const std::string& notification_key,
+      const std::vector<uint8_t>& icon_bytes);
   bool ClearNotification(const std::string& notification_key);
   void DispatchPendingNotificationAction();
 
@@ -77,6 +78,7 @@ class FlutterWindow : public Win32Window {
   std::string pending_notification_route_;
   flutter::EncodableMap pending_notification_payload_;
   std::string current_native_notification_key_;
+  HICON current_native_notification_icon_ = nullptr;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

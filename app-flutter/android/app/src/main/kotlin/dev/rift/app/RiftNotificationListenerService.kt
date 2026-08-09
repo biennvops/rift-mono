@@ -10,6 +10,8 @@ import java.util.Locale
 import java.util.TimeZone
 
 class RiftNotificationListenerService : NotificationListenerService() {
+    private val iconExtractor by lazy { NotificationAppIconExtractor(packageManager) }
+
     companion object {
         private const val tag = "RiftNotifListener"
         private const val syncTestExtraKey = "dev.rift.app.SYNC_TEST_NOTIFICATION"
@@ -176,7 +178,8 @@ class RiftNotificationListenerService : NotificationListenerService() {
                 NotificationSyncRelay.markNotificationActive(this, notificationId)
                 "posted"
             }
-        return mapOf(
+        val icon = iconExtractor.iconForPackage(sbn.packageName)
+        return linkedMapOf<String, Any?>(
             "eventType" to eventType,
             "notificationId" to notificationId,
             "sourcePlatform" to "android",
@@ -187,7 +190,11 @@ class RiftNotificationListenerService : NotificationListenerService() {
             "postedAt" to formatUtcTimestamp(sbn.postTime.takeIf { it > 0L } ?: System.currentTimeMillis()),
             "isDismissible" to sbn.isClearable,
             "isOpenable" to false,
-        )
+        ).also { payload ->
+            if (icon != null) {
+                payload["icon"] = icon
+            }
+        }
     }
 
     private fun executeAction(notificationId: String, action: String): Map<String, Any?> {

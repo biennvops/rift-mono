@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import '../device_status/device_status_publisher.dart';
 import '../media_playback/android_remote_media_playback_coordinator.dart';
 import '../notification_sync_policy.dart';
+import '../notification_icon.dart';
 import '../notification_mirror_identity.dart';
 import '../mirrored_notification_registry.dart';
 import '../mirrored_notification_reconciliation.dart';
@@ -354,6 +355,7 @@ Future<void> runAndroidBackgroundMain() async {
     final title = event['title']?.toString().trim();
     final body = event['bodyPreview']?.toString().trim();
     final appName = event['appName']?.toString().trim();
+    final iconBytes = parseNotificationIcon(event['icon'])?.bytes;
     try {
       final shown = await AndroidShell.showNotification(
         title: title?.isNotEmpty == true
@@ -364,6 +366,7 @@ Future<void> runAndroidBackgroundMain() async {
             : 'Notification from a trusted device.',
         route: NotificationRoute.historyNotifications,
         notificationKey: mirrorKey,
+        iconBytes: iconBytes,
         payload: {
           'notificationId': notificationId,
           'sourceDeviceId': sourceDeviceId,

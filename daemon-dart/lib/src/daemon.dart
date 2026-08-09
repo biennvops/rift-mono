@@ -87,6 +87,230 @@ class _DiscoveredPeerRecord {
 const String _notificationSyncModeAll = 'all';
 const String _notificationSyncModeExclude = 'exclude';
 const String _notificationSyncModeInclude = 'include';
+const int notificationIconMaxRawBytes = 131072;
+const int notificationIconMaxBase64Characters =
+    ((notificationIconMaxRawBytes + 2) ~/ 3) * 4;
+const int notificationIconMaxDimension = 512;
+const _notificationIconCanonicalFields = <String>{
+  'mediaType',
+  'dataBase64',
+  'byteSize',
+  'sha256',
+};
+const _pngSignature = <int>[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+final _notificationIconSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+
+Map<String, dynamic>? normalizeNotificationIcon(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
+
+  if (value.length != _notificationIconCanonicalFields.length ||
+      value.keys.any(
+        (key) =>
+            key is! String || !_notificationIconCanonicalFields.contains(key),
+      )) {
+    return null;
+  }
+
+  final mediaType = value['mediaType'];
+  final dataBase64 = value['dataBase64'];
+  final byteSize = value['byteSize'];
+  final sha256Value = value['sha256'];
+  if (mediaType != 'image/png' ||
+      dataBase64 is! String ||
+      dataBase64.length > notificationIconMaxBase64Characters ||
+      byteSize is! int ||
+      byteSize < 0 ||
+      byteSize > notificationIconMaxRawBytes ||
+      sha256Value is! String ||
+      !_notificationIconSha256Pattern.hasMatch(sha256Value)) {
+    return null;
+  }
+
+  Uint8List bytes;
+  try {
+    bytes = Uint8List.fromList(base64Decode(dataBase64));
+  } catch (_) {
+    return null;
+  }
+  if (bytes.length > notificationIconMaxRawBytes ||
+      bytes.length != byteSize ||
+      !_isValidNotificationPng(bytes) ||
+      sha256.convert(bytes).toString() != sha256Value) {
+    return null;
+  }
+
+  return <String, dynamic>{
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(bytes),
+    'byteSize': bytes.length,
+    'sha256': sha256Value,
+  };
+}
+
+bool _isValidNotificationPng(Uint8List bytes) {
+  if (bytes.length < _pngSignature.length) {
+    return false;
+  }
+  for (var index = 0; index < _pngSignature.length; index++) {
+    if (bytes[index] != _pngSignature[index]) {
+      return false;
+    }
+  }
+
+  var offset = _pngSignature.length;
+  var chunkIndex = 0;
+  var sawHeader = false;
+  var sawPalette = false;
+  var sawImageData = false;
+  var finishedImageData = false;
+  var imageDataBytes = 0;
+  var colorType = 0;
+
+  while (offset <= bytes.length - 12) {
+    final dataLength = _readPngUint32(bytes, offset);
+    if (dataLength > bytes.length - offset - 12) {
+      return false;
+    }
+    final typeOffset = offset + 4;
+    final dataOffset = offset + 8;
+    final expectedCrc = _readPngUint32(bytes, dataOffset + dataLength);
+    if (!_isPngChunkType(bytes, typeOffset) ||
+        _pngChunkCrc32(bytes, typeOffset, dataOffset, dataLength) !=
+            expectedCrc) {
+      return false;
+    }
+
+    final isHeader = _isPngChunk(bytes, typeOffset, 0x49, 0x48, 0x44, 0x52);
+    final isPalette = _isPngChunk(bytes, typeOffset, 0x50, 0x4c, 0x54, 0x45);
+    final isImageData = _isPngChunk(bytes, typeOffset, 0x49, 0x44, 0x41, 0x54);
+    final isEnd = _isPngChunk(bytes, typeOffset, 0x49, 0x45, 0x4e, 0x44);
+    if ((chunkIndex == 0 && !isHeader) || (chunkIndex > 0 && isHeader)) {
+      return false;
+    }
+
+    if (isHeader) {
+      if (dataLength != 13 || !_isValidPngHeader(bytes, dataOffset)) {
+        return false;
+      }
+      colorType = bytes[dataOffset + 9];
+      sawHeader = true;
+    } else if (isPalette) {
+      if (!sawHeader ||
+          sawPalette ||
+          sawImageData ||
+          colorType == 0 ||
+          colorType == 4 ||
+          dataLength == 0 ||
+          dataLength % 3 != 0 ||
+          dataLength > 768) {
+        return false;
+      }
+      sawPalette = true;
+    } else if (isImageData) {
+      if (!sawHeader || finishedImageData || (colorType == 3 && !sawPalette)) {
+        return false;
+      }
+      sawImageData = true;
+      imageDataBytes += dataLength;
+    } else {
+      if (sawImageData) {
+        finishedImageData = true;
+      }
+      if (isEnd) {
+        return dataLength == 0 &&
+            sawImageData &&
+            imageDataBytes > 0 &&
+            offset + 12 == bytes.length;
+      }
+      if ((bytes[typeOffset] & 0x20) == 0) {
+        return false;
+      }
+    }
+
+    offset += dataLength + 12;
+    chunkIndex++;
+  }
+  return false;
+}
+
+bool _isValidPngHeader(Uint8List bytes, int offset) {
+  final width = _readPngUint32(bytes, offset);
+  final height = _readPngUint32(bytes, offset + 4);
+  final bitDepth = bytes[offset + 8];
+  final colorType = bytes[offset + 9];
+  final validBitDepth = switch (colorType) {
+    0 =>
+      bitDepth == 1 ||
+          bitDepth == 2 ||
+          bitDepth == 4 ||
+          bitDepth == 8 ||
+          bitDepth == 16,
+    2 || 4 || 6 => bitDepth == 8 || bitDepth == 16,
+    3 => bitDepth == 1 || bitDepth == 2 || bitDepth == 4 || bitDepth == 8,
+    _ => false,
+  };
+  return width > 0 &&
+      width <= notificationIconMaxDimension &&
+      height > 0 &&
+      height <= notificationIconMaxDimension &&
+      validBitDepth &&
+      bytes[offset + 10] == 0 &&
+      bytes[offset + 11] == 0 &&
+      (bytes[offset + 12] == 0 || bytes[offset + 12] == 1);
+}
+
+int _readPngUint32(Uint8List bytes, int offset) =>
+    ByteData.sublistView(bytes, offset, offset + 4).getUint32(0);
+
+bool _isPngChunkType(Uint8List bytes, int offset) {
+  for (var index = offset; index < offset + 4; index++) {
+    final value = bytes[index];
+    if (!((value >= 0x41 && value <= 0x5a) ||
+        (value >= 0x61 && value <= 0x7a))) {
+      return false;
+    }
+  }
+  return (bytes[offset + 2] & 0x20) == 0;
+}
+
+bool _isPngChunk(
+  Uint8List bytes,
+  int offset,
+  int first,
+  int second,
+  int third,
+  int fourth,
+) =>
+    bytes[offset] == first &&
+    bytes[offset + 1] == second &&
+    bytes[offset + 2] == third &&
+    bytes[offset + 3] == fourth;
+
+int _pngChunkCrc32(
+  Uint8List bytes,
+  int typeOffset,
+  int dataOffset,
+  int dataLength,
+) {
+  var crc = 0xffffffff;
+  for (var index = typeOffset; index < typeOffset + 4; index++) {
+    crc = _updatePngCrc32(crc, bytes[index]);
+  }
+  for (var index = dataOffset; index < dataOffset + dataLength; index++) {
+    crc = _updatePngCrc32(crc, bytes[index]);
+  }
+  return (~crc) & 0xffffffff;
+}
+
+int _updatePngCrc32(int crc, int value) {
+  var updated = crc ^ value;
+  for (var bit = 0; bit < 8; bit++) {
+    updated = (updated & 1) != 0 ? (updated >> 1) ^ 0xedb88320 : updated >> 1;
+  }
+  return updated;
+}
 
 bool _isValidNotificationSyncMode(String? mode) =>
     mode == _notificationSyncModeAll ||
@@ -2020,6 +2244,17 @@ class RiftDaemon {
         ? sourcePlatform == 'android' && isDismissible
         : isDismissible;
     record['isOpenable'] = isLocalSource ? false : isOpenable;
+
+    final normalizedIcon = normalizeNotificationIcon(params['icon']);
+    if (params['icon'] != null && normalizedIcon == null) {
+      RiftLog.warn(
+        '[NotificationSync] Ignoring malformed notification icon for '
+        '${record['notificationId']}',
+      );
+    }
+    if (normalizedIcon != null) {
+      record['icon'] = normalizedIcon;
+    }
     return record;
   }
 

@@ -13,6 +13,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -275,6 +277,7 @@ class MainActivity: FlutterActivity() {
                         val destinationPath = args?.get("destinationPath") as? String
                         val payload = args?.get("payload") as? Map<*, *>
                         val notificationKey = args?.get("notificationKey") as? String
+                        val icon = decodeNotificationIcon(args?.get("iconBytes"))
                         if (title.isNullOrBlank() || body.isNullOrBlank() || route.isNullOrBlank()) {
                             result.error("invalid_args", "title, body, and route are required", null)
                         } else {
@@ -286,6 +289,7 @@ class MainActivity: FlutterActivity() {
                                     destinationPath = destinationPath,
                                     payload = payload,
                                     notificationKey = notificationKey,
+                                    icon = icon,
                                 )
                             )
                         }
@@ -549,6 +553,7 @@ class MainActivity: FlutterActivity() {
         payload: Map<*, *>?,
         notificationKey: String? = null,
         isSyncTestNotification: Boolean = false,
+        icon: Bitmap? = null,
     ): Boolean {
         val intent =
             Intent(this, MainActivity::class.java).apply {
@@ -579,7 +584,7 @@ class MainActivity: FlutterActivity() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
-        val notification =
+        val builder =
             NotificationCompat.Builder(this, notificationChannelId)
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(title)
@@ -594,7 +599,10 @@ class MainActivity: FlutterActivity() {
                         putBoolean(syncTestExtraKey, isSyncTestNotification)
                     },
                 )
-                .build()
+        if (icon != null) {
+            builder.setLargeIcon(icon)
+        }
+        val notification = builder.build()
 
         return try {
             val manager = NotificationManagerCompat.from(this)
@@ -611,6 +619,30 @@ class MainActivity: FlutterActivity() {
             Log.w(tag, "Notification permission denied", e)
             false
         }
+    }
+
+    private fun decodeNotificationIcon(value: Any?): Bitmap? {
+        val bytes = value as? ByteArray ?: return null
+        if (bytes.isEmpty() || bytes.size > NotificationIconLimits.maxRawBytes) {
+            return null
+        }
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null
+        }
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > NotificationIconLimits.renderSize ||
+            bounds.outHeight / sampleSize > NotificationIconLimits.renderSize) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 
     private fun clearNotification(notificationKey: String): Boolean {

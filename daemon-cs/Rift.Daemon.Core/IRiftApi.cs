@@ -55,7 +55,8 @@ public interface IRiftApi
         bool? isDismissible = null,
         bool? isOpenable = null,
         string? sourcePlatform = null,
-        string? removedAt = null);
+        string? removedAt = null,
+        Dictionary<string, object?>? icon = null);
     Task<ListNotificationsResult> ListNotificationsAsync();
     Task<PerformNotificationActionResult> PerformNotificationActionAsync(
         string sourceDeviceId,
