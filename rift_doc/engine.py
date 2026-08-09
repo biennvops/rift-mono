@@ -7,9 +7,11 @@ from typing import Any
 
 from .extractors.docx import extract_docx
 from .extractors.spreadsheets import extract_workbook
+from .document_set import DocumentSet, DocumentSetLoader
 from .model import Document, NormalizedDocument, Workbook
 from .results import Finding, Status, ValidationResult
 from .spec import CapstoneSpec, SpecError
+from .validators.cross_document import CrossDocumentValidator
 from .validators.structural import StructuralValidator
 from .validators.workbook import WorkbookValidator
 
@@ -22,6 +24,7 @@ class ValidationEngine:
         self.spec = spec
         self.structural = StructuralValidator(spec)
         self.workbooks = WorkbookValidator(spec)
+        self.cross_document = CrossDocumentValidator(spec)
 
     def infer_report_id(self, path: str | Path) -> str | None:
         return self.spec.infer_report_id(path)
@@ -64,6 +67,19 @@ class ValidationEngine:
     def inspect(self, path: str | Path, report_id: str | None = None) -> NormalizedDocument:
         actual_report_id = report_id or self.infer_report_id(path)
         return self.extract(path, actual_report_id)
+
+    def load_document_set(self, manifest_path: str | Path) -> DocumentSet:
+        loader = DocumentSetLoader(self.spec, self.extract)
+        return loader.load(manifest_path)
+
+    def validate_set(self, document_set: DocumentSet | str | Path) -> ValidationResult:
+        loaded = self.load_document_set(document_set) if isinstance(document_set, (str, Path)) else document_set
+        return self.cross_document.audit(loaded)
+
+    def trace(self, document_set: DocumentSet | str | Path) -> ValidationResult:
+        """Alias for callers using the CLI command name."""
+
+        return self.validate_set(document_set)
 
 
 def aggregate_results(results: list[ValidationResult]) -> dict[str, Any]:

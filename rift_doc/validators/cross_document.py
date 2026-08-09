@@ -1,21 +1,1080 @@
-"""Phase 2 extension point.
-
-No cross-document rules are implemented in Phase 1.  Keeping this interface
-separate lets later traceability checks consume normalized documents and
-findings without changing format extractors or the structural result model.
-"""
+"""Deterministic cross-document traceability validation (Phase 2)."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections import defaultdict
+import re
+from typing import Any, Iterable
 
-from ..model import NormalizedDocument
-from ..results import Finding
+from ..document_set import DocumentArtifact, DocumentSet, _domain_alias
+from ..model import Document, NormalizedDocument, Workbook
+from ..results import Finding, Status, ValidationResult
+from ..spec import CapstoneSpec, OrphanRule, TraceRule, TraceTargetRule
+from ..trace_entities import TraceEntityExtractor, _document_blocks
+from ..trace_model import (
+    MatchMethod,
+    MatchResult,
+    TraceEntity,
+    TraceGraph,
+    TraceIndex,
+    TraceLinkStatus,
+    TraceEdge,
+    normalize_name,
+)
+
+
+_SUPPORTED_HANDLERS = {
+    "feature_coverage": "feature_coverage",
+    "feature_trace": "feature_coverage",
+    "actor_use_case": "actor_use_case",
+    "actor_usecase": "actor_use_case",
+    "external_interface": "external_interface",
+    "interface_trace": "external_interface",
+    "data_entity": "data_entity",
+    "entity_data": "data_entity",
+    "quality_objective": "quality_objective",
+    "deliverable": "deliverable",
+    "deliverables": "deliverable",
+    "freshness": "freshness",
+    "xt-001": "feature_coverage",
+    "xt-002": "actor_use_case",
+    "xt-003": "external_interface",
+    "xt-004": "data_entity",
+    "xt-005": "quality_objective",
+    "xt-006": "deliverable",
+}
 
 
 class CrossDocumentValidator:
-    """Placeholder extension point for Report 1-to-7 consistency checks."""
+    """Build a trace graph and execute contract-defined traceability rules.
 
-    def validate(self, documents: dict[str, NormalizedDocument]) -> list[Finding]:
-        del documents
+    ``validate`` retains the Phase 1 extension-point return type (a list of
+    findings).  ``audit`` is the richer Phase 2 API and returns a
+    ``ValidationResult`` containing graph, coverage, and freshness metadata.
+    """
+
+    def __init__(self, spec: CapstoneSpec | None = None) -> None:
+        self.spec = spec
+        self.extractor = TraceEntityExtractor(spec)
+
+    def validate(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> list[Finding]:
+        return self.audit(documents).findings
+
+    def build_graph(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> TraceGraph:
+        return self.extractor.extract_document_set(self._as_document_set(documents))
+
+    def audit(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> ValidationResult:
+        document_set = self._as_document_set(documents)
+        if self.spec is None:
+            return ValidationResult(
+                source_path=document_set.source_manifest_path or "document-set",
+                report="document_set",
+                format="cross_document",
+                metadata={"document_set": document_set.to_dict(), "trace_graph": TraceGraph().to_dict()},
+            )
+
+        graph = self.extractor.extract_document_set(document_set)
+        index = TraceIndex(graph)
+        findings: list[Finding] = list(document_set.load_findings)
+        findings.extend(self._missing_target_domain_findings(document_set, list(self.spec.iter_trace_rules())))
+        coverage: dict[str, Any] = {}
+        freshness: list[dict[str, Any]] = []
+        quality: list[dict[str, Any]] = []
+
+        findings.extend(self._duplicate_identifier_findings(index))
+        rules = list(self.spec.iter_trace_rules())
+        for rule in rules:
+            handler = _SUPPORTED_HANDLERS.get(rule.handler.casefold(), _SUPPORTED_HANDLERS.get(rule.rule_id.casefold()))
+            if handler is None:
+                findings.append(
+                    self._finding(
+                        status=Status.FAIL,
+                        severity="error",
+                        rule_id=rule.rule_id,
+                        report=rule.source_domain or "document_set",
+                        message=f"Unknown cross-document rule handler {rule.handler!r}; the rule was not silently ignored.",
+                        spec_path=rule.path,
+                        metadata={"configuration_error": True, "handler": rule.handler},
+                    )
+                )
+                continue
+            if handler == "feature_coverage":
+                rule_coverage, rule_findings = self._run_trace_rule(document_set, graph, index, rule)
+                coverage[rule.rule_id] = rule_coverage
+                findings.extend(rule_findings)
+                if _truthy((rule.data or {}).get("freshness")) or rule.rule_id.casefold() == "xt-006":
+                    fresh, fresh_findings = self._run_freshness(document_set, graph, index, rule)
+                    freshness.extend(fresh)
+                    findings.extend(fresh_findings)
+            elif handler == "quality_objective":
+                rule_quality, rule_findings = self._run_quality_objectives(document_set, graph, index, rule)
+                quality.extend(rule_quality)
+                coverage[rule.rule_id] = rule_quality
+                findings.extend(rule_findings)
+            elif handler == "deliverable":
+                rule_coverage, rule_findings = self._run_trace_rule(document_set, graph, index, rule)
+                coverage[rule.rule_id] = rule_coverage
+                findings.extend(rule_findings)
+                findings.extend(self._run_deliverable_reverse_checks(document_set, graph, index, rule))
+                if _truthy((rule.data or {}).get("freshness")) or rule.rule_id.casefold() == "xt-006":
+                    fresh, fresh_findings = self._run_freshness(document_set, graph, index, rule)
+                    freshness.extend(fresh)
+                    findings.extend(fresh_findings)
+            else:
+                rule_coverage, rule_findings = self._run_trace_rule(document_set, graph, index, rule)
+                coverage[rule.rule_id] = rule_coverage
+                findings.extend(rule_findings)
+                if handler == "external_interface":
+                    orphan_findings = self._run_directional_interface_checks(document_set, graph, index, rule)
+                    findings.extend(orphan_findings)
+                elif handler == "data_entity":
+                    findings.extend(self._run_directional_data_checks(document_set, graph, index, rule))
+
+        for orphan_rule in self.spec.iter_orphan_rules():
+            findings.extend(self._run_orphan_rule(document_set, graph, index, orphan_rule))
+
+        # An explicit report7 freshness rule is supported, while the XT-006
+        # handler above supplies the normal contract configuration.
+        for rule in rules:
+            if _SUPPORTED_HANDLERS.get(rule.handler.casefold()) == "freshness":
+                fresh, fresh_findings = self._run_freshness(document_set, graph, index, rule)
+                freshness.extend(fresh)
+                findings.extend(fresh_findings)
+
+        metadata = {
+            "spec_version": self.spec.version,
+            "document_set": document_set.to_dict(),
+            "trace_graph": graph.to_dict(),
+            "coverage": coverage,
+            "freshness": freshness,
+            "quality_objectives": quality,
+            "entity_count": len(graph.nodes),
+            "edge_count": len(graph.edges),
+        }
+        return ValidationResult(
+            source_path=document_set.source_manifest_path or "document-set",
+            report="document_set",
+            format="cross_document",
+            findings=findings,
+            metadata=metadata,
+        )
+
+    def _as_document_set(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> DocumentSet:
+        if isinstance(documents, DocumentSet):
+            return documents
+        result = DocumentSet(reports=dict(documents), source_manifest={"reports": sorted(documents)})
+        for report_id, document in documents.items():
+            result.add_artifact(DocumentArtifact(str(report_id), str(report_id), document))
+        return result
+
+    def _missing_target_domain_findings(self, document_set: DocumentSet, rules: list[TraceRule]) -> list[Finding]:
+        findings: list[Finding] = []
+        already_reported = {finding.report for finding in document_set.load_findings if finding.rule_id == "SET-002"}
+        seen: set[str] = set()
+        for rule in rules:
+            for target in rule.targets:
+                domain = _domain_alias(target.domain)
+                if target.requirement not in {"MUST", "SHOULD", "CONDITIONAL"} or domain in seen or self._domain_present(document_set, domain):
+                    continue
+                if domain in already_reported:
+                    continue
+                seen.add(domain)
+                findings.append(
+                    self._finding(
+                        status=Status.WARNING,
+                        severity="warning",
+                        rule_id="SET-007",
+                        report="document_set",
+                        message=f"Target domain {domain!r} is not present in the audit set; dependent trace rules may be incomplete.",
+                        target_domain=domain,
+                        spec_path="cross_document_traceability",
+                        metadata={"missing_domain": domain, "dependent_rules": [rule.rule_id]},
+                    )
+                )
+        return findings
+
+    def _run_trace_rule(
+        self,
+        document_set: DocumentSet,
+        graph: TraceGraph,
+        index: TraceIndex,
+        rule: TraceRule,
+    ) -> tuple[list[dict[str, Any]], list[Finding]]:
+        source_domain = _domain_alias(rule.source_domain)
+        source_entities = _entities_for(graph, source_domain, rule.source_kinds)
+        if not source_entities:
+            if not self._domain_present(document_set, source_domain):
+                return [], [
+                    self._finding(
+                        status=Status.FAIL,
+                        severity="error",
+                        rule_id=rule.rule_id,
+                        report=source_domain,
+                        message=f"Source domain {source_domain!r} is missing; {rule.rule_id} cannot be evaluated.",
+                        target_domain=source_domain,
+                        spec_path=rule.path,
+                    )
+                ]
+            return [], [
+                self._finding(
+                    status=Status.REVIEW_REQUIRED,
+                    severity="warning",
+                    rule_id=rule.rule_id,
+                    report=source_domain,
+                    message=f"No deterministic source entities of kind {', '.join(rule.source_kinds)} were extracted from {source_domain}; review the source structure or add trace_entities configuration.",
+                    target_domain=source_domain,
+                    spec_path=rule.path,
+                )
+            ]
+
+        summary: list[dict[str, Any]] = []
+        findings: list[Finding] = []
+        for source in source_entities:
+            links: dict[str, str] = {}
+            link_details: dict[str, Any] = {}
+            for target in rule.targets:
+                status, match, finding = self._check_link(document_set, index, rule, source, target)
+                links[target.domain] = status.value
+                link_details[target.domain] = {
+                    "status": status.value,
+                    "match_method": match.method.value,
+                    "target_entities": [candidate.to_dict() for candidate in match.candidates],
+                    "reason": match.reason,
+                }
+                if finding is not None:
+                    findings.append(finding)
+                if status == TraceLinkStatus.VERIFIED and match.candidates:
+                    metadata_finding = self._metadata_conflict_finding(rule, source, target, match.candidates[0])
+                    if metadata_finding is not None:
+                        findings.append(metadata_finding)
+                    for candidate in match.candidates[:1]:
+                        graph.add_edge(
+                            TraceEdge(
+                                from_entity=source.entity_id,
+                                to_entity=candidate.entity_id,
+                                rule_id=rule.rule_id,
+                                match_method=match.method,
+                                confidence_class=match.method,
+                                evidence=_link_evidence(source, candidate),
+                            )
+                        )
+            summary.append(
+                {
+                    "source": source.to_dict(),
+                    "links": links,
+                    "link_details": link_details,
+                }
+            )
+        return summary, findings
+
+    def _check_link(
+        self,
+        document_set: DocumentSet,
+        index: TraceIndex,
+        rule: TraceRule,
+        source: TraceEntity,
+        target: TraceTargetRule,
+    ) -> tuple[TraceLinkStatus, MatchResult, Finding | None]:
+        target_domain = _domain_alias(target.domain)
+        applicability = _evaluate_applicability(source, target.condition)
+        if applicability is False:
+            match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="Configured applicability is deterministically false.")
+            return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
+        if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target):
+            match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="An explicit N/A rationale is present in the target scope.")
+            return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
+        if not self._domain_present(document_set, target_domain):
+            match = MatchResult(TraceLinkStatus.MISSING, MatchMethod.UNMATCHED, reason=f"Target domain {target_domain!r} is missing.")
+            status = _missing_status(target.requirement)
+            return status, match, self._link_finding(rule, source, target, status, match)
+        match = index.match(source, target_domain=target_domain, target_kinds=target.kinds)
+        status = match.status
+        if applicability is None and target.condition is not None:
+            status = TraceLinkStatus.REVIEW_REQUIRED
+            match = MatchResult(status, MatchMethod.AMBIGUOUS, match.candidates, "Target applicability cannot be determined from normalized evidence.")
+        elif match.status == TraceLinkStatus.MISSING:
+            status = _missing_status(target.requirement)
+        finding = self._link_finding(rule, source, target, status, match)
+        return status, match, finding
+
+    def _link_finding(
+        self,
+        rule: TraceRule,
+        source: TraceEntity,
+        target: TraceTargetRule,
+        status: TraceLinkStatus,
+        match: MatchResult,
+    ) -> Finding:
+        finding_status, severity = _finding_status(status, target.requirement)
+        candidates = [candidate.to_dict() for candidate in match.candidates]
+        if status == TraceLinkStatus.VERIFIED:
+            message = f"Verified {source.kind} {source.canonical_name!r} in {target.domain} by {match.method.value}."
+        elif status == TraceLinkStatus.NOT_APPLICABLE:
+            message = f"{source.kind.capitalize()} {source.canonical_name!r} has no required link to {target.domain}: {match.reason or 'not applicable'}."
+        elif status in {TraceLinkStatus.AMBIGUOUS, TraceLinkStatus.REVIEW_REQUIRED}:
+            message = f"Review {source.kind} {source.canonical_name!r} → {target.domain}: {match.reason or 'multiple deterministic candidates remain'}."
+        else:
+            message = f"Missing required trace link for {source.kind} {source.canonical_name!r} in {target.domain}."
+        return self._finding(
+            status=finding_status,
+            severity=severity,
+            rule_id=rule.rule_id,
+            report=source.source_report,
+            section=source.source_section,
+            location=source.source_location,
+            message=message,
+            evidence=_link_evidence(source, *match.candidates[:2]),
+            source_entity=source,
+            target_domain=target.domain,
+            candidate_entities=candidates,
+            source_requirement=f"{target.requirement} traceability link from {rule.source_domain} to {target.domain}.",
+            spec_path=rule.path,
+            metadata={
+                "trace_status": status.value,
+                "match_method": match.method.value,
+                "requirement": target.requirement,
+                "reason": match.reason,
+            },
+        )
+
+    def _metadata_conflict_finding(
+        self,
+        rule: TraceRule,
+        source: TraceEntity,
+        target: TraceTargetRule,
+        candidate: TraceEntity,
+    ) -> Finding | None:
+        if source.kind != "deliverable" and "deliverable" not in target.kinds and "tracking_item" not in target.kinds:
+            return None
+        conflicts: list[dict[str, Any]] = []
+        for field in ("version", "status", "state"):
+            source_value = source.metadata.get(field)
+            target_value = candidate.metadata.get(field)
+            if source_value in (None, "") or target_value in (None, ""):
+                continue
+            if normalize_name(str(source_value)) != normalize_name(str(target_value)):
+                conflicts.append({"field": field, "source": source_value, "target": target_value})
+        if not conflicts:
+            return None
+        return self._finding(
+            status=Status.REVIEW_REQUIRED,
+            severity="warning",
+            rule_id=f"{rule.rule_id}.metadata",
+            report=source.source_report,
+            section=source.source_section,
+            location=source.source_location,
+            message=f"Deterministic deliverable metadata differs between {source.source_report} and {target.domain}.",
+            evidence=_link_evidence(source, candidate),
+            source_entity=source,
+            target_domain=target.domain,
+            candidate_entities=[candidate.to_dict()],
+            spec_path=rule.path,
+            metadata={"consistency": TraceLinkStatus.STALE_OR_CONTRADICTED.value, "conflicts": conflicts},
+        )
+
+    def _run_deliverable_reverse_checks(
+        self,
+        document_set: DocumentSet,
+        graph: TraceGraph,
+        index: TraceIndex,
+        rule: TraceRule,
+    ) -> list[Finding]:
+        final_target = next((target for target in rule.targets if "final_report_item" in target.kinds), None)
+        final_domain = _domain_alias(final_target.domain) if final_target else ""
+        final_items = [
+            entity
+            for entity in _entities_for(graph, final_domain, ("final_report_item",))
+            if "deliverable" in normalize_name(entity.source_section or "")
+            or "release package" in normalize_name(entity.source_section or "")
+        ]
+        planning_targets = [target for target in rule.targets if target is not final_target]
+        planning: list[TraceEntity] = []
+        for target in planning_targets:
+            planning.extend(_entities_for(graph, _domain_alias(target.domain), target.kinds))
+        target_label = "/".join(target.domain for target in planning_targets) or "planning"
+        findings: list[Finding] = []
+        for item in final_items:
+            if _best_match_against(item, planning).status == TraceLinkStatus.VERIFIED:
+                continue
+            findings.append(
+                self._finding(
+                    status=Status.REVIEW_REQUIRED,
+                    severity="warning",
+                    rule_id=f"{rule.rule_id}.orphan_final",
+                    report=final_domain,
+                    section=item.source_section,
+                    location=item.source_location,
+                    message=f"Final deliverable {item.canonical_name!r} is not represented in configured planning/tracking domains.",
+                    evidence=_link_evidence(item),
+                    source_entity=item,
+                    target_domain=target_label,
+                    spec_path=rule.path,
+                    metadata={"direction": "final_to_plan"},
+                )
+            )
+        return findings
+
+    def _run_quality_objectives(
+        self,
+        document_set: DocumentSet,
+        graph: TraceGraph,
+        index: TraceIndex,
+        rule: TraceRule,
+    ) -> tuple[list[dict[str, Any]], list[Finding]]:
+        source_domain = _domain_alias(rule.source_domain)
+        objectives = _entities_for(graph, source_domain, rule.source_kinds or ("quality_objective",))
+        findings: list[Finding] = []
+        summary: list[dict[str, Any]] = []
+        if not objectives:
+            return [], [
+                self._finding(
+                    status=Status.REVIEW_REQUIRED if self._domain_present(document_set, source_domain) else Status.FAIL,
+                    severity="warning" if self._domain_present(document_set, source_domain) else "error",
+                    rule_id=rule.rule_id,
+                    report=source_domain,
+                    message="No deterministic quality objectives were extracted.",
+                    spec_path=rule.path,
+                )
+            ]
+        raw_data = rule.data or {}
+        configured_target = raw_data.get("target_domain")
+        if configured_target is None and rule.targets:
+            configured_target = rule.targets[0].domain
+        target_domain = _domain_alias(str(configured_target or ""))
+        target_entities = _entities_for(graph, target_domain, ("test_case_or_test_group", "quality_objective"))
+        for objective in objectives:
+            keywords = _quality_keywords(objective)
+            strategy_candidates = [candidate for candidate in target_entities if _candidate_stage(candidate, "strategy")]
+            result_candidates = [candidate for candidate in target_entities if _candidate_stage(candidate, "result")]
+            strategy_matches = _keyword_candidates(objective, strategy_candidates, keywords)
+            result_matches = _keyword_candidates(objective, result_candidates, keywords)
+            strategy_status = "TRACE_PRESENT" if strategy_matches else "REVIEW_REQUIRED"
+            if strategy_matches:
+                findings.append(
+                    self._finding(
+                        status=Status.PASS,
+                        severity="info",
+                        rule_id=rule.rule_id,
+                        report=objective.source_report,
+                        section=objective.source_section,
+                        location=objective.source_location,
+                        message=f"Quality objective {objective.canonical_name!r} is addressed by {target_domain} strategy evidence.",
+                        evidence=_link_evidence(objective, *strategy_matches[:2]),
+                        source_entity=objective,
+                        target_domain=target_domain,
+                        candidate_entities=[candidate.to_dict() for candidate in strategy_matches],
+                        spec_path=rule.path,
+                        metadata={"trace_status": "TRACE_PRESENT", "stage": "strategy", "keywords": sorted(keywords)},
+                    )
+                )
+            else:
+                findings.append(
+                    self._finding(
+                        status=Status.REVIEW_REQUIRED,
+                        severity="warning",
+                        rule_id=rule.rule_id,
+                        report=objective.source_report,
+                        section=objective.source_section,
+                        location=objective.source_location,
+                        message=f"No deterministic {target_domain} strategy statement was tied to quality objective {objective.canonical_name!r}.",
+                        evidence=[*objective.evidence],
+                        source_entity=objective,
+                        target_domain=target_domain,
+                        spec_path=rule.path,
+                        metadata={"trace_status": "REVIEW_REQUIRED", "stage": "strategy", "keywords": sorted(keywords)},
+                    )
+                )
+            measurable = objective.metadata.get("measurable") is True
+            achievement_status: str | None = None
+            if result_matches:
+                result_status = "RESULT_PRESENT"
+                findings.append(
+                    self._finding(
+                        status=Status.REVIEW_REQUIRED,
+                        severity="warning",
+                        rule_id=rule.rule_id,
+                        report=objective.source_report,
+                        section=objective.source_section,
+                        location=objective.source_location,
+                        message=f"Result evidence is present in {target_domain} for quality objective {objective.canonical_name!r}; deterministic tooling does not assert achievement.",
+                        evidence=_link_evidence(objective, *result_matches[:2]),
+                        source_entity=objective,
+                        target_domain=target_domain,
+                        candidate_entities=[candidate.to_dict() for candidate in result_matches],
+                        spec_path=rule.path,
+                        metadata={"trace_status": "RESULT_PRESENT", "stage": "result", "achievement": "REVIEW_REQUIRED"},
+                    )
+                )
+                achievement_status = "ACHIEVEMENT_REVIEW_REQUIRED"
+            elif measurable:
+                result_status = "MISSING"
+                findings.append(
+                    self._finding(
+                        status=Status.FAIL,
+                        severity="error",
+                        rule_id=rule.rule_id,
+                        report=objective.source_report,
+                        section=objective.source_section,
+                        location=objective.source_location,
+                        message=f"Measurable quality objective {objective.canonical_name!r} has no deterministic {target_domain} result evidence.",
+                        evidence=[*objective.evidence],
+                        source_entity=objective,
+                        target_domain=target_domain,
+                        spec_path=rule.path,
+                        metadata={"trace_status": "MISSING", "stage": "result"},
+                    )
+                )
+            else:
+                result_status = "REVIEW_REQUIRED"
+                findings.append(
+                    self._finding(
+                        status=Status.REVIEW_REQUIRED,
+                        severity="warning",
+                        rule_id=rule.rule_id,
+                        report=objective.source_report,
+                        section=objective.source_section,
+                        location=objective.source_location,
+                        message=f"Whether quality objective {objective.canonical_name!r} requires measurable Report 5 results is not structurally determinable.",
+                        evidence=[*objective.evidence],
+                        source_entity=objective,
+                        target_domain=target_domain,
+                        spec_path=rule.path,
+                        metadata={"trace_status": "REVIEW_REQUIRED", "stage": "result"},
+                    )
+                )
+            summary.append(
+                {
+                    "source": objective.to_dict(),
+                    "strategy": strategy_status,
+                    "result": result_status,
+                    "achievement": achievement_status if result_matches else None,
+                }
+            )
+        return summary, findings
+
+    def _run_directional_interface_checks(self, document_set: DocumentSet, graph: TraceGraph, index: TraceIndex, rule: TraceRule) -> list[Finding]:
+        findings: list[Finding] = []
+        design_target = next((target for target in rule.targets if "architecture_component" in target.kinds), None)
+        design_domain = _domain_alias(design_target.domain) if design_target else ""
+        design_entities = _entities_for(graph, design_domain, ("architecture_component", "external_interface"))
+        requirement_entities = _entities_for(graph, _domain_alias(rule.source_domain), ("external_interface",))
+        for design in design_entities:
+            if not requirement_entities:
+                break
+            design_text = " ".join([design.canonical_name, str(design.metadata.get("raw_text", ""))]).casefold()
+            if not re.search(r"\b(?:external|remote|api|service|platform|operating system|os integration|storage|paired device|dependency|endpoint)\b", design_text):
+                continue
+            match = _best_match_against(design, requirement_entities)
+            if match.status == TraceLinkStatus.MISSING:
+                findings.append(
+                    self._finding(
+                        status=Status.REVIEW_REQUIRED,
+                        severity="warning",
+                        rule_id=f"{rule.rule_id}.orphan_design",
+                        report=design_domain,
+                        section=design.source_section,
+                        location=design.source_location,
+                        message=f"Design introduces external dependency/component {design.canonical_name!r} with no identifiable Report 3 interface.",
+                        evidence=_link_evidence(design),
+                        source_entity=design,
+                        target_domain=rule.source_domain,
+                        spec_path=rule.path,
+                        metadata={"direction": "design_to_requirements"},
+                    )
+                )
+        return findings
+
+    def _run_directional_data_checks(self, document_set: DocumentSet, graph: TraceGraph, index: TraceIndex, rule: TraceRule) -> list[Finding]:
+        findings: list[Finding] = []
+        data_target = next((target for target in rule.targets if "entity_or_data_object" in target.kinds), None)
+        design_domain = _domain_alias(data_target.domain) if data_target else ""
+        source_entities = _entities_for(graph, _domain_alias(rule.source_domain), ("entity_or_data_object",))
+        design_entities = _entities_for(graph, design_domain, ("entity_or_data_object",))
+        source_names = {normalize_name(entity.canonical_name) for entity in source_entities}
+        for entity in design_entities:
+            if entity.identifiers and any(identifier in {item for source in source_entities for item in source.identifiers} for identifier in entity.identifiers):
+                continue
+            if normalize_name(entity.canonical_name) in source_names:
+                continue
+            findings.append(
+                self._finding(
+                    status=Status.REVIEW_REQUIRED,
+                    severity="warning",
+                    rule_id=f"{rule.rule_id}.orphan_design",
+                    report=design_domain,
+                    section=entity.source_section,
+                    location=entity.source_location,
+                    message=f"Report 4 data design item {entity.canonical_name!r} has no identifiable Report 3 entity.",
+                    evidence=_link_evidence(entity),
+                    source_entity=entity,
+                    target_domain=rule.source_domain,
+                    spec_path=rule.path,
+                    metadata={"direction": "data_design_to_requirements"},
+                )
+            )
+        return findings
+
+    def _run_orphan_rule(self, document_set: DocumentSet, graph: TraceGraph, index: TraceIndex, rule: OrphanRule) -> list[Finding]:
+        source_entities = _entities_for(graph, _domain_alias(rule.source_domain), rule.source_kinds)
+        findings: list[Finding] = []
+        for source in source_entities:
+            match = index.match(source, target_domain=_domain_alias(rule.target_domain), target_kinds=rule.target_kinds)
+            if match.status == TraceLinkStatus.VERIFIED:
+                continue
+            status = Status.REVIEW_REQUIRED if rule.status.upper() == "REVIEW_REQUIRED" else _status_from_string(rule.status)
+            findings.append(
+                self._finding(
+                    status=status,
+                    severity=rule.severity,
+                    rule_id=rule.rule_id,
+                    report=source.source_report,
+                    section=source.source_section,
+                    location=source.source_location,
+                    message=f"Orphan check: {source.kind} {source.canonical_name!r} has no identifiable {rule.target_domain} source.",
+                    evidence=_link_evidence(source, *match.candidates[:3]),
+                    source_entity=source,
+                    target_domain=rule.target_domain,
+                    candidate_entities=[candidate.to_dict() for candidate in match.candidates],
+                    spec_path=rule.path,
+                    metadata={"match_method": match.method.value, "reason": match.reason},
+                )
+            )
+        return findings
+
+    def _run_freshness(
+        self,
+        document_set: DocumentSet,
+        graph: TraceGraph,
+        index: TraceIndex,
+        rule: TraceRule,
+    ) -> tuple[list[dict[str, Any]], list[Finding]]:
+        config = (rule.data or {}).get("freshness", {})
+        if config is True:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        configured_target = next((target for target in rule.targets if "final_report_item" in target.kinds), rule.targets[-1] if rule.targets else None)
+        source_domains = config.get("sources", [rule.source_domain])
+        source_kinds = config.get("kinds", list(rule.source_kinds))
+        target_domain = _domain_alias(str(config.get("target", configured_target.domain if configured_target else "")))
+        target_kinds = tuple(str(value) for value in config.get("target_kinds", configured_target.kinds if configured_target else ("final_report_item",)))
+        freshness_rule_id = str(config.get("rule_id", "R7-FRESHNESS"))
+        target_entities = _entities_for(graph, target_domain, target_kinds)
+        summary: list[dict[str, Any]] = []
+        findings: list[Finding] = []
+        source_domain_values = source_domains if isinstance(source_domains, list) else [source_domains]
+        source_entities: list[TraceEntity] = []
+        for source_domain in source_domain_values:
+            source_entities.extend(_entities_for(graph, _domain_alias(str(source_domain)), source_kinds))
+            for source in _entities_for(graph, _domain_alias(str(source_domain)), source_kinds):
+                match = _best_match_against(source, target_entities)
+                if match.status == TraceLinkStatus.VERIFIED:
+                    state = TraceLinkStatus.CONSISTENT
+                    findings.append(
+                        self._finding(
+                            status=Status.PASS,
+                            severity="info",
+                            rule_id=freshness_rule_id,
+                            report=source.source_report,
+                            section=source.source_section,
+                            location=source.source_location,
+                            message=f"Report 7 contains a deterministic current representation of {source.canonical_name!r}.",
+                            evidence=_link_evidence(source, *match.candidates[:1]),
+                            source_entity=source,
+                            target_domain=target_domain,
+                            candidate_entities=[candidate.to_dict() for candidate in match.candidates],
+                            spec_path=rule.path,
+                            metadata={"consistency": state.value, "match_method": match.method.value},
+                        )
+                    )
+                elif match.status == TraceLinkStatus.MISSING:
+                    state = TraceLinkStatus.STALE_OR_CONTRADICTED
+                    findings.append(
+                        self._finding(
+                            status=Status.REVIEW_REQUIRED,
+                            severity="warning",
+                            rule_id=freshness_rule_id,
+                            report=source.source_report,
+                            section=source.source_section,
+                            location=source.source_location,
+                            message=f"Target domain {target_domain} has no deterministic representation of source item {source.canonical_name!r}.",
+                            evidence=_link_evidence(source),
+                            source_entity=source,
+                            target_domain=target_domain,
+                            spec_path=rule.path,
+                            metadata={"consistency": state.value},
+                        )
+                    )
+                else:
+                    state = TraceLinkStatus.REVIEW_REQUIRED
+                    findings.append(
+                        self._finding(
+                            status=Status.REVIEW_REQUIRED,
+                            severity="warning",
+                            rule_id=freshness_rule_id,
+                            report=source.source_report,
+                            section=source.source_section,
+                            location=source.source_location,
+                            message=f"Target domain {target_domain} has ambiguous candidates for source item {source.canonical_name!r}; freshness requires review.",
+                            evidence=_link_evidence(source, *match.candidates[:3]),
+                            source_entity=source,
+                            target_domain=target_domain,
+                            candidate_entities=[candidate.to_dict() for candidate in match.candidates],
+                            spec_path=rule.path,
+                            metadata={"consistency": state.value, "match_method": match.method.value},
+                        )
+                    )
+                summary.append({"source": source.to_dict(), "status": state.value, "candidates": [candidate.to_dict() for candidate in match.candidates]})
+
+        for target in target_entities:
+            if not target.identifiers:
+                continue
+            reverse_match = _best_match_against(target, source_entities)
+            if reverse_match.status == TraceLinkStatus.VERIFIED:
+                continue
+            findings.append(
+                self._finding(
+                    status=Status.REVIEW_REQUIRED,
+                    severity="warning",
+                    rule_id=freshness_rule_id,
+                    report=target.source_report,
+                    section=target.source_section,
+                    location=target.source_location,
+                    message=f"Final-state item {target.canonical_name!r} has no identifiable representation in the configured latest source domains.",
+                    evidence=_link_evidence(target, *reverse_match.candidates[:3]),
+                    source_entity=target,
+                    target_domain=",".join(str(value) for value in source_domain_values),
+                    candidate_entities=[candidate.to_dict() for candidate in reverse_match.candidates],
+                    spec_path=rule.path,
+                    metadata={"consistency": TraceLinkStatus.STALE_OR_CONTRADICTED.value, "direction": "final_to_source"},
+                )
+            )
+
+        findings.extend(self._freshness_metadata_findings(document_set, rule, source_domain_values, target_domain))
+        return summary, findings
+
+    def _freshness_metadata_findings(
+        self,
+        document_set: DocumentSet,
+        rule: TraceRule,
+        source_domains: Iterable[str],
+        target_domain: str,
+    ) -> list[Finding]:
+        final_documents = document_set.domain_documents(target_domain)
+        if not final_documents:
+            return []
+        final_values = _structured_values(final_documents)
+        findings: list[Finding] = []
+        for source_domain in source_domains:
+            source_documents = document_set.domain_documents(source_domain)
+            if not source_documents:
+                continue
+            source_values = _structured_values(source_documents)
+            for label, source_value, source_location in source_values:
+                final_value, final_location = _find_value(final_values, label)
+                if final_value is None:
+                    continue
+                if normalize_name(source_value) == normalize_name(final_value):
+                    continue
+                findings.append(
+                    self._finding(
+                        status=Status.REVIEW_REQUIRED,
+                        severity="warning",
+                        rule_id=str((rule.data or {}).get("freshness", {}).get("rule_id", "R7-FRESHNESS")) if isinstance((rule.data or {}).get("freshness", {}), dict) else "R7-FRESHNESS",
+                        report=source_domain,
+                        section=None,
+                        location=source_location,
+                        message=f"Report 7 structured value for {label!r} differs from {source_domain}: {source_value!r} versus {final_value!r}.",
+                        evidence=[
+                            {"report": source_domain, "label": label, "value": source_value, "location": source_location},
+                            {"report": target_domain, "label": label, "value": final_value, "location": final_location},
+                        ],
+                        target_domain=target_domain,
+                        spec_path=rule.path,
+                        metadata={"consistency": TraceLinkStatus.STALE_OR_CONTRADICTED.value, "label": label},
+                    )
+                )
+        return findings
+
+    def _duplicate_identifier_findings(self, index: TraceIndex) -> list[Finding]:
+        findings: list[Finding] = []
+        for domain, identifier, entities in index.duplicate_identifiers():
+            findings.append(
+                self._finding(
+                    status=Status.REVIEW_REQUIRED,
+                    severity="warning",
+                    rule_id="TRACE-ID-001",
+                    report=domain,
+                    section=None,
+                    location=entities[0].source_location if entities else "trace graph",
+                    message=f"Explicit identifier {identifier!r} is duplicated within semantic domain {domain!r}; links are not merged automatically.",
+                    evidence=_link_evidence(*entities),
+                    source_entity=entities[0] if entities else None,
+                    target_domain=domain,
+                    candidate_entities=[entity.to_dict() for entity in entities],
+                    metadata={"identifier": identifier, "domain": domain},
+                )
+            )
+        return findings
+
+    def _has_explicit_na(self, document_set: DocumentSet, domain: str, source: TraceEntity, target: TraceTargetRule) -> bool:
+        hints = " ".join(target.kinds).casefold()
+        source_tokens = {token for token in normalize_name(source.canonical_name).split() if len(token) > 2}
+        for document in document_set.domain_documents(domain):
+            for text, section in _document_text(document):
+                value = text.casefold()
+                if not re.search(r"\b(?:n/?a|not applicable|does not apply|no database|no persistent)\b", value):
+                    continue
+                if source.identifiers and any(identifier.casefold() in value for identifier in source.identifiers):
+                    return True
+                if source_tokens and source_tokens.intersection(set(normalize_name(text).split())):
+                    return True
+                if "entity" in hints or "data" in hints:
+                    if any(word in normalize_name(section or "") for word in ("database", "erd", "data")):
+                        return True
+        return False
+
+    def _domain_present(self, document_set: DocumentSet, domain: str) -> bool:
+        domain = _domain_alias(domain)
+        if domain in {_domain_alias(key) for key in document_set.reports}:
+            return True
+        return bool(document_set.domain_artifacts(domain)) or (domain == "report5" and bool(document_set.test_workbooks)) or (domain == "tracking" and bool(document_set.tracking_workbooks))
+
+    @staticmethod
+    def _finding(
+        *,
+        status: Status,
+        severity: str,
+        rule_id: str,
+        report: str,
+        message: str,
+        section: str | None = None,
+        location: Any = None,
+        evidence: Iterable[Any] = (),
+        source_entity: TraceEntity | dict[str, Any] | None = None,
+        target_domain: str | None = None,
+        candidate_entities: Iterable[Any] = (),
+        source_requirement: str | None = None,
+        spec_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Finding:
+        source_value = source_entity.to_dict() if isinstance(source_entity, TraceEntity) else source_entity
+        return Finding.from_location(
+            status=status,
+            severity=severity,
+            rule_id=rule_id,
+            report=report,
+            section=section,
+            location=location,
+            message=message,
+            evidence=evidence,
+            source_requirement=source_requirement,
+            spec_path=spec_path,
+            metadata=metadata,
+            validator="cross_document",
+            source_entity=source_value,
+            target_domain=target_domain,
+            candidate_entities=candidate_entities,
+        )
+
+
+def _entities_for(graph: TraceGraph, domain: str, kinds: Iterable[str]) -> list[TraceEntity]:
+    wanted = {str(kind) for kind in kinds}
+    return [entity for entity in graph.nodes if _domain_alias(str(entity.metadata.get("domain", entity.source_report))) == _domain_alias(domain) and entity.kind in wanted]
+
+
+def _evaluate_applicability(source: TraceEntity, condition: Any) -> bool | None:
+    if condition is None:
+        return True
+    if isinstance(condition, bool):
+        return condition
+    if isinstance(condition, str):
+        value = condition.casefold().replace("-", "_").replace(" ", "_")
+        if value in {"always", "true", "applicable"}:
+            return True
+        if value in {"never", "false", "not_applicable"}:
+            return False
+        if value in {"user_facing", "userfacing"}:
+            return source.metadata.get("user_facing") if isinstance(source.metadata.get("user_facing"), bool) else None
+        if value in {"measurable", "measurable_objective"}:
+            return source.metadata.get("measurable") if isinstance(source.metadata.get("measurable"), bool) else None
+        return None
+    if isinstance(condition, dict):
+        condition_type = str(condition.get("type", condition.get("when", ""))).casefold()
+        if condition_type in {"true", "always_true"}:
+            return True
+        if condition_type in {"false", "always_false"}:
+            return False
+        return _evaluate_applicability(source, condition_type)
+    return None
+
+
+def _finding_status(status: TraceLinkStatus, requirement: str) -> tuple[Status, str]:
+    if status == TraceLinkStatus.VERIFIED:
+        return Status.PASS, "info"
+    if status == TraceLinkStatus.NOT_APPLICABLE:
+        return Status.NOT_APPLICABLE, "info"
+    if status in {TraceLinkStatus.AMBIGUOUS, TraceLinkStatus.REVIEW_REQUIRED}:
+        return Status.REVIEW_REQUIRED, "warning"
+    if status == TraceLinkStatus.MISSING:
+        requirement_value = str(requirement or "MUST").upper()
+        if requirement_value == "MUST":
+            return Status.FAIL, "error"
+        if requirement_value == "SHOULD":
+            return Status.WARNING, "warning"
+        if requirement_value == "MAY":
+            return Status.SKIPPED, "info"
+        return Status.REVIEW_REQUIRED, "warning"
+    return Status.REVIEW_REQUIRED, "warning"
+
+
+def _missing_status(requirement: str) -> TraceLinkStatus:
+    requirement = str(requirement or "MUST").upper()
+    if requirement == "MAY":
+        return TraceLinkStatus.NOT_APPLICABLE
+    return TraceLinkStatus.MISSING
+
+
+def _status_from_string(value: str) -> Status:
+    try:
+        return Status[str(value).upper()]
+    except KeyError:
+        return Status.REVIEW_REQUIRED
+
+
+def _link_evidence(source: TraceEntity, *targets: TraceEntity) -> list[Any]:
+    evidence: list[Any] = []
+    for label, entity in [(source.source_report, source), *[(target.source_report, target) for target in targets]]:
+        evidence.append(
+            {
+                "report": label,
+                "entity_id": entity.entity_id,
+                "kind": entity.kind,
+                "name": entity.canonical_name,
+                "location": entity.source_location.to_dict() if hasattr(entity.source_location, "to_dict") else entity.source_location,
+                "evidence": entity.evidence,
+            }
+        )
+    return evidence
+
+
+def _best_match_against(source: TraceEntity, targets: list[TraceEntity]) -> MatchResult:
+    by_id = [target for target in targets if source.identifiers and set(source.identifiers).intersection(target.identifiers)]
+    if len(by_id) == 1:
+        return MatchResult(TraceLinkStatus.VERIFIED, MatchMethod.EXPLICIT_ID, tuple(by_id))
+    if len(by_id) > 1:
+        return MatchResult(TraceLinkStatus.AMBIGUOUS, MatchMethod.AMBIGUOUS, tuple(by_id), "Explicit identifier has multiple candidates.")
+    names = [target for target in targets if normalize_name(source.canonical_name) in {normalize_name(name) for name in target.comparison_names}]
+    if len(names) == 1:
+        if source.identifiers and names[0].identifiers:
+            return MatchResult(TraceLinkStatus.AMBIGUOUS, MatchMethod.AMBIGUOUS, tuple(names), "Names match but explicit IDs differ.")
+        return MatchResult(TraceLinkStatus.VERIFIED, MatchMethod.EXACT_NORMALIZED_NAME, tuple(names))
+    if len(names) > 1:
+        return MatchResult(TraceLinkStatus.AMBIGUOUS, MatchMethod.AMBIGUOUS, tuple(names), "Exact normalized name has multiple candidates.")
+    return MatchResult(TraceLinkStatus.MISSING, MatchMethod.UNMATCHED, (), "No exact ID or normalized-name match.")
+
+
+def _quality_keywords(entity: TraceEntity) -> set[str]:
+    text = " ".join([entity.canonical_name, str(entity.metadata.get("raw_text", ""))]).casefold()
+    words = set(re.findall(r"[a-z][a-z0-9%_-]{2,}", text))
+    useful = {
+        "coverage", "defect", "performance", "response", "availability", "reliability", "timeliness",
+        "milestone", "quality", "usability", "maintainability", "security", "target", "threshold",
+        "passed", "failed", "successful", "rate", "latency", "hours", "minutes", "seconds",
+    }
+    values = words.intersection(useful)
+    if entity.identifiers:
+        values.update(identifier.casefold() for identifier in entity.identifiers)
+    return values or {word for word in words if word not in {"the", "and", "for", "with", "project", "objective", "shall", "must"}}
+
+
+def _candidate_stage(entity: TraceEntity, stage: str) -> bool:
+    actual = str(entity.metadata.get("test_stage", "")).casefold()
+    section = normalize_name(entity.source_section or "")
+    if stage == "strategy":
+        return actual == "strategy" or "test strategy" in section or "testing types" in section or "test levels" in section
+    return actual == "result" or any(value in section for value in ("test report", "test statistics", "feature", "results"))
+
+
+def _keyword_candidates(source: TraceEntity, targets: list[TraceEntity], keywords: set[str]) -> list[TraceEntity]:
+    if not targets:
         return []
+    exact = [target for target in targets if source.identifiers and set(source.identifiers).intersection(target.identifiers)]
+    if exact:
+        return exact
+    result: list[TraceEntity] = []
+    for target in targets:
+        text = " ".join([target.canonical_name, str(target.metadata.get("raw_text", "")), " ".join(_evidence_text(target.evidence))]).casefold()
+        target_words = set(re.findall(r"[a-z][a-z0-9%_-]{2,}", text))
+        if keywords.intersection(target_words):
+            result.append(target)
+    return result
+
+
+def _document_text(document: NormalizedDocument) -> Iterable[tuple[str, str | None]]:
+    if isinstance(document, Document):
+        for block in _document_blocks(document):
+            yield block.text, block.section_path
+        for table in document.tables:
+            for row in table.rows:
+                yield " | ".join(cell.original_text for cell in row), table.parent_section
+    elif isinstance(document, Workbook):
+        for sheet in document.sheets:
+            for row in sheet.rows:
+                yield " | ".join(cell.original_text for cell in row), sheet.name
+
+
+def _structured_values(documents: list[NormalizedDocument]) -> list[tuple[str, str, str | None]]:
+    labels = {
+        "project name", "project code", "group", "team", "team members", "member", "members", "version", "test coverage", "test successful coverage",
+        "sub total", "passed", "failed", "pending", "availability", "milestone",
+    }
+    values: list[tuple[str, str, str | None]] = []
+    for document in documents:
+        for raw_label, raw_value in document.metadata.items():
+            label = normalize_name(str(raw_label))
+            if label in labels and raw_value not in (None, ""):
+                values.append((label, str(raw_value), document.source_path))
+        if isinstance(document, Document):
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [cell for cell in row if not cell.is_empty]
+                    if len(cells) < 2:
+                        continue
+                    label = normalize_name(cells[0].original_text)
+                    if label in labels:
+                        values.append((label, cells[1].original_text, cells[0].source_location.display() if cells[0].source_location else table.parent_section))
+        elif isinstance(document, Workbook):
+            for sheet in document.sheets:
+                for row in sheet.rows:
+                    cells = [cell for cell in row if not cell.is_empty]
+                    if len(cells) < 2:
+                        continue
+                    label = normalize_name(cells[0].original_text)
+                    if label in labels:
+                        values.append((label, cells[1].original_text, cells[0].source_location.display() if cells[0].source_location else sheet.name))
+    return values
+
+
+def _find_value(values: list[tuple[str, str, str | None]], label: str) -> tuple[str | None, str | None]:
+    for candidate_label, value, location in values:
+        if candidate_label == label:
+            return value, location
+    return None, None
+
+
+def _truthy(value: Any) -> bool:
+    return value is True or str(value).casefold() in {"true", "yes", "1"}
+
+
+def _evidence_text(items: Iterable[Any]) -> Iterable[str]:
+    for item in items:
+        if isinstance(item, dict):
+            for key in ("text", "original_text", "value"):
+                if item.get(key) is not None:
+                    if isinstance(item[key], list):
+                        yield " ".join(str(value) for value in item[key])
+                    else:
+                        yield str(item[key])
+        elif item is not None:
+            yield str(item)

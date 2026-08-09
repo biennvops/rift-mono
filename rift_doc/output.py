@@ -29,6 +29,8 @@ def render_text(results: list[ValidationResult]) -> str:
         findings = sorted(result.findings, key=lambda finding: _STATUS_ORDER[finding.status])
         for finding in findings:
             lines.extend(_render_finding(finding))
+        if result.format == "cross_document":
+            lines.extend(_render_trace_summary(result))
         lines.append("")
         lines.append("Summary:")
         for status in Status:
@@ -55,6 +57,46 @@ def render_json(results: list[ValidationResult], *, pretty: bool = True) -> str:
     return json.dumps(payload, indent=2 if pretty else None, ensure_ascii=False, sort_keys=False)
 
 
+def _render_trace_summary(result: ValidationResult) -> list[str]:
+    lines = ["", "Traceability summary:"]
+    coverage = result.metadata.get("coverage", {})
+    rendered = False
+    for rule_id, entries in (coverage.items() if isinstance(coverage, dict) else ()):
+        if not isinstance(entries, list) or not entries:
+            continue
+        if rule_id == "XT-001":
+            lines.append("Feature Traceability")
+            lines.append("  Legend: ✓ verified  ✗ required missing  ? review required  N/A not applicable")
+            lines.append("  Feature                              " + "  ".join(f"R{index}" for index in range(2, 8)))
+            for entry in entries:
+                source = entry.get("source", {}) if isinstance(entry, dict) else {}
+                name = source.get("canonical_name", source.get("entity_id", "source"))
+                links = entry.get("links", {}) if isinstance(entry, dict) else {}
+                marks = []
+                for domain in ("report2", "report3", "report4", "report5", "report6", "report7"):
+                    status = links.get(domain)
+                    if status is None:
+                        marks.append("—")
+                    else:
+                        marks.append({"VERIFIED": "✓", "NOT_APPLICABLE": "N/A", "MISSING": "✗", "AMBIGUOUS": "?", "REVIEW_REQUIRED": "?"}.get(str(status), "?"))
+                lines.append(f"  {str(name)[:34]:34}  " + "  ".join(marks))
+                rendered = True
+        else:
+            lines.append(f"{rule_id}: {len(entries)} source item(s)")
+            for entry in entries[:8]:
+                source = entry.get("source", {}) if isinstance(entry, dict) else {}
+                links = entry.get("links", {}) if isinstance(entry, dict) else {}
+                name = source.get("canonical_name", source.get("entity_id", "source"))
+                link_text = ", ".join(f"{domain}={value}" for domain, value in links.items())
+                lines.append(f"  - {name}: {link_text}")
+                rendered = True
+    freshness = result.metadata.get("freshness", [])
+    if isinstance(freshness, list) and freshness:
+        lines.append(f"Report 7 freshness: {len(freshness)} structured comparison(s)")
+        rendered = True
+    return lines if rendered else []
+
+
 def _render_finding(finding: Finding) -> list[str]:
     label = "REVIEW" if finding.status == Status.REVIEW_REQUIRED else finding.status.value
     prefix = f"{label:<7}"
@@ -72,4 +114,8 @@ def _render_finding(finding: Finding) -> list[str]:
                 if len(text) > 260:
                     text = text[:257] + "..."
                 lines.append(f"        evidence: {text}")
+            elif isinstance(evidence, dict) and evidence.get("report"):
+                label = evidence.get("name", evidence.get("entity_id", "evidence"))
+                location = evidence.get("location")
+                lines.append(f"        evidence: {evidence['report']} / {label}" + (f" @ {location}" if location else ""))
     return lines

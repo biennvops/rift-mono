@@ -614,8 +614,8 @@ reports:
     final_state: true
     source_requirement: >-
       The final report includes the final updated project outputs from Parts 1–6.
-      Phase 1 validates only this report's own structure and evidence; it does not
-      compare it with Reports 1–6.
+      Structural validation is supplemented by the contract's Phase 2
+      cross-document traceability and freshness checks.
     sections:
       acknowledgement:
         title: "Acknowledgement"
@@ -747,6 +747,135 @@ reports:
           deliverable_package: {title: "1. Deliverable Package", requirement: MUST, content: true}
           installation_guides: {title: "2. Installation Guides", requirement: MUST, content: true}
           user_manual: {title: "3. User Manual", requirement: MUST, content: true}
+cross_document_traceability:
+  - id: XT-001
+    handler: feature_coverage
+    source_domain: report1
+    source_kind: feature
+    targets:
+      - domain: report2
+        kind: wbs_item
+        requirement: MUST
+      - domain: report3
+        kind: [function, feature]
+        requirement: MUST
+      - domain: report4
+        kind: [function, feature]
+        requirement: MUST
+      - domain: report5
+        kind: test_case_or_test_group
+        requirement: MUST
+      - domain: report6
+        kind: user_workflow
+        requirement: CONDITIONAL
+        condition: user_facing
+        allow_explicit_na: true
+      - domain: report7
+        kind: final_report_item
+        requirement: MUST
+  - id: XT-002
+    handler: actor_use_case
+    source_domain: report3
+    source_kind: [actor, use_case]
+    targets:
+      - domain: report6
+        kind: user_workflow
+        requirement: CONDITIONAL
+        condition: user_facing
+        allow_explicit_na: true
+      - domain: report5
+        kind: test_case_or_test_group
+        requirement: CONDITIONAL
+        condition: user_facing
+  - id: XT-003
+    handler: external_interface
+    source_domain: report3
+    source_kind: external_interface
+    targets:
+      - domain: report4
+        kind: architecture_component
+        requirement: MUST
+      - domain: report5
+        kind: test_case_or_test_group
+        requirement: MUST
+  - id: XT-004
+    handler: data_entity
+    source_domain: report3
+    source_kind: entity_or_data_object
+    targets:
+      - domain: report4
+        kind: entity_or_data_object
+        requirement: CONDITIONAL
+        allow_explicit_na: true
+  - id: XT-005
+    handler: quality_objective
+    source_domain: report2
+    source_kind: quality_objective
+    target_domain: report5
+    targets:
+      - domain: report5
+        kind: test_case_or_test_group
+        role: strategy
+        requirement: MUST
+      - domain: report5
+        kind: test_case_or_test_group
+        role: result
+        requirement: CONDITIONAL
+  - id: XT-006
+    handler: deliverable
+    source_domain: report2
+    source_kind: deliverable
+    freshness:
+      sources: [report1, report2, report3, report4, report5, report6]
+      kinds: [feature, function, actor, use_case, external_interface, architecture_component, deliverable]
+      target: report7
+      target_kinds: [final_report_item]
+    targets:
+      - domain: tracking
+        kind: [tracking_item, deliverable]
+        requirement: MUST
+      - domain: report6
+        kind: deliverable
+        requirement: MUST
+      - domain: report7
+        kind: final_report_item
+        requirement: MUST
+cross_document_orphan_checks:
+  - id: ORPHAN-R4-DESIGN
+    source_domain: report4
+    source_kind: function
+    target_domain: report3
+    target_kind: [function, feature]
+    status: REVIEW_REQUIRED
+    severity: warning
+  - id: ORPHAN-R5-TEST
+    source_domain: report5
+    source_kind: test_case_or_test_group
+    target_domain: report3
+    target_kind: [function, feature, external_interface]
+    status: REVIEW_REQUIRED
+    severity: warning
+  - id: ORPHAN-R5-DESIGN
+    source_domain: report5
+    source_kind: test_case_or_test_group
+    target_domain: report4
+    target_kind: [function, feature, architecture_component]
+    status: REVIEW_REQUIRED
+    severity: warning
+  - id: ORPHAN-R6-WORKFLOW
+    source_domain: report6
+    source_kind: user_workflow
+    target_domain: report3
+    target_kind: [use_case, function]
+    status: REVIEW_REQUIRED
+    severity: warning
+  - id: ORPHAN-R7-FINAL
+    source_domain: report7
+    source_kind: final_report_item
+    target_domain: report1
+    target_kind: [feature, function, deliverable]
+    status: REVIEW_REQUIRED
+    severity: warning
 workbooks:
   report3_project_tracking:
     short_name: "Project Tracking"
