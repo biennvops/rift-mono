@@ -11,7 +11,7 @@ from ..document_set import DocumentArtifact, DocumentSet, _domain_alias
 from ..model import Document, NormalizedDocument, Workbook
 from ..results import Finding, Status, ValidationResult
 from ..spec import CapstoneSpec, OrphanRule, TraceRule, TraceTargetRule
-from ..trace_entities import TraceEntityExtractor, _document_blocks
+from ..trace_entities import TraceEntityExtractor, _document_blocks, _extract_identifiers
 from ..trace_model import (
     MatchMethod,
     MatchResult,
@@ -290,7 +290,7 @@ class CrossDocumentValidator:
         if applicability is False:
             match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="Configured applicability is deterministically false.")
             return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
-        if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target):
+        if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target, index):
             match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="An explicit N/A rationale is present in the target scope.")
             return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
         if applicability is None and target.condition is not None:
@@ -911,18 +911,43 @@ class CrossDocumentValidator:
             )
         return findings
 
-    def _has_explicit_na(self, document_set: DocumentSet, domain: str, source: TraceEntity, target: TraceTargetRule) -> bool:
+    def _has_explicit_na(
+        self,
+        document_set: DocumentSet,
+        domain: str,
+        source: TraceEntity,
+        target: TraceTargetRule,
+        index: TraceIndex,
+    ) -> bool:
         hints = " ".join(target.kinds).casefold()
         source_tokens = {token for token in normalize_name(source.canonical_name).split() if len(token) > 2}
+        source_identifiers = set(source.identifiers)
+        target_entities = index.candidates(domain, target.kinds)
         for document in document_set.domain_documents(domain):
             for text, section in _document_text(document):
                 value = text.casefold()
                 if not re.search(r"\b(?:n/?a|not applicable|does not apply|no database|no persistent)\b", value):
                     continue
-                if source.identifiers and any(identifier.casefold() in value for identifier in source.identifiers):
+                if source_identifiers and any(identifier.casefold() in value for identifier in source_identifiers):
                     return True
-                if source_tokens and source_tokens.intersection(set(normalize_name(text).split())):
+                normalized_text = normalize_name(text)
+                if source_tokens and source_tokens.intersection(set(normalized_text.split())):
                     return True
+                explicit_ids = set(_extract_identifiers(text)) - source_identifiers
+                if explicit_ids:
+                    continue
+                unrelated_entity = any(
+                    candidate is not source
+                    and any(
+                        normalized_name
+                        and normalized_name in normalized_text
+                        and normalized_name != normalize_name(source.canonical_name)
+                        for normalized_name in (normalize_name(name) for name in candidate.comparison_names)
+                    )
+                    for candidate in target_entities
+                )
+                if unrelated_entity:
+                    continue
                 if "entity" in hints or "data" in hints:
                     if any(word in normalize_name(section or "") for word in ("database", "erd", "data")):
                         return True

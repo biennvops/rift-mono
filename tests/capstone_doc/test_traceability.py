@@ -360,6 +360,18 @@ def test_identifier_and_name_normalization_is_conservative() -> None:
     assert normalize_name("Notification Sync") == normalize_name("notification-sync")
 
 
+def test_explicit_id_match_respects_target_kinds() -> None:
+    source = TraceEntity("source", "external_interface", "External API", ["IF-01"], metadata={"domain": "report3"})
+    wrong_kind = TraceEntity("target", "function", "External API", ["IF-01"], metadata={"domain": "report4"})
+    match = TraceIndex(TraceGraph([source, wrong_kind])).match(
+        source,
+        target_domain="report4",
+        target_kinds=["architecture_component"],
+    )
+    assert match.status == TraceLinkStatus.MISSING
+    assert not match.candidates
+
+
 def test_explicit_id_match_precedes_exact_name() -> None:
     source = TraceEntity("source", "feature", "Notification Sync", ["FE-01"], metadata={"domain": "report1"})
     target = TraceEntity("target", "function", "Renamed Sync", ["FE-01"], metadata={"domain": "report3"})
@@ -524,6 +536,40 @@ def test_data_entity_explicit_na_rationale_is_not_applicable() -> None:
     )
     finding = next(item for item in result.findings if item.rule_id == "XT-004")
     assert finding.status == Status.NOT_APPLICABLE
+
+
+def test_data_entity_na_does_not_leak_to_unrelated_entities() -> None:
+    spec = _spec(
+        {
+            "id": "XT-004",
+            "handler": "data_entity",
+            "source_domain": "report3",
+            "source_kind": "entity_or_data_object",
+            "targets": [
+                {
+                    "domain": "report4",
+                    "kind": "entity_or_data_object",
+                    "requirement": "CONDITIONAL",
+                    "allow_explicit_na": True,
+                }
+            ],
+        }
+    )
+    result = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _combined_document(
+                    "report3",
+                    [("Entity Relationship Diagram", "ENT-01 Device"), ("Entity Relationship Diagram", "ENT-02 Session")],
+                ),
+                "report4": _document("report4", "Database Design", ["ENT-01 Device: N/A - no persistent database"]),
+            }
+        )
+    )
+    device = next(item for item in result.findings if item.rule_id == "XT-004" and item.source_entity["identifiers"] == ["ENT-01"])
+    session = next(item for item in result.findings if item.rule_id == "XT-004" and item.source_entity["identifiers"] == ["ENT-02"])
+    assert device.status == Status.NOT_APPLICABLE
+    assert session.status == Status.FAIL
 
 
 def test_missing_report_is_reported_in_set_and_trace_results() -> None:
