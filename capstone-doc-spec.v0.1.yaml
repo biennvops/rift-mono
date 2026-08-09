@@ -833,6 +833,13 @@ cross_document_traceability:
       kinds: [feature, function, actor, use_case, external_interface, architecture_component, deliverable]
       target: report7
       target_kinds: [final_report_item]
+      section_map:
+        report1: ["I. Project Introduction"]
+        report2: ["II. Project Management Plan"]
+        report3: ["III. Software Requirement Specification"]
+        report4: ["IV. Software Design Description"]
+        report5: ["V. Software Testing Documentation"]
+        report6: ["VI. Release Package & User Guides"]
     targets:
       - domain: tracking
         kind: [tracking_item, deliverable]

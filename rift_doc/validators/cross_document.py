@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 import re
 from typing import Any, Iterable
 
@@ -22,6 +23,14 @@ from ..trace_model import (
     _unique_entities,
     normalize_name,
 )
+
+
+@dataclass(frozen=True)
+class _StructuredValue:
+    semantic_field: str
+    value: str
+    location: str | None
+    section: str | None
 
 
 _SUPPORTED_HANDLERS = {
@@ -782,35 +791,101 @@ class CrossDocumentValidator:
         final_documents = document_set.domain_documents(target_domain)
         if not final_documents:
             return []
+        freshness_config = (rule.data or {}).get("freshness", {})
+        if not isinstance(freshness_config, dict):
+            freshness_config = {}
+        freshness_rule_id = str(freshness_config.get("rule_id", "R7-FRESHNESS"))
+        source_domain_values = [_domain_alias(str(value)) for value in source_domains]
         final_values = _structured_values(final_documents)
         findings: list[Finding] = []
-        for source_domain in source_domains:
+        for source_domain in source_domain_values:
             source_documents = document_set.domain_documents(source_domain)
             if not source_documents:
                 continue
             source_values = _structured_values(source_documents)
-            for label, source_value, source_location in source_values:
-                final_value, final_location = _find_value(final_values, label)
-                if final_value is None:
+            for source_value in source_values:
+                candidates = _freshness_target_values(
+                    final_values,
+                    source_value.semantic_field,
+                    source_domain,
+                    source_domain_values,
+                    self.spec,
+                    freshness_config,
+                )
+                if not candidates:
                     continue
-                if normalize_name(source_value) == normalize_name(final_value):
+                if len(candidates) > 1:
+                    findings.append(
+                        self._finding(
+                            status=Status.REVIEW_REQUIRED,
+                            severity="warning",
+                            rule_id=freshness_rule_id,
+                            report=source_domain,
+                            section=source_value.section,
+                            location=source_value.location,
+                            message=(
+                                f"Report 7 has multiple structured candidates for {source_value.semantic_field!r} "
+                                f"in the {source_domain} consolidation; freshness requires review."
+                            ),
+                            evidence=[
+                                {
+                                    "report": target_domain,
+                                    "label": candidate.semantic_field,
+                                    "value": candidate.value,
+                                    "location": candidate.location,
+                                    "section": candidate.section,
+                                }
+                                for candidate in candidates
+                            ],
+                            target_domain=target_domain,
+                            spec_path=rule.path,
+                            metadata={
+                                "consistency": TraceLinkStatus.REVIEW_REQUIRED.value,
+                                "semantic_field": source_value.semantic_field,
+                                "candidate_count": len(candidates),
+                            },
+                        )
+                    )
+                    continue
+                final_value = candidates[0]
+                if normalize_name(source_value.value) == normalize_name(final_value.value):
                     continue
                 findings.append(
                     self._finding(
                         status=Status.REVIEW_REQUIRED,
                         severity="warning",
-                        rule_id=str((rule.data or {}).get("freshness", {}).get("rule_id", "R7-FRESHNESS")) if isinstance((rule.data or {}).get("freshness", {}), dict) else "R7-FRESHNESS",
+                        rule_id=freshness_rule_id,
                         report=source_domain,
-                        section=None,
-                        location=source_location,
-                        message=f"Report 7 structured value for {label!r} differs from {source_domain}: {source_value!r} versus {final_value!r}.",
+                        section=source_value.section,
+                        location=source_value.location,
+                        message=(
+                            f"Report 7 structured value for {source_value.semantic_field!r} differs from "
+                            f"{source_domain}: {source_value.value!r} versus {final_value.value!r}."
+                        ),
                         evidence=[
-                            {"report": source_domain, "label": label, "value": source_value, "location": source_location},
-                            {"report": target_domain, "label": label, "value": final_value, "location": final_location},
+                            {
+                                "report": source_domain,
+                                "label": source_value.semantic_field,
+                                "value": source_value.value,
+                                "location": source_value.location,
+                                "section": source_value.section,
+                            },
+                            {
+                                "report": target_domain,
+                                "label": final_value.semantic_field,
+                                "value": final_value.value,
+                                "location": final_value.location,
+                                "section": final_value.section,
+                            },
                         ],
                         target_domain=target_domain,
                         spec_path=rule.path,
-                        metadata={"consistency": TraceLinkStatus.STALE_OR_CONTRADICTED.value, "label": label},
+                        metadata={
+                            "consistency": TraceLinkStatus.STALE_OR_CONTRADICTED.value,
+                            "semantic_field": source_value.semantic_field,
+                            "source_section": source_value.section,
+                            "target_section": final_value.section,
+                        },
                     )
                 )
         return findings
@@ -1100,17 +1175,17 @@ def _document_text(document: NormalizedDocument) -> Iterable[tuple[str, str | No
                 yield " | ".join(cell.original_text for cell in row), sheet.name
 
 
-def _structured_values(documents: list[NormalizedDocument]) -> list[tuple[str, str, str | None]]:
+def _structured_values(documents: list[NormalizedDocument]) -> list[_StructuredValue]:
     labels = {
         "project name", "project code", "group", "team", "team members", "member", "members", "version", "test coverage", "test successful coverage",
         "sub total", "passed", "failed", "pending", "availability", "milestone",
     }
-    values: list[tuple[str, str, str | None]] = []
+    values: list[_StructuredValue] = []
     for document in documents:
         for raw_label, raw_value in document.metadata.items():
             label = normalize_name(str(raw_label))
             if label in labels and raw_value not in (None, ""):
-                values.append((label, str(raw_value), document.source_path))
+                values.append(_StructuredValue(label, str(raw_value), document.source_path, None))
         if isinstance(document, Document):
             for table in document.tables:
                 for row in table.rows:
@@ -1119,7 +1194,14 @@ def _structured_values(documents: list[NormalizedDocument]) -> list[tuple[str, s
                         continue
                     label = normalize_name(cells[0].original_text)
                     if label in labels:
-                        values.append((label, cells[1].original_text, cells[0].source_location.display() if cells[0].source_location else table.parent_section))
+                        values.append(
+                            _StructuredValue(
+                                label,
+                                cells[1].original_text,
+                                cells[0].source_location.display() if cells[0].source_location else table.parent_section,
+                                table.parent_section,
+                            )
+                        )
         elif isinstance(document, Workbook):
             for sheet in document.sheets:
                 for row in sheet.rows:
@@ -1128,15 +1210,86 @@ def _structured_values(documents: list[NormalizedDocument]) -> list[tuple[str, s
                         continue
                     label = normalize_name(cells[0].original_text)
                     if label in labels:
-                        values.append((label, cells[1].original_text, cells[0].source_location.display() if cells[0].source_location else sheet.name))
+                        values.append(
+                            _StructuredValue(
+                                label,
+                                cells[1].original_text,
+                                cells[0].source_location.display() if cells[0].source_location else sheet.name,
+                                sheet.name,
+                            )
+                        )
     return values
 
 
-def _find_value(values: list[tuple[str, str, str | None]], label: str) -> tuple[str | None, str | None]:
-    for candidate_label, value, location in values:
-        if candidate_label == label:
-            return value, location
-    return None, None
+def _freshness_target_values(
+    values: list[_StructuredValue],
+    semantic_field: str,
+    source_domain: str,
+    source_domains: list[str],
+    spec: CapstoneSpec | None,
+    config: dict[str, Any],
+) -> list[_StructuredValue]:
+    candidates = [value for value in values if value.semantic_field == semantic_field]
+    explicit: list[_StructuredValue] = []
+    unknown: list[_StructuredValue] = []
+    for candidate in candidates:
+        mapped_domain = _report7_section_domain(candidate.section, source_domains, spec, config)
+        if mapped_domain == source_domain:
+            explicit.append(candidate)
+        elif mapped_domain is None:
+            unknown.append(candidate)
+    return [*explicit, *unknown] if explicit else unknown
+
+
+def _report7_section_domain(
+    section: str | None,
+    source_domains: list[str],
+    spec: CapstoneSpec | None,
+    config: dict[str, Any],
+) -> str | None:
+    if not section:
+        return None
+    normalized_section = normalize_name(section)
+    section_map = config.get("section_map", {})
+    if isinstance(section_map, dict):
+        for raw_domain, raw_sections in section_map.items():
+            sections = raw_sections if isinstance(raw_sections, list) else [raw_sections]
+            if any(normalize_name(str(value)) in normalized_section for value in sections if value):
+                return _domain_alias(str(raw_domain))
+    roman_match = re.match(r"^([ivxlcdm]+)\b", str(section).strip(), re.IGNORECASE)
+    if roman_match:
+        roman_number = _roman_number(roman_match.group(1))
+        for domain in source_domains:
+            number_match = re.search(r"report[-_]?(\d+)$", domain, re.IGNORECASE)
+            if number_match and int(number_match.group(1)) == roman_number:
+                return domain
+    if spec is not None:
+        for domain in source_domains:
+            try:
+                report = spec.report(domain)
+            except Exception:
+                continue
+            aliases = [domain, report.get("short_name"), report.get("title")]
+            aliases.extend(spec.report_source_names(domain))
+            if any(normalize_name(str(alias)) in normalized_section for alias in aliases if alias):
+                return domain
+    return None
+
+
+def _roman_number(value: str) -> int | None:
+    numerals = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+    total = 0
+    previous = 0
+    for character in reversed(value.casefold()):
+        current = numerals.get(character)
+        if current is None:
+            return None
+        if current < previous:
+            total -= current
+        else:
+            total += current
+            previous = current
+    return total
 
 
 def _truthy(value: Any) -> bool:

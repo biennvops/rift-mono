@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from rift_doc.document_set import DocumentArtifact, DocumentSet, DocumentSetLoader
-from rift_doc.model import Block, Document, Section, SourceLocation
+from rift_doc.model import Block, Cell, Document, Section, SourceLocation, Table
 from rift_doc.results import Status
 from rift_doc.spec import CapstoneSpec
 from rift_doc.trace_entities import TraceEntityExtractor
@@ -244,6 +244,91 @@ def test_xt005_quality_results_do_not_assert_achievement() -> None:
     assert objective["result"] == "RESULT_PRESENT"
     assert objective["achievement"] == "ACHIEVEMENT_REVIEW_REQUIRED"
     assert not any(item.status == Status.FAIL for item in result.findings)
+
+
+def _structured_document(report: str, tables: list[tuple[str, str, str]]) -> Document:
+    document = Document(source_path=f"{report}.docx")
+    for index, (section, label, value) in enumerate(tables):
+        document.tables.append(
+            Table(
+                rows=[[Cell(value=label), Cell(value=value)]],
+                parent_section=section,
+                source_location=SourceLocation(kind="docx_table", table_index=index),
+            )
+        )
+    return document
+
+
+def test_report7_freshness_uses_source_report_sections() -> None:
+    spec = _spec(
+        {
+            "id": "R7-FRESHNESS",
+            "handler": "freshness",
+            "source_domain": "report1",
+            "source_kind": "feature",
+            "freshness": {
+                "sources": ["report1", "report2"],
+                "kinds": ["feature"],
+                "target": "report7",
+                "target_kinds": ["final_report_item"],
+                "section_map": {
+                    "report1": ["I. Project Introduction"],
+                    "report2": ["II. Project Management Plan"],
+                },
+            },
+            "targets": [{"domain": "report7", "kind": "final_report_item", "requirement": "MUST"}],
+        }
+    )
+    source = _structured_document("report1", [])
+    source.metadata["version"] = "1.0"
+    final = _structured_document(
+        "report7",
+        [
+            ("I. Project Introduction", "Version", "1.0"),
+            ("II. Project Management Plan", "Version", "9.0"),
+        ],
+    )
+    result = CrossDocumentValidator(spec).audit(_set_for_documents({"report1": source, "report7": final}))
+    assert not any(item.rule_id == "R7-FRESHNESS" and item.metadata.get("consistency") == "STALE_OR_CONTRADICTED" for item in result.findings)
+
+    final.tables[0].rows[0][1].value = "2.0"
+    final.tables[0].rows[0][1].original_text = "2.0"
+    stale = CrossDocumentValidator(spec).audit(_set_for_documents({"report1": source, "report7": final}))
+    stale_finding = next(item for item in stale.findings if item.rule_id == "R7-FRESHNESS" and item.metadata.get("consistency") == "STALE_OR_CONTRADICTED")
+    assert stale_finding.metadata["consistency"] == "STALE_OR_CONTRADICTED"
+    assert stale_finding.metadata["target_section"] == "I. Project Introduction"
+
+
+def test_report7_freshness_reviews_multiple_values_in_source_section() -> None:
+    spec = _spec(
+        {
+            "id": "R7-FRESHNESS",
+            "handler": "freshness",
+            "source_domain": "report1",
+            "source_kind": "feature",
+            "freshness": {
+                "sources": ["report1"],
+                "kinds": ["feature"],
+                "target": "report7",
+                "target_kinds": ["final_report_item"],
+                "section_map": {"report1": ["I. Project Introduction"]},
+            },
+            "targets": [{"domain": "report7", "kind": "final_report_item", "requirement": "MUST"}],
+        }
+    )
+    source = _structured_document("report1", [])
+    source.metadata["version"] = "1.0"
+    final = _structured_document(
+        "report7",
+        [
+            ("I. Project Introduction", "Version", "1.0"),
+            ("I. Project Introduction", "Version", "1.1"),
+        ],
+    )
+    result = CrossDocumentValidator(spec).audit(_set_for_documents({"report1": source, "report7": final}))
+    finding = next(item for item in result.findings if item.rule_id == "R7-FRESHNESS" and item.metadata.get("consistency") == "REVIEW_REQUIRED")
+    assert finding.metadata["consistency"] == "REVIEW_REQUIRED"
+    assert finding.metadata["candidate_count"] == 2
 
 
 def test_xt006_deliverables_cover_final_products() -> None:
