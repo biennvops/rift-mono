@@ -42,6 +42,7 @@ class TraceTargetRule:
     condition: Any = None
     allow_explicit_na: bool = False
     role: str | None = None
+    test_levels: tuple[str, ...] = ()
     data: dict[str, Any] | None = None
 
 
@@ -228,6 +229,9 @@ class CapstoneSpec:
                     "requirement",
                     target.get("requirement_level", raw.get("requirement", raw.get("requirement_level", "MUST"))),
                 )
+                test_levels = _string_tuple(
+                    target.get("test_levels", target.get("test_level", target.get("levels", [])))
+                )
                 targets.append(
                     TraceTargetRule(
                         domain=domain,
@@ -238,6 +242,7 @@ class CapstoneSpec:
                         role=str(target.get("role", target.get("stage")))
                         if target.get("role", target.get("stage")) is not None
                         else None,
+                        test_levels=tuple(dict.fromkeys(level.casefold().replace("-", "_") for level in test_levels)),
                         data=target,
                     )
                 )

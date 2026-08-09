@@ -19,6 +19,7 @@ from ..trace_model import (
     TraceIndex,
     TraceLinkStatus,
     TraceEdge,
+    _unique_entities,
     normalize_name,
 )
 
@@ -283,19 +284,70 @@ class CrossDocumentValidator:
         if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target):
             match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="An explicit N/A rationale is present in the target scope.")
             return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
+        if applicability is None and target.condition is not None:
+            match = MatchResult(
+                TraceLinkStatus.REVIEW_REQUIRED,
+                MatchMethod.AMBIGUOUS,
+                reason="Target applicability cannot be determined from normalized evidence.",
+            )
+            return TraceLinkStatus.REVIEW_REQUIRED, match, self._link_finding(rule, source, target, TraceLinkStatus.REVIEW_REQUIRED, match)
         if not self._domain_present(document_set, target_domain):
             match = MatchResult(TraceLinkStatus.MISSING, MatchMethod.UNMATCHED, reason=f"Target domain {target_domain!r} is missing.")
             status = _missing_status(target.requirement)
             return status, match, self._link_finding(rule, source, target, status, match)
-        match = index.match(source, target_domain=target_domain, target_kinds=target.kinds)
+        match = self._match_target(index, source, target, target_domain)
         status = match.status
-        if applicability is None and target.condition is not None:
-            status = TraceLinkStatus.REVIEW_REQUIRED
-            match = MatchResult(status, MatchMethod.AMBIGUOUS, match.candidates, "Target applicability cannot be determined from normalized evidence.")
-        elif match.status == TraceLinkStatus.MISSING:
+        if match.status == TraceLinkStatus.MISSING:
             status = _missing_status(target.requirement)
         finding = self._link_finding(rule, source, target, status, match)
         return status, match, finding
+
+    def _match_target(
+        self,
+        index: TraceIndex,
+        source: TraceEntity,
+        target: TraceTargetRule,
+        target_domain: str,
+    ) -> MatchResult:
+        if not target.role and not target.test_levels:
+            return index.match(source, target_domain=target_domain, target_kinds=target.kinds)
+
+        def state(candidate: TraceEntity) -> bool | None:
+            return _target_constraint_state(candidate, target)
+
+        matching = index.match(
+            source,
+            target_domain=target_domain,
+            target_kinds=target.kinds,
+            candidate_filter=lambda candidate: state(candidate) is True,
+        )
+        unknown = index.match(
+            source,
+            target_domain=target_domain,
+            target_kinds=target.kinds,
+            candidate_filter=lambda candidate: state(candidate) is None,
+        )
+        if matching.status in {TraceLinkStatus.VERIFIED, TraceLinkStatus.AMBIGUOUS} and unknown.status in {
+            TraceLinkStatus.VERIFIED,
+            TraceLinkStatus.AMBIGUOUS,
+        }:
+            candidates = _unique_entities([*matching.candidates, *unknown.candidates])
+            return MatchResult(
+                TraceLinkStatus.REVIEW_REQUIRED,
+                MatchMethod.AMBIGUOUS,
+                tuple(candidates),
+                "A matching test candidate has an indeterminate configured level or role.",
+            )
+        if matching.status in {TraceLinkStatus.VERIFIED, TraceLinkStatus.AMBIGUOUS}:
+            return matching
+        if unknown.status in {TraceLinkStatus.VERIFIED, TraceLinkStatus.AMBIGUOUS}:
+            return MatchResult(
+                TraceLinkStatus.REVIEW_REQUIRED,
+                MatchMethod.AMBIGUOUS,
+                unknown.candidates,
+                "A matching test candidate has an indeterminate configured level or role.",
+            )
+        return matching
 
     def _link_finding(
         self,
@@ -305,7 +357,10 @@ class CrossDocumentValidator:
         status: TraceLinkStatus,
         match: MatchResult,
     ) -> Finding:
-        finding_status, severity = _finding_status(status, target.requirement)
+        effective_requirement = target.requirement
+        if effective_requirement == "CONDITIONAL" and _evaluate_applicability(source, target.condition) is True:
+            effective_requirement = "MUST"
+        finding_status, severity = _finding_status(status, effective_requirement)
         candidates = [candidate.to_dict() for candidate in match.candidates]
         if status == TraceLinkStatus.VERIFIED:
             message = f"Verified {source.kind} {source.canonical_name!r} in {target.domain} by {match.method.value}."
@@ -333,6 +388,8 @@ class CrossDocumentValidator:
                 "trace_status": status.value,
                 "match_method": match.method.value,
                 "requirement": target.requirement,
+                "test_levels": list(target.test_levels),
+                "role": target.role,
                 "reason": match.reason,
             },
         )
@@ -436,118 +493,80 @@ class CrossDocumentValidator:
                     spec_path=rule.path,
                 )
             ]
-        raw_data = rule.data or {}
-        configured_target = raw_data.get("target_domain")
-        if configured_target is None and rule.targets:
-            configured_target = rule.targets[0].domain
-        target_domain = _domain_alias(str(configured_target or ""))
-        target_entities = _entities_for(graph, target_domain, ("test_case_or_test_group", "quality_objective"))
         for objective in objectives:
-            keywords = _quality_keywords(objective)
-            strategy_candidates = [candidate for candidate in target_entities if _candidate_stage(candidate, "strategy")]
-            result_candidates = [candidate for candidate in target_entities if _candidate_stage(candidate, "result")]
-            strategy_matches = _keyword_candidates(objective, strategy_candidates, keywords)
-            result_matches = _keyword_candidates(objective, result_candidates, keywords)
-            strategy_status = "TRACE_PRESENT" if strategy_matches else "REVIEW_REQUIRED"
-            if strategy_matches:
-                findings.append(
-                    self._finding(
-                        status=Status.PASS,
-                        severity="info",
-                        rule_id=rule.rule_id,
-                        report=objective.source_report,
-                        section=objective.source_section,
-                        location=objective.source_location,
-                        message=f"Quality objective {objective.canonical_name!r} is addressed by {target_domain} strategy evidence.",
-                        evidence=_link_evidence(objective, *strategy_matches[:2]),
-                        source_entity=objective,
-                        target_domain=target_domain,
-                        candidate_entities=[candidate.to_dict() for candidate in strategy_matches],
-                        spec_path=rule.path,
-                        metadata={"trace_status": "TRACE_PRESENT", "stage": "strategy", "keywords": sorted(keywords)},
+            target_results: list[dict[str, Any]] = []
+            role_results: dict[str, list[str]] = defaultdict(list)
+            for target in rule.targets:
+                status, match, finding = self._check_link(document_set, index, rule, objective, target)
+                role = _target_role(target)
+                if finding is not None:
+                    if role == "result" and status == TraceLinkStatus.VERIFIED:
+                        finding.status = Status.REVIEW_REQUIRED
+                        finding.severity = "warning"
+                        finding.message = (
+                            f"Result evidence is present in {target.domain} for quality objective "
+                            f"{objective.canonical_name!r}; deterministic tooling does not assert achievement."
+                        )
+                    elif role == "strategy" and status == TraceLinkStatus.VERIFIED:
+                        finding.message = (
+                            f"Quality objective {objective.canonical_name!r} is addressed by "
+                            f"{target.domain} strategy evidence."
+                        )
+                    finding.metadata.update(
+                        {
+                            "stage": role,
+                            "quality_dimension": (
+                                "RESULT_PRESENT" if role == "result" and status == TraceLinkStatus.VERIFIED
+                                else "TRACE_PRESENT" if status == TraceLinkStatus.VERIFIED
+                                else status.value
+                            ),
+                        }
                     )
-                )
-            else:
-                findings.append(
-                    self._finding(
-                        status=Status.REVIEW_REQUIRED,
-                        severity="warning",
-                        rule_id=rule.rule_id,
-                        report=objective.source_report,
-                        section=objective.source_section,
-                        location=objective.source_location,
-                        message=f"No deterministic {target_domain} strategy statement was tied to quality objective {objective.canonical_name!r}.",
-                        evidence=[*objective.evidence],
-                        source_entity=objective,
-                        target_domain=target_domain,
-                        spec_path=rule.path,
-                        metadata={"trace_status": "REVIEW_REQUIRED", "stage": "strategy", "keywords": sorted(keywords)},
+                    if role == "result" and status == TraceLinkStatus.VERIFIED:
+                        finding.metadata["achievement"] = "ACHIEVEMENT_REVIEW_REQUIRED"
+                    findings.append(finding)
+                if status == TraceLinkStatus.VERIFIED and match.candidates:
+                    graph.add_edge(
+                        TraceEdge(
+                            from_entity=objective.entity_id,
+                            to_entity=match.candidates[0].entity_id,
+                            rule_id=rule.rule_id,
+                            match_method=match.method,
+                            confidence_class=match.method,
+                            evidence=_link_evidence(objective, match.candidates[0]),
+                            metadata={"role": role},
+                        )
                     )
+                dimension = (
+                    "RESULT_PRESENT" if role == "result" and status == TraceLinkStatus.VERIFIED
+                    else "TRACE_PRESENT" if status == TraceLinkStatus.VERIFIED
+                    else status.value
                 )
-            measurable = objective.metadata.get("measurable") is True
-            achievement_status: str | None = None
-            if result_matches:
-                result_status = "RESULT_PRESENT"
-                findings.append(
-                    self._finding(
-                        status=Status.REVIEW_REQUIRED,
-                        severity="warning",
-                        rule_id=rule.rule_id,
-                        report=objective.source_report,
-                        section=objective.source_section,
-                        location=objective.source_location,
-                        message=f"Result evidence is present in {target_domain} for quality objective {objective.canonical_name!r}; deterministic tooling does not assert achievement.",
-                        evidence=_link_evidence(objective, *result_matches[:2]),
-                        source_entity=objective,
-                        target_domain=target_domain,
-                        candidate_entities=[candidate.to_dict() for candidate in result_matches],
-                        spec_path=rule.path,
-                        metadata={"trace_status": "RESULT_PRESENT", "stage": "result", "achievement": "REVIEW_REQUIRED"},
-                    )
+                if role:
+                    role_results[role].append(dimension)
+                target_results.append(
+                    {
+                        "role": role,
+                        "domain": target.domain,
+                        "status": dimension,
+                        "match_method": match.method.value,
+                        "target_entities": [candidate.to_dict() for candidate in match.candidates],
+                        "reason": match.reason,
+                        "requirement": target.requirement,
+                    }
                 )
-                achievement_status = "ACHIEVEMENT_REVIEW_REQUIRED"
-            elif measurable:
-                result_status = "MISSING"
-                findings.append(
-                    self._finding(
-                        status=Status.FAIL,
-                        severity="error",
-                        rule_id=rule.rule_id,
-                        report=objective.source_report,
-                        section=objective.source_section,
-                        location=objective.source_location,
-                        message=f"Measurable quality objective {objective.canonical_name!r} has no deterministic {target_domain} result evidence.",
-                        evidence=[*objective.evidence],
-                        source_entity=objective,
-                        target_domain=target_domain,
-                        spec_path=rule.path,
-                        metadata={"trace_status": "MISSING", "stage": "result"},
-                    )
-                )
-            else:
-                result_status = "REVIEW_REQUIRED"
-                findings.append(
-                    self._finding(
-                        status=Status.REVIEW_REQUIRED,
-                        severity="warning",
-                        rule_id=rule.rule_id,
-                        report=objective.source_report,
-                        section=objective.source_section,
-                        location=objective.source_location,
-                        message=f"Whether quality objective {objective.canonical_name!r} requires measurable Report 5 results is not structurally determinable.",
-                        evidence=[*objective.evidence],
-                        source_entity=objective,
-                        target_domain=target_domain,
-                        spec_path=rule.path,
-                        metadata={"trace_status": "REVIEW_REQUIRED", "stage": "result"},
-                    )
-                )
+            strategy_status = _first_role_status(role_results, "strategy")
+            result_status = _first_role_status(role_results, "result")
+            achievement_status = (
+                "ACHIEVEMENT_REVIEW_REQUIRED" if result_status == "RESULT_PRESENT" else None
+            )
             summary.append(
                 {
                     "source": objective.to_dict(),
                     "strategy": strategy_status,
                     "result": result_status,
-                    "achievement": achievement_status if result_matches else None,
+                    "achievement": achievement_status,
+                    "targets": target_results,
                 }
             )
         return summary, findings
@@ -974,41 +993,98 @@ def _best_match_against(source: TraceEntity, targets: list[TraceEntity]) -> Matc
     return MatchResult(TraceLinkStatus.MISSING, MatchMethod.UNMATCHED, (), "No exact ID or normalized-name match.")
 
 
-def _quality_keywords(entity: TraceEntity) -> set[str]:
-    text = " ".join([entity.canonical_name, str(entity.metadata.get("raw_text", ""))]).casefold()
-    words = set(re.findall(r"[a-z][a-z0-9%_-]{2,}", text))
-    useful = {
-        "coverage", "defect", "performance", "response", "availability", "reliability", "timeliness",
-        "milestone", "quality", "usability", "maintainability", "security", "target", "threshold",
-        "passed", "failed", "successful", "rate", "latency", "hours", "minutes", "seconds",
-    }
-    values = words.intersection(useful)
-    if entity.identifiers:
-        values.update(identifier.casefold() for identifier in entity.identifiers)
-    return values or {word for word in words if word not in {"the", "and", "for", "with", "project", "objective", "shall", "must"}}
+def _target_role(target: TraceTargetRule) -> str | None:
+    if target.role is None:
+        return None
+    value = normalize_name(target.role)
+    return value or None
 
 
-def _candidate_stage(entity: TraceEntity, stage: str) -> bool:
-    actual = str(entity.metadata.get("test_stage", "")).casefold()
+def _first_role_status(role_results: dict[str, list[str]], role: str) -> str | None:
+    values = role_results.get(role, [])
+    if not values:
+        return None
+    if len(set(values)) == 1:
+        return values[0]
+    return "REVIEW_REQUIRED"
+
+
+def _target_constraint_state(candidate: TraceEntity, target: TraceTargetRule) -> bool | None:
+    if target.role:
+        actual_stage = _test_stage_value(candidate)
+        required_role = _target_role(target)
+        if required_role in {"strategy", "result", "case"}:
+            if actual_stage is None:
+                return None
+            if actual_stage != required_role:
+                return False
+        else:
+            return None
+    if target.test_levels:
+        actual_level = _test_level_value(candidate.metadata.get("test_level"))
+        if actual_level is None:
+            raw_levels = candidate.metadata.get("test_levels")
+            if isinstance(raw_levels, (list, tuple, set)) and len(raw_levels) == 1:
+                actual_level = _test_level_value(next(iter(raw_levels)))
+        if actual_level is None:
+            return None
+        required_levels = {_normalize_test_level(level) for level in target.test_levels}
+        if actual_level not in required_levels:
+            return False
+    return True
+
+
+def _test_stage_value(entity: TraceEntity) -> str | None:
+    actual = normalize_name(str(entity.metadata.get("test_stage", "")))
+    if actual in {"strategy", "result", "case"}:
+        return actual
     section = normalize_name(entity.source_section or "")
-    if stage == "strategy":
-        return actual == "strategy" or "test strategy" in section or "testing types" in section or "test levels" in section
-    return actual == "result" or any(value in section for value in ("test report", "test statistics", "feature", "results"))
+    if "test strategy" in section or "testing types" in section or "test levels" in section:
+        return "strategy"
+    if any(value in section for value in ("test report", "test statistics", "result", "results")):
+        return "result"
+    return None
 
 
-def _keyword_candidates(source: TraceEntity, targets: list[TraceEntity], keywords: set[str]) -> list[TraceEntity]:
-    if not targets:
-        return []
-    exact = [target for target in targets if source.identifiers and set(source.identifiers).intersection(target.identifiers)]
-    if exact:
-        return exact
-    result: list[TraceEntity] = []
-    for target in targets:
-        text = " ".join([target.canonical_name, str(target.metadata.get("raw_text", "")), " ".join(_evidence_text(target.evidence))]).casefold()
-        target_words = set(re.findall(r"[a-z][a-z0-9%_-]{2,}", text))
-        if keywords.intersection(target_words):
-            result.append(target)
-    return result
+def _test_level_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        normalized = normalize_name(value)
+        aliases = {
+            "unit": "unit",
+            "unit test": "unit",
+            "unit testing": "unit",
+            "ut": "unit",
+            "integration": "integration",
+            "integration test": "integration",
+            "integration testing": "integration",
+            "system": "system",
+            "system test": "system",
+            "system testing": "system",
+            "acceptance": "acceptance",
+            "acceptance test": "acceptance",
+            "acceptance testing": "acceptance",
+            "uat": "acceptance",
+            "user acceptance test": "acceptance",
+        }
+        return aliases.get(normalized)
+    return None
+
+
+def _normalize_test_level(value: Any) -> str:
+    normalized = normalize_name(str(value or ""))
+    return {
+        "unit test": "unit",
+        "unit testing": "unit",
+        "ut": "unit",
+        "integration test": "integration",
+        "integration testing": "integration",
+        "system test": "system",
+        "system testing": "system",
+        "acceptance test": "acceptance",
+        "acceptance testing": "acceptance",
+        "uat": "acceptance",
+        "user acceptance test": "acceptance",
+    }.get(normalized, normalized.replace(" ", "_"))
 
 
 def _document_text(document: NormalizedDocument) -> Iterable[tuple[str, str | None]]:
@@ -1065,16 +1141,3 @@ def _find_value(values: list[tuple[str, str, str | None]], label: str) -> tuple[
 
 def _truthy(value: Any) -> bool:
     return value is True or str(value).casefold() in {"true", "yes", "1"}
-
-
-def _evidence_text(items: Iterable[Any]) -> Iterable[str]:
-    for item in items:
-        if isinstance(item, dict):
-            for key in ("text", "original_text", "value"):
-                if item.get(key) is not None:
-                    if isinstance(item[key], list):
-                        yield " ".join(str(value) for value in item[key])
-                    else:
-                        yield str(item[key])
-        elif item is not None:
-            yield str(item)

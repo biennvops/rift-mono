@@ -237,9 +237,10 @@ class TraceEntityExtractor:
                     source_location=block.source_location,
                     evidence=[self._block_evidence(block, document.source_path)],
                     metadata={
-                    "extraction": "paragraph",
-                    "test_stage": _test_stage_for_section(block.section_path) if kind == "test_case_or_test_group" else None,
-                },
+                        "extraction": "paragraph",
+                        "test_stage": _test_stage_for_section(block.section_path) if kind == "test_case_or_test_group" else None,
+                        "test_level": _test_level_for_text(block.section_path, block.text) if kind == "test_case_or_test_group" else None,
+                    },
                 )
                 if entity:
                     entities.append(entity)
@@ -334,7 +335,14 @@ class TraceEntityExtractor:
                     source_section=sheet.name,
                     source_location=sheet.source_location,
                     evidence=[self._sheet_evidence(sheet, workbook.source_path)],
-                    metadata={"extraction": "sheet_name", "test_stage": "result" if kind == "test_case_or_test_group" else None},
+                    metadata={
+                        "extraction": "sheet_name",
+                        "test_stage": "result" if kind == "test_case_or_test_group" else None,
+                        "test_level": _test_level_for_text(
+                            " ".join(value for value in (artifact_domain, workbook.source_path, sheet.name) if value),
+                            sheet.name,
+                        ) if kind == "test_case_or_test_group" else None,
+                    },
                 )
                 if entity:
                     entities.append(entity)
@@ -368,6 +376,11 @@ class TraceEntityExtractor:
                 metadata.update(_metadata_from_fields(fields, kind))
                 if kind == "test_case_or_test_group":
                     metadata.setdefault("test_stage", _test_stage(sheet.name, fields))
+                    metadata["test_level"] = _test_level_for_fields(
+                        " ".join(value for value in (artifact_domain, workbook.source_path, sheet.name) if value),
+                        fields,
+                        text,
+                    )
                 entity = self._entity_from_text(
                     kind,
                     str(name),
@@ -405,7 +418,11 @@ class TraceEntityExtractor:
                 source_section=child.path,
                 source_location=child.source_location,
                 evidence=[self._section_evidence(child, document.source_path)],
-                metadata={"extraction": "section_heading"},
+                metadata={
+                    "extraction": "section_heading",
+                    "test_stage": _test_stage_for_section(child.path) if kind == "test_case_or_test_group" else None,
+                    "test_level": _test_level_for_text(child.path, child.title) if kind == "test_case_or_test_group" else None,
+                },
             )
             if entity:
                 entities.append(entity)
@@ -490,8 +507,11 @@ class TraceEntityExtractor:
             metadata.update(_metadata_from_fields(fields, kind))
             if kind == "test_case_or_test_group":
                 metadata.setdefault("test_stage", _test_stage_for_section(table.parent_section))
-            if kind == "test_case_or_test_group":
-                metadata.setdefault("test_stage", "case")
+                metadata["test_level"] = _test_level_for_fields(
+                    " ".join(value for value in (logical_domain, source_path, table.parent_section or "") if value),
+                    fields,
+                    text,
+                )
             entity = self._entity_from_text(
                 kind,
                 str(name),
@@ -820,13 +840,58 @@ def _logical_artifact_domain(domain: str, artifact_id: str) -> str:
 
 
 def _test_stage(sheet_name: str, fields: dict[str, Any]) -> str:
-    value = " ".join(f"{key} {field}" for key, field in fields.items()).casefold()
     sheet_value = sheet_name.casefold()
-    if any(token in value for token in ("integration", "system", "acceptance")) or any(token in sheet_value for token in ("feature", "report", "statistic", "result")):
-        return "result"
-    if "strategy" in sheet_value:
+    field_values = " ".join(f"{key} {field}" for key, field in fields.items()).casefold()
+    explicit_stage = _field_value(fields, ("test stage", "stage", "testing stage"))
+    if explicit_stage:
+        stage = normalize_name(str(explicit_stage))
+        if stage in {"strategy", "result", "case"}:
+            return stage
+    if "strategy" in sheet_value or "strategy" in field_values:
         return "strategy"
+    if any(token in sheet_value for token in ("feature", "report", "statistic", "result")):
+        return "result"
     return "case"
+
+
+def _test_level_for_fields(section_or_sheet: str, fields: dict[str, Any], text: str) -> str | None:
+    explicit_level = _field_value(fields, ("test level", "test levels", "testing level", "level", "test type"))
+    if explicit_level is not None:
+        return _test_level_value(str(explicit_level))
+    field_text = " ".join(str(value) for value in fields.values() if value not in (None, ""))
+    return _test_level_for_text(section_or_sheet, " ".join(value for value in (field_text, text) if value))
+
+
+def _test_level_for_text(section_or_sheet: str | None, text: str) -> str | None:
+    values = " ".join(value for value in (str(section_or_sheet or ""), str(text or "")) if value)
+    found = [level for level in ("unit", "integration", "system", "acceptance") if _test_level_pattern(level, values)]
+    return found[0] if len(found) == 1 else None
+
+
+def _test_level_value(value: str) -> str | None:
+    normalized = normalize_name(value)
+    aliases = {
+        "unit": "unit",
+        "unit test": "unit",
+        "unit testing": "unit",
+        "ut": "unit",
+        "integration": "integration",
+        "integration test": "integration",
+        "integration testing": "integration",
+        "system": "system",
+        "system test": "system",
+        "system testing": "system",
+        "acceptance": "acceptance",
+        "acceptance test": "acceptance",
+        "acceptance testing": "acceptance",
+        "uat": "acceptance",
+        "user acceptance test": "acceptance",
+    }
+    return aliases.get(normalized)
+
+
+def _test_level_pattern(level: str, text: str) -> bool:
+    return bool(re.search(rf"\b{level}(?:[- ]level)?[- ]test(?:ing|s)?\b", text, re.IGNORECASE))
 
 
 def _sheet_rows_and_headers(sheet: Sheet) -> tuple[list[tuple[int, list[Cell]]], list[str]]:
