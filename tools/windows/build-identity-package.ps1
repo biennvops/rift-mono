@@ -123,6 +123,9 @@ $manifestPath = Join-Path $stageDirectory 'AppxManifest.xml'
 Set-Content -LiteralPath $manifestPath -Value $template -Encoding UTF8 -NoNewline
 Copy-Item -LiteralPath $LogoPath -Destination (Join-Path $stageDirectory 'Assets\Rift.png')
 
+$publisherXml = Escape-Xml $Publisher
+$packageNameXml = Escape-Xml $PackageName
+$applicationIdXml = Escape-Xml $ApplicationId
 $runnerManifest = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -138,9 +141,9 @@ $runnerManifest = @"
     </application>
   </compatibility>
   <msix xmlns="urn:schemas-microsoft-com:msix.v1"
-        publisher="$Publisher"
-        packageName="$PackageName"
-        applicationId="$ApplicationId" />
+        publisher="$publisherXml"
+        packageName="$packageNameXml"
+        applicationId="$applicationIdXml" />
 </assembly>
 "@
 # The side-by-side manifest is generated beside the exact executable used for
@@ -167,6 +170,18 @@ if ([string]::IsNullOrWhiteSpace($CertificatePath)) {
     throw "CertificatePath was not found: $CertificatePath"
 } elseif ($null -eq $CertificatePassword) {
     throw 'CertificatePassword is required when CertificatePath is supplied.'
+} else {
+    if ([IO.Path]::GetExtension($CertificatePath).ToLowerInvariant() -ne '.pfx') {
+        throw 'CertificatePath must point to a PFX containing a private signing key.'
+    }
+    $certificateCerPath = Join-Path $OutputDirectory 'Rift.Development.cer'
+    $pfxData = Get-PfxData -FilePath $CertificatePath -Password $CertificatePassword
+    $endEntity = $pfxData.EndEntityCertificates | Select-Object -First 1
+    if ($null -eq $endEntity) {
+        throw "No end-entity certificate was found in $CertificatePath."
+    }
+    Export-Certificate -Cert $endEntity -FilePath $certificateCerPath | Out-Null
+    Trust-DevelopmentCertificate -CerPath $certificateCerPath
 }
 $certificatePasswordPlain = Convert-SecureStringToPlainText $CertificatePassword
 
