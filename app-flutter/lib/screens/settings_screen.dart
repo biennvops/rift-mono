@@ -535,7 +535,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool get _canManageNotificationSettings =>
-      AndroidShell.isSupported || Platform.isMacOS || Platform.isWindows;
+      AndroidShell.isSupported || Platform.isMacOS;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
