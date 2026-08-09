@@ -46,6 +46,24 @@ void main() {
     expect(parseNotificationIcon(changed), isNull);
   });
 
+  test('creates canonical payloads for normalized PNG bytes', () {
+    final payload = createNotificationIconPayload(Uint8List.fromList(pngBytes));
+
+    expect(payload, isNotNull);
+    expect(payload!['mediaType'], 'image/png');
+    expect(payload['byteSize'], pngBytes.length);
+    expect(payload['sha256'], sha256.convert(pngBytes).toString());
+    expect(
+      parseNotificationIcon(payload)?.bytes,
+      orderedEquals(pngBytes),
+    );
+  });
+
+  test('rejects invalid bytes when creating canonical payloads', () {
+    expect(createNotificationIconPayload(Uint8List.fromList(<int>[1, 2, 3])),
+        isNull);
+  });
+
   test('parses a canonical icon', () {
     final icon = parseNotificationIcon(buildIcon(pngBytes));
 
