@@ -66,10 +66,11 @@ class WindowsNotificationListener {
       std::shared_ptr<flutter::EncodableList> entries,
       std::shared_ptr<MethodResult> result,
       std::shared_ptr<std::function<void(size_t)>> next);
-  static winrt::fire_and_forget ProcessNotificationChangeAsync(
+  static void QueueNotificationChange(
       std::shared_ptr<State> state,
       winrt::Windows::UI::Notifications::UserNotificationChangedKind kind,
       uint32_t notification_id);
+  static void DrainNotificationChanges(std::shared_ptr<State> state);
   static winrt::fire_and_forget BuildNotificationAsync(
       std::shared_ptr<State> state,
       winrt::Windows::UI::Notifications::UserNotification notification,

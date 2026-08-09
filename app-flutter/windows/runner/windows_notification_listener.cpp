@@ -67,6 +67,8 @@ struct WindowsNotificationListener::State {
   std::unordered_map<std::wstring, std::vector<uint8_t>> logo_cache;
   std::deque<std::wstring> logo_order;
   std::unordered_set<uint32_t> ignored_notification_ids;
+  std::deque<std::pair<UserNotificationChangedKind, uint32_t>> pending_changes;
+  bool processing_changes = false;
 };
 
 namespace {
@@ -573,7 +575,7 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
         [state = state_](
             UserNotificationListener const&,
             winrt::Windows::UI::Notifications::Management::UserNotificationChangedEventArgs const& args) {
-          WindowsNotificationListener::ProcessNotificationChangeAsync(
+          WindowsNotificationListener::QueueNotificationChange(
               state, args.ChangeKind(), args.UserNotificationId());
         });
     {
@@ -611,30 +613,57 @@ void WindowsNotificationListener::Stop(std::unique_ptr<MethodResult> result) {
   result->Success(EncodableValue(true));
 }
 
-winrt::fire_and_forget
-WindowsNotificationListener::ProcessNotificationChangeAsync(
+void WindowsNotificationListener::QueueNotificationChange(
     std::shared_ptr<State> state,
     UserNotificationChangedKind kind,
     uint32_t notification_id) {
+  bool should_start = false;
+  {
+    std::lock_guard<std::mutex> lock(state->gate);
+    state->pending_changes.emplace_back(kind, notification_id);
+    if (!state->processing_changes) {
+      state->processing_changes = true;
+      should_start = true;
+    }
+  }
+  if (should_start) {
+    DrainNotificationChanges(std::move(state));
+  }
+}
+
+void WindowsNotificationListener::DrainNotificationChanges(
+    std::shared_ptr<State> state) {
+  std::pair<UserNotificationChangedKind, uint32_t> change;
+  {
+    std::lock_guard<std::mutex> lock(state->gate);
+    if (state->pending_changes.empty()) {
+      state->processing_changes = false;
+      return;
+    }
+    change = state->pending_changes.front();
+    state->pending_changes.pop_front();
+  }
+
+  const auto kind = change.first;
+  const auto notification_id = change.second;
   if (kind == UserNotificationChangedKind::Removed) {
     bool ignored = false;
     {
       std::lock_guard<std::mutex> lock(state->gate);
       ignored = state->ignored_notification_ids.erase(notification_id) != 0;
     }
-    if (ignored) {
-      co_return;
+    if (!ignored) {
+      EncodableMap event;
+      event[EncodableValue("eventType")] = EncodableValue("removed");
+      event[EncodableValue("userNotificationId")] =
+          EncodableValue(static_cast<int64_t>(notification_id));
+      event[EncodableValue("notificationId")] =
+          EncodableValue("windows:" + std::to_string(notification_id));
+      AddString(&event, "removedAt", UtcIso8601(winrt::clock::now()));
+      PostEvent(state, std::move(event));
     }
-
-    EncodableMap event;
-    event[EncodableValue("eventType")] = EncodableValue("removed");
-    event[EncodableValue("userNotificationId")] =
-        EncodableValue(static_cast<int64_t>(notification_id));
-    event[EncodableValue("notificationId")] =
-        EncodableValue("windows:" + std::to_string(notification_id));
-    AddString(&event, "removedAt", UtcIso8601(winrt::clock::now()));
-    PostEvent(state, std::move(event));
-    co_return;
+    DrainNotificationChanges(std::move(state));
+    return;
   }
 
   try {
@@ -644,11 +673,13 @@ WindowsNotificationListener::ProcessNotificationChangeAsync(
       listener = state->listener;
     }
     if (listener == nullptr) {
-      co_return;
+      DrainNotificationChanges(std::move(state));
+      return;
     }
     const auto notification = listener.GetNotification(notification_id);
     if (notification == nullptr) {
-      co_return;
+      DrainNotificationChanges(std::move(state));
+      return;
     }
 
     BuildNotificationAsync(
@@ -657,9 +688,10 @@ WindowsNotificationListener::ProcessNotificationChangeAsync(
           if (event.has_value()) {
             PostEvent(state, std::move(event.value()));
           }
+          DrainNotificationChanges(std::move(state));
         });
   } catch (...) {
-    co_return;
+    DrainNotificationChanges(std::move(state));
   }
 }
 
