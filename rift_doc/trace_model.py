@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .model import SourceLocation
 
@@ -181,9 +181,12 @@ class TraceIndex:
         *,
         target_domain: str,
         target_kinds: Iterable[str],
+        candidate_filter: Callable[[TraceEntity], bool] | None = None,
     ) -> MatchResult:
         kinds = tuple(dict.fromkeys(str(kind) for kind in target_kinds if str(kind)))
         candidates = self.candidates(target_domain, kinds)
+        if candidate_filter is not None:
+            candidates = [candidate for candidate in candidates if candidate_filter(candidate)]
         if not candidates:
             return MatchResult(
                 status=TraceLinkStatus.MISSING,
@@ -196,7 +199,11 @@ class TraceIndex:
         if source.identifiers:
             by_id: list[TraceEntity] = []
             for identifier in source.identifiers:
-                by_id.extend(self.by_identifier.get((target_domain, identifier), []))
+                by_id.extend(
+                    candidate
+                    for candidate in self.by_identifier.get((target_domain, identifier), [])
+                    if candidate_filter is None or candidate_filter(candidate)
+                )
             by_id = _unique_entities(by_id)
             if len(by_id) == 1:
                 return MatchResult(TraceLinkStatus.VERIFIED, MatchMethod.EXPLICIT_ID, tuple(by_id))
@@ -212,7 +219,11 @@ class TraceIndex:
         name_candidates: list[TraceEntity] = []
         for kind in kinds:
             for name in source_names:
-                name_candidates.extend(self.by_name.get((target_domain, kind, name), []))
+                name_candidates.extend(
+                    candidate
+                    for candidate in self.by_name.get((target_domain, kind, name), [])
+                    if candidate_filter is None or candidate_filter(candidate)
+                )
         name_candidates = _unique_entities(name_candidates)
         if len(name_candidates) == 1:
             target = name_candidates[0]

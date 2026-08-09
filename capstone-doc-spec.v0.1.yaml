@@ -787,6 +787,7 @@ cross_document_traceability:
         kind: test_case_or_test_group
         requirement: CONDITIONAL
         condition: user_facing
+        test_levels: [system, acceptance]
   - id: XT-003
     handler: external_interface
     source_domain: report3
@@ -798,6 +799,7 @@ cross_document_traceability:
       - domain: report5
         kind: test_case_or_test_group
         requirement: MUST
+        test_levels: [integration, system]
   - id: XT-004
     handler: data_entity
     source_domain: report3
@@ -821,6 +823,7 @@ cross_document_traceability:
         kind: test_case_or_test_group
         role: result
         requirement: CONDITIONAL
+        condition: measurable
   - id: XT-006
     handler: deliverable
     source_domain: report2

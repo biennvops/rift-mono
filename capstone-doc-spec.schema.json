@@ -238,7 +238,10 @@
         "applicability": {},
         "allow_explicit_na": { "type": "boolean" },
         "role": { "type": "string" },
-        "stage": { "type": "string" }
+        "stage": { "type": "string" },
+        "test_level": { "type": ["string", "array"], "items": { "type": "string" } },
+        "test_levels": { "type": "array", "items": { "type": "string" } },
+        "levels": { "type": "array", "items": { "type": "string" } }
       },
       "additionalProperties": true
     },

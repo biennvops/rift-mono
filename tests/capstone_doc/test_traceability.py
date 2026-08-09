@@ -113,14 +113,14 @@ def test_xt002_actor_use_case_trace() -> None:
             "source_kind": ["actor", "use_case"],
             "targets": [
                 {"domain": "report6", "kind": "user_workflow", "requirement": "MUST"},
-                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST", "test_levels": ["system", "acceptance"]},
             ],
         }
     )
     documents = {
         "report3": _combined_document("report3", [("Actors", "ACT-01 Administrator actor"), ("Use Cases", "UC-01 Sync use case")]),
         "report6": _document("report6", "Workflow", ["ACT-01 Administrator workflow", "UC-01 Sync workflow"]),
-        "report5": _document("report5", "Test Cases", ["ACT-01 Administrator workflow", "UC-01 Sync workflow"]),
+        "report5": _document("report5", "Test Cases", ["ACT-01 Administrator system test", "UC-01 Sync acceptance test"]),
     }
     result = CrossDocumentValidator(spec).audit(_set_for_documents(documents))
     assert not any(item.rule_id == "XT-002" and item.status == Status.FAIL for item in result.findings)
@@ -135,7 +135,7 @@ def test_xt003_interface_trace_and_design_orphan_are_conservative() -> None:
             "source_kind": "external_interface",
             "targets": [
                 {"domain": "report4", "kind": "architecture_component", "requirement": "MUST"},
-                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST", "test_levels": ["integration", "system"]},
             ],
         }
     )
@@ -146,6 +146,60 @@ def test_xt003_interface_trace_and_design_orphan_are_conservative() -> None:
     }
     result = CrossDocumentValidator(spec).audit(_set_for_documents(documents))
     assert any(item.rule_id == "XT-003" and item.status == Status.PASS for item in result.findings)
+
+
+def test_test_level_is_extracted_independently_from_test_stage() -> None:
+    document = _combined_document(
+        "report5",
+        [
+            ("Test Reports", "IF-01 External API Gateway integration test"),
+            ("Test Reports", "IF-02 External API Gateway test"),
+        ],
+    )
+    entities = TraceEntityExtractor().extract(document, "report5", kinds=["test_case_or_test_group"])
+    by_identifier = {entity.identifiers[0]: entity for entity in entities}
+    assert by_identifier["IF-01"].metadata["test_stage"] == "result"
+    assert by_identifier["IF-01"].metadata["test_level"] == "integration"
+    assert by_identifier["IF-02"].metadata["test_stage"] == "result"
+    assert by_identifier["IF-02"].metadata["test_level"] is None
+
+
+def test_xt003_rejects_wrong_test_level_and_reviews_unknown_level() -> None:
+    spec = _spec(
+        {
+            "id": "XT-003",
+            "handler": "external_interface",
+            "source_domain": "report3",
+            "source_kind": "external_interface",
+            "targets": [
+                {"domain": "report4", "kind": "architecture_component", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST", "test_levels": ["integration", "system"]},
+            ],
+        }
+    )
+    wrong_level = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _document("report3", "External Interfaces", ["IF-01 External API Gateway"]),
+                "report4": _document("report4", "System Architecture", ["IF-01 External API Gateway service"]),
+                "report5": _document("report5", "Test Cases", ["IF-01 External API Gateway unit test"]),
+            }
+        )
+    )
+    wrong_finding = next(item for item in wrong_level.findings if item.rule_id == "XT-003" and item.target_domain == "report5")
+    assert wrong_finding.status == Status.FAIL
+
+    unknown_level = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _document("report3", "External Interfaces", ["IF-01 External API Gateway"]),
+                "report4": _document("report4", "System Architecture", ["IF-01 External API Gateway service"]),
+                "report5": _document("report5", "Test Cases", ["IF-01 External API Gateway test"]),
+            }
+        )
+    )
+    unknown_finding = next(item for item in unknown_level.findings if item.rule_id == "XT-003" and item.target_domain == "report5")
+    assert unknown_finding.status == Status.REVIEW_REQUIRED
 
 
 def test_xt004_data_entity_trace_accepts_explicit_design_mapping() -> None:
@@ -174,7 +228,10 @@ def test_xt005_quality_results_do_not_assert_achievement() -> None:
             "source_domain": "report2",
             "source_kind": "quality_objective",
             "target_domain": "report5",
-            "targets": [{"domain": "report5", "kind": "test_case_or_test_group"}],
+            "targets": [
+                {"domain": "report5", "kind": "test_case_or_test_group", "role": "strategy", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "role": "result", "requirement": "CONDITIONAL", "condition": "measurable"},
+            ],
         }
     )
     documents = {
