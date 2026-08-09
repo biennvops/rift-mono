@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -124,8 +122,11 @@ class MethodChannelWindowsNotificationListener
   static const EventChannel eventChannel =
       EventChannel('rift/windows/notification_listener_events');
 
+  @visibleForTesting
+  static bool? debugIsWindowsOverride;
+
   @override
-  bool get isSupported => Platform.isWindows;
+  bool get isSupported => debugIsWindowsOverride ?? Platform.isWindows;
 
   @override
   Future<WindowsNotificationListenerRuntimeStatus> getRuntimeStatus() async {
@@ -136,7 +137,8 @@ class MethodChannelWindowsNotificationListener
       );
     }
     try {
-      final result = await methodChannel.invokeMethod<Object>('getRuntimeStatus');
+      final result =
+          await methodChannel.invokeMethod<Object>('getRuntimeStatus');
       return WindowsNotificationListenerRuntimeStatus.fromMap(result);
     } catch (_) {
       return const WindowsNotificationListenerRuntimeStatus(
@@ -226,9 +228,9 @@ class MethodChannelWindowsNotificationListener
     if (!isSupported) {
       return const Stream<Map<String, dynamic>>.empty();
     }
-    return eventChannel.receiveBroadcastStream().whereType<Map>().map(
-          _dynamicMap,
-        );
+    return eventChannel.receiveBroadcastStream().where((value) {
+      return value is Map;
+    }).map((value) => _dynamicMap(value as Map));
   }
 }
 
@@ -240,7 +242,6 @@ class WindowsNotificationListener {
   static WindowsNotificationListenerPlatform _platform =
       const MethodChannelWindowsNotificationListener();
 
-  @visibleForTesting
   static WindowsNotificationListenerPlatform get platform => _platform;
 
   @visibleForTesting
@@ -319,8 +320,8 @@ Object? _copyNativeValue(Object? value) {
   if (value is Uint8List) {
     return Uint8List.fromList(value);
   }
-  if (value is List<int>) {
-    return Uint8List.fromList(value);
+  if (value is List && value.every((item) => item is int)) {
+    return Uint8List.fromList(value.cast<int>());
   }
   if (value is Map) {
     return _dynamicMap(value);

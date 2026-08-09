@@ -16,12 +16,14 @@ import 'onboarding_screen.dart';
 import 'pairing_screen.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/notification_sync_policy.dart';
+import '../src/notification_sync/windows_notification_sync_coordinator.dart';
 import '../src/platform/android_shell.dart';
 import '../src/platform/linux_notifications.dart';
 import '../src/platform/macos_notifications.dart';
 import '../src/platform/notification_route.dart';
 import '../src/ui/theme.dart';
 import '../src/platform/windows_shell.dart';
+import '../src/platform/windows_notification_listener.dart';
 import '../widgets/rift_snackbar.dart';
 import '../widgets/premium_dialog.dart';
 
@@ -85,6 +87,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _connectionSubscription?.cancel();
     _notificationPackageController.dispose();
     super.dispose();
+  }
+
+  WindowsNotificationSyncCoordinator? _windowsCoordinator() {
+    try {
+      return context.read<WindowsNotificationSyncCoordinator?>();
+    } on ProviderNotFoundException {
+      return null;
+    }
   }
 
   Future<void> _fetchDeviceInfo() async {
@@ -209,6 +219,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (AndroidShell.isSupported) {
       return AndroidShell.getNotificationListenerAccessStatus();
     }
+    if (Platform.isWindows) {
+      return WindowsNotificationListener.getAccessStatus();
+    }
     return 'unknown';
   }
 
@@ -263,6 +276,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _openNotificationAccessSettings() async {
+    if (Platform.isWindows) {
+      if (_notificationAccessStatus == 'unspecified') {
+        final status = await WindowsNotificationListener.requestAccess();
+        if (mounted) {
+          setState(() {
+            _notificationAccessStatus = status;
+          });
+        }
+        await _windowsCoordinator()?.refresh();
+        return;
+      }
+
+      var success = false;
+      try {
+        final result = await Process.run(
+          'explorer.exe',
+          const <String>['ms-settings:privacy-notifications'],
+        );
+        success = result.exitCode == 0;
+      } catch (_) {
+        success = false;
+      }
+      if (!mounted || success) return;
+      RiftSnackbar.show(
+        context: context,
+        message: 'Unable to open Windows notification settings.',
+        type: RiftSnackbarType.error,
+      );
+      return;
+    }
+
     final success = AndroidShell.isSupported
         ? await AndroidShell.openNotificationListenerSettings()
         : false;
@@ -403,6 +447,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) {
       return;
     }
+    final windowsCoordinator = _windowsCoordinator();
+    if (windowsCoordinator != null) {
+      unawaited(windowsCoordinator.refresh());
+    }
     final client = Provider.of<JsonRpcRiftClient>(context, listen: false);
     if (!client.isConnected) {
       return;
@@ -487,13 +535,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   bool get _canManageNotificationSettings =>
-      AndroidShell.isSupported || Platform.isMacOS;
+      AndroidShell.isSupported || Platform.isMacOS || Platform.isWindows;
 
   bool get _notificationsAuthorized =>
       _notificationPermissionStatus == 'authorized';
 
   bool get _notificationAccessAuthorized =>
-      _notificationAccessStatus == 'authorized';
+      _notificationAccessStatus == 'authorized' ||
+      _notificationAccessStatus == 'allowed';
 
   IconData get _notificationPermissionIcon => _notificationsAuthorized
       ? Icons.check_circle
@@ -554,6 +603,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   String get _notificationAccessSubtitle {
+    if (Platform.isWindows) {
+      switch (_notificationAccessStatus) {
+        case 'allowed':
+          return 'Enabled for sync';
+        case 'unspecified':
+          return 'Permission is required';
+        case 'denied':
+          return 'Access was denied; enable it in Windows settings';
+        case 'unpackaged':
+          return 'Requires the packaged Rift build';
+        case 'unsupported':
+          return 'Unavailable on this Windows version';
+        default:
+          return 'Status unavailable';
+      }
+    }
+
     if (!AndroidShell.isSupported) {
       return 'Android only';
     }
@@ -1064,12 +1130,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     )
                   : null),
         ),
-        if (AndroidShell.isSupported)
+        if (AndroidShell.isSupported || Platform.isWindows)
           _buildRow(
             theme: theme,
             title: 'Notification access',
             subtitle: _notificationAccessSubtitle,
-            titleBadge: _buildAndroidBadge(theme),
+            titleBadge: Platform.isWindows
+                ? _buildDesktopBadge(theme)
+                : _buildAndroidBadge(theme),
             leadingIcon: Icon(_notificationAccessIcon,
                 color: _notificationAccessColor(theme), size: 20),
             trailing: _notificationAccessAuthorized
@@ -1077,7 +1145,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 : _buildPrimaryButton(
                     theme: theme,
                     onPressed: _openNotificationAccessSettings,
-                    label: 'OPEN SETTINGS',
+                    label: Platform.isWindows &&
+                            _notificationAccessStatus == 'unspecified'
+                        ? 'GRANT ACCESS'
+                        : 'OPEN SETTINGS',
                   ),
           ),
         _buildRow(
@@ -1120,7 +1191,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           theme: theme,
           title: 'Sync notifications',
           subtitle: 'Send this device\'s notifications to trusted devices.',
-          titleBadge: _buildAndroidBadge(theme),
+          titleBadge: AndroidShell.isSupported
+              ? _buildAndroidBadge(theme)
+              : Platform.isWindows
+                  ? _buildDesktopBadge(theme)
+                  : null,
           trailingBelow: false,
           trailing: Switch(
             value: _notificationSyncEnabled,

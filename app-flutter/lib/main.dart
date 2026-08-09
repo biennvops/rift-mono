@@ -44,6 +44,7 @@ import 'src/platform/macos_notifications.dart';
 import 'src/platform/notification_route.dart';
 import 'src/platform/windows_send_files.dart';
 import 'src/platform/windows_shell.dart';
+import 'src/notification_sync/windows_notification_sync_coordinator.dart';
 
 const _desktopClipboardChannel = MethodChannel('rift/desktop/clipboard');
 String? _lastDesktopClipboardReadFingerprint;
@@ -255,6 +256,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
   WindowsMediaPlaybackPublisher? _windowsMediaPlaybackPublisher;
   WindowsRemoteMediaPlaybackCoordinator? _windowsRemoteMediaPlayback;
+  WindowsNotificationSyncCoordinator? _windowsNotificationSyncCoordinator;
   DeviceStatusPublisher? _deviceStatusPublisher;
   TrustedPeerNameResolver? _trustedPeerNameResolver;
   String? _lastExternalClipboardFingerprint;
@@ -271,6 +273,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
   @override
   void initState() {
     super.initState();
+    if (Platform.isWindows) {
+      final client = context.read<JsonRpcRiftClient>();
+      _windowsNotificationSyncCoordinator = WindowsNotificationSyncCoordinator(
+        client: client,
+        publishEvent: _submitNativeNotificationSyncEvent,
+      );
+    }
     if (_enableDesktopShellIntegration) {
       trayManager.addListener(this);
       windowManager.addListener(this);
@@ -447,6 +456,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
 
   Future<void> _handleConnectionRestored(JsonRpcRiftClient client) async {
     await _reapplyNotificationSyncPolicy(client);
+    await _windowsNotificationSyncCoordinator?.refresh();
     await _refreshTrustedPeerNames();
     await _reconcileMirroredNotificationPreviews();
   }
@@ -1092,6 +1102,7 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _notificationUpdatedSub?.cancel();
     _notificationRemovedSub?.cancel();
     _connectionChangedSub?.cancel();
+    unawaited(_windowsNotificationSyncCoordinator?.dispose());
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_macOSRemoteMediaPlayback?.dispose());
     unawaited(_windowsMediaPlaybackPublisher?.dispose());
@@ -1763,6 +1774,10 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       unawaited(_handleCompletedFileTransfer(event));
     });
 
+    if (Platform.isWindows) {
+      unawaited(_windowsNotificationSyncCoordinator?.start());
+    }
+
     if (client.isConnected) {
       unawaited(_recoverPendingFileCommits());
       unawaited(_reconcileMirroredNotificationPreviews());
@@ -2050,10 +2065,13 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       title: AppStrings.appTitle,
       theme: buildRiftTheme(),
       home: widget.hasCompletedOnboarding
-          ? rift_ui.AppShell(
-              key: _appShellKey,
-              historyRouteNotifier: _historyRouteNotifier,
-              sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
+          ? Provider<WindowsNotificationSyncCoordinator?>.value(
+              value: _windowsNotificationSyncCoordinator,
+              child: rift_ui.AppShell(
+                key: _appShellKey,
+                historyRouteNotifier: _historyRouteNotifier,
+                sharedClipboardTextNotifier: _sharedClipboardTextNotifier,
+              ),
             )
           : const OnboardingScreen(),
     );
