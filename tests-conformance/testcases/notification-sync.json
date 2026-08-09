@@ -28,6 +28,24 @@
       }
     },
     {
+      "id": "extra-field-001",
+      "description": "Canonical icon metadata with an unknown field is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+          "byteSize": 70,
+          "sha256": "4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5",
+          "unknown": "ignored"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
       "id": "unsupported-media-001",
       "description": "Unsupported MIME types are dropped while the notification remains accepted",
       "input": {

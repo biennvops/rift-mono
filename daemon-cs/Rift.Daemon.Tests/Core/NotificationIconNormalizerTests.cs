@@ -61,9 +61,12 @@ public sealed class NotificationIconNormalizerTests
     {
         var invalidStructure = PngBytes.ToArray();
         invalidStructure[45] ^= 1;
+        var extraField = CreateIcon(PngBytes);
+        extraField["unknown"] = "ignored";
 
         Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon([1, 2, 3])));
         Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon(invalidStructure)));
+        Assert.Null(NotificationIconNormalizer.Normalize(extraField));
         Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon(OversizedDimensionPngBytes)));
     }
 

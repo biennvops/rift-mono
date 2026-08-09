@@ -20,7 +20,6 @@ Map<String, dynamic> buildIcon(List<int> values) {
     'dataBase64': base64Encode(bytes),
     'byteSize': bytes.length,
     'sha256': sha256.convert(bytes).toString(),
-    'unknown': 'ignored',
   };
 }
 
@@ -47,13 +46,18 @@ void main() {
     expect(parseNotificationIcon(changed), isNull);
   });
 
-  test('parses a canonical icon and ignores unknown fields', () {
+  test('parses a canonical icon', () {
     final icon = parseNotificationIcon(buildIcon(pngBytes));
 
     expect(icon, isNotNull);
     expect(icon!.mediaType, 'image/png');
     expect(icon.bytes, pngBytes);
     expect(icon.sha256, sha256.convert(pngBytes).toString());
+  });
+
+  test('drops icons with unknown fields', () {
+    final value = buildIcon(pngBytes)..['unknown'] = 'ignored';
+    expect(parseNotificationIcon(value), isNull);
   });
 
   test('drops icons with unsupported media types', () {

@@ -5,6 +5,14 @@ namespace Rift.Daemon.Core;
 
 public static class NotificationIconNormalizer
 {
+    private static readonly HashSet<string> CanonicalFields =
+    [
+        "mediaType",
+        "dataBase64",
+        "byteSize",
+        "sha256"
+    ];
+
     public const int MaxRawBytes = 131072;
     public const int MaxBase64Characters = ((MaxRawBytes + 2) / 3) * 4;
     public const int MaxDimension = 512;
@@ -16,6 +24,8 @@ public static class NotificationIconNormalizer
         IReadOnlyDictionary<string, object?>? icon)
     {
         if (icon is null ||
+            icon.Count != CanonicalFields.Count ||
+            icon.Keys.Any(key => !CanonicalFields.Contains(key)) ||
             !TryGetString(icon, "mediaType", out var mediaType) ||
             !string.Equals(mediaType, "image/png", StringComparison.Ordinal) ||
             !TryGetString(icon, "dataBase64", out var dataBase64) ||

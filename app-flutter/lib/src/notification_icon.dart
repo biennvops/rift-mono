@@ -7,6 +7,12 @@ const int notificationIconMaxRawBytes = 131072;
 const int notificationIconMaxBase64Characters =
     ((notificationIconMaxRawBytes + 2) ~/ 3) * 4;
 const int notificationIconMaxDimension = 512;
+const _notificationIconCanonicalFields = <String>{
+  'mediaType',
+  'dataBase64',
+  'byteSize',
+  'sha256',
+};
 const _pngSignature = <int>[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 final _notificationIconSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 
@@ -42,6 +48,14 @@ void clearNotificationIconCache() => _notificationIconCache.clear();
 
 NotificationIcon? parseNotificationIcon(Object? value) {
   if (value is! Map) {
+    return null;
+  }
+
+  if (value.length != _notificationIconCanonicalFields.length ||
+      value.keys.any(
+        (key) =>
+            key is! String || !_notificationIconCanonicalFields.contains(key),
+      )) {
     return null;
   }
 

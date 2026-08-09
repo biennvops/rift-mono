@@ -33,8 +33,18 @@ jobs:
 
       - name: Install Conformance Runner Dependencies
         working-directory: tests-conformance
-        run: dart pub get
+        run: |
+          dart pub get
+          dotnet restore runners/dotnet/Rift.Conformance.Runner.csproj
 
       - name: Run Dart Conformance Test Vectors
         working-directory: tests-conformance
         run: dart run runners/dart/runner.dart
+
+      - name: Run C# Conformance Test Vectors
+        working-directory: tests-conformance
+        run: >-
+          dotnet run
+          --project runners/dotnet/Rift.Conformance.Runner.csproj
+          --no-restore
+          -- "$GITHUB_WORKSPACE/tests-conformance"

@@ -218,6 +218,8 @@ void main() {
     test('rejects non-PNG bytes, invalid structure, and dimensions', () {
       final invalidStructure = Uint8List.fromList(notificationPngA);
       invalidStructure[45] ^= 1;
+      final extraField = buildNotificationIcon(notificationPngA)
+        ..['unknown'] = 'ignored';
 
       expect(
         normalizeNotificationIcon(buildNotificationIcon([1, 2, 3])),
@@ -227,6 +229,7 @@ void main() {
         normalizeNotificationIcon(buildNotificationIcon(invalidStructure)),
         isNull,
       );
+      expect(normalizeNotificationIcon(extraField), isNull);
       expect(
         normalizeNotificationIcon(buildNotificationIcon(oversizedDimensionPng)),
         isNull,
