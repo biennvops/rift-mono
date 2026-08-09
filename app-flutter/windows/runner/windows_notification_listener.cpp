@@ -572,7 +572,7 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
     const auto token = listener.NotificationChanged(
         [state = state_](
             UserNotificationListener const&,
-            winrt::Windows::UI::Notifications::UserNotificationChangedEventArgs const& args) {
+            winrt::Windows::UI::Notifications::Management::UserNotificationChangedEventArgs const& args) {
           WindowsNotificationListener::ProcessNotificationChangeAsync(
               state, args.ChangeKind(), args.UserNotificationId());
         });
