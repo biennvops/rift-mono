@@ -208,18 +208,18 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
   winrt::com_ptr<IStream> stream_owner;
   stream_owner.attach(memory_stream);
 
-  winrt::com_ptr<::IInspectable> random_access_stream;
+  winrt::com_ptr<winrt::Windows::Storage::Streams::IRandomAccessStream>
+      random_access_stream;
   const HRESULT hr = CreateRandomAccessStreamOverStream(
       stream_owner.get(), BSOS_DEFAULT,
-      __uuidof(ABI::Windows::Storage::Streams::IRandomAccessStream),
+      winrt::guid_of<winrt::Windows::Storage::Streams::IRandomAccessStream>(),
       random_access_stream.put_void());
   if (FAILED(hr)) {
     return std::nullopt;
   }
 
-  auto stream =
-      random_access_stream.as<winrt::Windows::Storage::Streams::IRandomAccessStream>();
-  return RandomAccessStreamReference::CreateFromStream(stream);
+  return RandomAccessStreamReference::CreateFromStream(
+      random_access_stream.as<winrt::Windows::Storage::Streams::IRandomAccessStream>());
 }
 
 winrt::Windows::Media::SystemMediaTransportControls GetTransportControlsForWindow(
@@ -234,7 +234,8 @@ winrt::Windows::Media::SystemMediaTransportControls GetTransportControlsForWindo
 
   winrt::Windows::Media::SystemMediaTransportControls controls{nullptr};
   winrt::check_hresult(interop->GetForWindow(
-      window, winrt::guid_of<ABI::Windows::Media::ISystemMediaTransportControls>(),
+      window,
+      winrt::guid_of<winrt::Windows::Media::SystemMediaTransportControls>(),
       winrt::put_abi(controls)));
   return controls;
 }
