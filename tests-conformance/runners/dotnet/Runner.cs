@@ -46,6 +46,7 @@ public static class Runner
             lengthElement.TryGetInt32(out var length))
         {
             icon["dataBase64"] = new string('A', length);
+            icon.Remove("dataBase64Length");
         }
 
         var normalized = NotificationIconNormalizer.Normalize(icon);

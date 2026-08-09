@@ -154,6 +154,7 @@ void _runNotificationSync(Map<String, dynamic> testCase) {
   final encodedLength = rawIcon['dataBase64Length'];
   if (encodedLength is int) {
     rawIcon['dataBase64'] = 'A' * encodedLength;
+    rawIcon.remove('dataBase64Length');
   }
 
   final normalized = normalizeNotificationIcon(rawIcon);
