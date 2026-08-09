@@ -17,6 +17,7 @@ reference material, not sprint history.
 - `macOS/NotificationExtractor.md` - macOS Full Disk Access notification-extractor boundary
 - `macOS/NotificationExtractorXpc.md` - authenticated extractor IPC prototype
 - `Linux/NotificationObserver.md` - Linux session D-Bus notification-observer boundary
+- `Windows/NotificationObserver.md` - Windows UserNotificationListener and sparse-identity boundary
 
 ## Supporting Docs
 

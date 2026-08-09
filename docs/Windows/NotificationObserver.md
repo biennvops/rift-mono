@@ -1,0 +1,46 @@
+# Windows notification observer
+
+Rift's Windows notification source adapter observes third-party toast notifications through the supported `Windows.UI.Notifications.Management.UserNotificationListener` API. It runs in the user-session Flutter Windows process, not in the C# daemon.
+
+## Runtime requirements
+
+Notification capture is available only when all of these conditions hold:
+
+- Windows 10 build 19041 (version 2004) or later;
+- Rift is running with package identity from the sparse package-with-external-location build;
+- the package declares `uap3:Capability Name="userNotificationListener"`;
+- the user explicitly grants notification-listener access in Settings; and
+- the local notification-sync preference is enabled.
+
+The normal unpackaged Flutter build remains supported. It reports `unpackaged` for this source feature and continues to provide the rest of Rift's desktop functionality. The app never requests notification access during startup. The Settings action is the only path that calls `RequestAccessAsync()`.
+
+The development identity workflow is documented in [`app-flutter/windows/identity/README.md`](../../app-flutter/windows/identity/README.md). It uses `MakeAppx.exe`, `SignTool.exe`, and `Add-AppxPackage -ExternalLocation`; development certificates and private keys remain outside source control.
+
+## Source metadata
+
+The source identifier is `windows:<UserNotification.Id>`. It is not derived from notification text, timestamps, or application names. Windows `Added` notifications are posted for new identifiers and updated for identifiers already tracked by the coordinator. `Removed` notifications retain the same identifier.
+
+The observer forwards only normalized preview metadata:
+
+- `AppInfo.AppUserModelId` as `packageName`, with package-family/`AppInfo.Id` fallbacks;
+- `AppInfo.DisplayInfo.DisplayName` as `appName`;
+- the first `ToastGeneric` text element as `title`;
+- the remaining `ToastGeneric` text elements joined with newlines as `bodyPreview`, bounded to 256/1024 characters;
+- `UserNotification.CreationTime` as the UTC `postedAt` value; and
+- an optional registered application logo normalized to canonical PNG metadata through the shared notification-icon helper.
+
+Raw toast XML, action arguments, input values, hidden payloads, arbitrary images, and launch parameters are not forwarded. Windows-origin records advertise `isDismissible: false` and `isOpenable: false` until a separate source-action design is approved. Rift-owned notifications are filtered by application identity, never by display name.
+
+## Lifecycle and recovery
+
+The Dart coordinator subscribes to the native event channel, serializes source events FIFO, and maintains an in-memory identifier map. On startup and reconnect it calls `GetNotificationsAsync(NotificationKinds::Toast)` and compares the active snapshot with daemon records whose `sourceDeviceId` is the local device and whose `sourcePlatform` is `windows`.
+
+This source-side reconciliation emits:
+
+- `posted` for active notifications absent from daemon state;
+- `updated` for active notifications already represented locally; and
+- `removed` for local Windows source records absent from the active snapshot.
+
+Remote-origin records are never compared with Windows' local active set. Receiver-side mirror cleanup remains the existing mirrored-notification reconciliation path.
+
+If the Rift user-session process exits, observation stops. No Windows background task or second Windows-only daemon protocol is used. All events continue through `rift.notifyLocalNotificationEvent` and the existing `notification.sync@1` contract.
