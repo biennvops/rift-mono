@@ -1,7 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 const int notificationIconMaxRawBytes = 131072;
@@ -23,6 +22,24 @@ class NotificationIcon {
   final String sha256;
 }
 
+const _notificationIconCacheMaxEntries = 128;
+final _notificationIconCache = <String, _CachedNotificationIcon>{};
+
+class _CachedNotificationIcon {
+  const _CachedNotificationIcon({
+    required this.dataBase64,
+    required this.byteSize,
+    required this.icon,
+  });
+
+  final String dataBase64;
+  final int byteSize;
+  final NotificationIcon icon;
+}
+
+@visibleForTesting
+void clearNotificationIconCache() => _notificationIconCache.clear();
+
 NotificationIcon? parseNotificationIcon(Object? value) {
   if (value is! Map) {
     return null;
@@ -43,6 +60,13 @@ NotificationIcon? parseNotificationIcon(Object? value) {
     return null;
   }
 
+  final cached = _notificationIconCache[sha256Value];
+  if (cached != null &&
+      cached.dataBase64 == dataBase64 &&
+      cached.byteSize == byteSize) {
+    return cached.icon;
+  }
+
   Uint8List bytes;
   try {
     bytes = Uint8List.fromList(base64Decode(dataBase64));
@@ -56,11 +80,21 @@ NotificationIcon? parseNotificationIcon(Object? value) {
     return null;
   }
 
-  return NotificationIcon(
+  final icon = NotificationIcon(
     mediaType: 'image/png',
     bytes: bytes,
     sha256: sha256Value,
   );
+  if (!_notificationIconCache.containsKey(sha256Value) &&
+      _notificationIconCache.length >= _notificationIconCacheMaxEntries) {
+    _notificationIconCache.remove(_notificationIconCache.keys.first);
+  }
+  _notificationIconCache[sha256Value] = _CachedNotificationIcon(
+    dataBase64: dataBase64,
+    byteSize: byteSize,
+    icon: icon,
+  );
+  return icon;
 }
 
 bool _isValidNotificationPng(Uint8List bytes) {

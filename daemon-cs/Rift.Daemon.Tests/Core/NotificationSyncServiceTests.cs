@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -107,6 +108,28 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         var listed = await _service.ListNotificationsAsync(CancellationToken.None);
         Assert.Null(Assert.Single(listed.Notifications).Icon);
+    }
+
+    [Fact]
+    public async Task HandleNotificationRemovedAsync_DeletesIconBearingRecordFromMemory()
+    {
+        await _service.HandleNotificationPostedAsync(
+            CreateNotification("notif-icon-removed", icon: CreateIcon()),
+            CancellationToken.None);
+
+        await _service.HandleNotificationRemovedAsync(new NotificationRemovedRecord
+        {
+            NotificationId = "notif-icon-removed",
+            SourceDeviceId = "rift-peer"
+        }, CancellationToken.None);
+
+        var field = typeof(NotificationSyncService).GetField(
+            "_notifications",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var records = Assert.IsType<Dictionary<string, NotificationSyncRecord>>(
+            field!.GetValue(_service));
+
+        Assert.DoesNotContain("rift-peer\nnotif-icon-removed", records.Keys);
     }
 
     [Fact]

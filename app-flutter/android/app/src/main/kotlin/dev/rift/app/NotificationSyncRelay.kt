@@ -11,6 +11,8 @@ object NotificationSyncRelay {
     private const val prefsName = "rift_notification_sync"
     private const val pendingEventsKey = "pending_events"
     private const val activeNotificationIdsKey = "active_notification_ids"
+    internal const val maxPendingEvents = 128
+    internal const val maxPendingBytes = 1_048_576
 
     fun queueAndBroadcast(context: Context, payload: Map<String, Any?>) {
         queueEvent(context, payload)
@@ -116,8 +118,29 @@ object NotificationSyncRelay {
                 JSONArray(existingRaw)
             }
         entries.put(mapToJsonObject(payload))
-        prefs.edit().putString(pendingEventsKey, entries.toString()).apply()
+        prefs.edit().putString(pendingEventsKey, boundPendingEvents(entries).toString()).apply()
     }
+
+    internal fun boundPendingEvents(entries: JSONArray): JSONArray {
+        // Icons are optional presentation data; remove them before trimming events.
+        if (entries.length() > maxPendingEvents ||
+            serializedByteSize(entries) > maxPendingBytes
+        ) {
+            for (index in 0 until entries.length()) {
+                entries.optJSONObject(index)?.remove("icon")
+            }
+        }
+
+        while (entries.length() > maxPendingEvents ||
+            serializedByteSize(entries) > maxPendingBytes
+        ) {
+            entries.remove(0)
+        }
+        return entries
+    }
+
+    private fun serializedByteSize(entries: JSONArray): Int =
+        entries.toString().toByteArray(Charsets.UTF_8).size
 
     private fun buildIntent(payload: Map<String, Any?>): Intent {
         return Intent(broadcastAction).apply {

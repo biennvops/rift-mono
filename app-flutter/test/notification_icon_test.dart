@@ -25,6 +25,28 @@ Map<String, dynamic> buildIcon(List<int> values) {
 }
 
 void main() {
+  setUp(clearNotificationIconCache);
+
+  test('reuses validated icons when metadata is unchanged', () {
+    final first = parseNotificationIcon(buildIcon(pngBytes));
+    final second = parseNotificationIcon(buildIcon(pngBytes));
+
+    expect(first, isNotNull);
+    expect(second, same(first));
+  });
+
+  test('does not trust a cached hash for different metadata', () {
+    final valid = buildIcon(pngBytes);
+    parseNotificationIcon(valid);
+    final changed = <String, dynamic>{
+      ...valid,
+      'dataBase64': 'AQID',
+      'byteSize': 3,
+    };
+
+    expect(parseNotificationIcon(changed), isNull);
+  });
+
   test('parses a canonical icon and ignores unknown fields', () {
     final icon = parseNotificationIcon(buildIcon(pngBytes));
 

@@ -14,15 +14,20 @@ Rift implementations.
 - `testcases/` - declarative JSON test cases
 - `schema.md` - test case schema documentation
 - `runners/dart/` - executable Dart runner
-- `runners/dotnet/` - .NET runner work-in-progress
+- `runners/dotnet/` - executable .NET runner
 
-## Run The Dart Runner
+## Run The Runners
 
 ```bash
 cd tests-conformance
-dart pub get
+flutter pub get
 dart run runners/dart/runner.dart
+dotnet restore runners/dotnet/Rift.Conformance.Runner.csproj
+dotnet run --project runners/dotnet/Rift.Conformance.Runner.csproj --no-restore -- "$PWD"
 ```
+
+Both runners execute the shared notification-sync vectors, including malformed,
+oversized, hash-mismatched, and structurally invalid PNG metadata.
 
 ## Related Inputs
 

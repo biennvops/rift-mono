@@ -372,53 +372,23 @@ public sealed class NotificationSyncService : INotificationSyncService
             throw new InvalidOperationException("Notification removal requires both sourceDeviceId and notificationId.");
         }
 
-        NotificationSyncRecord updated;
+        var removedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O");
         lock (_gate)
         {
-            var key = GetNotificationKey(notification.SourceDeviceId, notification.NotificationId);
-            if (_notifications.TryGetValue(key, out var existing))
-            {
-                updated = new NotificationSyncRecord
-                {
-                    NotificationId = existing.NotificationId,
-                    SourceDeviceId = existing.SourceDeviceId,
-                    SourcePlatform = existing.SourcePlatform,
-                    PackageName = existing.PackageName,
-                    AppName = existing.AppName,
-                    Title = existing.Title,
-                    BodyPreview = existing.BodyPreview,
-                    PostedAt = existing.PostedAt,
-                    IsDismissible = existing.IsDismissible,
-                    IsOpenable = existing.IsOpenable,
-                    IsRemoved = true,
-                    RemovedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O"),
-                    Icon = existing.Icon is null ? null : new Dictionary<string, object?>(existing.Icon)
-                };
-            }
-            else
-            {
-                updated = new NotificationSyncRecord
-                {
-                    NotificationId = notification.NotificationId,
-                    SourceDeviceId = notification.SourceDeviceId,
-                    PostedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O"),
-                    IsRemoved = true,
-                    RemovedAt = notification.RemovedAt ?? DateTimeOffset.UtcNow.ToString("O")
-                };
-            }
-
-            _notifications[key] = updated;
+            _notifications.Remove(GetNotificationKey(
+                notification.SourceDeviceId,
+                notification.NotificationId));
         }
 
         await NotifyIpcAsync("rift.onNotificationRemoved", new
         {
-            notificationId = updated.NotificationId,
-            sourceDeviceId = updated.SourceDeviceId,
-            removedAt = updated.RemovedAt
+            notificationId = notification.NotificationId,
+            sourceDeviceId = notification.SourceDeviceId,
+            removedAt
         }).ConfigureAwait(false);
-        await LogEventAsync(SecurityEventTypes.NotificationRemoved, updated.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
+        await LogEventAsync(SecurityEventTypes.NotificationRemoved, notification.SourceDeviceId, SecurityEventOutcome.Success, null, new Dictionary<string, object?>
         {
-            ["notificationId"] = updated.NotificationId
+            ["notificationId"] = notification.NotificationId
         }).ConfigureAwait(false);
     }
 

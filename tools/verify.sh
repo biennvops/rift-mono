@@ -88,11 +88,16 @@ run_rift_app_tests() {
 run_conformance_restore() {
   cd "$repo_root/tests-conformance"
   flutter pub get
+  dotnet restore runners/dotnet/Rift.Conformance.Runner.csproj
 }
 
 run_conformance_tests() {
   cd "$repo_root/tests-conformance"
   dart run runners/dart/runner.dart
+  dotnet run \
+    --project runners/dotnet/Rift.Conformance.Runner.csproj \
+    --no-restore \
+    -- "$repo_root/tests-conformance"
 }
 
 run_interop_restore() {
