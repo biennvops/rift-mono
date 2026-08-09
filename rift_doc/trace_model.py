@@ -197,13 +197,11 @@ class TraceIndex:
         # An explicit ID is authoritative.  A target with a different explicit
         # ID is never merged solely because its label resembles the source.
         if source.identifiers:
-            by_id: list[TraceEntity] = []
-            for identifier in source.identifiers:
-                by_id.extend(
-                    candidate
-                    for candidate in self.by_identifier.get((target_domain, identifier), [])
-                    if candidate_filter is None or candidate_filter(candidate)
-                )
+            by_id = [
+                candidate
+                for candidate in candidates
+                if set(source.identifiers).intersection(candidate.identifiers)
+            ]
             by_id = _unique_entities(by_id)
             if len(by_id) == 1:
                 return MatchResult(TraceLinkStatus.VERIFIED, MatchMethod.EXPLICIT_ID, tuple(by_id))
