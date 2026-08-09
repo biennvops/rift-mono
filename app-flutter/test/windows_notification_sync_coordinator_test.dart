@@ -68,8 +68,9 @@ class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
   Future<List<Map<String, dynamic>>> listActiveNotifications() async => active;
 
   @override
-  Future<void> start() async {
+  Future<bool> start() async {
     startCount++;
+    return true;
   }
 
   @override

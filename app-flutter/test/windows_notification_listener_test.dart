@@ -145,7 +145,7 @@ class _FakePlatform implements WindowsNotificationListenerPlatform {
       const <Map<String, dynamic>>[];
 
   @override
-  Future<void> start() async {}
+  Future<bool> start() async => true;
 
   @override
   Future<void> stop() async {}

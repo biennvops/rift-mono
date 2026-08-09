@@ -106,7 +106,7 @@ abstract interface class WindowsNotificationListenerPlatform {
 
   Future<List<Map<String, dynamic>>> listActiveNotifications();
 
-  Future<void> start();
+  Future<bool> start();
 
   Future<void> stop();
 
@@ -210,10 +210,12 @@ class MethodChannelWindowsNotificationListener
   }
 
   @override
-  Future<void> start() async {
-    if (isSupported) {
-      await methodChannel.invokeMethod<Object>('start');
+  Future<bool> start() async {
+    if (!isSupported) {
+      return false;
     }
+    final result = await methodChannel.invokeMethod<Object>('start');
+    return result == true;
   }
 
   @override
@@ -279,7 +281,9 @@ class WindowsNotificationListener {
   static Future<List<Map<String, dynamic>>> listActiveNotifications() =>
       _platform.listActiveNotifications();
 
-  static Future<void> start() => _platform.start();
+  static Future<void> start() async {
+    await _platform.start();
+  }
 
   static Future<void> stop() => _platform.stop();
 

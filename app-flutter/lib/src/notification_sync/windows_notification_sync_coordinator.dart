@@ -79,7 +79,11 @@ class WindowsNotificationSyncCoordinator {
         unawaited(_enqueue(() => _handleNativeEvent(event)));
       });
       try {
-        await _listener.start();
+        final started = await _listener.start();
+        if (!started) {
+          await _stopInternal();
+          return;
+        }
         _running = true;
       } catch (_) {
         await _stopInternal();
@@ -115,7 +119,12 @@ class WindowsNotificationSyncCoordinator {
       return;
     }
 
-    final active = await _listener.listActiveNotifications();
+    late final List<Map<String, dynamic>> active;
+    try {
+      active = await _listener.listActiveNotifications();
+    } catch (_) {
+      return;
+    }
     final daemonRecords = await _loadLocalWindowsRecords(localDeviceId);
     final activeIds = <String>{};
 
