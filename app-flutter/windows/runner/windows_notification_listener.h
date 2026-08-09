@@ -23,8 +23,8 @@
 // capture to the WindowsShell notification-display channel.
 class WindowsNotificationListener {
  public:
-  // This message carries a heap-owned EncodableValue from a WinRT callback to
-  // the Flutter runner's UI message loop.
+  // This message carries a heap-owned generation-tagged event from a WinRT
+  // callback to the Flutter runner's UI message loop.
   static constexpr UINT kEventMessage = WM_APP + 17;
 
   struct State;
@@ -58,9 +58,11 @@ class WindowsNotificationListener {
       std::shared_ptr<MethodResult> result);
   static winrt::fire_and_forget ListActiveAsync(
       std::shared_ptr<State> state,
+      uint64_t generation,
       std::shared_ptr<MethodResult> result);
   static void ContinueListActive(
       std::shared_ptr<State> state,
+      uint64_t generation,
       std::shared_ptr<std::vector<winrt::Windows::UI::Notifications::UserNotification>> notifications,
       size_t index,
       std::shared_ptr<flutter::EncodableList> entries,
@@ -68,11 +70,14 @@ class WindowsNotificationListener {
       std::shared_ptr<std::function<void(size_t)>> next);
   static void QueueNotificationChange(
       std::shared_ptr<State> state,
+      uint64_t generation,
       winrt::Windows::UI::Notifications::UserNotificationChangedKind kind,
       uint32_t notification_id);
-  static void DrainNotificationChanges(std::shared_ptr<State> state);
+  static void DrainNotificationChanges(std::shared_ptr<State> state,
+                                       uint64_t generation);
   static winrt::fire_and_forget BuildNotificationAsync(
       std::shared_ptr<State> state,
+      uint64_t generation,
       winrt::Windows::UI::Notifications::UserNotification notification,
       NotificationCallback callback);
 

@@ -57,9 +57,16 @@ struct RuntimeInfo {
 };
 
 struct WindowsNotificationListener::State {
+  struct PendingChange {
+    UserNotificationChangedKind kind;
+    uint32_t notification_id;
+    uint64_t generation;
+  };
+
   HWND window = nullptr;
   bool accepting_events = false;
   bool started = false;
+  uint64_t listener_generation = 0;
   std::mutex gate;
   UserNotificationListener listener{nullptr};
   winrt::event_token notification_changed_token{};
@@ -67,7 +74,7 @@ struct WindowsNotificationListener::State {
   std::unordered_map<std::wstring, std::vector<uint8_t>> logo_cache;
   std::deque<std::wstring> logo_order;
   std::unordered_set<uint32_t> ignored_notification_ids;
-  std::deque<std::pair<UserNotificationChangedKind, uint32_t>> pending_changes;
+  std::deque<PendingChange> pending_changes;
   bool processing_changes = false;
 };
 
@@ -199,6 +206,18 @@ void AddString(EncodableMap* map,
   }
 }
 
+struct PostedEvent {
+  uint64_t generation;
+  EncodableValue value;
+};
+
+bool IsCurrentGeneration(
+    const std::shared_ptr<WindowsNotificationListener::State>& state,
+    uint64_t generation) {
+  std::lock_guard<std::mutex> lock(state->gate);
+  return state->listener_generation == generation;
+}
+
 std::optional<std::vector<uint8_t>> CachedLogo(
     const std::shared_ptr<WindowsNotificationListener::State>& state,
     const std::wstring& key) {
@@ -225,17 +244,20 @@ void CacheLogo(const std::shared_ptr<WindowsNotificationListener::State>& state,
 }
 
 void PostEvent(const std::shared_ptr<WindowsNotificationListener::State>& state,
+              uint64_t generation,
               EncodableMap event) {
   HWND window = nullptr;
   {
     std::lock_guard<std::mutex> lock(state->gate);
-    if (!state->accepting_events || state->window == nullptr) {
+    if (!state->accepting_events ||
+        state->listener_generation != generation || state->window == nullptr) {
       return;
     }
     window = state->window;
   }
 
-  auto* payload = new EncodableValue(std::move(event));
+  auto* payload = new PostedEvent{
+      generation, EncodableValue(std::move(event))};
   if (!PostMessageW(window, WindowsNotificationListener::kEventMessage, 0,
                     reinterpret_cast<LPARAM>(payload))) {
     delete payload;
@@ -300,6 +322,10 @@ void WindowsNotificationListener::OnDestroy() {
   {
     std::lock_guard<std::mutex> lock(state->gate);
     state->accepting_events = false;
+    state->listener_generation++;
+    state->pending_changes.clear();
+    state->processing_changes = false;
+    state->ignored_notification_ids.clear();
     state->window = nullptr;
     was_started = state->started;
     state->started = false;
@@ -325,10 +351,17 @@ bool WindowsNotificationListener::HandleWindowMessage(UINT message,
     return false;
   }
 
-  auto* payload = reinterpret_cast<EncodableValue*>(lparam);
+  auto* payload = reinterpret_cast<PostedEvent*>(lparam);
   if (payload != nullptr) {
-    if (event_sink_ != nullptr) {
-      event_sink_->Success(*payload);
+    bool current_generation = false;
+    {
+      std::lock_guard<std::mutex> lock(state_->gate);
+      current_generation =
+          state_->accepting_events &&
+          state_->listener_generation == payload->generation;
+    }
+    if (current_generation && event_sink_ != nullptr) {
+      event_sink_->Success(payload->value);
     }
     delete payload;
   }
@@ -452,9 +485,11 @@ winrt::fire_and_forget WindowsNotificationListener::RequestAccessAsync(
 void WindowsNotificationListener::ListActive(
     std::unique_ptr<MethodResult> result) {
   const auto runtime = GetRuntimeInfo();
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(state_->gate);
     state_->runtime = runtime;
+    generation = state_->listener_generation;
   }
   if (!runtime.supported || !runtime.has_package_identity) {
     result->Success(EncodableValue(flutter::EncodableList()));
@@ -462,11 +497,12 @@ void WindowsNotificationListener::ListActive(
   }
 
   auto result_holder = std::shared_ptr<MethodResult>(result.release());
-  ListActiveAsync(state_, std::move(result_holder));
+  ListActiveAsync(state_, generation, std::move(result_holder));
 }
 
 winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
     std::shared_ptr<State> state,
+    uint64_t generation,
     std::shared_ptr<MethodResult> result) {
   try {
     UserNotificationListener listener;
@@ -497,13 +533,14 @@ winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
     auto entries = std::make_shared<flutter::EncodableList>();
     auto next = std::make_shared<std::function<void(size_t)>>();
     auto weak_next = std::weak_ptr<std::function<void(size_t)>>(next);
-    *next = [state, items, entries, result, weak_next](size_t index) {
+    *next = [state, generation, items, entries, result, weak_next](
+                size_t index) {
       const auto strong_next = weak_next.lock();
       if (strong_next == nullptr) {
         return;
       }
       WindowsNotificationListener::ContinueListActive(
-          state, items, index, entries, result, strong_next);
+          state, generation, items, index, entries, result, strong_next);
     };
     (*next)(0);
   } catch (...) {
@@ -513,6 +550,7 @@ winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
 
 void WindowsNotificationListener::ContinueListActive(
     std::shared_ptr<State> state,
+    uint64_t generation,
     std::shared_ptr<std::vector<UserNotification>> notifications,
     size_t index,
     std::shared_ptr<flutter::EncodableList> entries,
@@ -525,7 +563,7 @@ void WindowsNotificationListener::ContinueListActive(
 
   const auto notification = (*notifications)[index];
   BuildNotificationAsync(
-      state, notification,
+      state, generation, notification,
       [state, entries, result, next, index](
           std::optional<EncodableMap> item) {
         if (item.has_value()) {
@@ -563,26 +601,44 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
       return;
     }
 
+    uint64_t generation = 0;
     {
       std::lock_guard<std::mutex> lock(state_->gate);
       if (state_->started) {
         result->Success(EncodableValue(true));
         return;
       }
+      generation = ++state_->listener_generation;
+      state_->accepting_events = false;
+      state_->pending_changes.clear();
+      state_->processing_changes = false;
+      state_->ignored_notification_ids.clear();
     }
 
     const auto token = listener.NotificationChanged(
-        [state = state_](
+        [state = state_, generation](
             UserNotificationListener const&,
             winrt::Windows::UI::Notifications::Management::UserNotificationChangedEventArgs const& args) {
           WindowsNotificationListener::QueueNotificationChange(
-              state, args.ChangeKind(), args.UserNotificationId());
+              state, generation, args.ChangeKind(), args.UserNotificationId());
         });
+    bool installed = false;
     {
       std::lock_guard<std::mutex> lock(state_->gate);
-      state_->notification_changed_token = token;
-      state_->started = true;
-      state_->accepting_events = true;
+      if (state_->listener_generation == generation && !state_->started) {
+        state_->notification_changed_token = token;
+        state_->started = true;
+        state_->accepting_events = true;
+        installed = true;
+      }
+    }
+    if (!installed) {
+      try {
+        listener.NotificationChanged(token);
+      } catch (...) {
+      }
+      result->Success(EncodableValue(false));
+      return;
     }
     result->Success(EncodableValue(true));
   } catch (...) {
@@ -598,6 +654,10 @@ void WindowsNotificationListener::Stop(std::unique_ptr<MethodResult> result) {
   {
     std::lock_guard<std::mutex> lock(state->gate);
     state->accepting_events = false;
+    state->listener_generation++;
+    state->pending_changes.clear();
+    state->processing_changes = false;
+    state->ignored_notification_ids.clear();
     was_started = state->started;
     state->started = false;
     token = state->notification_changed_token;
@@ -615,27 +675,42 @@ void WindowsNotificationListener::Stop(std::unique_ptr<MethodResult> result) {
 
 void WindowsNotificationListener::QueueNotificationChange(
     std::shared_ptr<State> state,
+    uint64_t generation,
     UserNotificationChangedKind kind,
     uint32_t notification_id) {
   bool should_start = false;
   {
     std::lock_guard<std::mutex> lock(state->gate);
-    state->pending_changes.emplace_back(kind, notification_id);
+    if (!state->accepting_events || !state->started ||
+        state->listener_generation != generation) {
+      return;
+    }
+    state->pending_changes.push_back(
+        State::PendingChange{kind, notification_id, generation});
     if (!state->processing_changes) {
       state->processing_changes = true;
       should_start = true;
     }
   }
   if (should_start) {
-    DrainNotificationChanges(std::move(state));
+    DrainNotificationChanges(std::move(state), generation);
   }
 }
 
 void WindowsNotificationListener::DrainNotificationChanges(
-    std::shared_ptr<State> state) {
-  std::pair<UserNotificationChangedKind, uint32_t> change;
+    std::shared_ptr<State> state,
+    uint64_t generation) {
+  State::PendingChange change{};
   {
     std::lock_guard<std::mutex> lock(state->gate);
+    if (state->listener_generation != generation ||
+        !state->accepting_events || !state->started) {
+      if (state->listener_generation == generation) {
+        state->pending_changes.clear();
+        state->processing_changes = false;
+      }
+      return;
+    }
     if (state->pending_changes.empty()) {
       state->processing_changes = false;
       return;
@@ -644,12 +719,15 @@ void WindowsNotificationListener::DrainNotificationChanges(
     state->pending_changes.pop_front();
   }
 
-  const auto kind = change.first;
-  const auto notification_id = change.second;
+  const auto kind = change.kind;
+  const auto notification_id = change.notification_id;
   if (kind == UserNotificationChangedKind::Removed) {
     bool ignored = false;
     {
       std::lock_guard<std::mutex> lock(state->gate);
+      if (state->listener_generation != generation) {
+        return;
+      }
       ignored = state->ignored_notification_ids.erase(notification_id) != 0;
     }
     if (!ignored) {
@@ -660,9 +738,9 @@ void WindowsNotificationListener::DrainNotificationChanges(
       event[EncodableValue("notificationId")] =
           EncodableValue("windows:" + std::to_string(notification_id));
       AddString(&event, "removedAt", UtcIso8601(winrt::clock::now()));
-      PostEvent(state, std::move(event));
+      PostEvent(state, generation, std::move(event));
     }
-    DrainNotificationChanges(std::move(state));
+    DrainNotificationChanges(std::move(state), generation);
     return;
   }
 
@@ -673,34 +751,40 @@ void WindowsNotificationListener::DrainNotificationChanges(
       listener = state->listener;
     }
     if (listener == nullptr) {
-      DrainNotificationChanges(std::move(state));
+      DrainNotificationChanges(std::move(state), generation);
       return;
     }
     const auto notification = listener.GetNotification(notification_id);
     if (notification == nullptr) {
-      DrainNotificationChanges(std::move(state));
+      DrainNotificationChanges(std::move(state), generation);
       return;
     }
 
     BuildNotificationAsync(
-        state, notification,
-        [state](std::optional<EncodableMap> event) {
+        state, generation, notification,
+        [state, generation](std::optional<EncodableMap> event) {
           if (event.has_value()) {
-            PostEvent(state, std::move(event.value()));
+            PostEvent(state, generation, std::move(event.value()));
           }
-          DrainNotificationChanges(std::move(state));
+          DrainNotificationChanges(std::move(state), generation);
         });
   } catch (...) {
-    DrainNotificationChanges(std::move(state));
+    DrainNotificationChanges(std::move(state), generation);
   }
 }
 
 winrt::fire_and_forget WindowsNotificationListener::BuildNotificationAsync(
     std::shared_ptr<State> state,
+    uint64_t generation,
     UserNotification notification,
     NotificationCallback callback) {
   std::optional<EncodableMap> event;
   try {
+    if (!IsCurrentGeneration(state, generation)) {
+      callback(std::nullopt);
+      co_return;
+    }
+
     const auto app_info = notification.AppInfo();
     if (app_info == nullptr) {
       callback(std::nullopt);
@@ -715,8 +799,13 @@ winrt::fire_and_forget WindowsNotificationListener::BuildNotificationAsync(
       runtime = state->runtime;
     }
     if (IsRiftApp(runtime, app_user_model_id, package_family_name)) {
-      std::lock_guard<std::mutex> lock(state->gate);
-      state->ignored_notification_ids.insert(notification.Id());
+      {
+        std::lock_guard<std::mutex> lock(state->gate);
+        if (state->listener_generation == generation) {
+          state->ignored_notification_ids.insert(notification.Id());
+        }
+      }
+      // The callback advances the serialized queue and may re-enter gate.
       callback(std::nullopt);
       co_return;
     }
@@ -819,6 +908,10 @@ winrt::fire_and_forget WindowsNotificationListener::BuildNotificationAsync(
     event = std::move(normalized);
   } catch (...) {
     event = std::nullopt;
+  }
+  if (!IsCurrentGeneration(state, generation)) {
+    callback(std::nullopt);
+    co_return;
   }
   callback(std::move(event));
 }
