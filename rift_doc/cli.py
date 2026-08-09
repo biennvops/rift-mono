@@ -99,13 +99,15 @@ def _run_validate_set(args: argparse.Namespace) -> int:
     spec = CapstoneSpec.load(args.spec)
     engine = ValidationEngine(spec)
     result = engine.validate_set(args.manifest)
-    _filter_trace_result(result, args.rule, args.entity)
+    has_errors = result.has_errors
+    has_strict_issues = result.has_strict_issues
+    display_result = _filter_trace_result(result, args.rule, args.entity)
     if args.format == "json":
-        print(render_json([result]))
+        print(render_json([display_result]))
     else:
-        text = render_text([result])
+        text = render_text([display_result])
         if args.show_graph:
-            graph = result.metadata.get("trace_graph", {})
+            graph = display_result.metadata.get("trace_graph", {})
             nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
             edges = graph.get("edges", []) if isinstance(graph, dict) else []
             if text:
@@ -115,17 +117,28 @@ def _run_validate_set(args: argparse.Namespace) -> int:
                 text += "\n  " + str(edge.get("from_entity")) + " -> " + str(edge.get("to_entity")) + " [" + str(edge.get("rule_id")) + "]"
         print(text)
     if args.strict:
-        return 1 if result.has_strict_issues else 0
-    return 1 if result.has_errors else 0
+        return 1 if has_strict_issues else 0
+    return 1 if has_errors else 0
 
 
-def _filter_trace_result(result: ValidationResult, rule_ids: list[str] | None, entity_query: str | None) -> None:
+def _filter_trace_result(
+    result: ValidationResult,
+    rule_ids: list[str] | None,
+    entity_query: str | None,
+) -> ValidationResult:
+    filtered = ValidationResult(
+        source_path=result.source_path,
+        report=result.report,
+        format=result.format,
+        findings=list(result.findings),
+        metadata=dict(result.metadata),
+    )
     if rule_ids:
         allowed = {str(rule_id).casefold() for rule_id in rule_ids}
-        result.findings = [finding for finding in result.findings if finding.rule_id.casefold() in allowed]
-        coverage = result.metadata.get("coverage")
+        filtered.findings = [finding for finding in filtered.findings if finding.rule_id.casefold() in allowed]
+        coverage = filtered.metadata.get("coverage")
         if isinstance(coverage, dict):
-            result.metadata["coverage"] = {key: value for key, value in coverage.items() if key.casefold() in allowed}
+            filtered.metadata["coverage"] = {key: value for key, value in coverage.items() if key.casefold() in allowed}
     if entity_query:
         from .trace_model import normalize_name
 
@@ -136,7 +149,8 @@ def _filter_trace_result(result: ValidationResult, rule_ids: list[str] | None, e
                 values = [source.get("entity_id"), source.get("canonical_name"), *(source.get("aliases", []) or [])]
                 return any(query == normalize_name(str(value)) or query in normalize_name(str(value)) for value in values if value)
             return query in normalize_name(str(getattr(finding, "message", "")))
-        result.findings = [finding for finding in result.findings if matches(finding)]
+        filtered.findings = [finding for finding in filtered.findings if matches(finding)]
+    return filtered
 
 
 def _run_inspect(args: argparse.Namespace) -> int:
