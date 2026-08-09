@@ -544,6 +544,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _notificationAccessStatus == 'authorized' ||
       _notificationAccessStatus == 'allowed';
 
+  bool get _canManageWindowsNotificationAccess =>
+      _notificationAccessStatus == 'unspecified' ||
+      _notificationAccessStatus == 'denied';
+
   IconData get _notificationPermissionIcon => _notificationsAuthorized
       ? Icons.check_circle
       : _notificationPermissionStatus == 'denied'
@@ -1142,14 +1146,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: _notificationAccessColor(theme), size: 20),
             trailing: _notificationAccessAuthorized
                 ? _buildGrantedChip(theme)
-                : _buildPrimaryButton(
-                    theme: theme,
-                    onPressed: _openNotificationAccessSettings,
-                    label: Platform.isWindows &&
-                            _notificationAccessStatus == 'unspecified'
-                        ? 'GRANT ACCESS'
-                        : 'OPEN SETTINGS',
-                  ),
+                : Platform.isWindows && !_canManageWindowsNotificationAccess
+                    ? null
+                    : _buildPrimaryButton(
+                        theme: theme,
+                        onPressed: _openNotificationAccessSettings,
+                        label: Platform.isWindows &&
+                                _notificationAccessStatus == 'unspecified'
+                            ? 'GRANT ACCESS'
+                            : 'OPEN SETTINGS',
+                      ),
           ),
         _buildRow(
           theme: theme,
