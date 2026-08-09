@@ -89,6 +89,12 @@ function Trust-DevelopmentCertificate(
     }
 }
 
+if ($PackageName -ne 'Rift.Desktop' -or
+    $ApplicationId -ne 'Rift' -or
+    $Publisher -ne 'CN=Rift Development') {
+    throw 'PackageName, ApplicationId, and Publisher must match the embedded runner.exe.manifest. Rebuild Rift after changing those identity values.'
+}
+
 $externalPath = (Resolve-Path -LiteralPath $ExternalLocation).Path
 $executablePath = Join-Path $externalPath 'Rift.exe'
 if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
@@ -122,34 +128,6 @@ foreach ($placeholder in $replacements.Keys) {
 $manifestPath = Join-Path $stageDirectory 'AppxManifest.xml'
 Set-Content -LiteralPath $manifestPath -Value $template -Encoding UTF8 -NoNewline
 Copy-Item -LiteralPath $LogoPath -Destination (Join-Path $stageDirectory 'Assets\Rift.png')
-
-$publisherXml = Escape-Xml $Publisher
-$packageNameXml = Escape-Xml $PackageName
-$applicationIdXml = Escape-Xml $ApplicationId
-$runnerManifest = @"
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity type="win32" name="Rift" version="1.0.0.0" />
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-    </windowsSettings>
-  </application>
-  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-    <application>
-      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
-    </application>
-  </compatibility>
-  <msix xmlns="urn:schemas-microsoft-com:msix.v1"
-        publisher="$publisherXml"
-        packageName="$packageNameXml"
-        applicationId="$applicationIdXml" />
-</assembly>
-"@
-# The side-by-side manifest is generated beside the exact executable used for
-# registration, allowing -Publisher to remain a local development choice.
-Set-Content -LiteralPath (Join-Path $externalPath 'Rift.exe.manifest') `
-    -Value $runnerManifest -Encoding UTF8 -NoNewline
 
 $signTool = Find-WindowsSdkTool 'signtool.exe'
 $makeAppx = Find-WindowsSdkTool 'makeappx.exe'

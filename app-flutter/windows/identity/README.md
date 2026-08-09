@@ -32,7 +32,7 @@ $certificatePassword = Read-Host 'PFX password' -AsSecureString
   -Publisher 'CN=Rift Development'
 ```
 
-The publisher in the package manifest, the signing certificate subject, and the generated `Rift.exe.manifest` must match. The build helper writes the generated side-by-side executable manifest into the external location so a custom development publisher can be used without changing tracked files.
+The current Flutter runner embeds `Rift.Desktop` / `Rift` / `CN=Rift Development` in `runner.exe.manifest`, so the package helper validates those identity values. To use a different publisher, update the tracked runner manifest and rebuild the Flutter Windows executable before packaging. The certificate subject and package manifest publisher must match exactly.
 
 Register and unregister the package with:
 
