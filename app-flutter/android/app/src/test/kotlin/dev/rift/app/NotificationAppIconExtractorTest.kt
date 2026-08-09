@@ -6,16 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NotificationAppIconExtractorTest {
+    private val pngBytes = java.util.Base64.getDecoder().decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    )
     @Test
     fun canonicalPayloadMatchesPngBytes() {
-        val bytes = byteArrayOf(1, 2, 3)
-        val payload = NotificationAppIconPayload.fromPngBytes(bytes)
+        val payload = NotificationAppIconPayload.fromPngBytes(pngBytes)
 
         requireNotNull(payload)
-        assertEquals(3, payload.byteSize)
-        assertEquals("AQID", payload.dataBase64)
+        assertEquals(70, payload.byteSize)
+        assertEquals(java.util.Base64.getEncoder().encodeToString(pngBytes), payload.dataBase64)
         assertEquals(
-            "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+            "4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5",
             payload.sha256,
         )
         assertEquals("image/png", payload.asMap()["mediaType"])
@@ -33,9 +35,9 @@ class NotificationAppIconExtractorTest {
     @Test
     fun cacheIsBoundedAndUsesLruEntries() {
         val cache = NotificationAppIconCache(maxEntries = 2)
-        val first = requireNotNull(NotificationAppIconPayload.fromPngBytes(byteArrayOf(1)))
-        val second = requireNotNull(NotificationAppIconPayload.fromPngBytes(byteArrayOf(2)))
-        val third = requireNotNull(NotificationAppIconPayload.fromPngBytes(byteArrayOf(3)))
+        val first = requireNotNull(NotificationAppIconPayload.fromPngBytes(pngBytes))
+        val second = requireNotNull(NotificationAppIconPayload.fromPngBytes(pngBytes))
+        val third = requireNotNull(NotificationAppIconPayload.fromPngBytes(pngBytes))
 
         cache.put("first", first)
         cache.put("second", second)

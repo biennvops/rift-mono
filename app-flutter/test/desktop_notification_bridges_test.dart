@@ -1,3 +1,4 @@
+import 'package:rift/src/platform/android_shell.dart';
 import 'package:rift/src/platform/linux_notifications.dart';
 import 'package:rift/src/platform/macos_notifications.dart';
 import 'package:rift/src/platform/windows_shell.dart';
@@ -7,16 +8,25 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  const androidChannel = MethodChannel('rift/android/shell');
   const linuxChannel = MethodChannel('rift/linux/notifications');
   const windowsChannel = MethodChannel('rift/windows/shell');
+  final androidCalls = <MethodCall>[];
   final linuxCalls = <MethodCall>[];
   final windowsCalls = <MethodCall>[];
 
   setUp(() {
+    AndroidShell.debugIsAndroidOverride = true;
     LinuxNotifications.debugIsLinuxOverride = true;
     WindowsShell.debugIsWindowsOverride = true;
+    androidCalls.clear();
     linuxCalls.clear();
     windowsCalls.clear();
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, (call) async {
+      androidCalls.add(call);
+      return true;
+    });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(linuxChannel, (call) async {
       linuxCalls.add(call);
@@ -30,8 +40,11 @@ void main() {
   });
 
   tearDown(() {
+    AndroidShell.debugIsAndroidOverride = null;
     LinuxNotifications.debugIsLinuxOverride = null;
     WindowsShell.debugIsWindowsOverride = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(androidChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(linuxChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -98,6 +111,12 @@ void main() {
   test('desktop bridges forward binary icon bytes', () async {
     final iconBytes = Uint8List.fromList([1, 2, 3]);
 
+    await AndroidShell.showNotification(
+      title: 'Android',
+      body: 'Mirror',
+      route: 'history.notifications',
+      iconBytes: iconBytes,
+    );
     await LinuxNotifications.show(
       title: 'Linux',
       body: 'Mirror',
@@ -111,6 +130,7 @@ void main() {
       iconBytes: iconBytes,
     );
 
+    expect(androidCalls.single.arguments['iconBytes'], iconBytes);
     expect(linuxCalls.single.arguments['iconBytes'], iconBytes);
     expect(windowsCalls.single.arguments['iconBytes'], iconBytes);
   });

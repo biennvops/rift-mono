@@ -836,7 +836,7 @@ Submits a locally observed or locally generated notification event into the daem
 
 `posted` / `updated` require `notificationId`, `packageName`, `appName`, `postedAt`, `isDismissible`, and `isOpenable`. `removed` requires `notificationId` and may include `removedAt`. `sourcePlatform` is optional and carries a source hint such as `android`, `ios`, `windows`, `macos`, or `linux`.
 
-`icon` is optional presentation metadata. When present, its canonical shape is `{ "mediaType": "image/png", "dataBase64": "...", "byteSize": 38142, "sha256": "64-lowercase-hex" }`; decoded bytes are capped at 131072 and the Base64 string is rejected above 174764 characters before decoding. The digest covers the exact PNG bytes. The IPC client receives lowerCamelCase fields. Invalid or oversized icons are ignored without rejecting the notification.
+`icon` is optional presentation metadata. When present, its canonical shape is `{ "mediaType": "image/png", "dataBase64": "...", "byteSize": 38142, "sha256": "64-lowercase-hex" }`; decoded bytes must be a structurally valid, CRC-consistent PNG no larger than 512×512 pixels, are capped at 131072 bytes, and the Base64 string is rejected above 174764 characters before decoding. The digest covers the exact PNG bytes. The IPC client receives lowerCamelCase fields. Invalid, oversized, or over-dimensioned icons are ignored without rejecting the notification.
 
 #### `rift.listMediaPlayback`
 

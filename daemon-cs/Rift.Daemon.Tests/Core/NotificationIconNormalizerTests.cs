@@ -5,18 +5,23 @@ namespace Rift.Daemon.Tests.Core;
 
 public sealed class NotificationIconNormalizerTests
 {
+    private static readonly byte[] PngBytes = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
+
+    private static readonly byte[] OversizedDimensionPngBytes = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAgEAAAABCAYAAABHeX1IAAAAF0lEQVR4nGNgGAWjYBSMglEwCkbBiAQACAUAAVbgEW4AAAAASUVORK5CYII=");
     [Fact]
     public void ValidIconIsCanonicalized()
     {
-        var normalized = NotificationIconNormalizer.Normalize(CreateIcon([1, 2, 3]));
+        var normalized = NotificationIconNormalizer.Normalize(CreateIcon(PngBytes));
 
         Assert.NotNull(normalized);
         Assert.Equal(
             new[] { "mediaType", "dataBase64", "byteSize", "sha256" },
             normalized!.Keys);
         Assert.Equal("image/png", normalized["mediaType"]);
-        Assert.Equal("AQID", normalized["dataBase64"]);
-        Assert.Equal(3, normalized["byteSize"]);
+        Assert.Equal(Convert.ToBase64String(PngBytes), normalized["dataBase64"]);
+        Assert.Equal(PngBytes.Length, normalized["byteSize"]);
     }
 
     [Theory]
@@ -49,6 +54,17 @@ public sealed class NotificationIconNormalizerTests
 
         Assert.Null(NotificationIconNormalizer.Normalize(wrongSize));
         Assert.Null(NotificationIconNormalizer.Normalize(wrongHash));
+    }
+
+    [Fact]
+    public void NonPngPayloadInvalidStructureAndOversizedDimensionsAreDropped()
+    {
+        var invalidStructure = PngBytes.ToArray();
+        invalidStructure[45] ^= 1;
+
+        Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon([1, 2, 3])));
+        Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon(invalidStructure)));
+        Assert.Null(NotificationIconNormalizer.Normalize(CreateIcon(OversizedDimensionPngBytes)));
     }
 
     [Fact]

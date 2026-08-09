@@ -45,6 +45,57 @@
       }
     },
     {
+      "id": "invalid-png-001",
+      "description": "Arbitrary bytes labeled image/png are dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "AQID",
+          "byteSize": 3,
+          "sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "invalid-png-structure-001",
+      "description": "A PNG with an invalid chunk CRC is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4zsDwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+          "byteSize": 70,
+          "sha256": "5381cfec02a0abe3105997114962ee9c1eb2cfd9bafae69c62d74af98b66aefe"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "oversized-dimensions-001",
+      "description": "A structurally valid PNG wider than 512 pixels is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAgEAAAABCAYAAABHeX1IAAAAF0lEQVR4nGNgGAWjYBSMglEwCkbBiAQACAUAAVbgEW4AAAAASUVORK5CYII=",
+          "byteSize": 80,
+          "sha256": "354b8fe823f16773bc780679a811a97a233d1e25ed2b8264a722779d59af86e4"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
       "id": "invalid-base64-001",
       "description": "Invalid Base64 is dropped",
       "input": {

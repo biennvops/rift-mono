@@ -1,5 +1,6 @@
 package dev.rift.app
 
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,8 +64,12 @@ class NotificationSyncRelayTest {
             ),
         )
 
-        val restored = NotificationSyncRelay.jsonCompatibleToMap(
-            NotificationSyncRelay.mapToJsonCompatible(payload),
+        val stored = JSONArray()
+            .put(NotificationSyncRelay.mapToJsonObject(payload))
+            .toString()
+        val restoredEntries = JSONArray(stored)
+        val restored = NotificationSyncRelay.jsonObjectToMap(
+            restoredEntries.getJSONObject(0),
         )
 
         assertEquals(payload, restored)

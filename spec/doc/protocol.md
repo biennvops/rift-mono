@@ -378,7 +378,7 @@ When present, `icon` MUST contain exactly the canonical v1 presentation fields b
 }
 ```
 
-`mediaType` MUST be `image/png`. The decoded PNG bytes MUST be at most 131072 bytes, `byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase SHA-256 digest of those exact bytes. Receivers MUST reject an icon before decoding when the Base64 string exceeds 174764 characters (the encoded bound for 131072 raw bytes), and MUST ignore malformed, oversized, or hash-mismatched icon metadata while retaining the notification. SVG, animated GIF, WebP, JPEG, resource IDs, local paths, content URIs, and remote URLs are not supported. Icons are presentation metadata only and MUST NOT be used as authorization, identity, or notification lifecycle inputs.
+`mediaType` MUST be `image/png`. The decoded bytes MUST be a structurally valid PNG with valid chunk CRCs, a width and height from 1 through 512 pixels, and a total size of at most 131072 bytes. `byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase SHA-256 digest of those exact bytes. Receivers MUST reject an icon before decoding when the Base64 string exceeds 174764 characters (the encoded bound for 131072 raw bytes), and MUST ignore malformed, oversized, over-dimensioned, or hash-mismatched icon metadata while retaining the notification. SVG, animated GIF, WebP, JPEG, resource IDs, local paths, content URIs, and remote URLs are not supported. Icons are presentation metadata only and MUST NOT be used as authorization, identity, or notification lifecycle inputs.
 
 `notification.posted` payload fields: the full notification record above.
 

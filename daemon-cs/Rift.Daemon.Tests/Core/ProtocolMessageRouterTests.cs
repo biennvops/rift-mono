@@ -525,9 +525,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
                 icon = new
                 {
                     mediaType = "image/png",
-                    dataBase64 = "AQID",
-                    byteSize = 3,
-                    sha256 = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+                    dataBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+                    byteSize = 70,
+                    sha256 = "4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5"
                 }
             }),
             CancellationToken.None);
@@ -536,7 +536,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
         var notification = Assert.Single(
             notifications.Notifications,
             notification => notification.NotificationId == "notif-router-1");
-        Assert.Equal("AQID", notification.Icon!["dataBase64"]);
+        Assert.Equal(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+            notification.Icon!["dataBase64"]);
     }
 
     [Fact]

@@ -10,6 +10,16 @@ import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:test/test.dart';
 
+final notificationPngA = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',
+);
+final notificationPngB = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg==',
+);
+final oversizedDimensionPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAgEAAAABCAYAAABHeX1IAAAAF0lEQVR4nGNgGAWjYBSMglEwCkbBiAQACAUAAVbgEW4AAAAASUVORK5CYII=',
+);
+
 Map<String, dynamic> buildNotificationIcon(List<int> bytes) {
   final data = Uint8List.fromList(bytes);
   return {
@@ -174,7 +184,7 @@ void main() {
     test(
       'preserves valid notification icons in local and listed records',
       () async {
-        final icon = buildNotificationIcon([1, 2, 3, 4]);
+        final icon = buildNotificationIcon(notificationPngA);
         await daemon.handleJsonRpcRequest({
           'method': 'rift.notifyLocalNotificationEvent',
           'params': {
@@ -205,10 +215,29 @@ void main() {
       },
     );
 
+    test('rejects non-PNG bytes, invalid structure, and dimensions', () {
+      final invalidStructure = Uint8List.fromList(notificationPngA);
+      invalidStructure[45] ^= 1;
+
+      expect(
+        normalizeNotificationIcon(buildNotificationIcon([1, 2, 3])),
+        isNull,
+      );
+      expect(
+        normalizeNotificationIcon(buildNotificationIcon(invalidStructure)),
+        isNull,
+      );
+      expect(
+        normalizeNotificationIcon(buildNotificationIcon(oversizedDimensionPng)),
+        isNull,
+      );
+    });
+
     test(
       'drops malformed notification icons without dropping the record',
       () async {
-        final icon = buildNotificationIcon([1, 2, 3])..['sha256'] = '0' * 64;
+        final icon = buildNotificationIcon(notificationPngA)
+          ..['sha256'] = '0' * 64;
         await daemon.handleJsonRpcRequest({
           'method': 'rift.notifyLocalNotificationEvent',
           'params': {
@@ -234,8 +263,8 @@ void main() {
     );
 
     test('updated notification replaces its previous icon', () async {
-      final firstIcon = buildNotificationIcon([1, 2, 3]);
-      final secondIcon = buildNotificationIcon([4, 5, 6]);
+      final firstIcon = buildNotificationIcon(notificationPngA);
+      final secondIcon = buildNotificationIcon(notificationPngB);
       Future<void> notify(String eventType, Map<String, dynamic> icon) async {
         await daemon.handleJsonRpcRequest({
           'method': 'rift.notifyLocalNotificationEvent',
@@ -313,7 +342,7 @@ void main() {
               'postedAt': '2026-07-15T08:30:00.000Z',
               'isDismissible': true,
               'isOpenable': true,
-              'icon': buildNotificationIcon([7, 8, 9]),
+              'icon': buildNotificationIcon(notificationPngB),
             },
           },
         );
@@ -326,7 +355,7 @@ void main() {
         expect(notification['sourceDeviceId'], peerDeviceId);
         expect(notification['isDismissible'], isTrue);
         expect(notification['isOpenable'], isTrue);
-        expect(notification['icon'], buildNotificationIcon([7, 8, 9]));
+        expect(notification['icon'], buildNotificationIcon(notificationPngB));
       },
     );
 

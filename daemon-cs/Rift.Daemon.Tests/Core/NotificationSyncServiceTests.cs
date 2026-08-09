@@ -75,7 +75,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
         _transport.ActivePeers.Add("rift-peer");
-        var icon = CreateIcon([1, 2, 3]);
+        var icon = CreateIcon();
 
         await _service.HandleLocalNotificationEventAsync(
             "posted",
@@ -98,7 +98,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     [Fact]
     public async Task MalformedNotificationIcon_IsDroppedWithoutDroppingNotification()
     {
-        var icon = CreateIcon([1, 2, 3]);
+        var icon = CreateIcon();
         icon["sha256"] = new string('0', 64);
 
         await _service.HandleNotificationPostedAsync(
@@ -745,14 +745,16 @@ public sealed class NotificationSyncServiceTests : IDisposable
         };
     }
 
-    private static Dictionary<string, object?> CreateIcon(IReadOnlyList<byte> bytes)
+    private static Dictionary<string, object?> CreateIcon()
     {
+        var bytes = Convert.FromBase64String(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==");
         return new Dictionary<string, object?>
         {
             ["mediaType"] = "image/png",
-            ["dataBase64"] = Convert.ToBase64String(bytes.ToArray()),
-            ["byteSize"] = bytes.Count,
-            ["sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes.ToArray())).ToLowerInvariant()
+            ["dataBase64"] = Convert.ToBase64String(bytes),
+            ["byteSize"] = bytes.Length,
+            ["sha256"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant()
         };
     }
 
