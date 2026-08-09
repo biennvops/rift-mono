@@ -175,7 +175,7 @@ def test_validate_set_cli_exit_and_rule_filter(minimal_spec_path: Path, tmp_path
     manifest.write_text(f"reports:\n  demo: {bad.name}\n", encoding="utf-8")
     assert main(["validate-set", "--spec", str(minimal_spec_path), "--manifest", str(manifest)]) == 1
     assert "FAIL" in capsys.readouterr().out
-    assert main(["validate-set", "--spec", str(minimal_spec_path), "--manifest", str(manifest), "--rule", "does-not-exist"]) == 0
+    assert main(["validate-set", "--spec", str(minimal_spec_path), "--manifest", str(manifest), "--rule", "does-not-exist"]) == 1
     assert "FAIL: 0" in capsys.readouterr().out
 
 
