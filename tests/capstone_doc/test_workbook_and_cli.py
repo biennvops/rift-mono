@@ -153,6 +153,32 @@ def test_cli_exit_codes_for_pass_and_fail(minimal_spec_path: Path, tmp_path: Pat
     assert "FAIL" in output
 
 
+def test_validate_set_aggregates_phase1_findings(minimal_spec_path: Path, tmp_path: Path) -> None:
+    bad = tmp_path / "bad.docx"
+    from docx import Document as WordDocument
+
+    WordDocument().save(bad)
+    manifest = tmp_path / "set.yaml"
+    manifest.write_text(f"reports:\n  demo: {bad.name}\n", encoding="utf-8")
+    result = ValidationEngine(CapstoneSpec.load(minimal_spec_path)).validate_set(manifest)
+    assert result.has_errors
+    assert any(item.validator == "structural" and item.status == Status.FAIL for item in result.findings)
+    assert result.metadata["phase1"]["finding_count"] > 0
+
+
+def test_validate_set_cli_exit_and_rule_filter(minimal_spec_path: Path, tmp_path: Path, capsys) -> None:
+    bad = tmp_path / "bad.docx"
+    from docx import Document as WordDocument
+
+    WordDocument().save(bad)
+    manifest = tmp_path / "set.yaml"
+    manifest.write_text(f"reports:\n  demo: {bad.name}\n", encoding="utf-8")
+    assert main(["validate-set", "--spec", str(minimal_spec_path), "--manifest", str(manifest)]) == 1
+    assert "FAIL" in capsys.readouterr().out
+    assert main(["validate-set", "--spec", str(minimal_spec_path), "--manifest", str(manifest), "--rule", "does-not-exist"]) == 0
+    assert "FAIL: 0" in capsys.readouterr().out
+
+
 def test_cli_invalid_contract_returns_code_two(tmp_path: Path, capsys) -> None:
     invalid = tmp_path / "invalid.yaml"
     invalid.write_text("reports: []\n", encoding="utf-8")

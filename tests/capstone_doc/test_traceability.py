@@ -11,7 +11,7 @@ from rift_doc.trace_model import TraceEntity, TraceGraph, TraceIndex, TraceLinkS
 from rift_doc.validators.cross_document import CrossDocumentValidator
 
 
-def _spec(*rules: dict) -> CapstoneSpec:
+def _spec(*rules: dict, orphans: list[dict] | None = None) -> CapstoneSpec:
     reports = {f"report{number}": {"title": f"Report {number}", "sections": {}} for number in range(1, 8)}
     return CapstoneSpec(
         path=Path("test-spec.yaml"),
@@ -23,6 +23,7 @@ def _spec(*rules: dict) -> CapstoneSpec:
             "workbooks": {},
             "source_ambiguities": [],
             "cross_document_traceability": list(rules),
+            "cross_document_orphan_checks": list(orphans or []),
         },
         schema_path=Path("test-schema.json"),
     )
@@ -469,6 +470,154 @@ def test_conditional_false_link_is_not_applicable() -> None:
     result = CrossDocumentValidator(spec).audit(_set_for_documents(documents))
     finding = next(item for item in result.findings if item.rule_id == "XT-001")
     assert finding.status == Status.NOT_APPLICABLE
+
+
+def test_configured_orphan_check_is_executed() -> None:
+    spec = _spec(
+        orphans=[
+            {
+                "id": "ORPHAN-TEST",
+                "source_domain": "report5",
+                "source_kind": "test_case_or_test_group",
+                "target_domain": "report3",
+                "target_kind": ["function", "feature"],
+                "status": "REVIEW_REQUIRED",
+                "severity": "warning",
+            }
+        ]
+    )
+    result = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _document("report3", "Functional Requirements", ["FE-01 Sync"]),
+                "report5": _document("report5", "Test Cases", ["TC-01 Unrelated integration test"]),
+            }
+        )
+    )
+    assert any(item.rule_id == "ORPHAN-TEST" and item.status == Status.REVIEW_REQUIRED for item in result.findings)
+
+
+def test_data_entity_explicit_na_rationale_is_not_applicable() -> None:
+    spec = _spec(
+        {
+            "id": "XT-004",
+            "handler": "data_entity",
+            "source_domain": "report3",
+            "source_kind": "entity_or_data_object",
+            "targets": [
+                {
+                    "domain": "report4",
+                    "kind": "entity_or_data_object",
+                    "requirement": "CONDITIONAL",
+                    "allow_explicit_na": True,
+                }
+            ],
+        }
+    )
+    result = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _document("report3", "Entity Relationship Diagram", ["ENT-01 Device"]),
+                "report4": _document("report4", "Database Design", ["ENT-01 Device: N/A - no persistent database"]),
+            }
+        )
+    )
+    finding = next(item for item in result.findings if item.rule_id == "XT-004")
+    assert finding.status == Status.NOT_APPLICABLE
+
+
+def test_missing_report_is_reported_in_set_and_trace_results() -> None:
+    spec = _spec(
+        {
+            "id": "XT-001",
+            "handler": "feature_coverage",
+            "source_domain": "report1",
+            "source_kind": "feature",
+            "targets": [{"domain": "report2", "kind": "wbs_item", "requirement": "MUST"}],
+        }
+    )
+    document_set = _set_for_documents({"report1": _document("report1", "Major Features", ["FE-01 Sync"])})
+    result = CrossDocumentValidator(spec).audit(document_set)
+    assert any(item.rule_id == "SET-007" and item.target_domain == "report2" for item in result.findings)
+    assert any(item.rule_id == "XT-001" and item.status == Status.FAIL for item in result.findings)
+
+
+def test_complete_seven_report_fixture_has_no_trace_failures() -> None:
+    spec = _spec(
+        {
+            "id": "XT-001",
+            "handler": "feature_coverage",
+            "source_domain": "report1",
+            "source_kind": "feature",
+            "targets": [
+                {"domain": "report2", "kind": "wbs_item", "requirement": "MUST"},
+                {"domain": "report3", "kind": "function", "requirement": "MUST"},
+                {"domain": "report4", "kind": "function", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST"},
+                {"domain": "report6", "kind": "user_workflow", "requirement": "MUST"},
+                {"domain": "report7", "kind": "final_report_item", "requirement": "MUST"},
+            ],
+        },
+        {
+            "id": "XT-002",
+            "handler": "actor_use_case",
+            "source_domain": "report3",
+            "source_kind": ["actor", "use_case"],
+            "targets": [
+                {"domain": "report6", "kind": "user_workflow", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST", "test_levels": ["system", "acceptance"]},
+            ],
+        },
+        {
+            "id": "XT-003",
+            "handler": "external_interface",
+            "source_domain": "report3",
+            "source_kind": "external_interface",
+            "targets": [
+                {"domain": "report4", "kind": "architecture_component", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "requirement": "MUST", "test_levels": ["integration", "system"]},
+            ],
+        },
+        {
+            "id": "XT-004",
+            "handler": "data_entity",
+            "source_domain": "report3",
+            "source_kind": "entity_or_data_object",
+            "targets": [{"domain": "report4", "kind": "entity_or_data_object", "requirement": "MUST"}],
+        },
+        {
+            "id": "XT-005",
+            "handler": "quality_objective",
+            "source_domain": "report2",
+            "source_kind": "quality_objective",
+            "targets": [
+                {"domain": "report5", "kind": "test_case_or_test_group", "role": "strategy", "requirement": "MUST"},
+                {"domain": "report5", "kind": "test_case_or_test_group", "role": "result", "requirement": "MUST", "condition": "measurable"},
+            ],
+        },
+        {
+            "id": "XT-006",
+            "handler": "deliverable",
+            "source_domain": "report2",
+            "source_kind": "deliverable",
+            "targets": [
+                {"domain": "report6", "kind": "deliverable", "requirement": "MUST"},
+                {"domain": "report7", "kind": "final_report_item", "requirement": "MUST"},
+            ],
+        },
+    )
+    documents = {
+        "report1": _document("report1", "Major Features", ["FE-01 User-facing Sync"]),
+        "report2": _combined_document("report2", [("WBS", "FE-01 User-facing Sync"), ("Project Objectives", "QO-01 90% test coverage target"), ("Project Deliverables", "DEL-01 Release Package")]),
+        "report3": _combined_document("report3", [("Actors", "ACT-01 Administrator actor"), ("Use Cases", "UC-01 Sync use case"), ("External Interfaces", "IF-01 External API Gateway"), ("Functional Requirements", "FE-01 User-facing Sync"), ("Entity Relationship Diagram", "ENT-01 Device")]),
+        "report4": _combined_document("report4", [("System Architecture", "FE-01 User-facing Sync"), ("System Architecture", "IF-01 External API Gateway service"), ("Database Design", "ENT-01 Device table"), ("Detailed Design", "FE-01 User-facing Sync")]),
+        "report5": _combined_document("report5", [("Test Cases", "FE-01 User-facing Sync system test"), ("Test Cases", "ACT-01 Administrator acceptance test"), ("Test Cases", "UC-01 Sync system test"), ("Test Cases", "IF-01 External API Gateway integration test"), ("Test Strategy", "QO-01 coverage strategy"), ("Test Reports", "QO-01 coverage result")]),
+        "report6": _combined_document("report6", [("Workflow", "FE-01 User-facing Sync workflow"), ("Workflow", "ACT-01 Administrator workflow"), ("Workflow", "UC-01 Sync workflow"), ("Deliverable Package", "DEL-01 Release Package")]),
+        "report7": _combined_document("report7", [("Major Features", "FE-01 User-facing Sync"), ("Deliverable Package", "DEL-01 Release Package")]),
+    }
+    result = CrossDocumentValidator(spec).audit(_set_for_documents(documents))
+    assert {f"XT-00{index}" for index in range(1, 7)} <= set(result.metadata["coverage"])
+    assert not any(item.status == Status.FAIL for item in result.findings)
 
 
 def test_finding_json_keeps_cross_document_fields() -> None:

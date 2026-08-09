@@ -74,7 +74,65 @@ class ValidationEngine:
 
     def validate_set(self, document_set: DocumentSet | str | Path) -> ValidationResult:
         loaded = self.load_document_set(document_set) if isinstance(document_set, (str, Path)) else document_set
-        return self.cross_document.audit(loaded)
+        result = self.cross_document.audit(loaded)
+        phase1_results = self._validate_set_phase1(loaded)
+        phase1_findings = [finding for item in phase1_results for finding in item.findings]
+        result.findings = [*phase1_findings, *result.findings]
+        result.metadata["phase1"] = {
+            "results": [
+                {
+                    "source_path": item.source_path,
+                    "report": item.report,
+                    "format": item.format,
+                    "counts": item.counts,
+                }
+                for item in phase1_results
+            ],
+            "finding_count": len(phase1_findings),
+        }
+        return result
+
+    def _validate_set_phase1(self, document_set: DocumentSet) -> list[ValidationResult]:
+        items: list[tuple[str, str, NormalizedDocument]] = []
+        seen: set[int] = set()
+        for artifact in document_set.iter_active_artifacts():
+            key = id(artifact.document)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append((artifact.artifact_id, artifact.domain, artifact.document))
+        for report_id, document in document_set.reports.items():
+            key = id(document)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append((str(report_id), str(report_id), document))
+        for index, workbook in enumerate([*document_set.tracking_workbooks, *document_set.test_workbooks], start=1):
+            artifact_id = f"set-workbook-{index}"
+            key = id(workbook)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append((artifact_id, "", workbook))
+
+        results: list[ValidationResult] = []
+        for artifact_id, domain, document in items:
+            contract_id = self._phase1_contract_id(artifact_id, domain, document)
+            if contract_id is None:
+                continue
+            results.append(self.validate_normalized(document, contract_id))
+        return results
+
+    def _phase1_contract_id(
+        self,
+        artifact_id: str,
+        domain: str,
+        document: NormalizedDocument,
+    ) -> str | None:
+        candidates = [domain, artifact_id, self.spec.infer_report_id(document.source_path)]
+        if isinstance(document, Document):
+            return next((str(candidate) for candidate in candidates if candidate and str(candidate) in self.spec.reports), None)
+        return next((str(candidate) for candidate in candidates if candidate and str(candidate) in self.spec.workbooks), None)
 
     def trace(self, document_set: DocumentSet | str | Path) -> ValidationResult:
         """Alias for callers using the CLI command name."""
