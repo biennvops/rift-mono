@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -45,6 +47,21 @@ class _CachedNotificationIcon {
 
 @visibleForTesting
 void clearNotificationIconCache() => _notificationIconCache.clear();
+
+Map<String, Object?>? createNotificationIconPayload(Uint8List pngBytes) {
+  if (pngBytes.isEmpty ||
+      pngBytes.length > notificationIconMaxRawBytes ||
+      !_isValidNotificationPng(pngBytes)) {
+    return null;
+  }
+
+  return <String, Object?>{
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(pngBytes),
+    'byteSize': pngBytes.length,
+    'sha256': sha256.convert(pngBytes).toString(),
+  };
+}
 
 NotificationIcon? parseNotificationIcon(Object? value) {
   if (value is! Map) {
