@@ -1,50 +1,18 @@
-import 'dart:ffi';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:sqlite3/open.dart' as sqlite_open;
 import 'package:sqlite3/sqlite3.dart';
 import '../core/rift_exceptions.dart';
 import '../interfaces/trust_store.dart';
 
-DynamicLibrary _openSqliteOnLinux() {
-  const candidates = <String>[
-    'libsqlite3.so',
-    'libsqlite3.so.0',
-    '/lib/x86_64-linux-gnu/libsqlite3.so.0',
-    '/usr/lib/x86_64-linux-gnu/libsqlite3.so.0',
-    '/lib/aarch64-linux-gnu/libsqlite3.so.0',
-    '/usr/lib/aarch64-linux-gnu/libsqlite3.so.0',
-  ];
-
-  Object? lastError;
-  for (final candidate in candidates) {
-    try {
-      return DynamicLibrary.open(candidate);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw ArgumentError(
-    'Failed to load sqlite3 dynamic library on Linux. Tried: ${candidates.join(', ')}. Last error: $lastError',
-  );
-}
-
 class TrustStoreImpl implements TrustStore {
   final String dbPath;
   Database? _db;
-  static bool _sqliteOpenConfigured = false;
 
   TrustStoreImpl(this.dbPath);
 
   @override
   Future<void> initialize() async {
-    if (!_sqliteOpenConfigured && Platform.isLinux) {
-      sqlite_open.open.overrideFor(sqlite_open.OperatingSystem.linux, _openSqliteOnLinux);
-      _sqliteOpenConfigured = true;
-    }
-
     if (dbPath != ':memory:') {
       final file = File(dbPath);
       if (!file.parent.existsSync()) {
@@ -218,7 +186,7 @@ class TrustStoreImpl implements TrustStore {
               ),
       ]);
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -231,7 +199,7 @@ class TrustStoreImpl implements TrustStore {
       if (results.isEmpty) return null;
       return _rowToPeerRecord(results.first);
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -243,7 +211,7 @@ class TrustStoreImpl implements TrustStore {
       final ResultSet results = stmt.select([state.toJson()]);
       return results.map(_rowToPeerRecord).toList();
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -255,7 +223,7 @@ class TrustStoreImpl implements TrustStore {
       final ResultSet results = stmt.select();
       return results.map(_rowToPeerRecord).toList();
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -293,7 +261,7 @@ class TrustStoreImpl implements TrustStore {
         stmt.execute([to.toJson(), now, pairedAt.toUtc().millisecondsSinceEpoch, deviceId, from.toJson()]);
         return _db!.updatedRows > 0;
       } finally {
-        stmt.dispose();
+        stmt.close();
       }
     } else {
       final stmt = _db!.prepare('''
@@ -305,7 +273,7 @@ class TrustStoreImpl implements TrustStore {
         stmt.execute([to.toJson(), now, deviceId, from.toJson()]);
         return _db!.updatedRows > 0;
       } finally {
-        stmt.dispose();
+        stmt.close();
       }
     }
   }
@@ -321,7 +289,7 @@ class TrustStoreImpl implements TrustStore {
     try {
       stmt.execute([lastSeenAt.toUtc().millisecondsSinceEpoch, deviceId]);
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -332,7 +300,7 @@ class TrustStoreImpl implements TrustStore {
     try {
       stmt.execute([deviceId]);
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -374,7 +342,7 @@ class TrustStoreImpl implements TrustStore {
         );
       ''');
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -397,7 +365,7 @@ class TrustStoreImpl implements TrustStore {
       final results = stmt.select([...bindings, query.limit, query.offset]);
       return results.map(_rowToSecurityEventRecord).toList();
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
 
@@ -417,7 +385,7 @@ class TrustStoreImpl implements TrustStore {
       }
       return results.first['count'] as int? ?? 0;
     } finally {
-      stmt.dispose();
+      stmt.close();
     }
   }
   
@@ -532,7 +500,7 @@ class TrustStoreImpl implements TrustStore {
   }
   
   void dispose() {
-    _db?.dispose();
+    _db?.close();
     _db = null;
   }
 }

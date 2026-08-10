@@ -166,7 +166,7 @@ void main() {
           DateTime.utc(2026, 6, 17, 12, 0, 0).millisecondsSinceEpoch,
         ],
       );
-      db.dispose();
+      db.close();
 
       final migratedStore = TrustStoreImpl(dbPath);
       await migratedStore.initialize();
@@ -203,7 +203,7 @@ void main() {
         );
       ''');
       db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '4')");
-      db.dispose();
+      db.close();
 
       final migratedStore = TrustStoreImpl(dbPath);
       await migratedStore.initialize();
@@ -263,6 +263,8 @@ void main() {
       );
       expect(totalWarnings, 1);
 
+      store.dispose();
+
       final reloaded = TrustStoreImpl(dbPath);
       await reloaded.initialize();
       final allEvents = await reloaded.querySecurityEvents(
@@ -273,7 +275,6 @@ void main() {
       expect(allEvents.last.eventId, 'evt-1');
       expect(allEvents.last.details?['source'], 'test');
 
-      store.dispose();
       reloaded.dispose();
     });
 
@@ -297,7 +298,7 @@ void main() {
         );
       ''');
       db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '2')");
-      db.dispose();
+      db.close();
 
       final migratedStore = TrustStoreImpl(dbPath);
       await migratedStore.initialize();
@@ -353,7 +354,7 @@ void main() {
         );
       ''');
       db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '3')");
-      db.dispose();
+      db.close();
 
       final migratedStore = TrustStoreImpl(dbPath);
       await migratedStore.initialize();

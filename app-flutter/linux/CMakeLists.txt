@@ -69,25 +69,6 @@ set_target_properties(${BINARY_NAME}
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/intermediates_do_not_run"
 )
 
-
-# Pin sqlite3_flutter_libs to an official mirror and checksum because the
-# plugin's unverified primary download can leave truncated archives behind.
-include(FetchContent)
-if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
-  FetchContent_Declare(
-    sqlite3
-    URL https://www2.sqlite.org/2026/sqlite-autoconf-3520000.tar.gz
-    URL_HASH SHA256=f6b50b0c103392af32a8be15b2b9d25959de9a00a70c3979128aafeaa5338b3f
-    DOWNLOAD_EXTRACT_TIMESTAMP NEW
-  )
-else()
-  FetchContent_Declare(
-    sqlite3
-    URL https://www2.sqlite.org/2026/sqlite-autoconf-3520000.tar.gz
-    URL_HASH SHA256=f6b50b0c103392af32a8be15b2b9d25959de9a00a70c3979128aafeaa5338b3f
-  )
-endif()
-
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
