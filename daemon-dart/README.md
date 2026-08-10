@@ -43,8 +43,16 @@ dart test
 ```
 
 The standalone runner at `bin/daemon.dart` is for local IPC smoke tests and
-development workflows. Android production hosting uses the foreground-service
-plus isolate model; iOS hosts the daemon in-process through the Flutter app.
+development workflows. Build it with native assets using:
+
+```bash
+dart build cli --target bin/daemon.dart --output build/daemon_runner
+```
+
+The resulting `build/daemon_runner/bundle/` directory is the deployable unit:
+its `bin/daemon` executable requires the SQLite native library in `lib/`.
+Android production hosting uses the foreground-service plus isolate model; iOS
+hosts the daemon in-process through the Flutter app.
 
 ## Security Notes
 
