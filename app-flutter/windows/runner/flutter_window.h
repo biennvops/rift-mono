@@ -8,6 +8,7 @@
 #include <flutter/flutter_view_controller.h>
 #include <flutter/method_channel.h>
 #include <winrt/Windows.Media.h>
+#include <winrt/Windows.Media.Control.h>
 #include <winrt/Windows.Media.Playback.h>
 
 #include <memory>
@@ -40,11 +41,30 @@ class FlutterWindow : public Win32Window {
   void RegisterClipboardEventChannel();
   void RegisterClipboardMethodChannel();
   void RegisterWindowsShellMethodChannel();
+  void RegisterWindowsMediaPlaybackEventChannel();
   void RegisterWindowsMediaPlaybackMethodChannel();
   void RegisterSendFilesMethodChannel();
   void DispatchQueuedSendFiles();
   bool ShowWindowsMediaPlayback(const flutter::EncodableMap& playback);
   bool ClearWindowsMediaPlayback();
+  bool StartWindowsMediaPlaybackObservation();
+  bool StopWindowsMediaPlaybackObservation();
+  void PollWindowsMediaPlaybackObservation();
+  std::optional<flutter::EncodableMap> BuildObservedWindowsPlaybackSnapshot(
+      winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession session,
+      const std::string& updated_at);
+  std::optional<flutter::EncodableMap> FindObservedWindowsPlayback(
+      const std::string& playback_id,
+      const std::string& updated_at);
+  std::optional<flutter::EncodableMap> ReadObservedWindowsPlaybackState();
+  flutter::EncodableMap BuildRemovedWindowsPlaybackEvent(
+      const flutter::EncodableMap& previous,
+      const std::string& removed_at);
+  bool PerformObservedWindowsPlaybackAction(
+      const std::string& playback_id,
+      const std::string& action,
+      std::optional<int64_t> position_ms,
+      flutter::EncodableMap* response);
   void QueueWindowsMediaPlaybackAction(
       const std::string& action,
       std::optional<int64_t> position_ms = std::nullopt);
@@ -79,6 +99,10 @@ class FlutterWindow : public Win32Window {
       clipboard_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       windows_shell_method_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      windows_media_playback_event_channel_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>
+      windows_media_playback_event_sink_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       windows_media_playback_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
@@ -87,6 +111,10 @@ class FlutterWindow : public Win32Window {
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
+  bool windows_media_playback_observing_ = false;
+  winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager
+      observed_media_session_manager_{nullptr};
+  std::optional<flutter::EncodableMap> last_observed_media_playback_;
   winrt::Windows::Media::SystemMediaTransportControls
       media_transport_controls_{nullptr};
   winrt::event_token media_playback_button_pressed_token_{};
