@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -22,6 +23,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private readonly CancellationTokenSource _shutdownCts = new();
     private ServiceProfile? _profile;
     private string? _advertisedDeviceId;
+    private string? _advertisedMinVersion;
+    private string? _advertisedMaxVersion;
     private bool _isAdvertising;
     private bool _isDiscovering;
     private bool _isMdnsRunning;
@@ -30,6 +33,13 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
     private UdpClient? _fallbackDiscoveryListener;
     private Task? _fallbackDiscoveryTask;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<IPAddress, DateTimeOffset> _fallbackPingPongTargets = new();
+    private IReadOnlyList<FallbackBroadcastTarget> _fallbackBroadcastTargets = [];
+    private DateTimeOffset _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
+    private int _networkRefreshQueued;
+    private Timer? _networkRefreshDebounceTimer;
+    private Timer? _periodicDiscoveryTimer;
+    private readonly bool _subscribedToNetworkChanges;
+    private static readonly TimeSpan PeriodicDiscoveryInterval = TimeSpan.FromSeconds(60);
 
     public event EventHandler<PeerDiscoveredEventArgs>? PeerDiscovered;
 
@@ -40,6 +50,12 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         _serviceDiscovery = new ServiceDiscovery(_mdns);
 
         _serviceDiscovery.ServiceInstanceDiscovered += OnServiceInstanceDiscovered;
+        _subscribedToNetworkChanges = ShouldSubscribeToNetworkChanges(OperatingSystem.IsMacOS());
+        if (_subscribedToNetworkChanges)
+        {
+            NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
+            NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+        }
     }
 
     public void StartAdvertising(string deviceId, string minVersion, string maxVersion)
@@ -56,17 +72,14 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             // Implementations SHOULD use an opaque random identifier.
             var instanceName = Guid.NewGuid().ToString("N");
 
-            _profile = new ServiceProfile(instanceName, "_rift._tcp", RiftNetworkDefaults.DefaultPort);
-
-            // spec §4.2: Required TXT records
-            _profile.AddProperty("minV", minVersion);
-            _profile.AddProperty("maxV", maxVersion);
-            _profile.AddProperty("did", deviceId);
-            // Optionally add fp if available; here we just use deviceId for recognition
+            _profile = CreateServiceProfile(instanceName, deviceId, minVersion, maxVersion);
             _advertisedDeviceId = deviceId;
+            _advertisedMinVersion = minVersion;
+            _advertisedMaxVersion = maxVersion;
 
             _serviceDiscovery.Advertise(_profile);
             StartMdnsIfNeeded();
+            RefreshFallbackBroadcastTargets(force: true);
             StartFallbackAdvertisingIfNeeded(deviceId, minVersion, maxVersion);
             _isAdvertising = true;
 
@@ -83,6 +96,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 _serviceDiscovery.Unadvertise(_profile);
                 _profile = null;
                 _advertisedDeviceId = null;
+                _advertisedMinVersion = null;
+                _advertisedMaxVersion = null;
                 _isAdvertising = false;
                 StopFallbackAdvertisingIfIdle();
                 StopMdnsIfIdle();
@@ -102,6 +117,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
 
             StartMdnsIfNeeded();
+            RefreshFallbackBroadcastTargets(force: true);
             StartFallbackDiscoveryIfNeeded();
             _isDiscovering = true;
 
@@ -109,6 +125,11 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             // browse query and wires responses back into
             // ServiceInstanceDiscovered.
             _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+            _periodicDiscoveryTimer = new Timer(
+                _ => QueryServiceInstancesSafely(),
+                null,
+                PeriodicDiscoveryInterval,
+                PeriodicDiscoveryInterval);
 
             _logger.LogInformation("Started mDNS discovery for peers.");
         }
@@ -125,6 +146,8 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             }
 
             _isDiscovering = false;
+            _periodicDiscoveryTimer?.Dispose();
+            _periodicDiscoveryTimer = null;
             StopFallbackDiscoveryIfIdle();
             StopMdnsIfIdle();
             _logger.LogInformation("Stopped mDNS discovery for peers.");
@@ -287,6 +310,7 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
         {
             try
             {
+                RefreshFallbackBroadcastTargets();
                 var payload = JsonSerializer.Serialize(new Dictionary<string, object?>
                 {
                     ["rift"] = "0.1-draft",
@@ -299,28 +323,19 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
                 });
                 var bytes = Encoding.UTF8.GetBytes(payload);
                 await client.SendAsync(bytes, endpoint, cancellationToken);
-                
-                // Route to specific subnets to bypass strict hotspot routing
-                foreach (var netIf in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (netIf.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up)
-                        continue;
 
-                    foreach (var ip in netIf.GetIPProperties().UnicastAddresses)
+                foreach (var broadcastTarget in GetFallbackBroadcastTargets())
+                {
+                    var subnetBroadcast = new IPEndPoint(
+                        broadcastTarget.BroadcastAddress,
+                        RiftNetworkDefaults.FallbackDiscoveryPort);
+                    try
                     {
-                        if (ip.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-                        {
-                            var addressBytes = ip.Address.GetAddressBytes();
-                            // Simple heuristic for /24 broadcast
-                            addressBytes[3] = 255;
-                            var subnetBroadcast = new IPEndPoint(new IPAddress(addressBytes), RiftNetworkDefaults.FallbackDiscoveryPort);
-                            try {
-                                await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
-                            } catch { /* Ignore individual subnet send errors */ }
-                        }
+                        await client.SendAsync(bytes, subnetBroadcast, cancellationToken);
                     }
+                    catch { }
                 }
-                
+
                 // Ping-pong: explicitly unicast to all known peers that sent us a beacon recently
                 var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
                 foreach (var kvp in _fallbackPingPongTargets)
@@ -546,6 +561,10 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _isAdvertising = false;
             _isDiscovering = false;
             _shutdownCts.Cancel();
+            _networkRefreshDebounceTimer?.Dispose();
+            _networkRefreshDebounceTimer = null;
+            _periodicDiscoveryTimer?.Dispose();
+            _periodicDiscoveryTimer = null;
             _fallbackAdvertiser?.Dispose();
             _fallbackAdvertiser = null;
             _fallbackDiscoveryListener?.Dispose();
@@ -558,6 +577,193 @@ public sealed class DiscoveryService : IDiscoveryService, IDisposable
             _serviceDiscovery.Dispose();
             _mdns.Dispose();
             _shutdownCts.Dispose();
+            if (_subscribedToNetworkChanges)
+            {
+                NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+                NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+            }
+        }
+    }
+
+    private ServiceProfile CreateServiceProfile(
+        string instanceName,
+        string deviceId,
+        string minVersion,
+        string maxVersion)
+    {
+        var addresses = NetworkInterface.GetAllNetworkInterfaces()
+            .Where(networkInterface =>
+                networkInterface.OperationalStatus == OperationalStatus.Up &&
+                networkInterface.Supports(NetworkInterfaceComponent.IPv4) &&
+                !IsVirtualInterface(networkInterface.Name))
+            .SelectMany(networkInterface =>
+            {
+                try
+                {
+                    return networkInterface.GetIPProperties().UnicastAddresses;
+                }
+                catch
+                {
+                    return [];
+                }
+            })
+            .Select(unicast => unicast.Address)
+            .Where(address =>
+                address.AddressFamily == AddressFamily.InterNetwork &&
+                !IPAddress.IsLoopback(address) &&
+                !IsApipa(address))
+            .Distinct()
+            .ToArray();
+
+        var profile = new ServiceProfile(
+            instanceName,
+            "_rift._tcp",
+            RiftNetworkDefaults.DefaultPort,
+            addresses.Length == 0 ? null : addresses);
+        profile.AddProperty("minV", minVersion);
+        profile.AddProperty("maxV", maxVersion);
+        profile.AddProperty("did", deviceId);
+        return profile;
+    }
+
+    private static bool IsVirtualInterface(string name)
+    {
+        var normalized = name.ToLowerInvariant();
+        return normalized.StartsWith("lo") ||
+            normalized.StartsWith("utun") ||
+            normalized.StartsWith("tun") ||
+            normalized.StartsWith("tap") ||
+            normalized.StartsWith("awdl") ||
+            normalized.StartsWith("llw") ||
+            normalized.StartsWith("bridge") ||
+            normalized.StartsWith("docker") ||
+            normalized.StartsWith("br-") ||
+            normalized.StartsWith("veth") ||
+            normalized.StartsWith("virbr") ||
+            normalized.StartsWith("tailscale") ||
+            normalized.StartsWith("wireguard") ||
+            normalized.StartsWith("wg") ||
+            normalized.StartsWith("anpi") ||
+            normalized.StartsWith("ap");
+    }
+
+    private static bool IsApipa(IPAddress address)
+    {
+        var bytes = address.GetAddressBytes();
+        return bytes is [169, 254, _, _];
+    }
+
+    private IReadOnlyList<FallbackBroadcastTarget> GetFallbackBroadcastTargets()
+    {
+        lock (_syncRoot)
+        {
+            return _fallbackBroadcastTargets;
+        }
+    }
+
+    private void RefreshFallbackBroadcastTargets(bool force = false)
+    {
+        lock (_syncRoot)
+        {
+            if (!force &&
+                _fallbackBroadcastTargets.Count > 0 &&
+                DateTimeOffset.UtcNow - _fallbackBroadcastTargetsRefreshedAt < TimeSpan.FromSeconds(30))
+            {
+                return;
+            }
+
+            _fallbackBroadcastTargets = FallbackNetworkInterfaceEnumerator.EnumerateIPv4BroadcastTargets();
+            _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.UtcNow;
+        }
+    }
+
+    internal static bool ShouldSubscribeToNetworkChanges(bool isMacOS) => !isMacOS;
+
+    public void NotifyNetworkChanged()
+    {
+        QueueNetworkRefresh();
+    }
+
+    private void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+    {
+        QueueNetworkRefresh();
+    }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e)
+    {
+        QueueNetworkRefresh();
+    }
+
+    private void QueueNetworkRefresh()
+    {
+        if (Interlocked.Exchange(ref _networkRefreshQueued, 1) == 1)
+        {
+            return;
+        }
+
+        lock (_syncRoot)
+        {
+            _networkRefreshDebounceTimer?.Dispose();
+            _networkRefreshDebounceTimer = new Timer(_ =>
+            {
+                try
+                {
+                    lock (_syncRoot)
+                    {
+                        _fallbackBroadcastTargets = [];
+                        _fallbackBroadcastTargetsRefreshedAt = DateTimeOffset.MinValue;
+
+                        if (_profile is not null &&
+                            _isAdvertising &&
+                            _advertisedDeviceId is not null &&
+                            _advertisedMinVersion is not null &&
+                            _advertisedMaxVersion is not null)
+                        {
+                            var instanceName = _profile.InstanceName.ToString();
+                            _serviceDiscovery.Unadvertise(_profile);
+                            _profile = CreateServiceProfile(
+                                instanceName,
+                                _advertisedDeviceId,
+                                _advertisedMinVersion,
+                                _advertisedMaxVersion);
+                            _serviceDiscovery.Advertise(_profile);
+                        }
+
+                        if (_isDiscovering)
+                        {
+                            QueryServiceInstancesSafely();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to refresh discovery state after network change.");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _networkRefreshQueued, 0);
+                }
+            }, null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void QueryServiceInstancesSafely()
+    {
+        lock (_syncRoot)
+        {
+            if (!_isDiscovering || !_isMdnsRunning)
+            {
+                return;
+            }
+
+            try
+            {
+                _serviceDiscovery.QueryServiceInstances("_rift._tcp");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to refresh mDNS service query.");
+            }
         }
     }
 }

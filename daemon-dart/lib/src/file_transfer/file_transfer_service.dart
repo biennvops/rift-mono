@@ -19,7 +19,6 @@ class FileTransferService {
   static const int defaultChunkSize = 256 * 1024;
   static const int maxChunkSize = 4 * 1024 * 1024;
   static const int defaultOfferExpiryMs = 300000;
-  static const int maxIncomingOfferByteSize = 32 * 1024 * 1024;
 
   final SessionManager _sessionManager;
   final TrustStore _trustStore;
@@ -58,6 +57,9 @@ class FileTransferService {
     _messageSub = _sessionManager.onMessage
         .asyncMap(_handleMessage)
         .listen((_) {});
+    _sessionManager.onTrustedSessionReady.listen((ctx) {
+      unawaited(_sendResumeRequestsForPeer(ctx.peerDeviceId));
+    });
   }
 
   Future<void> dispose() async {
@@ -267,7 +269,7 @@ class FileTransferService {
       byteSize: offer.byteSize,
       expectedSha256: offer.sha256,
       chunkSize: offer.chunkSize,
-      expectedChunkCount: offer.chunkCount,
+      expectedChunkCount: _computeChunkCount(offer.byteSize, offer.chunkSize),
       destinationPath: fullDestinationPath,
       stagingDirectory: stagingDirectory.path,
       stagingPath: stagingPath,
@@ -340,6 +342,42 @@ class FileTransferService {
         .toList(growable: false);
   }
 
+  Future<Map<String, dynamic>> cancelTransfer(String transferId) async {
+    if (transferId.trim().isEmpty) {
+      throw const RiftNotFoundException('transferId is required.');
+    }
+
+    const failureReason = 'Cancelled';
+    const message = 'Transfer cancelled by local user.';
+
+    final outgoing = _outgoingTransfers[transferId];
+    if (outgoing != null) {
+      outgoing.cancelRequested = true;
+      await _trySendCancel(
+        outgoing.targetDeviceId,
+        transferId,
+        failureReason,
+        message,
+      );
+      await _failOutgoingTransfer(outgoing, failureReason, message);
+      return {'transferId': transferId, 'cancelled': true};
+    }
+
+    final incoming = _incomingTransfers[transferId];
+    if (incoming != null) {
+      await _trySendCancel(
+        incoming.sourceDeviceId,
+        transferId,
+        failureReason,
+        message,
+      );
+      await _failIncomingTransfer(incoming, failureReason, message);
+      return {'transferId': transferId, 'cancelled': true};
+    }
+
+    throw RiftNotFoundException("Transfer '$transferId' was not found.");
+  }
+
   Future<void> _handleMessage(ProtocolMessage msg) async {
     final type = msg.payload['type'] as String?;
     if (type == null || !type.startsWith('file.')) {
@@ -382,6 +420,9 @@ class FileTransferService {
           break;
         case 'file.cancel':
           await _handleCancel(msg.peerDeviceId, payload);
+          break;
+        case 'file.resume':
+          await _handleResume(msg.peerDeviceId, payload);
           break;
         default:
           RiftLog.warn('[FileTransfer] Unknown file message type: $type');
@@ -430,18 +471,11 @@ class FileTransferService {
         fileName.isEmpty ||
         byteSize < 0 ||
         sha256.isEmpty ||
-        chunkCount < 0 ||
+        chunkCount <= 0 ||
         expiresInMs <= 0 ||
         required != requiredCapability) {
       throw const RiftException(-32001, 'Malformed file.offer payload.');
     }
-    if (byteSize > maxIncomingOfferByteSize) {
-      throw const RiftException(
-        -32007,
-        'Incoming file offer exceeded the maximum supported size.',
-      );
-    }
-
     await _ensurePeerCanUseFileTransfer(peerDeviceId);
 
     final offer = _RemoteFileOfferState(
@@ -487,16 +521,32 @@ class FileTransferService {
         'Accept sender did not match offered target device.',
       );
     }
+    if (transfer.sendTask != null) {
+      return;
+    }
 
+    transfer.acceptedChunkSize = _normalizeChunkSize(
+      payload['chunkSize'] as int?,
+    );
+    transfer.acceptedChunkCount = _computeChunkCount(
+      transfer.byteSize,
+      transfer.acceptedChunkSize!,
+    );
     transfer.state = 'active';
     _operationManager.transitionOperation(
       transfer.operationId,
       OperationState.active,
     );
-    await _sendOutgoingTransfer(
-      transfer,
-      requestedChunkSize: payload['chunkSize'] as int?,
-    );
+    transfer.sendTask = () async {
+      try {
+        await _sendOutgoingTransfer(
+          transfer,
+          requestedChunkSize: transfer.acceptedChunkSize,
+        );
+      } catch (_) {
+        // Transfer failures are emitted by _sendOutgoingTransfer.
+      }
+    }();
   }
 
   Future<void> _handleReject(
@@ -515,6 +565,7 @@ class FileTransferService {
         'Reject sender did not match offered target device.',
       );
     }
+    transfer.cancelRequested = true;
     await _failOutgoingTransfer(transfer, failureReason, message);
   }
 
@@ -608,7 +659,8 @@ class FileTransferService {
     if (byteSize != transfer.byteSize ||
         wholeFileHash != transfer.expectedSha256 ||
         chunkCount != transfer.expectedChunkCount ||
-        transfer.bytesTransferred != transfer.byteSize) {
+        transfer.bytesTransferred != transfer.byteSize ||
+        transfer.nextChunkIndex != chunkCount) {
       throw const RiftException(
         -32006,
         'Transfer completion metadata did not match the received chunks.',
@@ -659,6 +711,69 @@ class FileTransferService {
     await _deleteDirectoryIfExists(transfer.stagingDirectory);
   }
 
+  Future<void> _handleResume(
+    String peerDeviceId,
+    Map<String, dynamic> payload,
+  ) async {
+    final transferId = payload['transferId'] as String? ?? '';
+    final receivingDeviceId = payload['receivingDeviceId'] as String? ?? '';
+    final nextChunkIndex = payload['nextChunkIndex'] as int? ?? -1;
+    final offset = payload['offset'] as int? ?? -1;
+    if (transferId.isEmpty) {
+      throw const RiftException(-32001, 'Missing transferId in file.resume.');
+    }
+    if (receivingDeviceId != peerDeviceId) {
+      throw const RiftUnauthorizedException(
+        'file.resume receivingDeviceId mismatch with authenticated peer identity.',
+      );
+    }
+
+    final transfer = _outgoingTransfers[transferId];
+    if (transfer == null) {
+      throw RiftNotFoundException(
+        "Outgoing transfer '$transferId' was not found.",
+      );
+    }
+    if (transfer.targetDeviceId != peerDeviceId) {
+      throw const RiftUnauthorizedException(
+        'Resume sender did not match offered target device.',
+      );
+    }
+    if (transfer.state != 'paused' || transfer.sendTask != null) {
+      throw const RiftException(
+        -32001,
+        'Outgoing transfer is not paused.',
+      );
+    }
+    if (offset < 0 || offset > transfer.byteSize) {
+      throw const RiftException(-32001, 'Resume offset was out of bounds.');
+    }
+    final chunkSize = transfer.acceptedChunkSize ?? transfer.chunkSize;
+    final isFinalOffset = offset == transfer.byteSize;
+    final expectedNextChunkIndex =
+        offset ~/ chunkSize + (offset % chunkSize == 0 ? 0 : 1);
+    final hasValidChunkIndex = transfer.byteSize == 0
+        ? nextChunkIndex == 0 || nextChunkIndex == 1
+        : nextChunkIndex == expectedNextChunkIndex;
+    if ((!isFinalOffset && offset % chunkSize != 0) ||
+        !hasValidChunkIndex) {
+      throw const RiftException(
+        -32001,
+        'Resume chunk index did not match the declared offset.',
+      );
+    }
+
+    transfer.bytesTransferred = offset;
+    transfer.nextChunkIndex = nextChunkIndex;
+    transfer.state = 'active';
+    transfer.failureReason = null;
+    transfer.sendTask = () async {
+      try {
+        await _sendOutgoingTransfer(transfer, requestedChunkSize: chunkSize);
+      } catch (_) {}
+    }();
+  }
+
   Future<void> _handleCancel(
     String peerDeviceId,
     Map<String, dynamic> payload,
@@ -670,6 +785,7 @@ class FileTransferService {
 
     final outgoing = _outgoingTransfers[transferId];
     if (outgoing != null && outgoing.targetDeviceId == peerDeviceId) {
+      outgoing.cancelRequested = true;
       await _failOutgoingTransfer(outgoing, failureReason, message);
       return;
     }
@@ -677,6 +793,33 @@ class FileTransferService {
     final incoming = _incomingTransfers[transferId];
     if (incoming != null && incoming.sourceDeviceId == peerDeviceId) {
       await _failIncomingTransfer(incoming, failureReason, message);
+    }
+  }
+
+  Future<void> _sendResumeRequestsForPeer(String peerDeviceId) async {
+    final resumableTransfers = _incomingTransfers.values
+        .where((transfer) => transfer.sourceDeviceId == peerDeviceId)
+        .toList(growable: false);
+    if (resumableTransfers.isEmpty) {
+      return;
+    }
+
+    for (final transfer in resumableTransfers) {
+      try {
+        await _sessionManager.sendMessage(peerDeviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': 'file.resume',
+          'sourceDeviceId': _localDeviceId,
+          'destinationDeviceId': peerDeviceId,
+          'payload': {
+            'transferId': transfer.transferId,
+            'receivingDeviceId': _localDeviceId,
+            'nextChunkIndex': transfer.nextChunkIndex,
+            'offset': transfer.bytesTransferred,
+          },
+        });
+      } catch (_) {}
     }
   }
 
@@ -697,13 +840,22 @@ class FileTransferService {
 
     final raf = await file.open();
     try {
-      var offset = 0;
-      var chunkIndex = 0;
-      while (offset < transfer.byteSize) {
+      var offset = transfer.bytesTransferred;
+      var chunkIndex = transfer.nextChunkIndex;
+      if (offset > 0) {
+        await raf.setPosition(offset);
+      }
+      while (offset < transfer.byteSize ||
+          (transfer.byteSize == 0 && chunkIndex == 0)) {
+        if (transfer.cancelRequested) {
+          throw const RiftException(-32010, 'Transfer cancelled.');
+        }
         final remaining = transfer.byteSize - offset;
         final nextChunkSize = remaining < chunkSize ? remaining : chunkSize;
-        final bytes = await raf.read(nextChunkSize);
-        if (bytes.isEmpty) {
+        final bytes = transfer.byteSize == 0
+            ? <int>[]
+            : await raf.read(nextChunkSize);
+        if (transfer.byteSize > 0 && bytes.isEmpty) {
           throw const RiftException(
             -32000,
             'Unexpected end of file while sending transfer.',
@@ -732,33 +884,52 @@ class FileTransferService {
         offset += bytes.length;
         chunkIndex += 1;
         transfer.bytesTransferred = offset;
+        transfer.nextChunkIndex = chunkIndex;
         transfer.state = 'active';
         _emitProgress(transfer.toInfo());
       }
     } catch (error) {
+      final failureReason = _failureReasonForError(error);
+      final preserveForResume = failureReason == 'ConnectionLost';
       await _failOutgoingTransfer(
         transfer,
-        _failureReasonForError(error),
+        failureReason,
         error.toString(),
+        preserveForResume: preserveForResume,
       );
       rethrow;
     } finally {
       await raf.close();
     }
 
-    await _sessionManager.sendMessage(transfer.targetDeviceId, {
-      'rift': '0.1-draft',
-      'messageId': const Uuid().v4(),
-      'type': 'file.complete',
-      'sourceDeviceId': _localDeviceId,
-      'destinationDeviceId': transfer.targetDeviceId,
-      'payload': {
-        'transferId': transfer.transferId,
-        'byteSize': transfer.byteSize,
-        'sha256': transfer.sha256,
-        'chunkCount': transfer.chunkCount,
-      },
-    });
+    if (transfer.cancelRequested) {
+      throw const RiftException(-32010, 'Transfer cancelled.');
+    }
+
+    try {
+      await _sessionManager.sendMessage(transfer.targetDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'file.complete',
+        'sourceDeviceId': _localDeviceId,
+        'destinationDeviceId': transfer.targetDeviceId,
+        'payload': {
+          'transferId': transfer.transferId,
+          'byteSize': transfer.byteSize,
+          'sha256': transfer.sha256,
+          'chunkCount': transfer.acceptedChunkCount,
+        },
+      });
+    } catch (error) {
+      final failureReason = _failureReasonForError(error);
+      await _failOutgoingTransfer(
+        transfer,
+        failureReason,
+        error.toString(),
+        preserveForResume: failureReason == 'ConnectionLost',
+      );
+      rethrow;
+    }
 
     transfer.state = 'done';
     _operationManager.transitionOperation(
@@ -772,13 +943,20 @@ class FileTransferService {
   Future<void> _failOutgoingTransfer(
     _OutgoingTransferState transfer,
     String failureReason,
-    String? message,
-  ) async {
-    transfer.state = 'failed';
+    String? message, {
+    bool preserveForResume = false,
+  }) async {
+    if (transfer.state == 'failed' || transfer.state == 'done') {
+      return;
+    }
+    transfer.state = preserveForResume ? 'paused' : 'failed';
     transfer.failureReason = failureReason;
-    _transitionOperationToFailed(transfer.operationId, failureReason);
+    transfer.sendTask = null;
+    if (!preserveForResume) {
+      _transitionOperationToFailed(transfer.operationId, failureReason);
+      _outgoingTransfers.remove(transfer.transferId);
+    }
     _emitFailed(transfer.toInfo(), message);
-    _outgoingTransfers.remove(transfer.transferId);
   }
 
   Future<void> _failIncomingTransfer(
@@ -874,7 +1052,7 @@ class FileTransferService {
 
   int _computeChunkCount(int byteSize, int chunkSize) {
     if (byteSize == 0) {
-      return 0;
+      return 1;
     }
     return ((byteSize + chunkSize) - 1) ~/ chunkSize;
   }
@@ -911,6 +1089,8 @@ class FileTransferService {
           return 'Unauthorized';
         case -32006:
           return 'HashMismatch';
+        case -32007:
+          return 'PayloadTooLarge';
         case -32009:
           return 'NotFound';
         case -32010:
@@ -995,8 +1175,13 @@ class _OutgoingTransferState {
   final int chunkCount;
   final DateTime expiresAt;
   int bytesTransferred = 0;
+  int nextChunkIndex = 0;
+  int? acceptedChunkSize;
+  late int acceptedChunkCount;
   String state;
   String? failureReason;
+  bool cancelRequested = false;
+  Future<void>? sendTask;
 
   _OutgoingTransferState({
     required this.transferId,

@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:app_flutter/screens/security_dashboard_screen.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/screens/security_dashboard_screen.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -116,4 +116,31 @@ void main() {
       expect(find.text('No recent events'), findsNothing);
     },
   );
+
+  testWidgets('full log button is separated from the recent events frame',
+      (tester) async {
+    final client = _FakeSecurityClient()..events = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const SecurityDashboardScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final eventFrame = find
+        .ancestor(
+          of: find.text('No recent events'),
+          matching: find.byType(Container),
+        )
+        .first;
+    final fullLogButton = find.widgetWithText(OutlinedButton, 'VIEW FULL LOG');
+    final gap = tester.getTopLeft(fullLogButton).dy -
+        tester.getBottomLeft(eventFrame).dy;
+
+    expect(gap, greaterThanOrEqualTo(12));
+  });
 }

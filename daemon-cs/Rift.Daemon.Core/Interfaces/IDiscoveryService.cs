@@ -40,6 +40,12 @@ public sealed class PeerDiscoveredEventArgs : EventArgs
 public interface IDiscoveryService
 {
     /// <summary>
+    /// Requests an immediate refresh after the local network path changes.
+    /// Implementations that do not expose an active network monitor may ignore this request.
+    /// </summary>
+    void NotifyNetworkChanged() { }
+
+    /// <summary>
     /// Raised when mDNS discovery finds a Rift peer service instance.
     /// </summary>
     event EventHandler<PeerDiscoveredEventArgs> PeerDiscovered;

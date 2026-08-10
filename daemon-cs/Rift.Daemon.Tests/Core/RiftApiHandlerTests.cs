@@ -24,6 +24,10 @@ public sealed class RiftApiHandlerTests : IDisposable
     private readonly OperationService _operationService;
     private readonly ClipboardService _clipboardService;
     private readonly FileTransferService _fileTransferService;
+    private readonly SendQueueService _sendQueueService;
+    private readonly FakeMediaPlaybackSyncService _mediaPlaybackSyncService;
+    private readonly FakeNotificationSyncService _notificationSyncService;
+    private readonly DeviceStatusService _deviceStatusService;
     private readonly RiftApiHandler _handler;
 
     public RiftApiHandlerTests()
@@ -42,6 +46,14 @@ public sealed class RiftApiHandlerTests : IDisposable
         _operationService = new OperationService(null, _securityEventLog, _identityManager, NullLogger<OperationService>.Instance);
         _clipboardService = new ClipboardService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<ClipboardService>.Instance, FetchResponseTimeout);
         _fileTransferService = new FileTransferService(_transport, _trustStore, discoveryCoordinator, _presenceService, _identityManager, _securityEventLog, _operationService, null, NullLogger<FileTransferService>.Instance);
+        _sendQueueService = new SendQueueService(_trustStore, null);
+        _mediaPlaybackSyncService = new FakeMediaPlaybackSyncService();
+        _notificationSyncService = new FakeNotificationSyncService();
+        _deviceStatusService = new DeviceStatusService(
+            _transport,
+            _presenceService,
+            _identityManager,
+            logger: NullLogger<DeviceStatusService>.Instance);
         var pairingService = new PairingService(
             _trustStore,
             _identityManager,
@@ -49,7 +61,7 @@ public sealed class RiftApiHandlerTests : IDisposable
             _transport,
             pairingProtocolCoordinator: null,
             logger: NullLogger<PairingService>.Instance);
-        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _operationService, pairingService);
+        _handler = new RiftApiHandler(daemonInfoService, discoveryCoordinator, _clipboardService, _fileTransferService, _sendQueueService, _operationService, pairingService, _mediaPlaybackSyncService, _notificationSyncService, _deviceStatusService);
     }
 
     [Fact]
@@ -63,6 +75,100 @@ public sealed class RiftApiHandlerTests : IDisposable
         Assert.Equal("riftd-cs/0.1.0", result.ImplementationId);
         Assert.Equal("0.1-draft", result.ProtocolVersion);
         Assert.Contains(result.Capabilities, capability => capability.Name == "security.event_log");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "media.playback");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "notification.sync");
+        Assert.Contains(result.Capabilities, capability => capability.Name == "device.status");
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_CachesValidatedPowerState()
+    {
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 64,
+            chargingState: "charging",
+            powerSource: "usb",
+            lowPowerMode: false,
+            observedAt: "2026-06-18T11:00:00Z",
+            sourcePlatform: "android");
+
+        Assert.Empty(result.BroadcastTo);
+        var status = _deviceStatusService.GetDeviceStatus(_identityManager.GetDeviceId());
+        Assert.NotNull(status);
+        Assert.True(status!.BatteryPresent);
+        Assert.Equal(64, status.BatteryPercent);
+        Assert.Equal("charging", status.ChargingState);
+        Assert.Equal("usb", status.PowerSource);
+        Assert.False(status.LowPowerMode);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_RejectsNonRfc3339Timestamp()
+    {
+        var ex = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.NotifyLocalDeviceStatusAsync(
+                batteryPresent: true,
+                batteryPercent: 64,
+                observedAt: "2026-06-18 11:00:00Z"));
+
+        Assert.Equal(-32602, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_UsesNegotiatedSessionCapabilities()
+    {
+        const string peerDeviceId = "rift-peer-status-gate";
+        _presenceService.UpdatePeerPresence(
+            peerDeviceId,
+            "online",
+            DateTimeOffset.UtcNow.ToString("O"),
+            ["device.status"]);
+
+        var beforeSession = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 64);
+        Assert.Empty(beforeSession.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["presence.basic"]);
+        var withoutCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 63);
+        Assert.Empty(withoutCapability.BroadcastTo);
+
+        _transport.EmitSessionStateChanged(
+            peerDeviceId,
+            isOnline: true,
+            selectedCapabilities: ["device.status", "presence.basic"]);
+        var withCapability = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 62);
+        Assert.Contains(peerDeviceId, withCapability.BroadcastTo);
+    }
+
+    [Fact]
+    public async Task NotifyLocalDeviceStatusAsync_ContinuesAfterPeerSendFailure()
+    {
+        const string failingPeer = "rift-peer-status-failing";
+        const string healthyPeer = "rift-peer-status-healthy";
+        _transport.EmitSessionStateChanged(
+            failingPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.EmitSessionStateChanged(
+            healthyPeer,
+            isOnline: true,
+            selectedCapabilities: ["device.status"]);
+        _transport.FailSendsTo.Add(failingPeer);
+
+        var result = await _handler.NotifyLocalDeviceStatusAsync(
+            batteryPresent: true,
+            batteryPercent: 61);
+
+        Assert.DoesNotContain(failingPeer, result.BroadcastTo);
+        Assert.Contains(healthyPeer, result.BroadcastTo);
     }
 
     [Fact]
@@ -158,8 +264,11 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
             _fileTransferService,
+            _sendQueueService,
             _operationService,
-            pairingService);
+            pairingService,
+            _mediaPlaybackSyncService,
+            _notificationSyncService);
 
         var result = await handler.StartPairingByEndpointAsync("10.53.38.174", 9140);
 
@@ -235,6 +344,26 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task EnqueueFileSendAsync_ReturnsQueueItem()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"rift-api-send-queue-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "hello");
+        try
+        {
+            var result = await _handler.EnqueueFileSendAsync(path, "queued.txt", "text/plain");
+            var listed = await _handler.ListSendQueueAsync();
+
+            Assert.False(string.IsNullOrWhiteSpace(result.QueueItemId));
+            Assert.Equal("waiting_for_target", result.Status);
+            Assert.Contains(listed.Items, item => item.QueueItemId == result.QueueItemId && item.FileName == "queued.txt");
+        }
+        finally
+        {
+            await TestFiles.DeleteWithRetryAsync(path);
+        }
+    }
+
+    [Fact]
     public async Task NotifyClipboardChangeAsync_BroadcastsToTrustedPeers()
     {
         _trustStore.SavePeer(new PeerIdentity
@@ -280,7 +409,7 @@ public sealed class RiftApiHandlerTests : IDisposable
         {
             if (File.Exists(tempFile))
             {
-                File.Delete(tempFile);
+                await TestFiles.DeleteWithRetryAsync(tempFile);
             }
         }
     }
@@ -590,6 +719,82 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task NotificationSyncMethods_DelegateToNotificationService()
+    {
+        var localEvent = await _handler.NotifyLocalNotificationEventAsync(
+            "posted",
+            "notif-local-1",
+            "dev.rift.desktop",
+            "Rift Desktop",
+            "Desktop test",
+            "Mirrored to trusted peers",
+            "2026-07-16T10:00:00Z",
+            false,
+            false,
+            "windows");
+        var listed = await _handler.ListNotificationsAsync();
+        var action = await _handler.PerformNotificationActionAsync("rift-source", "notif-1", "open");
+        var policy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            mode: NotificationSyncPolicyModes.Exclude,
+            packageNames: ["com.bank.example"]);
+
+        Assert.Equal("notif-local-1", localEvent.NotificationId);
+        Assert.Single(listed.Notifications);
+        Assert.Equal("notif-1", listed.Notifications[0].NotificationId);
+        Assert.Equal("operation-notification-1", action.OperationId);
+        Assert.Equal("rift-source", action.SourceDeviceId);
+        Assert.Equal("notif-1", action.NotificationId);
+        Assert.Equal("open", action.Action);
+        Assert.True(policy.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, policy.Mode);
+        Assert.Equal(["com.bank.example"], policy.PackageNames);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_LegacyRequestIsProjectedToCanonicalPolicy()
+    {
+        var policy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            blacklistedPackages: [" com.foo ", "com.foo"]);
+
+        Assert.True(policy.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, policy.Mode);
+        Assert.Equal(["com.foo"], policy.PackageNames);
+
+        var emptyLegacyPolicy = await _handler.UpdateNotificationSyncPolicyAsync(
+            true,
+            blacklistedPackages: []);
+        Assert.Equal(NotificationSyncPolicyModes.All, emptyLegacyPolicy.Mode);
+        Assert.Empty(emptyLegacyPolicy.PackageNames);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_RejectsAmbiguousRequest()
+    {
+        var exception = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.UpdateNotificationSyncPolicyAsync(
+                true,
+                mode: NotificationSyncPolicyModes.Include,
+                packageNames: ["com.foo"],
+                blacklistedPackages: ["com.bar"]));
+
+        Assert.Equal(-32602, exception.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NotificationSyncPolicy_RejectsInvalidMode()
+    {
+        var exception = await Assert.ThrowsAsync<LocalRpcException>(() =>
+            _handler.UpdateNotificationSyncPolicyAsync(
+                true,
+                mode: "banana",
+                packageNames: []));
+
+        Assert.Equal(-32602, exception.ErrorCode);
+    }
+
+    [Fact]
     public async Task StartPairingAsync_UnexpectedServiceFailure_ReturnsInternalError()
     {
         var handler = new RiftApiHandler(
@@ -597,8 +802,11 @@ public sealed class RiftApiHandlerTests : IDisposable
             new DiscoveryCoordinator(_discoveryService, _trustStore, _identityManager),
             _clipboardService,
             _fileTransferService,
+            _sendQueueService,
             _operationService,
-            new ThrowingPairingService());
+            new ThrowingPairingService(),
+            _mediaPlaybackSyncService,
+            _notificationSyncService);
 
         var ex = await Assert.ThrowsAsync<LocalRpcException>(() => handler.StartPairingAsync("rift-peer-failure"));
 
@@ -645,6 +853,174 @@ public sealed class RiftApiHandlerTests : IDisposable
         }
     }
 
+    private sealed class FakeNotificationSyncService : INotificationSyncService
+    {
+        public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+            string eventType,
+            NotificationSyncRecord notification,
+            string? removedAt,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotifyLocalNotificationEventResult
+            {
+                NotificationId = notification.NotificationId,
+                BroadcastTo = ["rift-peer"],
+                Suppressed = false
+            });
+        }
+
+        public Task<ListNotificationsResult> ListNotificationsAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new ListNotificationsResult
+            {
+                Notifications =
+                [
+                    new NotificationSyncRecord
+                    {
+                        NotificationId = "notif-1",
+                        SourceDeviceId = "rift-peer",
+                        PackageName = "com.example.chat",
+                        AppName = "Example Chat",
+                        Title = "Riley",
+                        BodyPreview = "See you at 6?",
+                        PostedAt = "2026-07-14T10:00:00Z",
+                        IsDismissible = true,
+                        IsOpenable = true
+                    }
+                ],
+                Policy = new NotificationSyncPolicy
+                {
+                    Enabled = true,
+                    Mode = NotificationSyncPolicyModes.Exclude,
+                    PackageNames = ["com.bank.example"]
+                }
+            });
+        }
+
+        public Task<PerformNotificationActionResult> PerformNotificationActionAsync(string sourceDeviceId, string notificationId, string action, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new PerformNotificationActionResult
+            {
+                OperationId = "operation-notification-1",
+                SourceDeviceId = sourceDeviceId,
+                NotificationId = notificationId,
+                Action = action,
+                State = "Pending"
+            });
+        }
+
+        public Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(bool enabled, string mode, IReadOnlyList<string> packageNames, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotificationSyncPolicy
+            {
+                Enabled = enabled,
+                Mode = mode,
+                PackageNames = packageNames.ToArray()
+            });
+        }
+
+        public Task HandleNotificationPostedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class FakeMediaPlaybackSyncService : IMediaPlaybackSyncService
+    {
+        public Task<NotifyLocalMediaPlaybackEventResult> HandleLocalPlaybackEventAsync(string eventType, MediaPlaybackRecord playback, string? removedAt, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new NotifyLocalMediaPlaybackEventResult
+            {
+                PlaybackId = playback.PlaybackId,
+                BroadcastTo = ["rift-peer"]
+            });
+        }
+
+        public Task PublishLocalPlaybackToPeerAsync(string peerDeviceId, MediaPlaybackRecord playback, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task SendPeerErrorAsync(string peerDeviceId, string failureReason, string? refMessageId, string message, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<ListMediaPlaybackResult> ListMediaPlaybackAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new ListMediaPlaybackResult
+            {
+                Playbacks =
+                [
+                    new MediaPlaybackRecord
+                    {
+                        PlaybackId = "playback-1",
+                        SourceDeviceId = "rift-peer",
+                        AppId = "com.example.music",
+                        AppName = "Example Music",
+                        PlaybackState = "playing",
+                        PositionMs = 1000,
+                        CanPlay = true,
+                        CanPause = true,
+                        CanSkipNext = true,
+                        CanSkipPrevious = true,
+                        CanSeek = true,
+                        UpdatedAt = "2026-07-16T10:00:00Z"
+                    }
+                ]
+            });
+        }
+
+        public Task<MediaPlaybackRecord> GetMediaPlaybackAsync(string sourceDeviceId, string playbackId, CancellationToken cancellationToken) =>
+            Task.FromResult(new MediaPlaybackRecord
+            {
+                PlaybackId = playbackId,
+                SourceDeviceId = "rift-peer",
+                AppId = "com.example.music",
+                AppName = "Example Music",
+                PlaybackState = "playing",
+                PositionMs = 1000,
+                CanPlay = true,
+                CanPause = true,
+                CanSkipNext = true,
+                CanSkipPrevious = true,
+                CanSeek = true,
+                UpdatedAt = "2026-07-16T10:00:00Z"
+            });
+
+        public Task<PerformMediaPlaybackActionResult> PerformMediaPlaybackActionAsync(string sourceDeviceId, string playbackId, string action, long? positionMs, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new PerformMediaPlaybackActionResult
+            {
+                OperationId = "operation-media-1",
+                PlaybackId = playbackId,
+                Action = action,
+                State = "Pending"
+            });
+        }
+
+        public Task HandleMediaPlaybackActionRequestAsync(MediaPlaybackActionRequestRecord request, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<ReportHandledMediaPlaybackActionResult> ReportHandledMediaPlaybackActionAsync(
+            string requestId,
+            bool success,
+            string? failureReason,
+            string? message,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ReportHandledMediaPlaybackActionResult
+            {
+                RequestId = requestId,
+                PlaybackId = "playback-1",
+                Action = "play",
+                Success = success
+            });
+
+        public Task HandleMediaPlaybackPostedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackUpdatedAsync(MediaPlaybackRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackRemovedAsync(MediaPlaybackRemovedRecord playback, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task HandleMediaPlaybackActionResultAsync(MediaPlaybackActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private sealed class FakeTransport : ITransport
     {
         public event EventHandler<MessageReceivedEventArgs>? MessageReceived
@@ -652,30 +1028,46 @@ public sealed class RiftApiHandlerTests : IDisposable
             add { }
             remove { }
         }
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
-        public List<string> DisconnectedPeers { get; } = [];
+        public HashSet<string> FailSendsTo { get; } = new(StringComparer.Ordinal);
+
+        public void EmitSessionStateChanged(
+            string peerDeviceId,
+            bool isOnline,
+            IReadOnlyList<string> selectedCapabilities,
+            bool allowsProtectedTraffic = true) =>
+            SessionStateChanged?.Invoke(
+                this,
+                new SessionStateChangedEventArgs(
+                    peerDeviceId,
+                    isOnline,
+                    selectedCapabilities,
+                    allowsProtectedTraffic));
 
         public Task StartListeningAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-manual-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
         {
+            if (FailSendsTo.Contains(peerDeviceId))
+            {
+                throw new IOException("Simulated device status send failure.");
+            }
+
             using var document = JsonDocument.Parse(frameBody);
             SentMessages.Add((peerDeviceId, document.RootElement.GetProperty("type").GetString() ?? string.Empty));
             return Task.CompletedTask;
         }
 
         public bool HasActiveSession(string peerDeviceId) => true;
+        public bool HasProtectedSession(string peerDeviceId) => true;
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
         {

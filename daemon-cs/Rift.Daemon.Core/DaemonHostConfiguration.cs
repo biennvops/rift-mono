@@ -22,14 +22,25 @@ public static class DaemonHostConfiguration
         services.AddSingleton<ILocalIdentityStore, SqliteLocalIdentityStore>();
         services.AddSingleton<ITrustStore, SqliteTrustStore>();
         services.AddSingleton<ISecurityEventLog, SqliteSecurityEventLog>();
+        services.AddSingleton<ISendQueueStore, SqliteSendQueueStore>();
+        services.AddSingleton<INotificationSyncPolicyStore, SqliteNotificationSyncPolicyStore>();
         services.AddSingleton<IIdentityManager, IdentityManager>();
         services.AddSingleton<IDiscoveryCoordinator, DiscoveryCoordinator>();
-        services.AddSingleton<IDaemonInfoService, DaemonInfoService>();
         services.AddSingleton<IIpcNotificationService, IpcNotificationHub>();
         services.AddSingleton<IPresenceService, PresenceService>();
+        services.AddSingleton<IDeviceStatusService, DeviceStatusService>();
+        services.AddSingleton<IDaemonInfoService, DaemonInfoService>();
         services.AddSingleton<IOperationService, OperationService>();
         services.AddSingleton<IClipboardService, ClipboardService>();
         services.AddSingleton<IFileTransferService, FileTransferService>();
+        services.AddSingleton<IMediaPlaybackSyncService, MediaPlaybackSyncService>();
+        services.AddSingleton<INotificationSyncService, NotificationSyncService>();
+        services.AddSingleton<ISendQueueService>(provider => new SendQueueService(
+            provider.GetRequiredService<ITrustStore>(),
+            provider.GetService<IIpcNotificationService>(),
+            provider.GetRequiredService<IFileTransferService>(),
+            provider.GetRequiredService<ITransport>(),
+            provider.GetRequiredService<ISendQueueStore>()));
         services.AddSingleton<IPairingProtocolCoordinator, PairingProtocolCoordinator>();
         services.AddSingleton<IProtocolMessageRouter, ProtocolMessageRouter>();
         services.AddSingleton<IPairingService, PairingService>();

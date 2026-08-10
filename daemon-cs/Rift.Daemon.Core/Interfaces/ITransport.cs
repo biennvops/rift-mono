@@ -39,12 +39,21 @@ public sealed class SessionPeerContext
 
     public IReadOnlyList<string> SelectedCapabilities { get; }
 
+    public IReadOnlyDictionary<string, int> SelectedCapabilityVersions { get; }
+
     public bool AllowsProtectedTraffic { get; }
 
-    public SessionPeerContext(string peerDeviceId, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
+    public SessionPeerContext(
+        string peerDeviceId,
+        IReadOnlyList<string> selectedCapabilities,
+        bool allowsProtectedTraffic,
+        IReadOnlyDictionary<string, int>? selectedCapabilityVersions = null)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        SelectedCapabilityVersions = selectedCapabilityVersions ?? selectedCapabilities
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(capability => capability, _ => 1, StringComparer.Ordinal);
         AllowsProtectedTraffic = allowsProtectedTraffic;
     }
 
@@ -52,6 +61,12 @@ public sealed class SessionPeerContext
     {
         ArgumentNullException.ThrowIfNull(capabilityName);
         return SelectedCapabilities.Contains(capabilityName, StringComparer.Ordinal);
+    }
+
+    public int GetCapabilityVersion(string capabilityName)
+    {
+        ArgumentNullException.ThrowIfNull(capabilityName);
+        return SelectedCapabilityVersions.TryGetValue(capabilityName, out var version) ? version : 0;
     }
 }
 
@@ -63,13 +78,23 @@ public sealed class SessionStateChangedEventArgs : EventArgs
 
     public IReadOnlyList<string> SelectedCapabilities { get; }
 
+    public IReadOnlyDictionary<string, int> SelectedCapabilityVersions { get; }
+
     public bool AllowsProtectedTraffic { get; }
 
-    public SessionStateChangedEventArgs(string peerDeviceId, bool isOnline, IReadOnlyList<string> selectedCapabilities, bool allowsProtectedTraffic)
+    public SessionStateChangedEventArgs(
+        string peerDeviceId,
+        bool isOnline,
+        IReadOnlyList<string> selectedCapabilities,
+        bool allowsProtectedTraffic,
+        IReadOnlyDictionary<string, int>? selectedCapabilityVersions = null)
     {
         PeerDeviceId = peerDeviceId ?? throw new ArgumentNullException(nameof(peerDeviceId));
         IsOnline = isOnline;
         SelectedCapabilities = selectedCapabilities ?? throw new ArgumentNullException(nameof(selectedCapabilities));
+        SelectedCapabilityVersions = selectedCapabilityVersions ?? selectedCapabilities
+            .Distinct(StringComparer.Ordinal)
+            .ToDictionary(capability => capability, _ => 1, StringComparer.Ordinal);
         AllowsProtectedTraffic = allowsProtectedTraffic;
     }
 }
@@ -80,10 +105,17 @@ public sealed class PeerSessionEndpoint
 
     public int Port { get; }
 
-    public PeerSessionEndpoint(string address, int port)
+    /// <summary>
+    /// Indicates that the local daemon initiated this session. An inbound session's
+    /// remote port is an ephemeral client port and must not be persisted as a listener endpoint.
+    /// </summary>
+    public bool IsInitiator { get; }
+
+    public PeerSessionEndpoint(string address, int port, bool isInitiator)
     {
         Address = address ?? throw new ArgumentNullException(nameof(address));
         Port = port;
+        IsInitiator = isInitiator;
     }
 }
 
@@ -152,13 +184,30 @@ public interface ITransport
     /// returns the authenticated peer device ID derived from the TLS-bound
     /// Ed25519 identity after session bootstrap completes.
     /// </summary>
-    Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken);
+    Task<string> ConnectToPeerWithIdentityAsync(
+        string host,
+        int port,
+        CancellationToken cancellationToken,
+        string? expectedDeviceId = null);
 
     /// <summary>
     /// Returns <see langword="true"/> when an authenticated session already exists
     /// for the specified peer device ID and can be reused for protocol traffic.
     /// </summary>
     bool HasActiveSession(string peerDeviceId);
+
+    /// <summary>
+    /// Returns <see langword="true"/> when an authenticated session already exists
+    /// for the specified peer device ID and is authorized for protected traffic.
+    /// </summary>
+    bool HasProtectedSession(string peerDeviceId);
+
+    /// <summary>
+    /// Re-evaluates the current authenticated session for the specified peer device ID
+    /// against the latest trust-store state and emits a session-state update if the
+    /// protected-traffic authorization changes.
+    /// </summary>
+    void RefreshSessionAuthorization(string peerDeviceId);
 
     /// <summary>
     /// Returns the current authenticated session's remote socket endpoint for the peer,

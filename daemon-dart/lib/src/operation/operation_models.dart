@@ -81,7 +81,9 @@ class OperationRecord {
   Map<String, dynamic> toDetailJson() {
     return {
       ...toListJson(),
-      'transitions': transitions.map((transition) => transition.toJson()).toList(),
+      'transitions': transitions
+          .map((transition) => transition.toJson())
+          .toList(),
       if (failureReason != null) 'failureReason': failureReason,
     };
   }

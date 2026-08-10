@@ -1,11 +1,21 @@
 import 'dart:async';
-
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:provider/provider.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
-import 'package:app_flutter/main.dart'; // Or wherever RiftApp is defined
+import 'package:rift/constants.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/file_transfer/send_queue_controller.dart';
+import 'package:rift/src/notification_mirror_identity.dart';
+import 'package:rift/src/mirrored_notification_registry.dart';
+import 'package:rift/src/platform/ios_notifications.dart';
+import 'package:rift/src/platform/notification_route.dart';
+import 'package:rift/src/platform/windows_shell.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
+import 'package:rift/src/ui/app_shell.dart';
+import 'package:rift/main.dart'; // Or wherever RiftApp is defined
+import 'package:shared_preferences/shared_preferences.dart';
 import 'test_utils/fake_transport.dart';
 
 // Create a Mock for the JsonRpcRiftClient
@@ -39,10 +49,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferProgress => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferProgress =>
+      const Stream.empty();
 
   @override
-  Stream<Map<String, dynamic>> get onFileTransferCompleted => const Stream.empty();
+  Stream<Map<String, dynamic>> get onFileTransferCompleted =>
+      const Stream.empty();
 
   @override
   Stream<Map<String, dynamic>> get onFileTransferFailed => const Stream.empty();
@@ -52,6 +64,14 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 
   @override
   Stream<Map<String, dynamic>> get onClipboardExpired => const Stream.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onSendQueueChanged =>
+      const Stream<Map<String, dynamic>>.empty();
+
+  @override
+  Stream<Map<String, dynamic>> get onSendQueueItemUpdated =>
+      const Stream<Map<String, dynamic>>.empty();
 
   @override
   Stream<Map<String, dynamic>> get onPeerDiscovered =>
@@ -89,6 +109,12 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
   Future<dynamic> listClipboardOffers() async => {'offers': []};
 
   @override
+  Future<bool> supportsSendQueue() async => false;
+
+  @override
+  Future<dynamic> listSendQueue() async => {'items': []};
+
+  @override
   Future<dynamic> listTrustedPeers() async => {
         'peers': [
           {
@@ -121,7 +147,51 @@ class FakeShellJsonRpcClient extends JsonRpcRiftClient {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late MockJsonRpcClient mockClient;
+  late StreamController<bool> connectionChangedController;
+  late StreamController<Map<String, dynamic>> notificationPostedController;
+  late StreamController<Map<String, dynamic>> notificationUpdatedController;
+  late StreamController<Map<String, dynamic>> notificationRemovedController;
+  late StreamController<Map<String, dynamic>> fileReadyToCommitController;
+  late bool isConnected;
+  final macOsCalls = <MethodCall>[];
+
+  Future<void> dispatchPlatformMethodCall(
+      String channel, MethodCall call) async {
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final codec = const StandardMethodCodec();
+    ByteData? reply;
+    await messenger.handlePlatformMessage(
+      channel,
+      codec.encodeMethodCall(call),
+      (data) => reply = data,
+    );
+    if (reply != null) {
+      codec.decodeEnvelope(reply!);
+    }
+  }
+
+  Widget buildRiftApp(JsonRpcRiftClient client) {
+    return MultiProvider(
+      providers: [
+        Provider<JsonRpcRiftClient>.value(value: client),
+        ChangeNotifierProvider<SendQueueController>(
+          create: (_) => SendQueueController(client, false),
+        ),
+        ChangeNotifierProvider<LocalEventsNotifier>(
+          create: (_) => LocalEventsNotifier(client),
+        ),
+      ],
+      child: const RiftApp(hasCompletedOnboarding: true),
+    );
+  }
+
+  test('desktop background startup is enabled only by its launch flag', () {
+    expect(shouldStartDesktopHidden(const <String>[]), isFalse);
+    expect(shouldStartDesktopHidden(const <String>['--background']), isTrue);
+  });
 
   final mockDeviceInfo = {
     'deviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
@@ -134,10 +204,25 @@ void main() {
   };
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    setMacOSNotificationBridgeOverride(true);
+    IOSNotifications.debugIsIOSOverride = false;
+    WindowsShell.debugIsWindowsOverride = null;
     mockClient = MockJsonRpcClient();
+    connectionChangedController = StreamController<bool>.broadcast();
+    notificationPostedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    notificationUpdatedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    notificationRemovedController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    fileReadyToCommitController =
+        StreamController<Map<String, dynamic>>.broadcast();
+    isConnected = true;
+    macOsCalls.clear();
 
     // Default mock behavior
-    when(() => mockClient.isConnected).thenReturn(true);
+    when(() => mockClient.isConnected).thenAnswer((_) => isConnected);
     when(() => mockClient.onPairingRequest)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onSecurityEvent)
@@ -162,16 +247,38 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onClipboardExpired)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onNotificationPosted)
+        .thenAnswer((_) => notificationPostedController.stream);
+    when(() => mockClient.onNotificationUpdated)
+        .thenAnswer((_) => notificationUpdatedController.stream);
+    when(() => mockClient.onNotificationRemoved)
+        .thenAnswer((_) => notificationRemovedController.stream);
+    when(() => mockClient.onNotificationActionResult)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackPosted)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackRemoved)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onMediaPlaybackActionResult)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferProgress)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onFileTransferReadyToCommit)
+        .thenAnswer((_) => fileReadyToCommitController.stream);
     when(() => mockClient.onFileTransferCompleted)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileTransferFailed)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onSendQueueChanged)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onSendQueueItemUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onConnectionChanged)
-        .thenAnswer((_) => Stream.value(true));
+        .thenAnswer((_) => connectionChangedController.stream);
     when(() => mockClient.onOperationTransition)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.listOperations(
@@ -180,6 +287,24 @@ void main() {
         )).thenAnswer((_) async => {'operations': [], 'total': 0});
     when(() => mockClient.listClipboardOffers())
         .thenAnswer((_) async => {'offers': []});
+    when(() => mockClient.supportsSendQueue()).thenAnswer((_) async => false);
+    when(() => mockClient.listSendQueue())
+        .thenAnswer((_) async => {'items': []});
+    when(() => mockClient.listPendingFileCommits())
+        .thenAnswer((_) async => {'commits': []});
+    when(() => mockClient.listMediaPlayback())
+        .thenAnswer((_) async => {'playbacks': []});
+    when(() => mockClient.listNotifications())
+        .thenAnswer((_) async => {'notifications': []});
+    when(() => mockClient.confirmFileCommit(
+          transferId: any(named: 'transferId'),
+          destinationPath: any(named: 'destinationPath'),
+        )).thenAnswer((_) async => {'committed': true});
+    when(() => mockClient.failFileCommit(
+          transferId: any(named: 'transferId'),
+          failureReason: any(named: 'failureReason'),
+          message: any(named: 'message'),
+        )).thenAnswer((_) async => {'failed': true});
     when(() => mockClient.getDeviceInfo())
         .thenAnswer((_) async => mockDeviceInfo);
     when(() => mockClient.listTrustedPeers()).thenAnswer(
@@ -209,26 +334,150 @@ void main() {
         'isDiscovering': true,
       },
     );
+    when(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        mode: any(named: 'mode'),
+        packageNames: any(named: 'packageNames'),
+      ),
+    ).thenAnswer(
+      (_) async => {
+        'enabled': true,
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
+      },
+    );
+    when(
+      () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
+        notificationId: any(named: 'notificationId'),
+        action: any(named: 'action'),
+      ),
+    ).thenAnswer((_) async => <String, Object?>{'success': true});
+    when(() => mockClient.onFileProgress)
+        .thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileCompleted)
+        .thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.onFileFailed).thenAnswer((_) => const Stream.empty());
+    when(() => mockClient.connect()).thenAnswer((_) async {});
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/macos/media_playback'),
+      (_) async => true,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift.permissions'),
+      (call) async {
+        macOsCalls.add(call);
+        switch (call.method) {
+          case 'notification.show':
+            return true;
+          case 'share.consumePendingItems':
+            return null;
+          case 'notification.getStatus':
+            return 'authorized';
+          case 'notification.request':
+            return true;
+          case 'notification.clear':
+            return true;
+        }
+        return null;
+      },
+    );
+  });
+
+  tearDown(() {
+    connectionChangedController.close();
+    notificationPostedController.close();
+    notificationUpdatedController.close();
+    notificationRemovedController.close();
+    fileReadyToCommitController.close();
+    setMacOSNotificationBridgeOverride(null);
+    IOSNotifications.debugIsIOSOverride = null;
+    WindowsShell.debugIsWindowsOverride = null;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/macos/media_playback'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift.permissions'),
+      null,
+    );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
+      null,
+    );
   });
 
   testWidgets('App shell boots up and displays main navigation',
       (WidgetTester tester) async {
     // Inject mockClient via Provider
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: mockClient,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(mockClient),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Devices'), findsOneWidget);
-    expect(find.text('History'), findsOneWidget);
-    expect(find.text('Events'), findsOneWidget);
-    expect(find.text('Ops'), findsOneWidget);
-    expect(find.byTooltip('Settings'), findsOneWidget);
-    expect(find.text('RIFT'), findsOneWidget);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.text('Security'), findsOneWidget);
+    expect(find.text('Operations'), findsOneWidget);
+    expect(find.text('Settings'), findsWidgets);
+  });
+
+  testWidgets('tray right-click opens the configured context menu',
+      (WidgetTester tester) async {
+    const trayChannel = MethodChannel('tray_manager');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(trayChannel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(trayChannel, null);
+    });
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    final dynamic appState = tester.state(find.byType(RiftApp));
+    appState.onTrayIconRightMouseDown();
+    await tester.pump();
+
+    expect(calls.map((call) => call.method), contains('popUpContextMenu'));
+  });
+
+  testWidgets('AppShell applies a history route queued before mount',
+      (WidgetTester tester) async {
+    final routeNotifier = ValueNotifier<String?>(NotificationRoute.historySend);
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          Provider<JsonRpcRiftClient>.value(value: mockClient),
+          ChangeNotifierProvider<SendQueueController>(
+            create: (_) => SendQueueController(mockClient, false),
+          ),
+          ChangeNotifierProvider<LocalEventsNotifier>(
+            create: (_) => LocalEventsNotifier(mockClient),
+          ),
+        ],
+        child: MaterialApp(
+          home: AppShell(historyRouteNotifier: routeNotifier),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+        1);
+    expect(routeNotifier.value, isNull);
   });
 
   test('MockClient getDeviceInfo test', () async {
@@ -238,15 +487,13 @@ void main() {
     expect(result, equals(mockDeviceInfo));
   });
 
-  testWidgets('HomeScreen auto-opens PairingScreen for incoming pairing request',
+  testWidgets(
+      'HomeScreen auto-opens PairingScreen for incoming pairing request',
       (WidgetTester tester) async {
     final client = FakeShellJsonRpcClient();
 
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(client),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -262,11 +509,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Pairing with Linux Laptop'), findsOneWidget);
+    expect(
+      find.textContaining('Linux Laptop', findRichText: true),
+      findsOneWidget,
+    );
     expect(find.text('Approve'), findsOneWidget);
 
-    final approveButton = tester.widget<ElevatedButton>(
-      find.widgetWithText(ElevatedButton, 'Approve'),
+    final approveButton = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Approve'),
     );
     expect(approveButton.onPressed, isNotNull);
   });
@@ -276,10 +526,7 @@ void main() {
     final client = FakeShellJsonRpcClient();
 
     await tester.pumpWidget(
-      Provider<JsonRpcRiftClient>.value(
-        value: client,
-        child: const RiftApp(hasCompletedOnboarding: true),
-      ),
+      buildRiftApp(client),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
@@ -303,5 +550,426 @@ void main() {
       client.approvedFingerprint,
       'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
     );
+  });
+
+  testWidgets('App shell consumes pending macOS share payload on startup',
+      (WidgetTester tester) async {
+    final client = FakeShellJsonRpcClient();
+    setMacOSNotificationBridgeOverride(true);
+    final channel = const MethodChannel('rift.permissions');
+    var consumedPendingShareItems = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'share.consumePendingItems') {
+        consumedPendingShareItems = true;
+        return <String, Object?>{
+          'route': 'history.send',
+          'items': <Map<String, String>>[
+            <String, String>{
+              'localPath': '/definitely/missing/shared.txt',
+              'fileName': 'shared.txt',
+              'mediaType': 'text/plain',
+            },
+          ],
+        };
+      }
+      return null;
+    });
+
+    await tester.pumpWidget(buildRiftApp(client));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(consumedPendingShareItems, isTrue);
+  });
+
+  testWidgets('RiftApp reapplies saved notification sync policy on reconnect',
+      (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues({
+      AppPrefs.notificationSyncEnabled: false,
+      AppPrefs.notificationSyncBlacklist: ['com.bank.example'],
+    });
+    isConnected = false;
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    verifyNever(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: any(named: 'enabled'),
+        mode: any(named: 'mode'),
+        packageNames: any(named: 'packageNames'),
+      ),
+    );
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await tester.pump();
+    await tester.pump();
+
+    verify(
+      () => mockClient.updateNotificationSyncPolicy(
+        enabled: false,
+        mode: 'exclude',
+        packageNames: ['com.bank.example'],
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'mirrored notification post emits desktop payload with route and notification id',
+      (WidgetTester tester) async {
+    when(() => mockClient.listTrustedPeers()).thenAnswer(
+      (_) async => {
+        'peers': [
+          {
+            'deviceId': 'device-1234567890',
+            'displayName': 'Work Laptop',
+          },
+        ],
+      },
+    );
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-123',
+      'sourceDeviceId': 'device-1234567890',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Ping',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    final showCall =
+        macOsCalls.lastWhere((call) => call.method == 'notification.show');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], 'history.notifications');
+    expect(
+      arguments['notificationKey'],
+      mirroredNotificationKey(
+        sourceDeviceId: 'device-1234567890',
+        notificationId: 'notif-123',
+      ),
+    );
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'Work Laptop • Ping');
+    expect(arguments['payload'], <String, Object?>{
+      'route': 'history.notifications',
+      'notificationId': 'notif-123',
+      'sourceDeviceId': 'device-1234567890',
+      'appName': 'Messages',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    expect(arguments['actions'], <Map<String, String>>[
+      <String, String>{'id': 'open', 'title': 'Open'},
+      <String, String>{'id': 'dismiss', 'title': 'Dismiss'},
+    ]);
+  });
+
+  testWidgets('local notification post does not emit a duplicate native popup',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+    final showCountBefore =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-local',
+      'sourceDeviceId': mockDeviceInfo['deviceId'],
+      'sourcePlatform': 'linux',
+      'appName': 'Example Chat',
+      'title': 'Local message',
+      'bodyPreview': 'Already shown by the source application',
+      'isOpenable': false,
+      'isDismissible': false,
+    });
+    await tester.pump();
+
+    final showCountAfter =
+        macOsCalls.where((call) => call.method == 'notification.show').length;
+    expect(showCountAfter, showCountBefore);
+  });
+
+  testWidgets('iOS consumes launch actions without requesting permission',
+      (WidgetTester tester) async {
+    setMacOSNotificationBridgeOverride(false);
+    IOSNotifications.debugIsIOSOverride = true;
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('rift/ios/notifications'),
+      (call) async {
+        calls.add(call);
+        switch (call.method) {
+          case 'requestPermission':
+          case 'showNotification':
+            return true;
+          case 'consumeLaunchAction':
+            return null;
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': 'notif-ios',
+      'sourceDeviceId': 'rift-peer-1',
+      'appName': 'Messages',
+      'title': 'Alice',
+      'bodyPreview': 'Hello iPhone',
+      'isOpenable': true,
+      'isDismissible': true,
+    });
+    await tester.pump();
+
+    expect(calls.any((call) => call.method == 'requestPermission'), isFalse);
+    expect(calls.any((call) => call.method == 'consumeLaunchAction'), isTrue);
+    final showCall =
+        calls.lastWhere((call) => call.method == 'showNotification');
+    final arguments = Map<String, Object?>.from(
+      showCall.arguments as Map<Object?, Object?>,
+    );
+    expect(arguments['route'], NotificationRoute.historyNotifications);
+    expect(
+      arguments['notificationKey'],
+      mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-1',
+        notificationId: 'notif-ios',
+      ),
+    );
+    expect(arguments['title'], 'Alice');
+    expect(arguments['body'], 'rift-peer-1 • Hello iPhone');
+  });
+
+  testWidgets(
+      'explicit mirrored notification actions call performNotificationAction',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    await dispatchPlatformMethodCall(
+      'rift.permissions',
+      const MethodCall('notificationActivated', <String, Object?>{
+        'route': 'history.notifications',
+        'sourceDeviceId': 'rift-source',
+        'notificationId': 'notif-321',
+        'notificationAction': 'open',
+      }),
+    );
+    await tester.pump();
+
+    verify(
+      () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-source',
+        notificationId: 'notif-321',
+        action: 'open',
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'disconnected mirrored notification actions are queued and flushed on reconnect',
+      (WidgetTester tester) async {
+    isConnected = false;
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    await dispatchPlatformMethodCall(
+      'rift.permissions',
+      const MethodCall('notificationActivated', <String, Object?>{
+        'route': 'history.notifications',
+        'sourceDeviceId': 'rift-source',
+        'notificationId': 'notif-queued',
+        'notificationAction': 'dismiss',
+      }),
+    );
+    await tester.pump();
+
+    verifyNever(
+      () => mockClient.performNotificationAction(
+        sourceDeviceId: any(named: 'sourceDeviceId'),
+        notificationId: any(named: 'notificationId'),
+        action: any(named: 'action'),
+      ),
+    );
+    verify(() => mockClient.connect()).called(1);
+
+    isConnected = true;
+    connectionChangedController.add(true);
+    await tester.pump();
+    await tester.pump();
+
+    verify(
+      () => mockClient.performNotificationAction(
+        sourceDeviceId: 'rift-source',
+        notificationId: 'notif-queued',
+        action: 'dismiss',
+      ),
+    ).called(1);
+  });
+
+  testWidgets(
+      'reconnect reconciliation clears stale mirrors without replaying active ones',
+      (WidgetTester tester) async {
+    final stale = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-stale',
+        notificationId: 'notification-stale',
+      ),
+      sourceDeviceId: 'rift-peer-stale',
+      notificationId: 'notification-stale',
+    );
+    final active = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-active',
+        notificationId: 'notification-active',
+      ),
+      sourceDeviceId: 'rift-peer-active',
+      notificationId: 'notification-active',
+    );
+    final registry = await MirroredNotificationRegistry.load();
+    await registry.remember(stale);
+    await registry.remember(active);
+    when(() => mockClient.listNotifications()).thenAnswer(
+      (_) async => {
+        'notifications': [
+          {
+            'sourceDeviceId': active.sourceDeviceId,
+            'notificationId': active.notificationId,
+          },
+        ],
+      },
+    );
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    expect(clearCalls, hasLength(1));
+    expect(clearCalls.single.arguments, {'notificationKey': stale.mirrorKey});
+    expect(showCalls, isEmpty);
+    expect((await MirroredNotificationRegistry.load()).entries, [active]);
+  });
+
+  testWidgets('mirrored notification reconciliation shares the lifecycle queue',
+      (WidgetTester tester) async {
+    final entry = MirroredNotificationEntry(
+      mirrorKey: mirroredNotificationKey(
+        sourceDeviceId: 'rift-peer-race',
+        notificationId: 'notification-race',
+      ),
+      sourceDeviceId: 'rift-peer-race',
+      notificationId: 'notification-race',
+    );
+    final registry = await MirroredNotificationRegistry.load();
+    await registry.remember(entry);
+
+    final listResult = Completer<dynamic>();
+    when(() => mockClient.listNotifications())
+        .thenAnswer((_) => listResult.future);
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    await tester.pump();
+    verify(() => mockClient.listNotifications());
+
+    notificationPostedController.add(<String, dynamic>{
+      'notificationId': entry.notificationId,
+      'sourceDeviceId': entry.sourceDeviceId,
+      'sourcePlatform': 'linux',
+      'appName': 'Messages',
+      'title': 'Reposted',
+      'bodyPreview': 'Fresh content',
+    });
+    await tester.pump();
+    expect(
+      macOsCalls.where((call) => call.method == 'notification.show'),
+      isEmpty,
+    );
+
+    listResult.complete({'notifications': []});
+    await tester.pump();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    expect(clearCalls, hasLength(1));
+    expect(showCalls, hasLength(1));
+    expect((await MirroredNotificationRegistry.load()).entries, [entry]);
+  });
+
+  testWidgets(
+      'mirrored notification updates avoid Apple re-alerts and removals reuse the native identity',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+    clearInteractions(mockClient);
+
+    const sourceDeviceId = 'rift-peer-notification';
+    const notificationId = 'notif-dup';
+    final expectedKey = mirroredNotificationKey(
+      sourceDeviceId: sourceDeviceId,
+      notificationId: notificationId,
+    );
+    final posted = <String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      'sourcePlatform': 'linux',
+      'appName': 'Messages',
+      'title': 'Posted',
+      'bodyPreview': 'Original',
+    };
+    notificationPostedController.add(posted);
+    await tester.pump();
+    final postedCall =
+        macOsCalls.lastWhere((call) => call.method == 'notification.show');
+
+    notificationUpdatedController.add(<String, dynamic>{
+      ...posted,
+      'title': 'Updated',
+      'bodyPreview': 'Changed',
+    });
+    await tester.pump();
+    notificationRemovedController.add(<String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+    });
+    await tester.pump();
+
+    final showCalls =
+        macOsCalls.where((call) => call.method == 'notification.show').toList();
+    final clearCalls = macOsCalls
+        .where((call) => call.method == 'notification.clear')
+        .toList();
+    expect(showCalls, hasLength(1));
+    expect(postedCall.arguments['notificationKey'], expectedKey);
+    expect(clearCalls, hasLength(1));
+    expect(clearCalls.single.arguments, {'notificationKey': expectedKey});
   });
 }

@@ -46,6 +46,27 @@ void main() {
       store.dispose();
     });
 
+    test('Should persist device display name and platform', () async {
+      final store = TrustStoreImpl(dbPath);
+      await store.initialize();
+
+      await store.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer-metadata',
+          displayName: 'Alice’s iPhone',
+          platform: 'ios',
+          certDer: Uint8List.fromList(List<int>.filled(32, 4)),
+          state: TrustState.trusted,
+          updatedAt: DateTime.utc(2026, 7, 1),
+        ),
+      );
+
+      final reloaded = await store.getPeer('rift-peer-metadata');
+      expect(reloaded?.displayName, 'Alice’s iPhone');
+      expect(reloaded?.platform, 'ios');
+      store.dispose();
+    });
+
     test('Should persist and reload trustedEndpoints for trusted peers', () async {
       final store = TrustStoreImpl(dbPath);
       await store.initialize();
@@ -158,6 +179,46 @@ void main() {
       expect(migrated, isNotNull);
       expect(migrated!.state, TrustState.trusted);
       expect(migrated.lastSeenAt, isNotNull);
+      migratedStore.dispose();
+    });
+
+    test('Should migrate v4 databases to include platform column', () async {
+      final db = sqlite3.open(dbPath);
+      db.execute('''
+        CREATE TABLE config (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      ''');
+      db.execute('''
+        CREATE TABLE peers (
+          device_id    TEXT PRIMARY KEY,
+          display_name TEXT,
+          cert_der     BLOB NOT NULL,
+          state        TEXT NOT NULL,
+          paired_at    INTEGER,
+          updated_at   INTEGER NOT NULL,
+          last_seen_at INTEGER,
+          trusted_endpoints_json TEXT
+        );
+      ''');
+      db.execute("INSERT INTO config (key, value) VALUES ('schema_version', '4')");
+      db.dispose();
+
+      final migratedStore = TrustStoreImpl(dbPath);
+      await migratedStore.initialize();
+      await migratedStore.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer-ios',
+          displayName: 'Alice’s iPhone',
+          platform: 'ios',
+          certDer: Uint8List.fromList(List<int>.filled(32, 6)),
+          state: TrustState.trusted,
+          updatedAt: DateTime.utc(2026, 7, 1),
+        ),
+      );
+
+      expect((await migratedStore.getPeer('rift-peer-ios'))?.platform, 'ios');
       migratedStore.dispose();
     });
 

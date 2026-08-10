@@ -27,6 +27,13 @@ class MockSessionManager implements SessionManager {
   @override
   void requireCapability(String peerDeviceId, String capabilityName) {}
   @override
+  Future<void> sendPeerError(
+    String peerDeviceId, {
+    required String failureReason,
+    String? refMessageId,
+    required String message,
+  }) async {}
+  @override
   Future<void> waitForSessionEstablished(
     String peerDeviceId, {
     Duration timeout = const Duration(seconds: 10),
@@ -209,7 +216,11 @@ void main() {
       () async {
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.start',
-          'payload': {'expiresInMs': 120000, 'displayName': 'Peer Device'},
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Peer Device',
+            'platform': 'ios',
+          },
         });
 
         // Wait for microtask for stream to process
@@ -217,14 +228,49 @@ void main() {
 
         final peer = await trustStore.getPeer('rift-peer');
         expect(peer!.state, TrustState.pairingPending);
+        expect(peer.displayName, isNull);
+        expect(peer.platform, isNull);
 
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
         expect(ipcEvents[0]['params']['fingerprint'], testFingerprint);
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
 
         expect(ipcEvents[0]['params']['expiresInMs'], 120000);
         // Because FakeAsync is not used, skip waiting for the actual timer and
         // verify the surfaced expiry instead.
+      },
+    );
+
+    test(
+      'Process pairing.start preserves verified session metadata',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-peer',
+            displayName: 'Verified Device',
+            platform: 'ios',
+            certDer: testCertDer,
+            state: TrustState.discovered,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {
+            'expiresInMs': 120000,
+            'displayName': 'Compatibility Name',
+            'platform': 'android',
+          },
+        });
+
+        await Future.delayed(Duration.zero);
+
+        final peer = await trustStore.getPeer('rift-peer');
+        expect(peer!.displayName, 'Verified Device');
+        expect(peer.platform, 'ios');
+        expect(ipcEvents.single['params']['displayName'], 'Verified Device');
       },
     );
 
@@ -251,12 +297,12 @@ void main() {
         expect(peer!.state, TrustState.pairingPending);
         expect(ipcEvents.length, 1);
         expect(ipcEvents[0]['method'], 'rift.onPairingRequest');
-        expect(ipcEvents[0]['params']['displayName'], 'Peer Device');
+        expect(ipcEvents[0]['params']['displayName'], 'rift-peer');
       },
     );
 
     test(
-      'Process rift.approvePairing sends protocol message and becomes trusted',
+      'Process rift.approvePairing sends approval but waits for peer approval',
       () async {
         await trustStore.upsertPeer(
           PeerRecord(
@@ -276,16 +322,12 @@ void main() {
         });
 
         final peer = await trustStore.getPeer('rift-peer');
-        expect(peer!.state, TrustState.trusted);
+        expect(peer!.state, TrustState.pairingPending);
 
-        expect(sessionManager.sentMessages.length, 2);
+        expect(sessionManager.sentMessages.length, 1);
         expect(sessionManager.sentMessages[0]['type'], 'pairing.approve');
         expect(sessionManager.sentMessages[0]['messageId'], isNotNull);
-        expect(sessionManager.sentMessages[1]['type'], 'pairing.complete');
-        expect(sessionManager.sentMessages[1]['messageId'], isNotNull);
-
-        expect(ipcEvents.length, 1);
-        expect(ipcEvents[0]['method'], 'rift.onPairingComplete');
+        expect(ipcEvents, isEmpty);
       },
     );
 
@@ -481,6 +523,11 @@ void main() {
           'params': {'deviceId': 'rift-peer'},
         });
 
+        final pairingStart = sessionManager.sentMessages.single;
+        expect(pairingStart['type'], 'pairing.start');
+        expect(pairingStart['payload'].containsKey('displayName'), isFalse);
+        expect(pairingStart['payload'].containsKey('platform'), isFalse);
+
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.approve',
           'payload': {'approvedAt': DateTime.now().toIso8601String()},
@@ -524,6 +571,11 @@ void main() {
         });
         await Future.delayed(Duration.zero);
 
+        await pairingManager.handleIpcCommand({
+          'method': 'rift.approvePairing',
+          'params': {'deviceId': 'rift-peer', 'fingerprint': testFingerprint},
+        });
+
         sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
           'type': 'pairing.complete',
           'payload': {
@@ -539,6 +591,44 @@ void main() {
         expect(
           ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'),
           isTrue,
+        );
+      },
+    );
+
+    test(
+      'pairing.complete without local approval does not establish trust',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-peer',
+            certDer: testCertDer,
+            state: TrustState.pairingPending,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {'expiresInMs': 120000},
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+          'type': 'pairing.complete',
+          'payload': {
+            'trustedDeviceId': 'rift-peer',
+            'persistedAt': DateTime.now().toUtc().toIso8601String(),
+          },
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          (await trustStore.getPeer('rift-peer'))!.state,
+          TrustState.pairingPending,
+        );
+        expect(
+          ipcEvents.any((event) => event['method'] == 'rift.onPairingComplete'),
+          isFalse,
         );
       },
     );
@@ -597,30 +687,43 @@ void main() {
       },
     );
 
-    test('Trusted peer sending pairing.start is ignored', () async {
-      await trustStore.upsertPeer(
-        PeerRecord(
-          deviceId: 'rift-trusted',
-          certDer: testCertDer,
-          state: TrustState.trusted,
-          updatedAt: DateTime.now().toUtc(),
-        ),
-      );
+    test(
+      'Trusted peer sending pairing.start is rejected without a prompt',
+      () async {
+        await trustStore.upsertPeer(
+          PeerRecord(
+            deviceId: 'rift-trusted',
+            certDer: testCertDer,
+            state: TrustState.trusted,
+            updatedAt: DateTime.now().toUtc(),
+          ),
+        );
 
-      sessionManager.simulateNetworkMessage('rift-trusted', testCertDer, {
-        'type': 'pairing.start',
-        'payload': {'displayName': 'Trusted Device', 'expiresInMs': 120000},
-      });
+        sessionManager.simulateNetworkMessage('rift-trusted', testCertDer, {
+          'type': 'pairing.start',
+          'payload': {'displayName': 'Trusted Device', 'expiresInMs': 120000},
+        });
 
-      await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
 
-      final peer = await trustStore.getPeer('rift-trusted');
-      expect(peer!.state, TrustState.trusted);
-      expect(
-        ipcEvents.where((event) => event['method'] == 'rift.onPairingRequest'),
-        isEmpty,
-      );
-    });
+        final peer = await trustStore.getPeer('rift-trusted');
+        expect(peer!.state, TrustState.trusted);
+        expect(
+          ipcEvents.where(
+            (event) => event['method'] == 'rift.onPairingRequest',
+          ),
+          isEmpty,
+        );
+        expect(
+          sessionManager.sentMessages.any(
+            (message) =>
+                message['type'] == 'pairing.reject' &&
+                message['payload']['failureReason'] == 'PolicyDenied',
+          ),
+          isTrue,
+        );
+      },
+    );
 
     test(
       'Trusted peer keeps pinned certDer when a new cert is observed',
@@ -777,6 +880,68 @@ void main() {
         expect(peer, isNull);
       },
     );
+
+    test('disconnect clears stale outbound pairing state', () async {
+      await trustStore.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer',
+          certDer: testCertDer,
+          state: TrustState.discovered,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+
+      await pairingManager.handleIpcCommand({
+        'method': 'rift.startPairing',
+        'params': {'deviceId': 'rift-peer'},
+      });
+      sessionManager.simulateDisconnect('rift-peer');
+      await Future<void>.delayed(const Duration(milliseconds: 1600));
+
+      sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+        'type': 'pairing.approve',
+        'payload': {'approvedAt': DateTime.now().toUtc().toIso8601String()},
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        sessionManager.sentMessages.any(
+          (message) => message['type'] == 'pairing.reject',
+        ),
+        isTrue,
+      );
+      expect(
+        (await trustStore.getPeer('rift-peer'))!.state,
+        TrustState.discovered,
+      );
+    });
+
+    test('remote trust removal clears pending pairing state', () async {
+      await trustStore.upsertPeer(
+        PeerRecord(
+          deviceId: 'rift-peer',
+          certDer: testCertDer,
+          state: TrustState.pairingPending,
+          updatedAt: DateTime.now().toUtc(),
+        ),
+      );
+
+      sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {
+        'type': 'trust.remove',
+        'payload': {
+          'removedDeviceId': 'rift-local',
+          'reason': 'Peer removed trusted device',
+          'removedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        (await trustStore.getPeer('rift-peer'))!.state,
+        TrustState.discovered,
+      );
+      expect(sessionManager.disconnectedPeers, contains('rift-peer'));
+    });
 
     test('dispose cancels pending timers and unsubscribes listeners', () async {
       sessionManager.simulateNetworkMessage('rift-peer', testCertDer, {

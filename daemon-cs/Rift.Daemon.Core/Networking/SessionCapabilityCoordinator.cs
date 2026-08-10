@@ -14,13 +14,23 @@ internal sealed class SessionCapabilityCoordinator
     internal static readonly CapabilityDescriptor[] SupportedCapabilities =
     [
         new("clipboard.offer_fetch", 1),
-        new("file.transfer", 1),
+        new("device.status", 1),
+        new("file.transfer", 2),
+        new("media.playback", 1),
+        new("notification.sync", 1),
         new("presence.basic", 1),
         new("operation.lifecycle", 1),
         new("security.event_log", 1)
     ];
 
     private static readonly StringComparer CapabilityNameComparer = StringComparer.Ordinal;
+    private static readonly string[] RequiredCapabilityNames =
+    [
+        "clipboard.offer_fetch",
+        "presence.basic",
+        "operation.lifecycle",
+        "security.event_log"
+    ];
     private static readonly HashSet<string> SupportedCapabilityNames = SupportedCapabilities
         .Select(capability => capability.Name)
         .ToHashSet(CapabilityNameComparer);
@@ -248,16 +258,16 @@ internal sealed class SessionCapabilityCoordinator
     internal static bool HasRequiredCapabilities(IReadOnlyList<CapabilityDescriptor> selectedCapabilities)
     {
         var selectedByName = selectedCapabilities.ToDictionary(capability => capability.Name, capability => capability.Version, CapabilityNameComparer);
-        return SupportedCapabilities.All(capability =>
-            selectedByName.TryGetValue(capability.Name, out var selectedVersion) &&
-            selectedVersion >= GetMinimumRequiredVersion(capability.Name));
+        return RequiredCapabilityNames.All(capabilityName =>
+            selectedByName.TryGetValue(capabilityName, out var selectedVersion) &&
+            selectedVersion >= GetMinimumRequiredVersion(capabilityName));
     }
 
     private static int GetMinimumRequiredVersion(string capabilityName)
     {
         return capabilityName switch
         {
-            "clipboard.offer_fetch" or "file.transfer" or "presence.basic" or "operation.lifecycle" or "security.event_log" => 1,
+            "clipboard.offer_fetch" or "device.status" or "file.transfer" or "media.playback" or "notification.sync" or "presence.basic" or "operation.lifecycle" or "security.event_log" => 1,
             _ => int.MaxValue
         };
     }

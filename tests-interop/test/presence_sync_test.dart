@@ -17,7 +17,13 @@ class FakeTrustStore implements TrustStore {
   @override
   Future<void> upsertPeer(PeerRecord record) async {}
   @override
-  Future<PeerRecord?> getPeer(String deviceId) async => null;
+  Future<PeerRecord?> getPeer(String deviceId) async => PeerRecord(
+        deviceId: deviceId,
+        certDer: Uint8List(0),
+        state: TrustState.trusted,
+        updatedAt: DateTime.now(),
+        lastSeenAt: DateTime.now(),
+      );
   @override
   Future<List<PeerRecord>> getAllPeers() async => [];
   @override

@@ -3,8 +3,15 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:fake_async/fake_async.dart';
-import 'package:app_flutter/src/ipc/ipc_transport.dart';
-import 'package:app_flutter/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/media_playback/android_remote_media_playback_coordinator.dart';
+import 'package:rift/src/media_playback/ios_remote_media_playback_coordinator.dart';
+import 'package:rift/src/media_playback/macos_remote_media_playback_coordinator.dart';
+import 'package:rift/src/platform/android_shell.dart';
+import 'package:rift/src/platform/ios_media_playback.dart';
+import 'package:rift/src/platform/macos_media_playback.dart';
+import 'package:flutter/services.dart';
 
 class MockTransport implements IpcTransport {
   StreamController<String>? _daemonToApp;
@@ -96,6 +103,31 @@ class MockTransport implements IpcTransport {
       }
     ]
   };
+  Map<String, dynamic> enqueueFileSendResult = {
+    'QueueItemId': 'queue-1',
+    'Status': 'waiting_for_target',
+    'TargetDeviceId': null,
+  };
+  Map<String, dynamic> listSendQueueResult = {
+    'Items': [
+      {
+        'QueueItemId': 'queue-1',
+        'Status': 'queued',
+        'TargetDeviceId': 'rift-peer',
+        'LocalPath': '/tmp/demo.txt',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'CurrentOperationId': null,
+        'LastTransferId': null,
+        'FailureReason': null,
+        'FailureMessage': null,
+        'CreatedAt': '2026-07-14T10:00:00Z',
+        'UpdatedAt': '2026-07-14T10:00:00Z',
+        'Origin': 'share',
+      }
+    ]
+  };
   Map<String, dynamic> listOperationsResult = {
     'Operations': [
       {
@@ -109,6 +141,75 @@ class MockTransport implements IpcTransport {
       }
     ],
     'Total': 1,
+  };
+  Map<String, dynamic> listNotificationsResult = {
+    'Notifications': [
+      {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'See you at 6?',
+        'PostedAt': '2026-07-14T10:00:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      }
+    ],
+    'ObservedApps': [
+      {
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+      }
+    ],
+    'Policy': {
+      'Enabled': true,
+      'Mode': 'exclude',
+      'PackageNames': ['com.bank.example'],
+    }
+  };
+  Map<String, dynamic> listMediaPlaybackResult = {
+    'playbacks': [],
+  };
+  Map<String, dynamic> getMediaPlaybackResult = {
+    'playbackId': 'playback-1',
+    'sourceDeviceId': 'rift-peer',
+    'appId': 'com.example.music',
+    'appName': 'Example Music',
+    'playbackState': 'playing',
+    'positionMs': 1000,
+    'canPlay': true,
+    'canPause': true,
+    'canSkipNext': true,
+    'canSkipPrevious': true,
+    'canSeek': true,
+    'updatedAt': '2026-07-16T10:00:00Z',
+  };
+  Map<String, dynamic> performMediaPlaybackActionResult = {
+    'OperationId': 'operation-media-1',
+    'PlaybackId': 'playback-1',
+    'Action': 'pause',
+    'State': 'Pending',
+  };
+  Map<String, dynamic> performNotificationActionResult = {
+    'OperationId': 'operation-notification-1',
+    'NotificationId': 'notif-1',
+    'Action': 'open',
+    'State': 'Pending',
+  };
+  Map<String, dynamic> updateNotificationSyncPolicyResult = {
+    'Enabled': true,
+    'Mode': 'exclude',
+    'PackageNames': ['com.bank.example'],
+  };
+  Map<String, dynamic> notifyLocalNotificationEventResult = {
+    'NotificationId': 'notif-1',
+    'BroadcastTo': ['rift-peer'],
+    'Suppressed': false,
+  };
+  Map<String, dynamic> notifyLocalMediaPlaybackEventResult = {
+    'PlaybackId': 'playback-1',
+    'BroadcastTo': ['rift-peer'],
   };
   Map<String, dynamic> getOperationResult = {
     'OperationId': 'operation-1',
@@ -182,6 +283,7 @@ class MockTransport implements IpcTransport {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'IdentityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]
@@ -218,6 +320,12 @@ class MockTransport implements IpcTransport {
         case 'rift.listIncomingFileOffers':
           _sendResult(id, listIncomingFileOffersResult);
           break;
+        case 'rift.enqueueFileSend':
+          _sendResult(id, enqueueFileSendResult);
+          break;
+        case 'rift.listSendQueue':
+          _sendResult(id, listSendQueueResult);
+          break;
         case 'rift.acceptFileOffer':
           _sendResult(id, acceptFileOfferResult);
           break;
@@ -237,6 +345,30 @@ class MockTransport implements IpcTransport {
             _sendResult(id, getOperationResult);
           }
           break;
+        case 'rift.listNotifications':
+          _sendResult(id, listNotificationsResult);
+          break;
+        case 'rift.performNotificationAction':
+          _sendResult(id, performNotificationActionResult);
+          break;
+        case 'rift.updateNotificationSyncPolicy':
+          _sendResult(id, updateNotificationSyncPolicyResult);
+          break;
+        case 'rift.notifyLocalNotificationEvent':
+          _sendResult(id, notifyLocalNotificationEventResult);
+          break;
+        case 'rift.notifyLocalMediaPlaybackEvent':
+          _sendResult(id, notifyLocalMediaPlaybackEventResult);
+          break;
+        case 'rift.listMediaPlayback':
+          _sendResult(id, listMediaPlaybackResult);
+          break;
+        case 'rift.getMediaPlayback':
+          _sendResult(id, getMediaPlaybackResult);
+          break;
+        case 'rift.performMediaPlaybackAction':
+          _sendResult(id, performMediaPlaybackActionResult);
+          break;
       }
     });
 
@@ -252,6 +384,8 @@ class MockTransport implements IpcTransport {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('JsonRpcRiftClient', () {
     late MockTransport transport;
     late JsonRpcRiftClient client;
@@ -282,6 +416,7 @@ void main() {
             'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
             'implementationId': 'riftd-cs/0.1.0',
             'protocolVersion': '0.1-draft',
+            'identityProtectionBackend': 'dpapi',
             'capabilities': [
               {'name': 'clipboard.offer_fetch', 'version': 1}
             ]
@@ -307,6 +442,67 @@ void main() {
           ]
         }),
       );
+    });
+
+    test('should canonicalize C# device status fields in results and events',
+        () async {
+      transport.listTrustedPeersJson = jsonEncode({
+        'Peers': [
+          {
+            'DeviceId': 'rift-phone',
+            'DeviceStatus': {
+              'SourceDeviceId': 'rift-phone',
+              'SourcePlatform': 'android',
+              'BatteryPresent': true,
+              'BatteryPercent': 64,
+              'ChargingState': 'charging',
+              'PowerSource': 'usb',
+              'LowPowerMode': false,
+              'ObservedAt': '2026-08-06T12:00:00Z',
+              'IsStale': false,
+            },
+          },
+        ],
+      });
+      await client.connect();
+
+      final result = await client.listTrustedPeers();
+      expect((result['peers'] as List).single, {
+        'deviceId': 'rift-phone',
+        'deviceStatus': {
+          'sourceDeviceId': 'rift-phone',
+          'sourcePlatform': 'android',
+          'batteryPresent': true,
+          'batteryPercent': 64,
+          'chargingState': 'charging',
+          'powerSource': 'usb',
+          'lowPowerMode': false,
+          'observedAt': '2026-08-06T12:00:00Z',
+          'isStale': false,
+        },
+      });
+
+      final eventFuture = client.onDeviceStatusUpdated.first;
+      transport.emitNotification('rift.onDeviceStatusUpdated', {
+        'SourceDeviceId': 'rift-phone',
+        'BatteryPresent': true,
+        'BatteryPercent': 64,
+        'ChargingState': 'charging',
+        'PowerSource': 'usb',
+        'LowPowerMode': false,
+        'ObservedAt': '2026-08-06T12:00:00Z',
+        'IsStale': false,
+      });
+      expect(await eventFuture, {
+        'sourceDeviceId': 'rift-phone',
+        'batteryPresent': true,
+        'batteryPercent': 64,
+        'chargingState': 'charging',
+        'powerSource': 'usb',
+        'lowPowerMode': false,
+        'observedAt': '2026-08-06T12:00:00Z',
+        'isStale': false,
+      });
     });
 
     test('should format transport and pairing errors for display', () {
@@ -463,11 +659,95 @@ void main() {
       });
     });
 
+    test(
+        'should deliver notification sync notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final postedFuture = client.onNotificationPosted.first;
+      final updatedFuture = client.onNotificationUpdated.first;
+      final removedFuture = client.onNotificationRemoved.first;
+      final actionFuture = client.onNotificationActionResult.first;
+
+      transport.emitNotification('rift.onNotificationPosted', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'See you at 6?',
+        'PostedAt': '2026-07-14T10:00:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      });
+      transport.emitNotification('rift.onNotificationUpdated', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'PackageName': 'com.example.chat',
+        'AppName': 'Example Chat',
+        'Title': 'Riley',
+        'BodyPreview': 'Running late',
+        'PostedAt': '2026-07-14T10:01:00Z',
+        'IsDismissible': true,
+        'IsOpenable': true,
+      });
+      transport.emitNotification('rift.onNotificationRemoved', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'RemovedAt': '2026-07-14T10:02:00Z',
+      });
+      transport.emitNotification('rift.onNotificationActionResult', {
+        'NotificationId': 'notif-1',
+        'SourceDeviceId': 'rift-peer',
+        'OperationId': 'operation-notification-1',
+        'Action': 'open',
+        'State': 'Done',
+        'Success': true,
+      });
+
+      expect(await postedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'packageName': 'com.example.chat',
+        'appName': 'Example Chat',
+        'title': 'Riley',
+        'bodyPreview': 'See you at 6?',
+        'postedAt': '2026-07-14T10:00:00Z',
+        'isDismissible': true,
+        'isOpenable': true,
+      });
+      expect(await updatedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'packageName': 'com.example.chat',
+        'appName': 'Example Chat',
+        'title': 'Riley',
+        'bodyPreview': 'Running late',
+        'postedAt': '2026-07-14T10:01:00Z',
+        'isDismissible': true,
+        'isOpenable': true,
+      });
+      expect(await removedFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'removedAt': '2026-07-14T10:02:00Z',
+      });
+      expect(await actionFuture, {
+        'notificationId': 'notif-1',
+        'sourceDeviceId': 'rift-peer',
+        'operationId': 'operation-notification-1',
+        'action': 'open',
+        'state': 'Done',
+        'success': true,
+      });
+    });
+
     test('should deliver file transfer notifications with canonicalized fields',
         () async {
       await client.connect();
 
       final offerFuture = client.onFileOffer.first;
+      final readyFuture = client.onFileTransferReadyToCommit.first;
       final progressFuture = client.onFileTransferProgress.first;
       final completedFuture = client.onFileTransferCompleted.first;
       final failedFuture = client.onFileTransferFailed.first;
@@ -482,6 +762,18 @@ void main() {
         'ChunkSize': 262144,
         'ChunkCount': 1,
         'ExpiresAt': '2026-06-30T02:10:00Z',
+      });
+      transport.emitNotification('rift.onFileTransferReadyToCommit', {
+        'TransferId': 'transfer-1',
+        'OperationId': 'operation-file-1',
+        'PeerDeviceId': 'rift-peer',
+        'FileName': 'demo.txt',
+        'MediaType': 'text/plain',
+        'ByteSize': 12,
+        'Sha256': 'abc123',
+        'StagingPath': '/private/rift/incoming/content.part',
+        'DestinationPath': '/home/user/Downloads/demo.txt',
+        'State': 'ready_to_commit',
       });
       transport.emitNotification('rift.onFileTransferProgress', {
         'TransferId': 'transfer-1',
@@ -521,6 +813,18 @@ void main() {
         'chunkCount': 1,
         'expiresAt': '2026-06-30T02:10:00Z',
       });
+      expect(await readyFuture, {
+        'transferId': 'transfer-1',
+        'operationId': 'operation-file-1',
+        'peerDeviceId': 'rift-peer',
+        'fileName': 'demo.txt',
+        'mediaType': 'text/plain',
+        'byteSize': 12,
+        'sha256': 'abc123',
+        'stagingPath': '/private/rift/incoming/content.part',
+        'destinationPath': '/home/user/Downloads/demo.txt',
+        'state': 'ready_to_commit',
+      });
       expect(await progressFuture, {
         'transferId': 'transfer-1',
         'operationId': 'operation-file-1',
@@ -546,6 +850,42 @@ void main() {
         'fileName': 'bad.bin',
         'byteSize': 8,
         'failureReason': 'ConnectionLost',
+      });
+    });
+
+    test('should deliver send queue notifications with canonicalized fields',
+        () async {
+      await client.connect();
+
+      final changedFuture = client.onSendQueueChanged.first;
+      final updatedFuture = client.onSendQueueItemUpdated.first;
+
+      transport.emitNotification('rift.onSendQueueChanged', {
+        'QueueItemId': 'queue-1',
+        'Removed': true,
+      });
+      transport.emitNotification('rift.onSendQueueItemUpdated', {
+        'QueueItemId': 'queue-1',
+        'Status': 'waiting_for_peer',
+        'TargetDeviceId': 'rift-peer',
+        'CurrentOperationId': 'operation-1',
+        'LastTransferId': 'transfer-1',
+        'FailureReason': 'PeerUnreachable',
+        'FailureMessage': 'offline',
+      });
+
+      expect(await changedFuture, {
+        'queueItemId': 'queue-1',
+        'removed': true,
+      });
+      expect(await updatedFuture, {
+        'queueItemId': 'queue-1',
+        'status': 'waiting_for_peer',
+        'targetDeviceId': 'rift-peer',
+        'currentOperationId': 'operation-1',
+        'lastTransferId': 'transfer-1',
+        'failureReason': 'PeerUnreachable',
+        'failureMessage': 'offline',
       });
     });
 
@@ -638,6 +978,42 @@ void main() {
       expect(transfers['transfers'], hasLength(1));
     });
 
+    test('should expose daemon send queue RPC wrappers', () async {
+      await client.connect();
+
+      final enqueue = await client.enqueueFileSend(
+        localPath: '/tmp/demo.txt',
+        fileName: 'demo.txt',
+        mediaType: 'text/plain',
+        origin: 'share',
+      );
+      final queue = await client.listSendQueue();
+      final supported = await client.supportsSendQueue();
+
+      expect(enqueue['queueItemId'], 'queue-1');
+      expect(queue['items'], hasLength(1));
+      expect((queue['items'] as List).single['fileName'], 'demo.txt');
+      expect(supported, isTrue);
+    });
+
+    test('supportsSendQueue cache is cleared on reconnect', () async {
+      await client.connect();
+
+      // First probe caches true.
+      expect(await client.supportsSendQueue(), isTrue);
+
+      // Drop the connection; the cache must be cleared so a subsequent
+      // reconnect re-probes the capability.
+      await client.disconnect();
+      await client.connect();
+
+      // Re-probe after reconnect. If the cache had stuck as true without
+      // re-checking, this would still pass even if the daemon no longer
+      // supported the method — so the assertion is that the call still
+      // succeeds (true) AND that a subsequent force-fail still re-probes.
+      expect(await client.supportsSendQueue(), isTrue);
+    });
+
     test('should expose operation RPC wrappers', () async {
       await client.connect();
 
@@ -665,6 +1041,523 @@ void main() {
             .where((request) => request['method'] == 'rift.getOperation')
             .single['params'],
         {'operationId': 'operation-1'},
+      );
+    });
+
+    test('should expose notification sync RPC wrappers', () async {
+      await client.connect();
+
+      final localEventResult = await client.notifyLocalNotificationEvent(
+        eventType: 'posted',
+        payload: const {
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
+      final listed = await client.listNotifications();
+      final actionResult = await client.performNotificationAction(
+        sourceDeviceId: 'rift-source',
+        notificationId: 'notif-1',
+        action: 'open',
+      );
+      final policyResult = await client.updateNotificationSyncPolicy(
+        enabled: true,
+        mode: 'exclude',
+        packageNames: ['com.bank.example'],
+      );
+
+      expect(localEventResult['notificationId'], 'notif-1');
+      expect((listed['notifications'] as List).single['notificationId'],
+          'notif-1');
+      expect(listed['observedApps'], [
+        {
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+        }
+      ]);
+      expect(listed['policy'], {
+        'enabled': true,
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
+      });
+      expect(actionResult['operationId'], 'operation-notification-1');
+      expect(policyResult, {
+        'enabled': true,
+        'mode': 'exclude',
+        'packageNames': ['com.bank.example'],
+      });
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.updateNotificationSyncPolicy',
+            )
+            .single['params'],
+        {
+          'enabled': true,
+          'mode': 'exclude',
+          'packageNames': ['com.bank.example'],
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalNotificationEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'notificationId': 'notif-1',
+          'packageName': 'com.example.chat',
+          'appName': 'Example Chat',
+          'postedAt': '2026-07-14T10:00:00Z',
+          'isDismissible': true,
+          'isOpenable': true,
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.performNotificationAction',
+            )
+            .single['params'],
+        {
+          'sourceDeviceId': 'rift-source',
+          'notificationId': 'notif-1',
+          'action': 'open',
+        },
+      );
+    });
+
+    test('should expose media playback RPC wrappers', () async {
+      await client.connect();
+
+      await client.notifyLocalMediaPlaybackEvent(
+        eventType: 'posted',
+        payload: const {
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.notifyLocalMediaPlaybackEvent',
+            )
+            .single['params'],
+        {
+          'eventType': 'posted',
+          'playbackId': 'playback-1',
+          'appId': 'com.example.music',
+          'appName': 'Example Music',
+          'artwork': {
+            'dataBase64': 'Zm9v',
+            'mediaType': 'image/png',
+          },
+          'playbackState': 'playing',
+          'positionMs': 1000,
+          'updatedAt': '2026-07-16T10:00:00Z',
+          'canPlay': true,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': true,
+        },
+      );
+
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-1',
+            'sourceDeviceId': 'rift-peer',
+            'appId': 'com.example.music',
+            'appName': 'Example Music',
+            'artwork': {
+              'dataBase64': 'Zm9v',
+              'mediaType': 'image/png',
+            },
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-16T10:00:00Z',
+          }
+        ],
+      };
+      transport.getMediaPlaybackResult = {
+        'playbackId': 'playback-1',
+        'sourceDeviceId': 'rift-peer',
+        'appId': 'com.example.music',
+        'appName': 'Example Music',
+        'artwork': {
+          'dataBase64': 'Zm9v',
+          'mediaType': 'image/png',
+        },
+        'playbackState': 'playing',
+        'positionMs': 1000,
+        'canPlay': true,
+        'canPause': true,
+        'canSkipNext': true,
+        'canSkipPrevious': true,
+        'canSeek': true,
+        'updatedAt': '2026-07-16T10:00:00Z',
+      };
+      transport.performMediaPlaybackActionResult = {
+        'OperationId': 'operation-media-1',
+        'PlaybackId': 'playback-1',
+        'Action': 'pause',
+        'State': 'Pending',
+      };
+
+      final listed = await client.listMediaPlayback();
+      final detailed = await client.getMediaPlayback(
+        sourceDeviceId: 'rift-peer',
+        playbackId: 'playback-1',
+      );
+      final actionResult = await client.performMediaPlaybackAction(
+        sourceDeviceId: 'rift-peer',
+        playbackId: 'playback-1',
+        action: 'pause',
+      );
+
+      expect((listed['playbacks'] as List).single['playbackId'], 'playback-1');
+      expect(
+        ((listed['playbacks'] as List).single['artwork'] as Map)['mediaType'],
+        'image/png',
+      );
+      expect(detailed['playbackId'], 'playback-1');
+      expect((detailed['artwork'] as Map)['mediaType'], 'image/png');
+      expect(actionResult['playbackId'], 'playback-1');
+      expect(
+        transport.requests
+            .where(
+              (request) =>
+                  request['method'] == 'rift.performMediaPlaybackAction',
+            )
+            .single['params'],
+        {
+          'sourceDeviceId': 'rift-peer',
+          'playbackId': 'playback-1',
+          'action': 'pause',
+        },
+      );
+    });
+
+    test('Android playback actions include the source device identity',
+        () async {
+      const shellChannel = MethodChannel('rift/android/shell');
+      AndroidShell.debugIsAndroidOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shellChannel, (call) async => true);
+      await client.connect();
+      final coordinator = AndroidRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          }),
+        );
+
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-peer',
+            'playbackId': 'playback-1',
+            'action': 'pause',
+          },
+        );
+      } finally {
+        await coordinator.dispose();
+        AndroidShell.debugIsAndroidOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(shellChannel, null);
+      }
+    });
+
+    test('iOS mirrors playback state and routes native seek actions', () async {
+      const mediaPlaybackChannel = MethodChannel('rift/ios/media_playback');
+      final nativeCalls = <MethodCall>[];
+      IOSMediaPlayback.debugIsIOSOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'playback-ios-1',
+            'sourceDeviceId': 'rift-mac',
+            'sourcePlatform': 'macos',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Test Song',
+            'artist': 'Test Artist',
+            'album': 'Test Album',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': true,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          }
+        ],
+      };
+      await client.connect();
+      final coordinator = IOSRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'show',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-mac');
+        expect(playback['playbackId'], 'playback-ios-1');
+        expect(playback['title'], 'Test Song');
+        expect(playback['positionMs'], 1500);
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-mac',
+            'playbackId': 'playback-ios-1',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+
+        transport.listMediaPlaybackResult = {
+          'playbacks': [
+            {
+              ...Map<String, dynamic>.from(
+                (transport.listMediaPlaybackResult['playbacks'] as List).single
+                    as Map,
+              ),
+              'playbackState': 'paused',
+              'positionMs': 42000,
+              'canPlay': true,
+              'canPause': false,
+              'updatedAt': '2026-07-19T17:30:01Z',
+            }
+          ],
+        };
+        transport.emitNotification('rift.onMediaPlaybackActionResult', {
+          'playbackId': 'playback-ios-1',
+          'sourceDeviceId': 'rift-mac',
+          'action': 'seek',
+          'operationId': 'operation-media-1',
+          'state': 'Done',
+          'success': true,
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final confirmedPlayback = Map<String, dynamic>.from(
+          (nativeCalls.lastWhere((call) => call.method == 'show').arguments
+              as Map)['playback'] as Map,
+        );
+        expect(confirmedPlayback['playbackState'], 'paused');
+        expect(confirmedPlayback['positionMs'], 42000);
+      } finally {
+        await coordinator.dispose();
+        IOSMediaPlayback.debugIsIOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(nativeCalls.map((call) => call.method), contains('clear'));
+    });
+
+    test('macOS mirrors the latest remote playback and routes seek actions',
+        () async {
+      const mediaPlaybackChannel = MethodChannel('rift/macos/media_playback');
+      final nativeCalls = <MethodCall>[];
+      MacOSMediaPlaybackBridge.debugIsMacOSOverride = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (call) async {
+        nativeCalls.add(call);
+        return true;
+      });
+      transport.listMediaPlaybackResult = {
+        'playbacks': [
+          {
+            'playbackId': 'local-playback',
+            'sourceDeviceId': 'rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq',
+            'appId': 'com.apple.Music',
+            'appName': 'Music',
+            'title': 'Local Song',
+            'playbackState': 'playing',
+            'positionMs': 500,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:31:00Z',
+          },
+          {
+            'playbackId': 'playback-older',
+            'sourceDeviceId': 'rift-linux',
+            'appId': 'org.mpris.MediaPlayer2.mpd',
+            'appName': 'MPD',
+            'title': 'Older Song',
+            'playbackState': 'playing',
+            'positionMs': 1000,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': false,
+            'updatedAt': '2026-07-19T17:29:00Z',
+          },
+          {
+            'playbackId': 'playback-latest',
+            'sourceDeviceId': 'rift-android',
+            'appId': 'com.example.player',
+            'appName': 'Example Player',
+            'title': 'Latest Song',
+            'artist': 'Test Artist',
+            'playbackState': 'playing',
+            'positionMs': 1500,
+            'durationMs': 180000,
+            'canPlay': false,
+            'canPause': true,
+            'canSkipNext': true,
+            'canSkipPrevious': true,
+            'canSeek': true,
+            'updatedAt': '2026-07-19T17:30:00Z',
+          },
+        ],
+      };
+      await client.connect();
+      final coordinator = MacOSRemoteMediaPlaybackCoordinator(client);
+
+      try {
+        await coordinator.start();
+
+        final showCall = nativeCalls.singleWhere(
+          (call) => call.method == 'showRemotePlayback',
+        );
+        final playback = Map<String, dynamic>.from(
+          (showCall.arguments as Map)['playback'] as Map,
+        );
+        expect(playback['sourceDeviceId'], 'rift-android');
+        expect(playback['playbackId'], 'playback-latest');
+        expect(playback['title'], 'Latest Song');
+
+        final handled = await coordinator.handlePlatformMethodCall(
+          const MethodCall('mediaPlaybackAction', {
+            'sourceDeviceId': 'rift-android',
+            'playbackId': 'playback-latest',
+            'action': 'seek',
+            'positionMs': 42000,
+          }),
+        );
+        expect(handled, isTrue);
+        expect(
+          transport.requests
+              .where(
+                (request) =>
+                    request['method'] == 'rift.performMediaPlaybackAction',
+              )
+              .single['params'],
+          {
+            'sourceDeviceId': 'rift-android',
+            'playbackId': 'playback-latest',
+            'action': 'seek',
+            'positionMs': 42000,
+          },
+        );
+
+        transport.emitNotification('rift.onMediaPlaybackUpdated', {
+          'playbackId': 'playback-older',
+          'sourceDeviceId': 'rift-linux',
+          'appId': 'org.mpris.MediaPlayer2.mpd',
+          'appName': 'MPD',
+          'title': 'Older Song',
+          'playbackState': 'playing',
+          'positionMs': 2000,
+          'canPlay': false,
+          'canPause': true,
+          'canSkipNext': true,
+          'canSkipPrevious': true,
+          'canSeek': false,
+          'updatedAt': '2026-07-19T17:32:00Z',
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        final updatedPlayback = Map<String, dynamic>.from(
+          (nativeCalls
+              .lastWhere(
+                (call) => call.method == 'showRemotePlayback',
+              )
+              .arguments as Map)['playback'] as Map,
+        );
+        expect(updatedPlayback['sourceDeviceId'], 'rift-linux');
+        expect(updatedPlayback['playbackId'], 'playback-older');
+      } finally {
+        await coordinator.dispose();
+        MacOSMediaPlaybackBridge.debugIsMacOSOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
+
+      expect(
+        nativeCalls.map((call) => call.method),
+        contains('clearRemotePlayback'),
       );
     });
 

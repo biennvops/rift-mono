@@ -66,6 +66,18 @@
                         </items>
                     </menu>
                 </menuItem>
+                <menuItem title="File" id="wW7-3Q-4Zc">
+                    <modifierMask key="keyEquivalentModifierMask"/>
+                    <menu key="submenu" title="File" id="2QJ-hV-D7z">
+                        <items>
+                            <menuItem title="Send Files…" keyEquivalent="O" id="9Hu-jw-l9l">
+                                <connections>
+                                    <action selector="sendFilesMenuAction:" target="Voe-Tx-rLC" id="Yf7-v8-Y6m"/>
+                                </connections>
+                            </menuItem>
+                        </items>
+                    </menu>
+                </menuItem>
                 <menuItem title="Edit" id="5QF-Oa-p0T">
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="Edit" id="W48-6f-4Dl">

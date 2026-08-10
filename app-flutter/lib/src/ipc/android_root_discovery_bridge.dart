@@ -112,6 +112,8 @@ class AndroidRootDiscoveryBridge {
       _fallbackPeersByInstanceId = {};
   final String _instanceId;
   final Set<String> _recentlyTcpPinged = {};
+  Set<String> _localIpv4Prefixes = const <String>{};
+  int _discoverySnapshotGeneration = 0;
 
   AndroidRootDiscoveryBridge({
     required this.port,
@@ -124,7 +126,7 @@ class AndroidRootDiscoveryBridge {
   Stream<AndroidDiscoveredPeer> get onPeerDiscovered =>
       _peerDiscoveredController.stream;
   Stream<AndroidDiscoveredPeer> get onPeerLost => _peerLostController.stream;
-  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested => 
+  Stream<AndroidDiscoveredPeer> get onReverseTcpPingRequested =>
       _reverseTcpPingController.stream;
 
   bool get isDiscovering => _discovery != null;
@@ -173,6 +175,7 @@ class AndroidRootDiscoveryBridge {
   Future<void> startDiscovery() async {
     if (_discovery != null) return;
 
+    await _refreshLocalIpv4Prefixes();
     _discovery = await nsd.startDiscovery('_rift._tcp');
     _discovery!.addListener(_onDiscoveryChanged);
     await _ensureFallbackDiscovery();
@@ -222,31 +225,30 @@ class AndroidRootDiscoveryBridge {
     final discovery = _discovery;
     if (discovery == null) return;
 
-    debugPrint(
-        '[mDNS Debug] nsd plugin fired _onDiscoveryChanged with ${discovery.services.length} services.');
+    final generation = ++_discoverySnapshotGeneration;
+    final services = List<nsd.Service>.from(discovery.services);
+    unawaited(_ingestDiscoveryServices(services, generation));
+  }
+
+  Future<void> _ingestDiscoveryServices(
+    List<nsd.Service> services,
+    int generation,
+  ) async {
+    final peers = await Future.wait(services.map(_peerFromService));
+    if (generation != _discoverySnapshotGeneration) return;
+
     final mdnsSnapshot = <AndroidDiscoveredPeer>[];
-    for (final service in discovery.services) {
-      debugPrint(
-          '[mDNS Debug] nsd raw service: name=${service.name}, type=${service.type}, host=${service.host}, addresses=${service.addresses}, port=${service.port}, txt=${service.txt}');
-      final peer = _peerFromService(service);
+    for (var i = 0; i < services.length; i += 1) {
+      final peer = peers[i];
+      final service = services[i];
       if (peer != null) {
-        debugPrint(
-            '[mDNS Debug] Parsed peer: ${peer.instanceId} at ${peer.address}:${peer.port}');
         if (peer.deviceIdHint != deviceIdHint) {
           if (_shouldSuppressMdnsPeer(peer)) {
-            debugPrint(
-              '[mDNS Debug] Suppressed stale mDNS peer: ${peer.instanceId} '
-              'at ${peer.address}:${peer.port}',
-            );
             continue;
           }
           mdnsSnapshot.add(peer);
-        } else {
-          debugPrint('[mDNS Debug] Ignored self peer.');
         }
-      } else if (service.name == _instanceId) {
-        debugPrint('[mDNS Debug] Ignored own broadcast service: ${service.name}');
-      } else {
+      } else if (service.name != _instanceId) {
         debugPrint(
             '[mDNS Debug] Failed to parse peer from service: ${service.name}');
       }
@@ -256,14 +258,19 @@ class AndroidRootDiscoveryBridge {
 
   void _ingestMergedSnapshot(
       [Iterable<AndroidDiscoveredPeer> mdnsSnapshot = const []]) {
-    final mergedByInstanceId = <String, AndroidDiscoveredPeer>{
-      for (final peer in mdnsSnapshot) peer.instanceId: peer,
+    // Merge mDNS and UDP-fallback observations by stable identity (device ID
+    // hint when available) so one device never yields duplicate entries.
+    // mDNS wins over fallback for the same device.
+    final merged = <String, AndroidDiscoveredPeer>{
       for (final entry in _fallbackPeersByInstanceId.entries)
         if (entry.value.peer.deviceIdHint != deviceIdHint)
-          entry.key: entry.value.peer,
+          AndroidDiscoveryPeerTracker._trackingKey(entry.value.peer):
+              entry.value.peer,
+      for (final peer in mdnsSnapshot)
+        AndroidDiscoveryPeerTracker._trackingKey(peer): peer,
     };
 
-    final delta = tracker.ingest(mergedByInstanceId.values);
+    final delta = tracker.ingest(merged.values);
     for (final peer in delta.removed) {
       _peerLostController.add(peer);
     }
@@ -271,14 +278,11 @@ class AndroidRootDiscoveryBridge {
       _peerDiscoveredController.add(peer);
     }
     for (final peer in delta.updated) {
-      debugPrint(
-        '[mDNS Debug] Updated peer: ${peer.instanceId} now at ${peer.address}:${peer.port}',
-      );
       _peerDiscoveredController.add(peer);
     }
   }
 
-  AndroidDiscoveredPeer? _peerFromService(nsd.Service service) {
+  Future<AndroidDiscoveredPeer?> _peerFromService(nsd.Service service) async {
     final instanceId = service.name;
     final port = service.port;
     final observedEndpoints = <({String address, int port})>[];
@@ -292,8 +296,25 @@ class AndroidRootDiscoveryBridge {
     }
 
     final host = service.host;
-    if (host != null && seenAddresses.add(host)) {
-      observedEndpoints.add((address: host, port: port ?? 0));
+    final lookupHosts = <String>{
+      if (host != null && InternetAddress.tryParse(host) == null) host,
+      if (instanceId != null) '$instanceId.rift.local',
+    };
+    for (final lookupHost in lookupHosts) {
+      try {
+        final resolvedAddresses = await InternetAddress.lookup(
+          lookupHost,
+          type: InternetAddressType.IPv4,
+        );
+        for (final address in resolvedAddresses) {
+          if (seenAddresses.add(address.address)) {
+            observedEndpoints.add((address: address.address, port: port ?? 0));
+          }
+        }
+      } catch (_) {
+        // The service.addresses list is still useful when hostname resolution
+        // is unavailable on a particular Android network.
+      }
     }
 
     if (instanceId == null ||
@@ -302,6 +323,12 @@ class AndroidRootDiscoveryBridge {
         instanceId == _instanceId) {
       return null;
     }
+
+    observedEndpoints.sort(
+      (a, b) => _endpointPriority(b.address).compareTo(
+        _endpointPriority(a.address),
+      ),
+    );
 
     final txt = service.txt ?? {};
     final minV =
@@ -321,6 +348,54 @@ class AndroidRootDiscoveryBridge {
       deviceIdHint: did,
       fingerprintPrefix: fp,
     );
+  }
+
+  Future<void> _refreshLocalIpv4Prefixes() async {
+    try {
+      final interfaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLoopback: false,
+      );
+      _localIpv4Prefixes = {
+        for (final address
+            in interfaces.expand((interface) => interface.addresses))
+          if (address.type == InternetAddressType.IPv4)
+            _ipv4Prefix(address.address),
+      };
+    } catch (_) {
+      _localIpv4Prefixes = const <String>{};
+    }
+  }
+
+  int _endpointPriority(String address) {
+    final parsed = InternetAddress.tryParse(address);
+    if (parsed == null || parsed.type != InternetAddressType.IPv4) {
+      return 0;
+    }
+    if (_localIpv4Prefixes.contains(_ipv4Prefix(address))) {
+      return 3;
+    }
+    if (_isPrivateIpv4(address)) {
+      return 2;
+    }
+    return 1;
+  }
+
+  String _ipv4Prefix(String address) {
+    final parts = address.split('.');
+    return parts.length == 4 ? '${parts[0]}.${parts[1]}.${parts[2]}' : address;
+  }
+
+  bool _isPrivateIpv4(String address) {
+    final parts = address.split('.').map(int.tryParse).toList(growable: false);
+    if (parts.length != 4 || parts.any((part) => part == null)) {
+      return false;
+    }
+    final first = parts[0]!;
+    final second = parts[1]!;
+    return first == 10 ||
+        (first == 172 && second >= 16 && second <= 31) ||
+        (first == 192 && second == 168);
   }
 
   bool _isBenignStopDiscoveryError(Object error) {
@@ -428,9 +503,6 @@ class AndroidRootDiscoveryBridge {
         peer: peer,
         lastSeen: DateTime.now(),
       );
-      debugPrint(
-        '[mDNS Debug] Parsed fallback peer: ${peer.instanceId} at ${peer.address}:${peer.port}',
-      );
       _ingestMergedSnapshot();
       _sendDirectPingPong(peer);
     } catch (e) {
@@ -507,26 +579,27 @@ class AndroidRootDiscoveryBridge {
     final bytes = Uint8List.fromList(utf8.encode(payload));
 
     try {
-      final b1 = socket.send(bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
-      debugPrint('[mDNS Debug] Ping-pong unicast to $targetAddress sent $b1 bytes.');
+      socket.send(
+          bytes, InternetAddress(targetAddress), _fallbackDiscoveryPort);
 
       final parts = targetAddress.split('.');
       if (parts.length == 4) {
         final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
-        final b2 = socket.send(bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
-        debugPrint('[mDNS Debug] Ping-pong subnet to $subnetBroadcast sent $b2 bytes.');
+        socket.send(
+            bytes, InternetAddress(subnetBroadcast), _fallbackDiscoveryPort);
       }
-      
+
       // TCP Reverse-Connect Hack for Android Hotspot Asymmetry
       final endpointKey = '${targetPeer.address}:${targetPeer.port}';
       if (_recentlyTcpPinged.add(endpointKey)) {
-        debugPrint('[mDNS Debug] Reverse TCP Pinging new endpoint $endpointKey');
         _reverseTcpPingController.add(targetPeer);
         // Clear after a while so we can ping again if it gets lost
-        Timer(const Duration(seconds: 15), () => _recentlyTcpPinged.remove(endpointKey));
+        Timer(const Duration(seconds: 15),
+            () => _recentlyTcpPinged.remove(endpointKey));
       }
     } catch (e) {
-      debugPrint('[mDNS Debug] Failed immediate ping-pong to $targetAddress: $e');
+      debugPrint(
+          '[mDNS Debug] Failed immediate ping-pong to $targetAddress: $e');
     }
   }
 
@@ -588,7 +661,7 @@ class AndroidRootDiscoveryBridge {
             InternetAddress(endpoint.address),
             _fallbackDiscoveryPort,
           );
-          
+
           final parts = endpoint.address.split('.');
           if (parts.length == 4) {
             final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
@@ -613,29 +686,39 @@ class AndroidDiscoveryPeerTracker {
   List<AndroidDiscoveredPeer> get currentPeers =>
       _seenPeers.values.toList(growable: false);
 
+  /// Tracking key: peers advertising a device ID hint are keyed by that
+  /// stable identity, so mDNS instance-name churn (advertisers regenerate
+  /// `rift-peer-` instance names) is an update rather than a remove+add
+  /// flap. Hint-less peers fall back to the instance name.
+  static String _trackingKey(AndroidDiscoveredPeer peer) =>
+      peer.deviceIdHint ?? 'instance:${peer.instanceId}';
+
   AndroidDiscoverySnapshotDelta ingest(Iterable<AndroidDiscoveredPeer> peers) {
-    final snapshot = peers.toList(growable: false);
-    final currentIds = {for (final peer in snapshot) peer.instanceId};
+    // Deduplicate by tracking key; the last observation wins.
+    final snapshot = <String, AndroidDiscoveredPeer>{};
+    for (final peer in peers) {
+      snapshot[_trackingKey(peer)] = peer;
+    }
 
     final removed = <AndroidDiscoveredPeer>[];
-    final lostIds = _seenPeers.keys.toSet().difference(currentIds);
+    final lostIds = _seenPeers.keys.toSet().difference(snapshot.keys.toSet());
     for (final id in lostIds) {
       removed.add(_seenPeers.remove(id)!);
     }
 
     final added = <AndroidDiscoveredPeer>[];
     final updated = <AndroidDiscoveredPeer>[];
-    for (final peer in snapshot) {
-      final existing = _seenPeers[peer.instanceId];
+    for (final entry in snapshot.entries) {
+      final existing = _seenPeers[entry.key];
       if (existing == null) {
-        _seenPeers[peer.instanceId] = peer;
-        added.add(peer);
+        _seenPeers[entry.key] = entry.value;
+        added.add(entry.value);
         continue;
       }
 
-      if (!_samePeer(existing, peer)) {
-        _seenPeers[peer.instanceId] = peer;
-        updated.add(peer);
+      if (!_samePeer(existing, entry.value)) {
+        _seenPeers[entry.key] = entry.value;
+        updated.add(entry.value);
       }
     }
 

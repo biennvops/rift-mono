@@ -34,10 +34,17 @@ public static class SecurityEventTypes
     public const string CertificateRotated = "certificate.rotated";
     public const string CapabilityNegotiated = "capability.negotiated";
     public const string OperationTransitioned = "operation.transitioned";
+    public const string FileTransferRejected = "file_transfer.rejected";
     public const string ClipboardOffered = "clipboard.offered";
     public const string ClipboardFetched = "clipboard.fetched";
     public const string ClipboardExpired = "clipboard.expired";
     public const string ClipboardOfferReplay = "clipboard.offer_replay";
+    public const string NotificationSynced = "notification.synced";
+    public const string NotificationRemoved = "notification.removed";
+    public const string NotificationActioned = "notification.actioned";
+    public const string MediaPlaybackSynced = "media.playback_synced";
+    public const string MediaPlaybackRemoved = "media.playback_removed";
+    public const string MediaPlaybackActioned = "media.playback_actioned";
     public const string MessageMalformed = "message.malformed";
     public const string CertificateMalformed = "certificate.malformed";
     public const string PolicyDenied = "policy.denied";

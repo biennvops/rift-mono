@@ -13,3 +13,20 @@ class AppStrings {
   static const openSettings = 'Open settings/debug';
   static const settingsTitle = 'Settings / Debug';
 }
+
+class AppPrefs {
+  static const clipboardNotificationsEnabled =
+      'clipboard_notifications_enabled';
+  static const sendQueueState = 'send_queue_state_v1';
+  static const notificationSyncEnabled = 'notification_sync_enabled';
+  static const notificationSyncBlacklist = 'notification_sync_blacklist_v1';
+  static const notificationSyncPolicyEnabledV2 =
+      'notification_sync_policy_enabled_v2';
+  static const notificationSyncPolicyModeV2 =
+      'notification_sync_policy_mode_v2';
+  static const notificationSyncPolicyPackagesV2 =
+      'notification_sync_policy_packages_v2';
+  static const notificationSyncPolicyLegacyProjectionV2 =
+      'notification_sync_policy_legacy_projection_v2';
+  static const defaultDownloadPath = 'default_download_path';
+}

@@ -17,6 +17,7 @@ import 'package:daemon_dart/src/network/discovery_service_factory.dart'
 import 'package:daemon_dart/src/network/transport_impl.dart';
 import 'package:daemon_dart/src/network/session_manager.dart';
 import 'package:daemon_dart/src/interfaces/discovery_service.dart';
+import 'package:daemon_dart/src/interfaces/identity_manager.dart';
 import 'package:daemon_dart/src/interfaces/transport.dart';
 import 'package:daemon_dart/src/interfaces/trust_store.dart';
 import 'package:daemon_dart/src/storage/trust_store_impl.dart';
@@ -25,6 +26,9 @@ import 'package:daemon_dart/src/clipboard/clipboard_engine.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_handler.dart';
 import 'package:daemon_dart/src/clipboard/clipboard_models.dart';
 import 'package:daemon_dart/src/file_transfer/file_transfer_service.dart';
+import 'package:daemon_dart/src/device_status/device_status_manager.dart';
+import 'package:daemon_dart/src/media_playback/media_playback_manager.dart';
+import 'package:daemon_dart/src/media_playback/media_playback_models.dart';
 import 'package:daemon_dart/src/operation/operation_manager.dart';
 import 'package:daemon_dart/src/operation/operation_models.dart';
 import 'package:path/path.dart' as p;
@@ -55,8 +59,15 @@ class _DiscoveredPeerRecord {
 
   List<DiscoveredPeer> get orderedPeers {
     final peers = peersByInstanceId.values.toList(growable: false);
-    peers.sort(_compareDiscoveredPeers);
-    return peers;
+    final grouped = <int, List<DiscoveredPeer>>{};
+    for (final peer in peers) {
+      grouped
+          .putIfAbsent(_endpointScore(peer.address), () => <DiscoveredPeer>[])
+          .add(peer);
+    }
+
+    final scores = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    return [for (final score in scores) ...grouped[score]!];
   }
 
   DiscoveredPeer? get primaryPeer =>
@@ -73,16 +84,280 @@ class _DiscoveredPeerRecord {
       .toList(growable: false);
 }
 
-int _compareDiscoveredPeers(DiscoveredPeer a, DiscoveredPeer b) {
-  final scoreCompare = _endpointScore(
-    b.address,
-  ).compareTo(_endpointScore(a.address));
-  if (scoreCompare != 0) return scoreCompare;
+const String _notificationSyncModeAll = 'all';
+const String _notificationSyncModeExclude = 'exclude';
+const String _notificationSyncModeInclude = 'include';
+const int notificationIconMaxRawBytes = 131072;
+const int notificationIconMaxBase64Characters =
+    ((notificationIconMaxRawBytes + 2) ~/ 3) * 4;
+const int notificationIconMaxDimension = 512;
+const _notificationIconCanonicalFields = <String>{
+  'mediaType',
+  'dataBase64',
+  'byteSize',
+  'sha256',
+};
+const _pngSignature = <int>[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+final _notificationIconSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
 
-  final addressCompare = a.address.compareTo(b.address);
-  if (addressCompare != 0) return addressCompare;
+Map<String, dynamic>? normalizeNotificationIcon(Object? value) {
+  if (value is! Map) {
+    return null;
+  }
 
-  return a.port.compareTo(b.port);
+  if (value.length != _notificationIconCanonicalFields.length ||
+      value.keys.any(
+        (key) =>
+            key is! String || !_notificationIconCanonicalFields.contains(key),
+      )) {
+    return null;
+  }
+
+  final mediaType = value['mediaType'];
+  final dataBase64 = value['dataBase64'];
+  final byteSize = value['byteSize'];
+  final sha256Value = value['sha256'];
+  if (mediaType != 'image/png' ||
+      dataBase64 is! String ||
+      dataBase64.length > notificationIconMaxBase64Characters ||
+      byteSize is! int ||
+      byteSize < 0 ||
+      byteSize > notificationIconMaxRawBytes ||
+      sha256Value is! String ||
+      !_notificationIconSha256Pattern.hasMatch(sha256Value)) {
+    return null;
+  }
+
+  Uint8List bytes;
+  try {
+    bytes = Uint8List.fromList(base64Decode(dataBase64));
+  } catch (_) {
+    return null;
+  }
+  if (bytes.length > notificationIconMaxRawBytes ||
+      bytes.length != byteSize ||
+      !_isValidNotificationPng(bytes) ||
+      sha256.convert(bytes).toString() != sha256Value) {
+    return null;
+  }
+
+  return <String, dynamic>{
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(bytes),
+    'byteSize': bytes.length,
+    'sha256': sha256Value,
+  };
+}
+
+bool _isValidNotificationPng(Uint8List bytes) {
+  if (bytes.length < _pngSignature.length) {
+    return false;
+  }
+  for (var index = 0; index < _pngSignature.length; index++) {
+    if (bytes[index] != _pngSignature[index]) {
+      return false;
+    }
+  }
+
+  var offset = _pngSignature.length;
+  var chunkIndex = 0;
+  var sawHeader = false;
+  var sawPalette = false;
+  var sawImageData = false;
+  var finishedImageData = false;
+  var imageDataBytes = 0;
+  var colorType = 0;
+
+  while (offset <= bytes.length - 12) {
+    final dataLength = _readPngUint32(bytes, offset);
+    if (dataLength > bytes.length - offset - 12) {
+      return false;
+    }
+    final typeOffset = offset + 4;
+    final dataOffset = offset + 8;
+    final expectedCrc = _readPngUint32(bytes, dataOffset + dataLength);
+    if (!_isPngChunkType(bytes, typeOffset) ||
+        _pngChunkCrc32(bytes, typeOffset, dataOffset, dataLength) !=
+            expectedCrc) {
+      return false;
+    }
+
+    final isHeader = _isPngChunk(bytes, typeOffset, 0x49, 0x48, 0x44, 0x52);
+    final isPalette = _isPngChunk(bytes, typeOffset, 0x50, 0x4c, 0x54, 0x45);
+    final isImageData = _isPngChunk(bytes, typeOffset, 0x49, 0x44, 0x41, 0x54);
+    final isEnd = _isPngChunk(bytes, typeOffset, 0x49, 0x45, 0x4e, 0x44);
+    if ((chunkIndex == 0 && !isHeader) || (chunkIndex > 0 && isHeader)) {
+      return false;
+    }
+
+    if (isHeader) {
+      if (dataLength != 13 || !_isValidPngHeader(bytes, dataOffset)) {
+        return false;
+      }
+      colorType = bytes[dataOffset + 9];
+      sawHeader = true;
+    } else if (isPalette) {
+      if (!sawHeader ||
+          sawPalette ||
+          sawImageData ||
+          colorType == 0 ||
+          colorType == 4 ||
+          dataLength == 0 ||
+          dataLength % 3 != 0 ||
+          dataLength > 768) {
+        return false;
+      }
+      sawPalette = true;
+    } else if (isImageData) {
+      if (!sawHeader || finishedImageData || (colorType == 3 && !sawPalette)) {
+        return false;
+      }
+      sawImageData = true;
+      imageDataBytes += dataLength;
+    } else {
+      if (sawImageData) {
+        finishedImageData = true;
+      }
+      if (isEnd) {
+        return dataLength == 0 &&
+            sawImageData &&
+            imageDataBytes > 0 &&
+            offset + 12 == bytes.length;
+      }
+      if ((bytes[typeOffset] & 0x20) == 0) {
+        return false;
+      }
+    }
+
+    offset += dataLength + 12;
+    chunkIndex++;
+  }
+  return false;
+}
+
+bool _isValidPngHeader(Uint8List bytes, int offset) {
+  final width = _readPngUint32(bytes, offset);
+  final height = _readPngUint32(bytes, offset + 4);
+  final bitDepth = bytes[offset + 8];
+  final colorType = bytes[offset + 9];
+  final validBitDepth = switch (colorType) {
+    0 =>
+      bitDepth == 1 ||
+          bitDepth == 2 ||
+          bitDepth == 4 ||
+          bitDepth == 8 ||
+          bitDepth == 16,
+    2 || 4 || 6 => bitDepth == 8 || bitDepth == 16,
+    3 => bitDepth == 1 || bitDepth == 2 || bitDepth == 4 || bitDepth == 8,
+    _ => false,
+  };
+  return width > 0 &&
+      width <= notificationIconMaxDimension &&
+      height > 0 &&
+      height <= notificationIconMaxDimension &&
+      validBitDepth &&
+      bytes[offset + 10] == 0 &&
+      bytes[offset + 11] == 0 &&
+      (bytes[offset + 12] == 0 || bytes[offset + 12] == 1);
+}
+
+int _readPngUint32(Uint8List bytes, int offset) =>
+    ByteData.sublistView(bytes, offset, offset + 4).getUint32(0);
+
+bool _isPngChunkType(Uint8List bytes, int offset) {
+  for (var index = offset; index < offset + 4; index++) {
+    final value = bytes[index];
+    if (!((value >= 0x41 && value <= 0x5a) ||
+        (value >= 0x61 && value <= 0x7a))) {
+      return false;
+    }
+  }
+  return (bytes[offset + 2] & 0x20) == 0;
+}
+
+bool _isPngChunk(
+  Uint8List bytes,
+  int offset,
+  int first,
+  int second,
+  int third,
+  int fourth,
+) =>
+    bytes[offset] == first &&
+    bytes[offset + 1] == second &&
+    bytes[offset + 2] == third &&
+    bytes[offset + 3] == fourth;
+
+int _pngChunkCrc32(
+  Uint8List bytes,
+  int typeOffset,
+  int dataOffset,
+  int dataLength,
+) {
+  var crc = 0xffffffff;
+  for (var index = typeOffset; index < typeOffset + 4; index++) {
+    crc = _updatePngCrc32(crc, bytes[index]);
+  }
+  for (var index = dataOffset; index < dataOffset + dataLength; index++) {
+    crc = _updatePngCrc32(crc, bytes[index]);
+  }
+  return (~crc) & 0xffffffff;
+}
+
+int _updatePngCrc32(int crc, int value) {
+  var updated = crc ^ value;
+  for (var bit = 0; bit < 8; bit++) {
+    updated = (updated & 1) != 0 ? (updated >> 1) ^ 0xedb88320 : updated >> 1;
+  }
+  return updated;
+}
+
+bool _isValidNotificationSyncMode(String? mode) =>
+    mode == _notificationSyncModeAll ||
+    mode == _notificationSyncModeExclude ||
+    mode == _notificationSyncModeInclude;
+
+String _validateNotificationSyncMode(Object? value) {
+  if (value is! String || !_isValidNotificationSyncMode(value)) {
+    throw ArgumentError.value(
+      value,
+      'mode',
+      'must be one of all, exclude, or include',
+    );
+  }
+  return value;
+}
+
+List<String> _normalizeNotificationSyncPackageNames(Iterable<String?> values) {
+  final normalized = <String>{};
+  for (final value in values) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isNotEmpty) {
+      normalized.add(trimmed);
+    }
+  }
+  return normalized.toList(growable: false)..sort();
+}
+
+class _NotificationSyncPolicy {
+  bool enabled;
+  String mode;
+  List<String> packageNames;
+
+  _NotificationSyncPolicy({
+    this.enabled = true,
+    String mode = _notificationSyncModeAll,
+    List<String>? packageNames,
+  }) : mode = _validateNotificationSyncMode(mode),
+       packageNames = _normalizeNotificationSyncPackageNames(
+         packageNames ?? const [],
+       );
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'mode': mode,
+    'packageNames': List<String>.from(packageNames),
+  };
 }
 
 int _endpointScore(String address) {
@@ -257,37 +532,52 @@ Future<String> reconnectTrustedPeerViaEndpoints({
     );
   }
 
-  Object? lastError;
-  for (final endpoint in trustedEndpoints) {
-    RiftLog.info(
-      '[Reconnect] Trying trusted endpoint for peerDeviceId=$peerDeviceId '
-      'address=${endpoint.address}:${endpoint.port} source=${endpoint.source}',
+  final attempts =
+      <
+        int,
+        Future<
+          ({
+            int index,
+            TrustedPeerEndpoint endpoint,
+            String? peerDeviceId,
+            Object? error,
+          })
+        >
+      >{};
+  for (var index = 0; index < trustedEndpoints.length; index++) {
+    final endpoint = trustedEndpoints[index];
+    attempts[index] = _attemptTrustedEndpoint(
+      index,
+      endpoint,
+      peerDeviceId,
+      transport,
+      getContext,
+      sendSessionHello,
+      waitForSessionEstablished,
+      timeout,
     );
-    try {
-      final connectedPeerDeviceId = await transport
-          .connectTo(
-            endpoint.address,
-            endpoint.port,
-            expectedDeviceId: peerDeviceId,
-            forceFreshSession: true,
-          )
-          .timeout(timeout);
+  }
 
-      if (getContext(connectedPeerDeviceId) == null) {
-        await sendSessionHello(connectedPeerDeviceId);
-      }
-      await waitForSessionEstablished(connectedPeerDeviceId).timeout(timeout);
-      await persistTrustedEndpoint(connectedPeerDeviceId, 'trusted-reconnect');
-      return connectedPeerDeviceId;
-    } catch (error) {
-      lastError = error;
-      final classification = _classifyPairingConnectFailure(error);
-      RiftLog.warn(
-        '[Reconnect] Trusted endpoint failed for peerDeviceId=$peerDeviceId '
-        'address=${endpoint.address}:${endpoint.port} '
-        'classification=$classification detail=${_describePairingConnectFailure(error)}',
-      );
+  Object? lastError;
+  while (attempts.isNotEmpty) {
+    final result = await Future.any(attempts.values);
+    attempts.remove(result.index);
+    if (result.error == null && result.peerDeviceId != null) {
+      // A transport implementation retains the first authenticated session for
+      // duplicate connections. Let losing attempts finish and consume their
+      // results, but only persist the endpoint that won the race.
+      unawaited(Future.wait(attempts.values));
+      await persistTrustedEndpoint(result.peerDeviceId!, 'trusted-reconnect');
+      return result.peerDeviceId!;
     }
+
+    lastError = result.error;
+    final classification = _classifyPairingConnectFailure(result.error!);
+    RiftLog.warn(
+      '[Reconnect] Trusted endpoint failed for peerDeviceId=$peerDeviceId '
+      'address=${result.endpoint.address}:${result.endpoint.port} '
+      'classification=$classification detail=${_describePairingConnectFailure(result.error!)}',
+    );
   }
 
   throw RiftException(
@@ -295,6 +585,53 @@ Future<String> reconnectTrustedPeerViaEndpoints({
     'Failed to reconnect trusted peer $peerDeviceId using persisted endpoints. '
     '${lastError == null ? "" : _describePairingConnectFailure(lastError)}',
   );
+}
+
+Future<
+  ({
+    int index,
+    TrustedPeerEndpoint endpoint,
+    String? peerDeviceId,
+    Object? error,
+  })
+>
+_attemptTrustedEndpoint(
+  int index,
+  TrustedPeerEndpoint endpoint,
+  String expectedPeerDeviceId,
+  Transport transport,
+  SessionContext? Function(String peerDeviceId) getContext,
+  Future<void> Function(String peerDeviceId) sendSessionHello,
+  Future<void> Function(String peerDeviceId) waitForSessionEstablished,
+  Duration timeout,
+) async {
+  try {
+    final connectedPeerDeviceId = await transport
+        .connectTo(
+          endpoint.address,
+          endpoint.port,
+          expectedDeviceId: expectedPeerDeviceId,
+          forceFreshSession: true,
+        )
+        .timeout(timeout);
+
+    if (getContext(connectedPeerDeviceId) == null) {
+      await sendSessionHello(connectedPeerDeviceId);
+    }
+    await waitForSessionEstablished(connectedPeerDeviceId).timeout(timeout);
+    RiftLog.info(
+      '[Reconnect] Trusted endpoint succeeded for peerDeviceId=$expectedPeerDeviceId '
+      'address=${endpoint.address}:${endpoint.port} source=${endpoint.source}',
+    );
+    return (
+      index: index,
+      endpoint: endpoint,
+      peerDeviceId: connectedPeerDeviceId,
+      error: null,
+    );
+  } catch (error) {
+    return (index: index, endpoint: endpoint, peerDeviceId: null, error: error);
+  }
 }
 
 @visibleForTesting
@@ -341,11 +678,47 @@ Future<bool> allowPeerHandshake({
 /// This class encapsulates all network, crypto, and session services
 /// and is designed to be executed inside a background Isolate
 /// hosted by an Android Foreground Service.
+typedef PeerTransportFactory =
+    Transport Function(IdentityManager identityManager, int port);
+
 class RiftDaemon {
   static const Duration _trustedReconnectTimeout = Duration(seconds: 3);
+  static const Duration _discoveryPrefetchRetryDelay = Duration(seconds: 10);
+  static const List<Duration> _trustedReconnectDelays = [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 16),
+    Duration(seconds: 30),
+  ];
+  static const Duration _defaultMediaPlaybackActionTimeout = Duration(
+    seconds: 30,
+  );
+  static final RegExp _rfc3339UtcTimestamp = RegExp(
+    r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$',
+  );
+  static const Set<String> _failureReasons = {
+    'PeerUnreachable',
+    'PeerRejected',
+    'OfferExpired',
+    'CapabilityUnavailable',
+    'ConnectionLost',
+    'Timeout',
+    'PolicyDenied',
+    'AuthenticationFailed',
+    'Unauthorized',
+    'HashMismatch',
+    'MalformedMessage',
+    'VersionMismatch',
+    'ProtocolError',
+    'PayloadTooLarge',
+    'InvalidTransition',
+  };
   IdentityManagerImpl? _identityManager;
   DiscoveryService? _discoveryService;
-  TransportImpl? _transport;
+  Transport? _transport;
+  int? _boundTransportPort;
   SessionManager? _sessionManager;
   TrustStoreImpl? _trustStore;
   PairingManager? _pairingManager;
@@ -353,46 +726,97 @@ class RiftDaemon {
   ClipboardProtocolHandler? _clipboardHandler;
   FileTransferService? _fileTransferService;
   OperationManager? _operationManager;
+  MediaPlaybackManager? _mediaPlaybackManager;
+  DeviceStatusManager? _deviceStatusManager;
+  StreamSubscription<ProtocolMessage>? _notificationSyncMessageSub;
+  StreamSubscription<ProtocolMessage>? _mediaPlaybackMessageSub;
+  StreamSubscription<ProtocolMessage>? _deviceStatusMessageSub;
+  StreamSubscription<String>? _sessionDisconnectSub;
+  final Map<String, Map<String, dynamic>> _pendingMediaPlaybackActions = {};
+  final Map<String, String> _pendingMediaPlaybackActionKeys = {};
+  final Map<String, Timer> _pendingMediaPlaybackActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingIncomingMediaPlaybackActions =
+      {};
+  final Map<String, Timer> _pendingIncomingMediaPlaybackActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingNotificationActions = {};
+  final Map<String, String> _pendingNotificationActionKeys = {};
+  final Map<String, Timer> _pendingNotificationActionTimers = {};
+  final Map<String, Map<String, dynamic>> _pendingIncomingNotificationActions =
+      {};
+  final Map<String, Timer> _pendingIncomingNotificationActionTimers = {};
+  final Map<String, String> _notificationSyncObservedApps = {};
+  final Map<String, Map<String, dynamic>> _notificationSyncRecords = {};
+  _NotificationSyncPolicy _notificationSyncPolicy = _NotificationSyncPolicy();
   final Map<String, _DiscoveredPeerRecord> _discoveredPeers = {};
+  final Map<String, DateTime> _lastDiscoveryPrefetchAttempts = {};
   final Map<String, Future<String>> _pendingSessionEnsures = {};
   final Map<String, Future<Map<String, dynamic>>> _pendingStartPairings = {};
   final Map<String, Future<Map<String, dynamic>>>
   _pendingEndpointStartPairings = {};
   final Map<String, Future<String>> _pendingTrustedReconnects = {};
   final Map<String, TrustedPeerEndpoint> _pendingTrustedEndpointHints = {};
+  final Map<String, Timer> _trustedReconnectTimers = {};
+  final Map<String, int> _trustedReconnectAttempts = {};
   bool _isDiscovering = false;
+  bool _isStopping = false;
 
   final String storagePath;
+  final Future<Uint8List> Function()? identityPrivateKeyProvider;
+  final String? localDisplayName;
   final int port;
   final bool enableTransport;
+  final Transport? peerTransport;
+  final PeerTransportFactory? peerTransportFactory;
   final bool enableDiscovery;
   final void Function(Map<String, dynamic>)? onIpcEvent;
+  final Duration mediaPlaybackActionTimeout;
 
   RiftDaemon({
     required this.storagePath,
+    this.identityPrivateKeyProvider,
+    this.localDisplayName,
     this.port = 11112,
     this.enableTransport = true,
+    this.peerTransport,
+    this.peerTransportFactory,
     this.enableDiscovery = true,
     this.onIpcEvent,
+    this.mediaPlaybackActionTimeout = _defaultMediaPlaybackActionTimeout,
   });
 
   Future<void> start() async {
-    _identityManager = IdentityManagerImpl(storagePath);
+    _isStopping = false;
+    _identityManager = IdentityManagerImpl(
+      storagePath,
+      privateKeyProvider: identityPrivateKeyProvider,
+      platformDisplayName: localDisplayName,
+    );
     await _identityManager!.initialize();
 
     _trustStore = TrustStoreImpl(p.join(storagePath, 'trust_store.db'));
     await _trustStore!.initialize();
 
     if (enableTransport) {
-      // If the requested port is unavailable (common on dev devices), fall back
-      // to an ephemeral port rather than failing the entire IPC layer.
-      try {
-        _transport = TransportImpl(_identityManager!, port: port);
+      final injectedTransport =
+          peerTransport ?? peerTransportFactory?.call(_identityManager!, port);
+      if (injectedTransport != null) {
+        _transport = injectedTransport;
         await _transport!.startServer();
-      } on SocketException {
-        _transport = TransportImpl(_identityManager!, port: 0);
-        await _transport!.startServer();
+      } else {
+        // If the requested port is unavailable (common on dev devices), fall back
+        // to an ephemeral port rather than failing the entire IPC layer.
+        try {
+          _transport = TransportImpl(_identityManager!, port: port);
+          await _transport!.startServer();
+        } on SocketException {
+          _transport = TransportImpl(_identityManager!, port: 0);
+          await _transport!.startServer();
+        }
       }
+      _boundTransportPort = switch (_transport) {
+        BoundTransport transport => transport.boundPort,
+        _ => port,
+      };
     }
 
     if (_transport != null) {
@@ -407,12 +831,32 @@ class RiftDaemon {
       );
 
       _sessionManager!.onTrustedSessionReady.listen((ctx) {
+        _trustedReconnectTimers.remove(ctx.peerDeviceId)?.cancel();
+        _trustedReconnectAttempts.remove(ctx.peerDeviceId);
         unawaited(
           _persistTrustedEndpointIfAvailable(
             ctx.peerDeviceId,
             source: 'session-established',
           ),
         );
+        unawaited(_replayActiveSyncState(ctx.peerDeviceId));
+      });
+      _sessionManager!.onPresenceUpdate.listen((ctx) {
+        if (ctx.currentPresenceStatus != 'online') {
+          _mediaPlaybackManager?.removePlaybacksFromSource(ctx.peerDeviceId);
+        }
+        _forwardIpcEvent({
+          'jsonrpc': '2.0',
+          'method': 'rift.onPresenceUpdate',
+          'params': {
+            'deviceId': ctx.peerDeviceId,
+            'status': ctx.currentPresenceStatus,
+            'lastSeenAt': ctx.lastHeartbeatReceived?.toUtc().toIso8601String(),
+            'capabilities': ctx.negotiatedCapabilities
+                .map((capability) => capability.name)
+                .toList(),
+          },
+        });
       });
 
       _pairingManager = PairingManager(
@@ -439,6 +883,14 @@ class RiftDaemon {
         _identityManager!.deviceId,
       );
       _operationManager = OperationManager();
+      _mediaPlaybackManager = MediaPlaybackManager();
+      _deviceStatusManager = DeviceStatusManager();
+      _sessionDisconnectSub = _sessionManager!.onPeerDisconnected.listen((
+        peerDeviceId,
+      ) {
+        _mediaPlaybackManager?.removePlaybacksFromSource(peerDeviceId);
+        _scheduleTrustedReconnect(peerDeviceId);
+      });
       _fileTransferService = FileTransferService(
         sessionManager: _sessionManager!,
         trustStore: _trustStore!,
@@ -517,10 +969,61 @@ class RiftDaemon {
           ),
         );
       });
+
+      _notificationSyncMessageSub = _sessionManager!.onMessage.listen(
+        _handleNotificationSyncProtocolMessage,
+      );
+      _mediaPlaybackMessageSub = _sessionManager!.onMessage.listen(
+        _handleMediaPlaybackProtocolMessage,
+      );
+      _deviceStatusMessageSub = _sessionManager!.onMessage.listen(
+        _handleDeviceStatusProtocolMessage,
+      );
+
+      _deviceStatusManager!.onUpdated.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onDeviceStatusUpdated',
+          'params': record.toJson(),
+        });
+      });
+
+      _mediaPlaybackManager!.onPosted.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackPosted',
+          'params': record.toJson(),
+        });
+      });
+      _mediaPlaybackManager!.onUpdated.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackUpdated',
+          'params': record.toJson(),
+        });
+      });
+      _mediaPlaybackManager!.onRemoved.listen((record) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackRemoved',
+          'params': {
+            'playbackId': record.playbackId,
+            'sourceDeviceId': record.sourceDeviceId,
+            if (record.removedAt != null) 'removedAt': record.removedAt,
+          },
+        });
+      });
+      _mediaPlaybackManager!.onActionResult.listen((event) {
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onMediaPlaybackActionResult',
+          'params': event,
+        });
+      });
     }
 
     if (enableDiscovery) {
-      final advertisedPort = _transport?.boundPort ?? port;
+      final advertisedPort = _boundTransportPort ?? port;
       _discoveryService = discovery_factory.createDiscoveryService(
         port: advertisedPort,
         deviceIdHint: _identityManager!.deviceId,
@@ -528,10 +1031,52 @@ class RiftDaemon {
           _identityManager!.getDeviceFingerprint(),
         ),
       );
-      await _discoveryService!.startAdvertising();
-      if (await _shouldAutoStartDiscovery()) {
-        await _discoveryService!.startDiscovery();
-        _isDiscovering = true;
+      _discoveryService!.onDeviceDiscovered.listen((peer) {
+        if (peer.deviceIdHint == _identityManager!.deviceId) return;
+        if (peer.deviceIdHint == null) return;
+        trackDiscoveredPeer(peer);
+        unawaited(prefetchSessionForDiscoveredPeer(peer.deviceIdHint!));
+        _forwardIpcEvent({
+          'jsonrpc': '2.0',
+          'method': 'rift.onPeerDiscovered',
+          'params': {
+            'deviceId': peer.deviceIdHint,
+            'instanceId': peer.instanceId,
+            'address': peer.address,
+            'port': peer.port,
+            'txtRecord': {
+              'minV': peer.minVersion,
+              'maxV': peer.maxVersion,
+              'did': peer.deviceIdHint,
+              if (peer.fingerprintPrefix != null) 'fp': peer.fingerprintPrefix,
+            },
+          },
+        });
+      });
+      _discoveryService!.onDeviceLost.listen((peer) {
+        final deviceId = peer.deviceIdHint;
+        if (deviceId == null) return;
+
+        final hadVisiblePeer = _discoveredPeers.containsKey(deviceId);
+        untrackDiscoveredPeer(peer);
+        if (hadVisiblePeer && !_discoveredPeers.containsKey(deviceId)) {
+          _forwardIpcEvent({
+            'jsonrpc': '2.0',
+            'method': 'rift.onPeerLost',
+            'params': {'deviceId': deviceId, 'instanceId': peer.instanceId},
+          });
+        }
+      });
+      try {
+        await _discoveryService!.startAdvertising();
+        if (await _shouldAutoStartDiscovery()) {
+          await _discoveryService!.startDiscovery();
+          _isDiscovering = true;
+        }
+      } catch (e) {
+        RiftLog.warn(
+          '[Discovery] Startup failed; continuing without active discovery: $e',
+        );
       }
     }
     // Discovery remains passive for browsing, but pairing may trigger an
@@ -566,17 +1111,2127 @@ class RiftDaemon {
     }
   }
 
+  List<String> _parseNotificationSyncPackageNames(
+    Object? value,
+    String fieldName,
+  ) {
+    if (value is! List) {
+      throw ArgumentError.value(value, fieldName, 'must be a list of strings');
+    }
+
+    final packageNames = <String?>[];
+    for (final entry in value) {
+      if (entry is! String) {
+        throw ArgumentError.value(
+          value,
+          fieldName,
+          'must be a list of strings',
+        );
+      }
+      packageNames.add(entry);
+    }
+    return _normalizeNotificationSyncPackageNames(packageNames);
+  }
+
+  Future<Map<String, dynamic>> _updateNotificationSyncPolicy({
+    required bool enabled,
+    required String mode,
+    required List<String> packageNames,
+  }) async {
+    _notificationSyncPolicy = _NotificationSyncPolicy(
+      enabled: enabled,
+      mode: mode,
+      packageNames: packageNames,
+    );
+    return _notificationSyncPolicy.toJson();
+  }
+
+  Map<String, dynamic> _listMediaPlaybackState() {
+    return _mediaPlaybackManager?.listStateJson() ?? {'playbacks': <dynamic>[]};
+  }
+
+  Future<Map<String, dynamic>> _getPeerDeviceStatus(
+    Map<String, dynamic> params,
+  ) async {
+    final sourceDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
+    final peer = await _trustStore!.getPeer(sourceDeviceId);
+    if (peer == null) {
+      throw const RiftNotFoundException('Peer not found in TrustStore');
+    }
+    if (peer.state != TrustState.trusted) {
+      throw const RiftUnauthorizedException('Peer is not trusted');
+    }
+    final context = _sessionManager?.getContext(sourceDeviceId);
+    final status = _deviceStatusManager?.getStatus(
+      sourceDeviceId,
+      isOnline: context?.currentPresenceStatus == 'online',
+    );
+    if (status == null) {
+      throw const RiftNotFoundException('Device status is unavailable');
+    }
+    return status.toJson();
+  }
+
+  Future<Map<String, dynamic>> _handleLocalDeviceStatus(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final record = DeviceStatusRecord(
+      sourceDeviceId: _identityManager!.deviceId,
+      sourcePlatform: params['sourcePlatform'] is String
+          ? params['sourcePlatform'] as String
+          : _localPlatform(),
+      batteryPresent: params['batteryPresent'] as bool?,
+      batteryPercent: params['batteryPercent'] as int?,
+      chargingState: params['chargingState'] as String?,
+      powerSource: params['powerSource'] as String?,
+      lowPowerMode: params['lowPowerMode'] as bool?,
+      observedAt: params['observedAt'] is String
+          ? params['observedAt'] as String
+          : DateTime.now().toUtc().toIso8601String(),
+    );
+    _validateDeviceStatus(record);
+    _deviceStatusManager!.update(record);
+
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final context = _sessionManager!.getContext(peer.deviceId);
+        if (context == null || !context.hasCapability('device.status')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': 'device.statusUpdated',
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': record.toJson(),
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[DeviceStatus] Could not send status to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return {'broadcastTo': broadcastTo};
+  }
+
+  void _validateDeviceStatus(DeviceStatusRecord record) {
+    const chargingStates = {
+      'charging',
+      'discharging',
+      'full',
+      'notCharging',
+      'unknown',
+    };
+    const powerSources = {'battery', 'ac', 'usb', 'unknown'};
+    final batteryPercent = record.batteryPercent;
+    if (batteryPercent != null &&
+        (batteryPercent < 0 || batteryPercent > 100)) {
+      throw ArgumentError.value(
+        batteryPercent,
+        'batteryPercent',
+        'must be between 0 and 100',
+      );
+    }
+    if (record.batteryPresent == false &&
+        (batteryPercent != null || record.chargingState != null)) {
+      throw ArgumentError.value(
+        record.toJson(),
+        'deviceStatus',
+        'batteryPercent and chargingState must be omitted when batteryPresent is false',
+      );
+    }
+    if (record.chargingState != null &&
+        !chargingStates.contains(record.chargingState)) {
+      throw ArgumentError.value(
+        record.chargingState,
+        'chargingState',
+        'is not supported',
+      );
+    }
+    if (record.powerSource != null &&
+        !powerSources.contains(record.powerSource)) {
+      throw ArgumentError.value(
+        record.powerSource,
+        'powerSource',
+        'is not supported',
+      );
+    }
+    if (record.batteryPresent == null &&
+        batteryPercent == null &&
+        record.chargingState == null &&
+        record.powerSource == null &&
+        record.lowPowerMode == null) {
+      throw ArgumentError.value(
+        record.toJson(),
+        'deviceStatus',
+        'requires at least one power-state field',
+      );
+    }
+    if (!_rfc3339UtcTimestamp.hasMatch(record.observedAt) ||
+        DateTime.tryParse(record.observedAt) == null) {
+      throw ArgumentError.value(
+        record.observedAt,
+        'observedAt',
+        'must be an RFC 3339 UTC timestamp',
+      );
+    }
+  }
+
+  Map<String, dynamic> _getMediaPlaybackState(Map<String, dynamic> params) {
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final playback = _mediaPlaybackManager!.getPlayback(
+      sourceDeviceId,
+      playbackId,
+    );
+    if (playback == null) {
+      throw const RiftException(-32009, 'Media playback was not found');
+    }
+    return playback.toJson();
+  }
+
+  @visibleForTesting
+  static Map<String, dynamic> buildNotificationReplayMessage({
+    required String localDeviceId,
+    required String peerDeviceId,
+    required Map<String, dynamic> record,
+  }) => {
+    'rift': '0.1-draft',
+    'messageId': const Uuid().v4(),
+    'type': 'notification.updated',
+    'sourceDeviceId': localDeviceId,
+    'destinationDeviceId': peerDeviceId,
+    'payload': record,
+  };
+
+  Future<void> _replayActiveSyncState(String peerDeviceId) async {
+    final sessionManager = _sessionManager;
+    final identityManager = _identityManager;
+    final mediaPlaybackManager = _mediaPlaybackManager;
+    final deviceStatusManager = _deviceStatusManager;
+    if (sessionManager == null ||
+        identityManager == null ||
+        mediaPlaybackManager == null ||
+        deviceStatusManager == null) {
+      return;
+    }
+
+    final context = sessionManager.getContext(peerDeviceId);
+    if (context == null || context.trustState != TrustState.trusted) {
+      return;
+    }
+
+    final localDeviceId = identityManager.deviceId;
+    if (context.hasCapability('device.status')) {
+      final status = deviceStatusManager.getStatus(localDeviceId);
+      if (status != null) {
+        try {
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'device.statusUpdated',
+            'sourceDeviceId': localDeviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': status.toJson()..remove('isStale'),
+          });
+        } catch (error) {
+          RiftLog.warn(
+            '[DeviceStatus] Failed to replay status to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
+
+    if (context.hasCapability('notification.sync')) {
+      for (final record in _notificationSyncRecords.values) {
+        if (record['sourceDeviceId'] != localDeviceId) {
+          continue;
+        }
+        try {
+          await sessionManager.sendMessage(
+            peerDeviceId,
+            buildNotificationReplayMessage(
+              localDeviceId: localDeviceId,
+              peerDeviceId: peerDeviceId,
+              record: record,
+            ),
+          );
+        } catch (error) {
+          RiftLog.warn(
+            '[NotificationSync] Failed to replay active state to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
+
+    if (context.hasCapability('media.playback')) {
+      final playbacks = mediaPlaybackManager.listStateJson()['playbacks'];
+      if (playbacks is! List) {
+        return;
+      }
+      for (final playback in playbacks.whereType<Map>()) {
+        final record = Map<String, dynamic>.from(playback);
+        if (record['sourceDeviceId'] != localDeviceId) {
+          continue;
+        }
+        try {
+          await sessionManager.sendMessage(peerDeviceId, {
+            'rift': '0.1-draft',
+            'messageId': const Uuid().v4(),
+            'type': 'media.playbackPosted',
+            'sourceDeviceId': localDeviceId,
+            'destinationDeviceId': peerDeviceId,
+            'payload': record,
+          });
+        } catch (error) {
+          RiftLog.warn(
+            '[MediaPlayback] Failed to replay active state to $peerDeviceId: $error',
+          );
+          return;
+        }
+      }
+    }
+  }
+
+  Future<List<String>> _broadcastMediaPlaybackEnvelope({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) async {
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final ctx = _sessionManager!.getContext(peer.deviceId);
+        if (ctx == null || !ctx.hasCapability('media.playback')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': messageType,
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': payload,
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[MediaPlayback] Could not send $messageType to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return broadcastTo;
+  }
+
+  Future<Map<String, dynamic>> _handleLocalMediaPlaybackEvent(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final eventType = RpcUtils.requireStringParam(params, 'eventType');
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final localDeviceId = _identityManager!.deviceId;
+
+    if (eventType == 'removed') {
+      final removedAt = _optionalMediaPlaybackTimestamp(params, 'removedAt');
+      _mediaPlaybackManager!.removePlayback(
+        localDeviceId,
+        playbackId,
+        removedAt: removedAt,
+      );
+      final payload = <String, dynamic>{
+        'playbackId': playbackId,
+        'sourceDeviceId': localDeviceId,
+        'removedAt': ?removedAt,
+      };
+      return {
+        'playbackId': playbackId,
+        'broadcastTo': await _broadcastMediaPlaybackEnvelope(
+          messageType: 'media.playbackRemoved',
+          payload: payload,
+        ),
+      };
+    }
+
+    if (eventType != 'posted' && eventType != 'updated') {
+      throw ArgumentError.value(
+        eventType,
+        'eventType',
+        'must be posted, updated, or removed',
+      );
+    }
+
+    final record = MediaPlaybackRecord(
+      playbackId: playbackId,
+      sourceDeviceId: localDeviceId,
+      sourcePlatform: params['sourcePlatform'] as String?,
+      appId: RpcUtils.requireStringParam(params, 'appId'),
+      appName: RpcUtils.requireStringParam(params, 'appName'),
+      title: params['title'] as String?,
+      artist: params['artist'] as String?,
+      album: params['album'] as String?,
+      artwork: params['artwork'] is Map
+          ? Map<String, dynamic>.from(params['artwork'] as Map)
+          : null,
+      playbackState: RpcUtils.requireStringParam(params, 'playbackState'),
+      positionMs: RpcUtils.requireIntParam(params, 'positionMs'),
+      durationMs: params['durationMs'] as int?,
+      canPlay: _requireMediaPlaybackBool(params, 'canPlay'),
+      canPause: _requireMediaPlaybackBool(params, 'canPause'),
+      canSkipNext: _requireMediaPlaybackBool(params, 'canSkipNext'),
+      canSkipPrevious: _requireMediaPlaybackBool(params, 'canSkipPrevious'),
+      canSeek: _requireMediaPlaybackBool(params, 'canSeek'),
+      updatedAt: RpcUtils.requireStringParam(params, 'updatedAt'),
+    );
+    _validateMediaPlaybackRecord(record);
+    final result = _mediaPlaybackManager!.notifyLocalEvent(eventType, record);
+    return {
+      ...result,
+      'broadcastTo': await _broadcastMediaPlaybackEnvelope(
+        messageType: eventType == 'posted'
+            ? 'media.playbackPosted'
+            : 'media.playbackUpdated',
+        payload: record.toJson(),
+      ),
+    };
+  }
+
+  String _normalizeNotificationAction(String action) {
+    if (action == 'open' || action == 'dismiss') {
+      return action;
+    }
+    throw const RiftException(-32010, 'Unknown notification action');
+  }
+
+  String _notificationActionKey(
+    String sourceDeviceId,
+    String notificationId,
+    String action,
+  ) => '$sourceDeviceId\n$notificationId\n$action';
+
+  void _ensureNotificationActionAllowed(
+    Map<String, dynamic> notification,
+    String action,
+  ) {
+    final allowed = switch (action) {
+      'dismiss' => notification['isDismissible'] == true,
+      'open' => notification['isOpenable'] == true,
+      _ => false,
+    };
+    if (!allowed) {
+      throw const RiftException(
+        -32010,
+        'Notification does not allow the requested action',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _performNotificationAction(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final notificationId = RpcUtils.requireStringParam(
+      params,
+      'notificationId',
+    );
+    final action = _normalizeNotificationAction(
+      RpcUtils.requireStringParam(params, 'action'),
+    );
+    final notification =
+        _notificationSyncRecords[_notificationRecordKey(
+          sourceDeviceId,
+          notificationId,
+        )];
+    if (notification == null) {
+      throw const RiftException(-32009, 'Mirrored notification was not found');
+    }
+    _ensureNotificationActionAllowed(notification, action);
+
+    await _ensureTrustedSessionForPeer(sourceDeviceId);
+    try {
+      _sessionManager!.requireCapability(sourceDeviceId, 'notification.sync');
+    } catch (error) {
+      throw RiftException(-32003, error.toString());
+    }
+
+    final actionKey = _notificationActionKey(
+      sourceDeviceId,
+      notificationId,
+      action,
+    );
+    if (_pendingNotificationActionKeys.containsKey(actionKey)) {
+      throw const RiftException(
+        -32010,
+        'A matching notification action is pending',
+      );
+    }
+
+    final operationId = const Uuid().v4();
+    _operationManager!.createOperation(
+      operationId: operationId,
+      operationType: 'notification.$action',
+      sourceDeviceId: _identityManager!.deviceId,
+      destinationDeviceId: sourceDeviceId,
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.pending,
+      details: {
+        'sourceDeviceId': sourceDeviceId,
+        'notificationId': notificationId,
+        'action': action,
+      },
+    );
+    _pendingNotificationActions[operationId] = {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'notificationId': notificationId,
+      'action': action,
+      'actionKey': actionKey,
+    };
+    _pendingNotificationActionKeys[actionKey] = operationId;
+    _pendingNotificationActionTimers[operationId] = Timer(
+      mediaPlaybackActionTimeout,
+      () => _expirePendingNotificationAction(operationId),
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
+
+    try {
+      await _sessionManager!.sendMessage(sourceDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'notification.actionRequest',
+        'sourceDeviceId': _identityManager!.deviceId,
+        'destinationDeviceId': sourceDeviceId,
+        'payload': {
+          'operationId': operationId,
+          'notificationId': notificationId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': _identityManager!.deviceId,
+          'action': action,
+          'requestedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+    } catch (error) {
+      _removePendingNotificationAction(operationId);
+      _operationManager!.transitionOperation(
+        operationId,
+        OperationState.failed,
+        failureReason: 'PeerUnreachable',
+      );
+      throw RiftException(-32003, 'Failed to send notification action: $error');
+    }
+
+    return {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'notificationId': notificationId,
+      'action': action,
+      'state': 'Pending',
+    };
+  }
+
+  void _removePendingNotificationAction(String operationId) {
+    final pending = _pendingNotificationActions.remove(operationId);
+    _pendingNotificationActionTimers.remove(operationId)?.cancel();
+    if (pending == null) return;
+    final actionKey = pending['actionKey'] as String;
+    if (_pendingNotificationActionKeys[actionKey] == operationId) {
+      _pendingNotificationActionKeys.remove(actionKey);
+    }
+  }
+
+  void _emitNotificationActionResult(
+    Map<String, dynamic> pending, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) {
+    onIpcEvent?.call({
+      'jsonrpc': '2.0',
+      'method': 'rift.onNotificationActionResult',
+      'params': {
+        'notificationId': pending['notificationId'],
+        'sourceDeviceId': pending['sourceDeviceId'],
+        'action': pending['action'],
+        'operationId': pending['operationId'],
+        'state': success ? 'Done' : 'Failed',
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  void _expirePendingNotificationAction(String operationId) {
+    final pending = _pendingNotificationActions[operationId];
+    if (pending == null) return;
+    _removePendingNotificationAction(operationId);
+    _operationManager?.transitionOperation(
+      operationId,
+      OperationState.failed,
+      failureReason: 'Timeout',
+    );
+    _emitNotificationActionResult(
+      pending,
+      success: false,
+      failureReason: 'Timeout',
+      message: 'The remote notification action timed out.',
+    );
+  }
+
+  Future<Map<String, dynamic>> _reportLocalNotificationActionHandled(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final requestId = RpcUtils.requireStringParam(params, 'requestId');
+    final success = params['success'];
+    if (success is! bool) {
+      throw ArgumentError.value(success, 'success', 'must be a boolean');
+    }
+    final failureReason = _normalizeMediaPlaybackFailureReason(
+      success: success,
+      failureReason: params['failureReason'],
+      invalidCode: -32602,
+    );
+    final message = params['message'];
+    if (message != null && message is! String) {
+      throw ArgumentError.value(message, 'message', 'must be a string');
+    }
+    final pending = _pendingIncomingNotificationActions.remove(requestId);
+    if (pending == null) {
+      throw const RiftException(
+        -32009,
+        'Notification action request was not found',
+      );
+    }
+    _pendingIncomingNotificationActionTimers.remove(requestId)?.cancel();
+    await _sendNotificationActionResult(
+      pending,
+      success: success,
+      failureReason: failureReason,
+      message: message as String?,
+    );
+    return {
+      'requestId': requestId,
+      'notificationId': pending['notificationId'],
+      'action': pending['action'],
+      'success': success,
+    };
+  }
+
+  Future<void> _sendNotificationActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    final requestingDeviceId = request['requestingDeviceId'] as String;
+    await _sessionManager!.sendMessage(requestingDeviceId, {
+      'rift': '0.1-draft',
+      'messageId': const Uuid().v4(),
+      'type': 'notification.actionResult',
+      'sourceDeviceId': _identityManager!.deviceId,
+      'destinationDeviceId': requestingDeviceId,
+      'payload': {
+        'operationId': request['operationId'],
+        'notificationId': request['notificationId'],
+        'sourceDeviceId': _identityManager!.deviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': request['action'],
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  Future<void> _expireIncomingNotificationAction(String requestId) async {
+    _pendingIncomingNotificationActionTimers.remove(requestId);
+    final pending = _pendingIncomingNotificationActions.remove(requestId);
+    if (pending == null) return;
+    try {
+      await _sendNotificationActionResult(
+        pending,
+        success: false,
+        failureReason: 'Timeout',
+        message:
+            'The local notification action client did not handle the request.',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Failed to expire incoming action $requestId: $error',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _performMediaPlaybackAction(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      params,
+      'sourceDeviceId',
+    );
+    final playbackId = RpcUtils.requireStringParam(params, 'playbackId');
+    final action = _normalizeMediaPlaybackAction(
+      RpcUtils.requireStringParam(params, 'action'),
+      params['positionMs'] as int?,
+    );
+    final playback = _mediaPlaybackManager!.getPlayback(
+      sourceDeviceId,
+      playbackId,
+    );
+    if (playback == null) {
+      throw const RiftException(-32009, 'Media playback was not found');
+    }
+    _ensureMediaPlaybackActionAllowed(playback, action);
+
+    await _ensureTrustedSessionForPeer(sourceDeviceId);
+    try {
+      _sessionManager!.requireCapability(sourceDeviceId, 'media.playback');
+    } catch (error) {
+      throw RiftException(-32003, error.toString());
+    }
+
+    final actionKey = '$sourceDeviceId\n$playbackId\n$action';
+    if (_pendingMediaPlaybackActionKeys.containsKey(actionKey)) {
+      throw const RiftException(
+        -32010,
+        'A matching playback action is pending',
+      );
+    }
+
+    final operationId = const Uuid().v4();
+    _operationManager!.createOperation(
+      operationId: operationId,
+      operationType: _mediaPlaybackOperationType(action),
+      sourceDeviceId: _identityManager!.deviceId,
+      destinationDeviceId: sourceDeviceId,
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.pending,
+      details: {
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'action': action,
+        if (params['positionMs'] != null) 'positionMs': params['positionMs'],
+      },
+    );
+    _pendingMediaPlaybackActions[operationId] = {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'playbackId': playbackId,
+      'action': action,
+      'actionKey': actionKey,
+    };
+    _pendingMediaPlaybackActionKeys[actionKey] = operationId;
+    _pendingMediaPlaybackActionTimers[operationId] = Timer(
+      mediaPlaybackActionTimeout,
+      () => _expirePendingMediaPlaybackAction(operationId),
+    );
+    _operationManager!.transitionOperation(
+      operationId,
+      OperationState.dispatched,
+    );
+
+    try {
+      await _sessionManager!.sendMessage(sourceDeviceId, {
+        'rift': '0.1-draft',
+        'messageId': const Uuid().v4(),
+        'type': 'media.playbackActionRequest',
+        'sourceDeviceId': _identityManager!.deviceId,
+        'destinationDeviceId': sourceDeviceId,
+        'operationId': operationId,
+        'payload': {
+          'playbackId': playbackId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': _identityManager!.deviceId,
+          'action': action,
+          if (params['positionMs'] != null) 'positionMs': params['positionMs'],
+          'requestedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      });
+    } catch (error) {
+      final pending = _pendingMediaPlaybackActions.remove(operationId);
+      if (pending != null) {
+        if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
+          _pendingMediaPlaybackActionKeys.remove(actionKey);
+        }
+        _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.failed,
+          failureReason: 'PeerUnreachable',
+        );
+      }
+      throw RiftException(-32003, 'Failed to send playback action: $error');
+    }
+
+    return {
+      'operationId': operationId,
+      'sourceDeviceId': sourceDeviceId,
+      'playbackId': playbackId,
+      'action': action,
+      'state': 'Pending',
+    };
+  }
+
+  void _expirePendingMediaPlaybackAction(String operationId) {
+    final pending = _pendingMediaPlaybackActions.remove(operationId);
+    _pendingMediaPlaybackActionTimers.remove(operationId);
+    if (pending == null) {
+      return;
+    }
+
+    final actionKey = pending['actionKey'] as String;
+    if (_pendingMediaPlaybackActionKeys[actionKey] == operationId) {
+      _pendingMediaPlaybackActionKeys.remove(actionKey);
+    }
+    _operationManager?.transitionOperation(
+      operationId,
+      OperationState.expired,
+      failureReason: 'Timeout',
+    );
+  }
+
+  Future<Map<String, dynamic>> _reportLocalMediaPlaybackActionHandled(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final requestId = RpcUtils.requireStringParam(params, 'requestId');
+    final success = params['success'];
+    if (success is! bool) {
+      throw ArgumentError.value(success, 'success', 'must be a boolean');
+    }
+    final failureReason = _normalizeMediaPlaybackFailureReason(
+      success: success,
+      failureReason: params['failureReason'],
+      invalidCode: -32602,
+    );
+    final message = params['message'];
+    if (message != null && message is! String) {
+      throw ArgumentError.value(message, 'message', 'must be a string');
+    }
+    final pending = _pendingIncomingMediaPlaybackActions.remove(requestId);
+    if (pending == null) {
+      throw const RiftException(
+        -32009,
+        'Playback action request was not found',
+      );
+    }
+    _pendingIncomingMediaPlaybackActionTimers.remove(requestId)?.cancel();
+    await _sendMediaPlaybackActionResult(
+      pending,
+      success: success,
+      failureReason: failureReason,
+      message: message as String?,
+    );
+    return {
+      'requestId': requestId,
+      'playbackId': pending['playbackId'],
+      'action': pending['action'],
+      'success': success,
+    };
+  }
+
+  String? _normalizeMediaPlaybackFailureReason({
+    required bool success,
+    required Object? failureReason,
+    required int invalidCode,
+  }) {
+    if (failureReason != null) {
+      if (failureReason is! String) {
+        throw ArgumentError.value(
+          failureReason,
+          'failureReason',
+          'must be a string',
+        );
+      }
+      if (!_failureReasons.contains(failureReason)) {
+        throw RiftException(
+          invalidCode,
+          'Invalid failureReason: $failureReason',
+        );
+      }
+      if (success) {
+        return null;
+      }
+      return failureReason;
+    }
+    return success ? null : 'PeerRejected';
+  }
+
+  @visibleForTesting
+  String? normalizeMediaPlaybackFailureReasonForTesting({
+    required bool success,
+    required Object? failureReason,
+    required int invalidCode,
+  }) => _normalizeMediaPlaybackFailureReason(
+    success: success,
+    failureReason: failureReason,
+    invalidCode: invalidCode,
+  );
+
+  Future<void> _sendMediaPlaybackActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    final requestingDeviceId = request['requestingDeviceId'] as String;
+    await _sessionManager!.sendMessage(requestingDeviceId, {
+      'rift': '0.1-draft',
+      'messageId': const Uuid().v4(),
+      'type': 'media.playbackActionResult',
+      'sourceDeviceId': _identityManager!.deviceId,
+      'destinationDeviceId': requestingDeviceId,
+      'payload': {
+        'playbackId': request['playbackId'],
+        'sourceDeviceId': _identityManager!.deviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': request['action'],
+        'success': success,
+        'failureReason': ?failureReason,
+        'message': ?message,
+      },
+    });
+  }
+
+  Future<void> _trySendMediaPlaybackActionResult(
+    Map<String, dynamic> request, {
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    try {
+      await _sendMediaPlaybackActionResult(
+        request,
+        success: success,
+        failureReason: failureReason,
+        message: message,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to send incoming action result: $error',
+      );
+    }
+  }
+
+  Future<void> _expireIncomingMediaPlaybackAction(String requestId) async {
+    _pendingIncomingMediaPlaybackActionTimers.remove(requestId);
+    final pending = _pendingIncomingMediaPlaybackActions.remove(requestId);
+    if (pending == null) {
+      return;
+    }
+    try {
+      await _sendMediaPlaybackActionResult(
+        pending,
+        success: false,
+        failureReason: 'Timeout',
+        message: 'The local media control client did not handle the request.',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to expire incoming action $requestId: $error',
+      );
+    }
+  }
+
+  String? _optionalMediaPlaybackTimestamp(
+    Map<String, dynamic> payload,
+    String key,
+  ) {
+    final value = payload[key];
+    if (value == null) {
+      return null;
+    }
+    if (value is! String || !_isRfc3339UtcTimestamp(value)) {
+      throw ArgumentError.value(
+        value,
+        key,
+        'must be a full RFC 3339 UTC timestamp',
+      );
+    }
+    return value;
+  }
+
+  bool _requireMediaPlaybackBool(Map<String, dynamic> payload, String key) {
+    final value = payload[key];
+    if (value is! bool) {
+      throw ArgumentError.value(value, key, 'must be a boolean');
+    }
+    return value;
+  }
+
+  void _validateMediaPlaybackRecord(MediaPlaybackRecord playback) {
+    const playbackStates = {'playing', 'paused', 'stopped', 'buffering'};
+    if (!playbackStates.contains(playback.playbackState)) {
+      throw ArgumentError.value(
+        playback.playbackState,
+        'playbackState',
+        'must be playing, paused, stopped, or buffering',
+      );
+    }
+    if (playback.positionMs < 0 ||
+        (playback.durationMs != null && playback.durationMs! < 0)) {
+      throw const RiftException(
+        -32602,
+        'positionMs and durationMs must be non-negative',
+      );
+    }
+    if (!_isRfc3339UtcTimestamp(playback.updatedAt)) {
+      throw ArgumentError.value(
+        playback.updatedAt,
+        'updatedAt',
+        'must be a full RFC 3339 UTC timestamp',
+      );
+    }
+  }
+
+  bool _isRfc3339UtcTimestamp(String value) {
+    final match = _rfc3339UtcTimestamp.firstMatch(value);
+    final timestamp = DateTime.tryParse(value);
+    if (match == null || timestamp == null || !timestamp.isUtc) {
+      return false;
+    }
+    final parts = value.substring(0, 19).split(RegExp(r'[-T:]'));
+    final expected = parts.map(int.parse).toList(growable: false);
+    return expected[0] > 0 &&
+        timestamp.year == expected[0] &&
+        timestamp.month == expected[1] &&
+        timestamp.day == expected[2] &&
+        timestamp.hour == expected[3] &&
+        timestamp.minute == expected[4] &&
+        timestamp.second == expected[5];
+  }
+
+  String _normalizeMediaPlaybackAction(
+    String action,
+    int? positionMs, {
+    bool allowSeekWithoutPosition = false,
+  }) {
+    const actions = {
+      'play',
+      'pause',
+      'togglePlayPause',
+      'next',
+      'previous',
+      'seek',
+    };
+    if (!actions.contains(action)) {
+      throw RiftException(-32010, 'Unknown media playback action: $action');
+    }
+    if (action == 'seek' &&
+        !allowSeekWithoutPosition &&
+        (positionMs == null || positionMs < 0)) {
+      throw const RiftException(
+        -32602,
+        'A non-negative positionMs is required for seek',
+      );
+    }
+    return action;
+  }
+
+  void _ensureMediaPlaybackActionAllowed(
+    MediaPlaybackRecord playback,
+    String action,
+  ) {
+    final allowed = switch (action) {
+      'play' => playback.canPlay,
+      'pause' => playback.canPause,
+      'togglePlayPause' => playback.canPlay || playback.canPause,
+      'next' => playback.canSkipNext,
+      'previous' => playback.canSkipPrevious,
+      'seek' => playback.canSeek,
+      _ => false,
+    };
+    if (!allowed) {
+      throw RiftException(
+        -32010,
+        "Media playback does not allow action '$action'",
+      );
+    }
+  }
+
+  String _mediaPlaybackOperationType(String action) => switch (action) {
+    'play' => 'media.play',
+    'pause' => 'media.pause',
+    'togglePlayPause' => 'media.toggle',
+    'next' => 'media.next',
+    'previous' => 'media.previous',
+    'seek' => 'media.seek',
+    _ => 'media.playback',
+  };
+
+  Map<String, dynamic> _listNotificationSyncState() {
+    final notifications =
+        _notificationSyncRecords.values.toList(growable: false)..sort((a, b) {
+          final aPostedAt = a['postedAt'] as String? ?? '';
+          final bPostedAt = b['postedAt'] as String? ?? '';
+          return bPostedAt.compareTo(aPostedAt);
+        });
+    final observedApps = _notificationSyncObservedApps.entries.toList()
+      ..sort((a, b) {
+        final byName = a.value.compareTo(b.value);
+        return byName != 0 ? byName : a.key.compareTo(b.key);
+      });
+    return {
+      'notifications': notifications,
+      'observedApps': [
+        for (final entry in observedApps)
+          {'packageName': entry.key, 'appName': entry.value},
+      ],
+      'policy': _notificationSyncPolicy.toJson(),
+    };
+  }
+
+  String _notificationRecordKey(String sourceDeviceId, String notificationId) =>
+      '$sourceDeviceId\n$notificationId';
+
+  Map<String, dynamic> _normalizeNotificationRecord(
+    Map<String, dynamic> params, {
+    required String notificationId,
+    required String sourceDeviceId,
+    required bool isLocalSource,
+  }) {
+    final record = <String, dynamic>{
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      if (params['sourcePlatform'] is String &&
+          (params['sourcePlatform'] as String).isNotEmpty)
+        'sourcePlatform': params['sourcePlatform'],
+      'packageName': RpcUtils.requireStringParam(params, 'packageName'),
+      'appName': RpcUtils.requireStringParam(params, 'appName'),
+      if (params['title'] is String && (params['title'] as String).isNotEmpty)
+        'title': params['title'],
+      if (params['bodyPreview'] is String &&
+          (params['bodyPreview'] as String).isNotEmpty)
+        'bodyPreview': params['bodyPreview'],
+      'postedAt': RpcUtils.requireStringParam(params, 'postedAt'),
+    };
+
+    final isDismissible = params['isDismissible'];
+    final isOpenable = params['isOpenable'];
+    if (isDismissible is! bool || isOpenable is! bool) {
+      throw ArgumentError.value(
+        params,
+        'isDismissible/isOpenable',
+        'must be booleans',
+      );
+    }
+    final sourcePlatform = record['sourcePlatform'];
+    record['isDismissible'] = isLocalSource
+        ? sourcePlatform == 'android' && isDismissible
+        : isDismissible;
+    record['isOpenable'] = isLocalSource ? false : isOpenable;
+
+    final normalizedIcon = normalizeNotificationIcon(params['icon']);
+    if (params['icon'] != null && normalizedIcon == null) {
+      RiftLog.warn(
+        '[NotificationSync] Ignoring malformed notification icon for '
+        '${record['notificationId']}',
+      );
+    }
+    if (normalizedIcon != null) {
+      record['icon'] = normalizedIcon;
+    }
+    return record;
+  }
+
+  bool _shouldSyncNotification(String packageName) {
+    if (!_notificationSyncPolicy.enabled) {
+      return false;
+    }
+
+    switch (_notificationSyncPolicy.mode) {
+      case _notificationSyncModeAll:
+        return true;
+      case _notificationSyncModeExclude:
+        return !_notificationSyncPolicy.packageNames.contains(packageName);
+      case _notificationSyncModeInclude:
+        return _notificationSyncPolicy.packageNames.contains(packageName);
+      default:
+        return false;
+    }
+  }
+
+  Future<List<String>> _broadcastNotificationSyncEnvelope({
+    required String messageType,
+    required Map<String, dynamic> payload,
+  }) async {
+    final trustedPeers = await _trustStore!.getPeersByState(TrustState.trusted);
+    final broadcastTo = <String>[];
+    for (final peer in trustedPeers) {
+      try {
+        await _ensureTrustedSessionForPeer(peer.deviceId);
+        final ctx = _sessionManager!.getContext(peer.deviceId);
+        if (ctx == null || !ctx.hasCapability('notification.sync')) {
+          continue;
+        }
+        await _sessionManager!.sendMessage(peer.deviceId, {
+          'rift': '0.1-draft',
+          'messageId': const Uuid().v4(),
+          'type': messageType,
+          'sourceDeviceId': _identityManager!.deviceId,
+          'destinationDeviceId': peer.deviceId,
+          'payload': payload,
+        });
+        broadcastTo.add(peer.deviceId);
+      } catch (error) {
+        RiftLog.warn(
+          '[NotificationSync] Could not send $messageType to ${peer.deviceId}: $error',
+        );
+      }
+    }
+    return broadcastTo;
+  }
+
+  Future<Map<String, dynamic>> _handleLocalNotificationSyncEvent(
+    Map<String, dynamic> params,
+  ) async {
+    _requireTransportServices();
+    final eventType = RpcUtils.requireStringParam(params, 'eventType');
+    final notificationId = RpcUtils.requireStringParam(
+      params,
+      'notificationId',
+    );
+    final localDeviceId = _identityManager!.deviceId;
+
+    switch (eventType) {
+      case 'posted':
+      case 'updated':
+        final record = _normalizeNotificationRecord(
+          params,
+          notificationId: notificationId,
+          sourceDeviceId: localDeviceId,
+          isLocalSource: true,
+        );
+
+        final packageName = record['packageName'] as String;
+        _notificationSyncObservedApps[packageName] =
+            record['appName'] as String;
+        if (!_shouldSyncNotification(packageName)) {
+          return {
+            'notificationId': notificationId,
+            'broadcastTo': const <String>[],
+            'suppressed': true,
+          };
+        }
+
+        _notificationSyncRecords[_notificationRecordKey(
+              localDeviceId,
+              notificationId,
+            )] =
+            record;
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': eventType == 'posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+
+        final broadcastTo = await _broadcastNotificationSyncEnvelope(
+          messageType: eventType == 'posted'
+              ? 'notification.posted'
+              : 'notification.updated',
+          payload: record,
+        );
+
+        return {
+          'notificationId': notificationId,
+          'broadcastTo': broadcastTo,
+          'suppressed': false,
+        };
+      case 'removed':
+        final removedPayload = <String, dynamic>{
+          'notificationId': notificationId,
+          'sourceDeviceId': localDeviceId,
+          if (params['removedAt'] is String &&
+              (params['removedAt'] as String).isNotEmpty)
+            'removedAt': params['removedAt'],
+        };
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(localDeviceId, notificationId),
+        );
+
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': removedPayload,
+        });
+
+        final broadcastTo = await _broadcastNotificationSyncEnvelope(
+          messageType: 'notification.removed',
+          payload: removedPayload,
+        );
+        return {'notificationId': notificationId, 'broadcastTo': broadcastTo};
+      default:
+        throw ArgumentError.value(
+          eventType,
+          'eventType',
+          'must be posted, updated, or removed',
+        );
+    }
+  }
+
+  Future<void> _handleNotificationSyncProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    try {
+      await _handleValidatedNotificationSyncProtocolMessage(message);
+    } on RiftException catch (error) {
+      final failureReason = error.code == -32010
+          ? 'ProtocolError'
+          : 'MalformedMessage';
+      RiftLog.warn(
+        '[NotificationSync] Dropping $failureReason from ${message.peerDeviceId}: $error',
+      );
+      await _trySendNotificationSyncPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on ArgumentError catch (error) {
+      await _trySendNotificationSyncPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    } on TypeError catch (error) {
+      await _trySendNotificationSyncPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    }
+  }
+
+  Future<void> _trySendNotificationSyncPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  Future<void> _handleValidatedNotificationSyncProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'] as String?;
+    if (type == null || !type.startsWith('notification.')) {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'notification.sync',
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[NotificationSync] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      return;
+    }
+
+    final payload = message.payload['payload'];
+    if (payload is! Map<String, dynamic>) {
+      RiftLog.warn(
+        '[NotificationSync] Missing payload for $type from ${message.peerDeviceId}',
+      );
+      return;
+    }
+
+    switch (type) {
+      case 'notification.actionRequest':
+        final operationId = RpcUtils.requireStringParam(payload, 'operationId');
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        final requestingDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'requestingDeviceId',
+        );
+        if (sourceDeviceId != _identityManager!.deviceId ||
+            requestingDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping action request from ${message.peerDeviceId}: identity mismatch',
+          );
+          return;
+        }
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final rawAction = RpcUtils.requireStringParam(payload, 'action');
+        final action = rawAction == 'open' || rawAction == 'dismiss'
+            ? rawAction
+            : rawAction;
+        final requestedAt = _optionalMediaPlaybackTimestamp(
+          payload,
+          'requestedAt',
+        );
+        final requestId = const Uuid().v4();
+        final request = <String, dynamic>{
+          'requestId': requestId,
+          'operationId': operationId,
+          'notificationId': notificationId,
+          'sourceDeviceId': sourceDeviceId,
+          'requestingDeviceId': requestingDeviceId,
+          'action': action,
+          'requestedAt': ?requestedAt,
+        };
+        final localNotification =
+            _notificationSyncRecords[_notificationRecordKey(
+              sourceDeviceId,
+              notificationId,
+            )];
+        if (action != 'open' && action != 'dismiss') {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'ProtocolError',
+            message: 'Unknown notification action.',
+          );
+          return;
+        }
+        if (localNotification == null) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'The local notification was not found.',
+          );
+          return;
+        }
+        if (action == 'open' ||
+            localNotification['sourcePlatform'] != 'android') {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'Remote Android notification open is not supported.',
+          );
+          return;
+        }
+        if (localNotification['isDismissible'] != true) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'PolicyDenied',
+            message: 'The local notification is not dismissible.',
+          );
+          return;
+        }
+        if (onIpcEvent == null) {
+          await _sendNotificationActionResult(
+            request,
+            success: false,
+            failureReason: 'CapabilityUnavailable',
+            message: 'No local notification action client is connected.',
+          );
+          return;
+        }
+        _pendingIncomingNotificationActions[requestId] = request;
+        _pendingIncomingNotificationActionTimers[requestId] = Timer(
+          mediaPlaybackActionTimeout,
+          () => unawaited(_expireIncomingNotificationAction(requestId)),
+        );
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationActionRequest',
+          'params': request,
+        });
+        return;
+
+      case 'notification.actionResult':
+        final operationId = RpcUtils.requireStringParam(payload, 'operationId');
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        if (sourceDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping action result from ${message.peerDeviceId}: source identity mismatch',
+          );
+          return;
+        }
+        final requestingDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'requestingDeviceId',
+        );
+        if (requestingDeviceId != _identityManager!.deviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping notification action result: requester identity mismatch',
+          );
+          return;
+        }
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final action = _normalizeNotificationAction(
+          RpcUtils.requireStringParam(payload, 'action'),
+        );
+        final success = payload['success'];
+        if (success is! bool) {
+          throw ArgumentError.value(success, 'success', 'must be a boolean');
+        }
+        final failureReason = _normalizeMediaPlaybackFailureReason(
+          success: success,
+          failureReason: payload['failureReason'],
+          invalidCode: -32010,
+        );
+        if (payload['message'] != null && payload['message'] is! String) {
+          throw ArgumentError.value(
+            payload['message'],
+            'message',
+            'must be a string',
+          );
+        }
+        final pending = _pendingNotificationActions[operationId];
+        if (pending == null ||
+            pending['sourceDeviceId'] != sourceDeviceId ||
+            pending['notificationId'] != notificationId ||
+            pending['action'] != action) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping unmatched action result from ${message.peerDeviceId}',
+          );
+          return;
+        }
+        _removePendingNotificationAction(operationId);
+        _operationManager!.transitionOperation(
+          operationId,
+          OperationState.active,
+        );
+        _operationManager!.transitionOperation(
+          operationId,
+          success ? OperationState.done : OperationState.failed,
+          failureReason: failureReason,
+          details: payload['message'] is String
+              ? {'message': payload['message']}
+              : null,
+        );
+        _emitNotificationActionResult(
+          pending,
+          success: success,
+          failureReason: failureReason,
+          message: payload['message'] as String?,
+        );
+        return;
+
+      case 'notification.posted':
+      case 'notification.updated':
+        final record = _normalizeNotificationRecord(
+          payload,
+          notificationId: RpcUtils.requireStringParam(
+            payload,
+            'notificationId',
+          ),
+          sourceDeviceId: RpcUtils.requireStringParam(
+            payload,
+            'sourceDeviceId',
+          ),
+          isLocalSource: false,
+        );
+        if (record['sourceDeviceId'] != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords[_notificationRecordKey(
+              record['sourceDeviceId'] as String,
+              record['notificationId'] as String,
+            )] =
+            record;
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': type == 'notification.posted'
+              ? 'rift.onNotificationPosted'
+              : 'rift.onNotificationUpdated',
+          'params': record,
+        });
+        return;
+      case 'notification.removed':
+        final notificationId = RpcUtils.requireStringParam(
+          payload,
+          'notificationId',
+        );
+        final sourceDeviceId = RpcUtils.requireStringParam(
+          payload,
+          'sourceDeviceId',
+        );
+        if (sourceDeviceId != message.peerDeviceId) {
+          RiftLog.warn(
+            '[NotificationSync] Dropping $type from ${message.peerDeviceId}: sourceDeviceId mismatch',
+          );
+          return;
+        }
+        _notificationSyncRecords.remove(
+          _notificationRecordKey(sourceDeviceId, notificationId),
+        );
+        onIpcEvent?.call({
+          'jsonrpc': '2.0',
+          'method': 'rift.onNotificationRemoved',
+          'params': <String, dynamic>{
+            'notificationId': notificationId,
+            'sourceDeviceId': sourceDeviceId,
+            if (payload['removedAt'] is String &&
+                (payload['removedAt'] as String).isNotEmpty)
+              'removedAt': payload['removedAt'],
+          },
+        });
+        return;
+      default:
+        return;
+    }
+  }
+
+  @visibleForTesting
+  SessionManager get sessionManagerForTesting => _sessionManager!;
+
+  @visibleForTesting
+  TrustStore get trustStoreForTesting => _trustStore!;
+
+  @visibleForTesting
+  Future<void> handleNotificationSyncProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleNotificationSyncProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
+
+  @visibleForTesting
+  Future<void> handleDeviceStatusProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleDeviceStatusProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
+
+  Future<void> _handleDeviceStatusProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'];
+    if (type != 'device.statusUpdated') {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(message.peerDeviceId, 'device.status');
+      final context = _sessionManager!.getContext(message.peerDeviceId);
+      if (context?.trustState != TrustState.trusted) {
+        throw const RiftUnauthorizedException(
+          'Device status requires a trusted peer',
+        );
+      }
+      final payload = message.payload['payload'];
+      if (payload is! Map<String, dynamic>) {
+        throw ArgumentError.value(payload, 'payload', 'must be an object');
+      }
+      final sourceDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'sourceDeviceId',
+      );
+      if (sourceDeviceId != message.peerDeviceId) {
+        await _recordSecurityEvent(
+          eventType: 'auth.failed',
+          severity: 'critical',
+          peerDeviceId: message.peerDeviceId,
+          outcome: 'denied',
+          failureReason: 'Unauthorized',
+          details: {
+            'messageType': 'device.statusUpdated',
+            'identityField': 'sourceDeviceId',
+          },
+        );
+        throw const RiftUnauthorizedException(
+          'Device status sourceDeviceId mismatch',
+        );
+      }
+      final record = DeviceStatusRecord(
+        sourceDeviceId: sourceDeviceId,
+        sourcePlatform: payload['sourcePlatform'] as String?,
+        batteryPresent: payload['batteryPresent'] as bool?,
+        batteryPercent: payload['batteryPercent'] as int?,
+        chargingState: payload['chargingState'] as String?,
+        powerSource: payload['powerSource'] as String?,
+        lowPowerMode: payload['lowPowerMode'] as bool?,
+        observedAt: RpcUtils.requireStringParam(payload, 'observedAt'),
+      );
+      _validateDeviceStatus(record);
+      _deviceStatusManager!.update(record);
+    } on SessionException catch (error) {
+      final failureReason = error.message.contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'Unauthorized';
+      await _trySendDeviceStatusPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on RiftException catch (error) {
+      final failureReason = error.code == -32004
+          ? 'Unauthorized'
+          : error.toString().contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'MalformedMessage';
+      await _trySendDeviceStatusPeerError(
+        message,
+        failureReason,
+        error.message,
+      );
+    } on ArgumentError catch (error) {
+      await _trySendDeviceStatusPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    } on TypeError catch (error) {
+      await _trySendDeviceStatusPeerError(
+        message,
+        'MalformedMessage',
+        error.toString(),
+      );
+    }
+  }
+
+  Future<void> _trySendDeviceStatusPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[DeviceStatus] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  @visibleForTesting
+  Future<void> handleMediaPlaybackProtocolMessageForTesting(
+    String peerDeviceId,
+    Map<String, dynamic> envelope,
+  ) => _handleMediaPlaybackProtocolMessage(
+    ProtocolMessage(peerDeviceId, null, envelope),
+  );
+
+  Future<void> _handleMediaPlaybackProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    try {
+      await _handleValidatedMediaPlaybackProtocolMessage(message);
+    } on RiftException catch (error) {
+      final reason = error.code == -32010
+          ? 'ProtocolError'
+          : 'MalformedMessage';
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $reason from ${message.peerDeviceId}: $error',
+      );
+      try {
+        await _sessionManager!.sendPeerError(
+          message.peerDeviceId,
+          failureReason: reason,
+          refMessageId: message.payload['messageId'] is String
+              ? message.payload['messageId'] as String
+              : null,
+          message: error.message,
+        );
+      } catch (rejectError) {
+        RiftLog.warn(
+          '[MediaPlayback] Failed to send $reason to ${message.peerDeviceId}: $rejectError',
+        );
+      }
+    } on ArgumentError catch (error) {
+      await _rejectMalformedMediaPlaybackMessage(message, error);
+    } on TypeError catch (error) {
+      await _rejectMalformedMediaPlaybackMessage(message, error);
+    }
+  }
+
+  Future<void> _trySendMediaPlaybackPeerError(
+    ProtocolMessage message,
+    String failureReason,
+    String errorMessage,
+  ) async {
+    try {
+      await _sessionManager!.sendPeerError(
+        message.peerDeviceId,
+        failureReason: failureReason,
+        refMessageId: message.payload['messageId'] is String
+            ? message.payload['messageId'] as String
+            : null,
+        message: errorMessage,
+      );
+    } catch (error) {
+      RiftLog.warn(
+        '[MediaPlayback] Failed to send $failureReason to ${message.peerDeviceId}: $error',
+      );
+    }
+  }
+
+  Future<void> _rejectMalformedMediaPlaybackMessage(
+    ProtocolMessage message,
+    Object error,
+  ) async {
+    RiftLog.warn(
+      '[MediaPlayback] Dropping MalformedMessage from ${message.peerDeviceId}: $error',
+    );
+    await _trySendMediaPlaybackPeerError(
+      message,
+      'MalformedMessage',
+      error.toString(),
+    );
+  }
+
+  Future<void> _handleValidatedMediaPlaybackProtocolMessage(
+    ProtocolMessage message,
+  ) async {
+    final type = message.payload['type'] as String?;
+    if (type == null || !type.startsWith('media.playback')) {
+      return;
+    }
+
+    try {
+      _sessionManager!.requireCapability(
+        message.peerDeviceId,
+        'media.playback',
+      );
+    } catch (error) {
+      final failureReason = error.toString().contains('CapabilityUnavailable')
+          ? 'CapabilityUnavailable'
+          : 'Unauthorized';
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $error',
+      );
+      await _trySendMediaPlaybackPeerError(
+        message,
+        failureReason,
+        error.toString(),
+      );
+      return;
+    }
+
+    final payload = message.payload['payload'];
+    if (payload is! Map<String, dynamic>) {
+      throw ArgumentError.value(payload, 'payload', 'must be an object');
+    }
+
+    if (type == 'media.playbackActionRequest') {
+      final sourceDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'sourceDeviceId',
+      );
+      final requestingDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'requestingDeviceId',
+      );
+      if (sourceDeviceId != _identityManager!.deviceId ||
+          requestingDeviceId != message.peerDeviceId) {
+        const errorMessage = 'Media playback action request identity mismatch';
+        RiftLog.warn(
+          '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+        );
+        await _trySendMediaPlaybackPeerError(
+          message,
+          'Unauthorized',
+          errorMessage,
+        );
+        return;
+      }
+      final requestId = const Uuid().v4();
+      final action = _normalizeMediaPlaybackAction(
+        RpcUtils.requireStringParam(payload, 'action'),
+        payload['positionMs'] as int?,
+      );
+      final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+      final requestedAt = _optionalMediaPlaybackTimestamp(
+        payload,
+        'requestedAt',
+      );
+      final request = <String, dynamic>{
+        'requestId': requestId,
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'requestingDeviceId': requestingDeviceId,
+        'action': action,
+        if (payload['positionMs'] is int) 'positionMs': payload['positionMs'],
+        'requestedAt': ?requestedAt,
+      };
+      final localPlayback = _mediaPlaybackManager!.getPlayback(
+        sourceDeviceId,
+        playbackId,
+      );
+      if (localPlayback == null) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: 'The local media playback was not found.',
+        );
+        return;
+      }
+      try {
+        _ensureMediaPlaybackActionAllowed(localPlayback, action);
+      } on RiftException catch (error) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: error.message,
+        );
+        return;
+      }
+      if (onIpcEvent == null) {
+        await _trySendMediaPlaybackActionResult(
+          request,
+          success: false,
+          failureReason: 'CapabilityUnavailable',
+          message: 'No local media control client is connected.',
+        );
+        return;
+      }
+      _pendingIncomingMediaPlaybackActions[requestId] = request;
+      _pendingIncomingMediaPlaybackActionTimers[requestId] = Timer(
+        mediaPlaybackActionTimeout,
+        () => unawaited(_expireIncomingMediaPlaybackAction(requestId)),
+      );
+      onIpcEvent?.call({
+        'jsonrpc': '2.0',
+        'method': 'rift.onMediaPlaybackActionRequest',
+        'params': request,
+      });
+      return;
+    }
+
+    final sourceDeviceId = RpcUtils.requireStringParam(
+      payload,
+      'sourceDeviceId',
+    );
+    if (sourceDeviceId != message.peerDeviceId) {
+      const errorMessage = 'Media playback sourceDeviceId mismatch';
+      RiftLog.warn(
+        '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+      );
+      await _trySendMediaPlaybackPeerError(
+        message,
+        'Unauthorized',
+        errorMessage,
+      );
+      return;
+    }
+
+    if (type == 'media.playbackActionResult') {
+      final requestingDeviceId = RpcUtils.requireStringParam(
+        payload,
+        'requestingDeviceId',
+      );
+      if (requestingDeviceId != _identityManager!.deviceId) {
+        const errorMessage = 'Media playback requestingDeviceId mismatch';
+        RiftLog.warn(
+          '[MediaPlayback] Dropping $type from ${message.peerDeviceId}: $errorMessage',
+        );
+        await _trySendMediaPlaybackPeerError(
+          message,
+          'Unauthorized',
+          errorMessage,
+        );
+        return;
+      }
+      final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+      final action = _normalizeMediaPlaybackAction(
+        RpcUtils.requireStringParam(payload, 'action'),
+        null,
+        allowSeekWithoutPosition: true,
+      );
+      final success = payload['success'];
+      if (success is! bool) {
+        throw ArgumentError.value(success, 'success', 'must be a boolean');
+      }
+      final failureReason = _normalizeMediaPlaybackFailureReason(
+        success: success,
+        failureReason: payload['failureReason'],
+        invalidCode: -32010,
+      );
+      if (payload['message'] != null && payload['message'] is! String) {
+        throw ArgumentError.value(
+          payload['message'],
+          'message',
+          'must be a string',
+        );
+      }
+      final actionKey = '$sourceDeviceId\n$playbackId\n$action';
+      final operationId = _pendingMediaPlaybackActionKeys.remove(actionKey);
+      final pending = operationId == null
+          ? null
+          : _pendingMediaPlaybackActions.remove(operationId);
+      if (operationId == null || pending == null) {
+        RiftLog.warn(
+          '[MediaPlayback] Dropping unmatched action result from ${message.peerDeviceId}',
+        );
+        return;
+      }
+      _pendingMediaPlaybackActionTimers.remove(operationId)?.cancel();
+      _operationManager!.transitionOperation(
+        operationId,
+        OperationState.active,
+      );
+      _operationManager!.transitionOperation(
+        operationId,
+        success ? OperationState.done : OperationState.failed,
+        failureReason: failureReason,
+        details: payload['message'] is String
+            ? {'message': payload['message']}
+            : null,
+      );
+      _mediaPlaybackManager!.addActionResult({
+        'playbackId': playbackId,
+        'sourceDeviceId': sourceDeviceId,
+        'operationId': operationId,
+        'action': action,
+        'state': success ? 'Done' : 'Failed',
+        'success': success,
+        'failureReason': ?failureReason,
+        if (payload['message'] is String) 'message': payload['message'],
+      });
+      return;
+    }
+
+    final playbackId = RpcUtils.requireStringParam(payload, 'playbackId');
+    if (type == 'media.playbackRemoved') {
+      _mediaPlaybackManager!.removePlayback(
+        sourceDeviceId,
+        playbackId,
+        removedAt: _optionalMediaPlaybackTimestamp(payload, 'removedAt'),
+      );
+      return;
+    }
+
+    final record = MediaPlaybackRecord(
+      playbackId: playbackId,
+      sourceDeviceId: sourceDeviceId,
+      sourcePlatform: payload['sourcePlatform'] as String?,
+      appId: RpcUtils.requireStringParam(payload, 'appId'),
+      appName: RpcUtils.requireStringParam(payload, 'appName'),
+      title: payload['title'] as String?,
+      artist: payload['artist'] as String?,
+      album: payload['album'] as String?,
+      artwork: payload['artwork'] is Map
+          ? Map<String, dynamic>.from(payload['artwork'] as Map)
+          : null,
+      playbackState: RpcUtils.requireStringParam(payload, 'playbackState'),
+      positionMs: RpcUtils.requireIntParam(payload, 'positionMs'),
+      durationMs: payload['durationMs'] as int?,
+      canPlay: _requireMediaPlaybackBool(payload, 'canPlay'),
+      canPause: _requireMediaPlaybackBool(payload, 'canPause'),
+      canSkipNext: _requireMediaPlaybackBool(payload, 'canSkipNext'),
+      canSkipPrevious: _requireMediaPlaybackBool(payload, 'canSkipPrevious'),
+      canSeek: _requireMediaPlaybackBool(payload, 'canSeek'),
+      updatedAt: RpcUtils.requireStringParam(payload, 'updatedAt'),
+    );
+    _validateMediaPlaybackRecord(record);
+
+    switch (type) {
+      case 'media.playbackPosted':
+        _mediaPlaybackManager!.notifyLocalEvent('posted', record);
+        return;
+      case 'media.playbackUpdated':
+        _mediaPlaybackManager!.notifyLocalEvent('updated', record);
+        return;
+      default:
+        return;
+    }
+  }
+
   Future<void> stop() async {
+    _isStopping = true;
+    await _notificationSyncMessageSub?.cancel();
+    await _mediaPlaybackMessageSub?.cancel();
+    await _deviceStatusMessageSub?.cancel();
+    await _sessionDisconnectSub?.cancel();
+    for (final timer in _trustedReconnectTimers.values) {
+      timer.cancel();
+    }
+    _trustedReconnectTimers.clear();
+    _trustedReconnectAttempts.clear();
+    _lastDiscoveryPrefetchAttempts.clear();
+    for (final timer in _pendingMediaPlaybackActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingMediaPlaybackActionTimers.clear();
+    for (final timer in _pendingIncomingMediaPlaybackActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingIncomingMediaPlaybackActionTimers.clear();
+    for (final timer in _pendingNotificationActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingNotificationActionTimers.clear();
+    for (final timer in _pendingIncomingNotificationActionTimers.values) {
+      timer.cancel();
+    }
+    _pendingIncomingNotificationActionTimers.clear();
+    _pendingNotificationActions.clear();
+    _pendingNotificationActionKeys.clear();
+    _pendingIncomingNotificationActions.clear();
     await _pairingManager?.dispose();
     _clipboardHandler?.dispose();
     _clipboardEngine?.dispose();
     await _fileTransferService?.dispose();
+    _mediaPlaybackManager?.dispose();
+    _deviceStatusManager?.dispose();
     _operationManager?.dispose();
     await _discoveryService?.stopDiscovery();
     await _discoveryService?.stopAdvertising();
     await _discoveryService?.dispose(); // closes _peerStreamController
-    await _transport?.stopServer();
     await _sessionManager?.dispose();
+    await _transport?.stopServer();
     _trustStore?.dispose();
     await _identityManager?.dispose();
   }
@@ -636,10 +3291,16 @@ class RiftDaemon {
       final lastSeenAt =
           ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
+      final deviceStatus = peer.state == TrustState.trusted
+          ? _deviceStatusManager?.getStatus(
+              peer.deviceId,
+              isOnline: ctx?.currentPresenceStatus == 'online',
+            )
+          : null;
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
-        'platform': _platformFromDisplayName(peer.displayName),
+        'platform': peer.platform ?? _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -648,6 +3309,7 @@ class RiftDaemon {
         'capabilities':
             ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
             <String>[],
+        if (deviceStatus != null) 'deviceStatus': deviceStatus.toJson(),
       };
     }).toList();
   }
@@ -665,10 +3327,16 @@ class RiftDaemon {
       final lastSeenAt =
           ctx?.lastHeartbeatReceived?.toUtc().toIso8601String() ??
           peer.lastSeenAt?.toUtc().toIso8601String();
+      final deviceStatus = peer.state == TrustState.trusted
+          ? _deviceStatusManager?.getStatus(
+              peer.deviceId,
+              isOnline: ctx?.currentPresenceStatus == 'online',
+            )
+          : null;
       return {
         'deviceId': peer.deviceId,
         if (peer.displayName != null) 'displayName': peer.displayName,
-        'platform': _platformFromDisplayName(peer.displayName),
+        'platform': peer.platform ?? _platformFromDisplayName(peer.displayName),
         'trustState': peer.state.toJson(),
         if (peer.pairedAt != null)
           'pairedAt': peer.pairedAt!.toUtc().toIso8601String(),
@@ -677,6 +3345,7 @@ class RiftDaemon {
         'capabilities':
             ctx?.negotiatedCapabilities.map((c) => c.name).toList() ??
             <String>[],
+        if (deviceStatus != null) 'deviceStatus': deviceStatus.toJson(),
       };
     }).toList();
   }
@@ -708,7 +3377,9 @@ class RiftDaemon {
         'deviceId': hintedDeviceId,
         if (knownPeer?.displayName != null)
           'displayName': knownPeer!.displayName,
-        'platform': _platformFromDisplayName(knownPeer?.displayName),
+        'platform':
+            knownPeer?.platform ??
+            _platformFromDisplayName(knownPeer?.displayName),
         'address': peer.address,
         'port': peer.port,
         'trustState': trustState,
@@ -737,6 +3408,9 @@ class RiftDaemon {
     if (Platform.isAndroid) {
       return 'android';
     }
+    if (Platform.isIOS) {
+      return 'ios';
+    }
     if (Platform.isWindows) {
       return 'windows';
     }
@@ -756,6 +3430,9 @@ class RiftDaemon {
 
     if (displayName.startsWith('Android ')) {
       return 'android';
+    }
+    if (displayName.startsWith('iOS ')) {
+      return 'ios';
     }
     if (displayName.startsWith('Windows ')) {
       return 'windows';
@@ -850,6 +3527,8 @@ class RiftDaemon {
       case 'rift.listPeersByState':
         final state = RpcUtils.requireStringParam(params, 'trustState');
         return {'peers': await listPeersByState(state)};
+      case 'rift.getPeerDeviceStatus':
+        return _getPeerDeviceStatus(params);
       case 'rift.getPeerPresence':
         final peerDeviceId = RpcUtils.requireStringParam(params, 'deviceId');
         final trustRecord = await _trustStore!.getPeer(peerDeviceId);
@@ -925,6 +3604,8 @@ class RiftDaemon {
             await _sessionManager!.sendMessage(peer.deviceId, {
               'rift': '0.1-draft',
               'type': 'clipboard.offer',
+              'id': const Uuid().v4(),
+              'messageId': const Uuid().v4(),
               'sourceDeviceId': _identityManager!.deviceId,
               'destinationDeviceId': peer.deviceId,
               'payload': offerPayload,
@@ -941,6 +3622,84 @@ class RiftDaemon {
           'expiresInMs': expiresInMs,
           'broadcastTo': broadcastTo,
         };
+
+      case 'rift.notifyLocalNotificationEvent':
+        return _handleLocalNotificationSyncEvent(params);
+
+      case 'rift.notifyLocalDeviceStatus':
+        return _handleLocalDeviceStatus(params);
+
+      case 'rift.notifyLocalMediaPlaybackEvent':
+        return _handleLocalMediaPlaybackEvent(params);
+
+      case 'rift.listNotifications':
+        return _listNotificationSyncState();
+
+      case 'rift.listMediaPlayback':
+        return _listMediaPlaybackState();
+
+      case 'rift.getMediaPlayback':
+        return _getMediaPlaybackState(params);
+
+      case 'rift.performMediaPlaybackAction':
+        return _performMediaPlaybackAction(params);
+
+      case 'rift.performNotificationAction':
+        return _performNotificationAction(params);
+
+      case 'rift.reportLocalMediaPlaybackActionHandled':
+        return _reportLocalMediaPlaybackActionHandled(params);
+
+      case 'rift.reportLocalNotificationActionHandled':
+        return _reportLocalNotificationActionHandled(params);
+
+      case 'rift.updateNotificationSyncPolicy':
+        final enabled = params['enabled'];
+        if (enabled is! bool) {
+          throw ArgumentError.value(enabled, 'enabled', 'must be a boolean');
+        }
+
+        final hasMode = params.containsKey('mode');
+        final hasPackageNames = params.containsKey('packageNames');
+        final hasLegacyPackages = params.containsKey('blacklistedPackages');
+        if (hasLegacyPackages && (hasMode || hasPackageNames)) {
+          throw ArgumentError(
+            'Canonical and legacy notification sync policy fields cannot be mixed',
+          );
+        }
+        if (hasMode != hasPackageNames) {
+          throw ArgumentError(
+            'Notification sync policy requires both mode and packageNames',
+          );
+        }
+
+        late final String mode;
+        late final List<String> packageNames;
+        if (hasLegacyPackages) {
+          packageNames = _parseNotificationSyncPackageNames(
+            params['blacklistedPackages'],
+            'blacklistedPackages',
+          );
+          mode = packageNames.isEmpty
+              ? _notificationSyncModeAll
+              : _notificationSyncModeExclude;
+        } else if (hasMode) {
+          mode = _validateNotificationSyncMode(params['mode']);
+          packageNames = _parseNotificationSyncPackageNames(
+            params['packageNames'],
+            'packageNames',
+          );
+        } else {
+          throw ArgumentError(
+            'Notification sync policy requires canonical or legacy package fields',
+          );
+        }
+
+        return _updateNotificationSyncPolicy(
+          enabled: enabled,
+          mode: mode,
+          packageNames: packageNames,
+        );
 
       case 'rift.listClipboardOffers':
         _requireTransportServices();
@@ -1105,6 +3864,10 @@ class RiftDaemon {
         );
       case 'rift.getOperation':
         return getOperation(RpcUtils.requireStringParam(params, 'operationId'));
+      case 'rift.cancelFileTransfer':
+        return _fileTransferService!.cancelTransfer(
+          RpcUtils.requireStringParam(params, 'transferId'),
+        );
       case 'rift.startDiscovery':
         _requireDiscoveryServices();
         await _discoveryService!.startDiscovery();
@@ -1652,7 +4415,18 @@ class RiftDaemon {
     // cross-platform pairing, the Android daemon prefers proactively opening
     // outbound sessions to discovered peers and then reuses those authenticated
     // sessions when the local user initiates pairing later.
+    _lastDiscoveryPrefetchAttempts.removeWhere(
+      (peerId, _) => !refreshedPeerIds.contains(peerId),
+    );
+    final now = DateTime.now();
     for (final peerId in refreshedPeerIds) {
+      final lastAttempt = _lastDiscoveryPrefetchAttempts[peerId];
+      if (!addedPeerIds.contains(peerId) &&
+          lastAttempt != null &&
+          now.difference(lastAttempt) < _discoveryPrefetchRetryDelay) {
+        continue;
+      }
+      _lastDiscoveryPrefetchAttempts[peerId] = now;
       unawaited(prefetchSessionForDiscoveredPeer(peerId));
     }
   }
@@ -1773,6 +4547,7 @@ class RiftDaemon {
       PeerRecord(
         deviceId: record.deviceId,
         displayName: record.displayName,
+        platform: record.platform,
         certDer: record.certDer,
         state: record.state,
         pairedAt: record.pairedAt,
@@ -1836,6 +4611,12 @@ class RiftDaemon {
     return null;
   }
 
+  @visibleForTesting
+  static bool hasActivePairingSession(
+    SessionContext? context,
+    PeerSocketEndpoint? endpoint,
+  ) => context != null && endpoint != null;
+
   Future<String> _ensureSessionForPairing(String peerDeviceId) async {
     final sessionManager = _sessionManager;
     final transport = _transport;
@@ -1845,11 +4626,28 @@ class RiftDaemon {
       );
     }
 
+    final record = await _trustStore?.getPeer(peerDeviceId);
+    final expectedTrustState = record?.state ?? TrustState.discovered;
     final ctx = sessionManager.getContext(peerDeviceId);
-    if (ctx != null && ctx.handshakeState == HandshakeState.established) {
+    final activeEndpoint = transport.getPeerSocketEndpoint(peerDeviceId);
+    if (ctx != null && ctx.trustState != expectedTrustState) {
+      RiftLog.warn(
+        '[Pairing] Session context for peerDeviceId=$peerDeviceId had stale '
+        'trust state ${ctx.trustState.toJson()} (expected ${expectedTrustState.toJson()}); '
+        'restarting session prefetch.',
+      );
+      sessionManager.disconnectPeer(peerDeviceId);
+    } else if (ctx != null && !hasActivePairingSession(ctx, activeEndpoint)) {
+      RiftLog.warn(
+        '[Pairing] Session context for peerDeviceId=$peerDeviceId had no active '
+        'transport socket. Restarting session prefetch.',
+      );
+      sessionManager.disconnectPeer(peerDeviceId);
+    } else if (ctx != null &&
+        ctx.handshakeState == HandshakeState.established) {
       return peerDeviceId;
-    }
-    if (ctx != null && ctx.handshakeState == HandshakeState.handshaking) {
+    } else if (ctx != null &&
+        ctx.handshakeState == HandshakeState.handshaking) {
       RiftLog.debug(
         '[Pairing] Reusing in-flight handshake for peerDeviceId=$peerDeviceId',
       );
@@ -1875,6 +4673,72 @@ class RiftDaemon {
       }
     }
   }
+
+  void _scheduleTrustedReconnect(String peerDeviceId) {
+    if (_isStopping || _trustedReconnectTimers.containsKey(peerDeviceId)) {
+      return;
+    }
+
+    final attempt = _trustedReconnectAttempts[peerDeviceId] ?? 0;
+    final delay =
+        _trustedReconnectDelays[attempt
+            .clamp(0, _trustedReconnectDelays.length - 1)
+            .toInt()];
+    _trustedReconnectTimers[peerDeviceId] = Timer(delay, () {
+      _trustedReconnectTimers.remove(peerDeviceId);
+      unawaited(_attemptTrustedReconnect(peerDeviceId, attempt));
+    });
+  }
+
+  Future<void> _attemptTrustedReconnect(
+    String peerDeviceId,
+    int attempt, {
+    Future<PeerRecord?> Function()? loadPeer,
+    void Function()? scheduleRetry,
+  }) async {
+    if (_isStopping) {
+      return;
+    }
+
+    try {
+      final lookup = loadPeer?.call() ?? _trustStore?.getPeer(peerDeviceId);
+      final record = lookup == null ? null : await lookup;
+      if (record == null || record.state != TrustState.trusted) {
+        _trustedReconnectAttempts.remove(peerDeviceId);
+        return;
+      }
+
+      await _ensureTrustedSessionForPeer(peerDeviceId);
+      _trustedReconnectAttempts.remove(peerDeviceId);
+    } catch (error) {
+      if (_isStopping) {
+        return;
+      }
+      _trustedReconnectAttempts[peerDeviceId] = attempt + 1;
+      RiftLog.debug(
+        '[Reconnect] Scheduled trusted reconnect failed for '
+        'peerDeviceId=$peerDeviceId attempt=${attempt + 1} error=$error',
+      );
+      if (scheduleRetry != null) {
+        scheduleRetry();
+      } else {
+        _scheduleTrustedReconnect(peerDeviceId);
+      }
+    }
+  }
+
+  @visibleForTesting
+  Future<void> attemptTrustedReconnectForTesting({
+    required String peerDeviceId,
+    required int attempt,
+    required Future<PeerRecord?> Function() loadPeer,
+    required void Function() scheduleRetry,
+  }) => _attemptTrustedReconnect(
+    peerDeviceId,
+    attempt,
+    loadPeer: loadPeer,
+    scheduleRetry: scheduleRetry,
+  );
 
   Future<String> _ensureTrustedSessionForPeer(String peerDeviceId) async {
     final trustStore = _trustStore;
@@ -2283,7 +5147,10 @@ class RiftDaemon {
   }
 
   /// The static entry point for spawning the Isolate from Flutter
-  static void isolateEntryPoint(Map<String, dynamic> args) async {
+  static void isolateEntryPoint(
+    Map<String, dynamic> args, {
+    PeerTransportFactory? peerTransportFactory,
+  }) async {
     final storagePath = args['storagePath'] as String;
     final sendPort = args.containsKey('sendPort')
         ? args['sendPort'] as SendPort
@@ -2291,12 +5158,21 @@ class RiftDaemon {
     final port = args['port'] as int? ?? 11112;
     final enableDiscovery = args['enableDiscovery'] as bool? ?? true;
     final enableTransport = args['enableTransport'] as bool? ?? true;
+    // Identity seed loaded by the host (e.g. from a platform keystore) before
+    // spawning; the daemon isolate itself cannot use platform channels.
+    final identityKey = args['identityKey'];
+    final localDisplayName = args['localDisplayName'] as String?;
 
     final daemon = RiftDaemon(
       storagePath: storagePath,
       port: port,
       enableDiscovery: enableDiscovery,
       enableTransport: enableTransport,
+      peerTransportFactory: peerTransportFactory,
+      identityPrivateKeyProvider: identityKey is Uint8List
+          ? () async => identityKey
+          : null,
+      localDisplayName: localDisplayName,
       onIpcEvent: (event) => sendPort?.send(event),
     );
 
@@ -2321,6 +5197,14 @@ class RiftDaemon {
                       : const <Map<String, dynamic>>[],
                   isDiscovering: message['isDiscovering'] == true,
                 );
+                return;
+              }
+
+              if (message['internal'] == 'android.prefetchPeer') {
+                final deviceId = message['deviceId'];
+                if (deviceId is String) {
+                  unawaited(daemon.prefetchSessionForDiscoveredPeer(deviceId));
+                }
                 return;
               }
 
@@ -2380,69 +5264,12 @@ class RiftDaemon {
             'params': {
               'status': 'running',
               'deviceId': daemon._identityManager!.deviceId,
-              'advertisedPort': daemon._transport?.boundPort ?? daemon.port,
+              'advertisedPort': daemon._boundTransportPort ?? daemon.port,
               'fingerprintPrefix': _fingerprintPrefix(
                 daemon._identityManager!.getDeviceFingerprint(),
               ),
               'rpcPort': rpcPort.sendPort,
             },
-          });
-
-          daemon._discoveryService?.onDeviceDiscovered.listen((peer) {
-            if (peer.deviceIdHint == daemon._identityManager!.deviceId) return;
-            if (peer.deviceIdHint == null) return; // Ignore non-Rift devices
-            daemon.trackDiscoveredPeer(peer);
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPeerDiscovered',
-              'params': {
-                'deviceId': peer.deviceIdHint,
-                'address': peer.address,
-                'port': peer.port,
-                'txtRecord': {
-                  'minV': peer.minVersion,
-                  'maxV': peer.maxVersion,
-                  'did': peer.deviceIdHint,
-                  if (peer.fingerprintPrefix != null)
-                    'fp': peer.fingerprintPrefix,
-                },
-              },
-            });
-          });
-
-          daemon._discoveryService?.onDeviceLost.listen((peer) {
-            final deviceId = peer.deviceIdHint;
-            if (deviceId == null) return;
-
-            final hadVisiblePeer = daemon._discoveredPeers.containsKey(
-              deviceId,
-            );
-            daemon.untrackDiscoveredPeer(peer);
-            final stillVisible = daemon._discoveredPeers.containsKey(deviceId);
-            if (hadVisiblePeer && !stillVisible) {
-              sendPort.send({
-                'jsonrpc': '2.0',
-                'method': 'rift.onPeerLost',
-                'params': {'deviceId': deviceId},
-              });
-            }
-          });
-
-          daemon._sessionManager?.onPresenceUpdate.listen((ctx) {
-            sendPort.send({
-              'jsonrpc': '2.0',
-              'method': 'rift.onPresenceUpdate',
-              'params': {
-                'deviceId': ctx.peerDeviceId,
-                'status': ctx.currentPresenceStatus,
-                'lastSeenAt': ctx.lastHeartbeatReceived
-                    ?.toUtc()
-                    .toIso8601String(),
-                'capabilities': ctx.negotiatedCapabilities
-                    .map((c) => c.name)
-                    .toList(),
-              },
-            });
           });
         } on SocketException catch (e) {
           rpcPort.close();

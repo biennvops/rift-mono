@@ -1,6 +1,8 @@
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Rift.Daemon.Core.Data;
+using Rift.Daemon.Core.Interfaces;
 
 namespace Rift.Daemon.Tests.Core;
 
@@ -32,6 +34,180 @@ public sealed class DatabaseContextTests : IDisposable
         }
 
         Assert.Contains("TlsCertificatePfx", columnNames);
+
+        using var queueCommand = connection.CreateCommand();
+        queueCommand.CommandText = "PRAGMA table_info(SendQueueItems);";
+        using var queueReader = queueCommand.ExecuteReader();
+        var queueColumns = new List<string>();
+        while (queueReader.Read())
+        {
+            queueColumns.Add((string)queueReader["name"]);
+        }
+
+        Assert.Contains("QueueItemId", queueColumns);
+        Assert.Contains("Status", queueColumns);
+
+        using var policyCommand = connection.CreateCommand();
+        policyCommand.CommandText = "PRAGMA table_info(NotificationSyncPolicy);";
+        using var policyReader = policyCommand.ExecuteReader();
+        var policyColumns = new List<string>();
+        while (policyReader.Read())
+        {
+            policyColumns.Add((string)policyReader["name"]);
+        }
+
+        Assert.Contains("Enabled", policyColumns);
+        Assert.Contains("BlacklistedPackagesJson", policyColumns);
+        Assert.Contains("PolicyJson", policyColumns);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_RoundTripsPolicy()
+    {
+        _databaseContext.Initialize();
+        var store = new SqliteNotificationSyncPolicyStore(_databaseContext);
+
+        store.Save(new NotificationSyncPolicy
+        {
+            Enabled = false,
+            Mode = NotificationSyncPolicyModes.Exclude,
+            PackageNames = ["org.example.Secret", "org.example.Secret", " org.example.Chat ", ""]
+        });
+        var restored = store.Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, restored.Mode);
+        Assert.Equal(["org.example.Chat", "org.example.Secret"], restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_ProjectsIncludeModeFailClosedForLegacyReaders()
+    {
+        _databaseContext.Initialize();
+        var store = new SqliteNotificationSyncPolicyStore(_databaseContext);
+
+        store.Save(new NotificationSyncPolicy
+        {
+            Enabled = true,
+            Mode = NotificationSyncPolicyModes.Include,
+            PackageNames = ["com.example.allowed"]
+        });
+
+        using var connection = _databaseContext.CreateOpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "SELECT Enabled, BlacklistedPackagesJson, PolicyJson FROM NotificationSyncPolicy WHERE Id = 1;";
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.Equal(0, reader.GetInt64(0));
+        Assert.Equal("[]", reader.GetString(1));
+
+        using var policyDocument = JsonDocument.Parse(reader.GetString(2));
+        Assert.Equal(2, policyDocument.RootElement.GetProperty("version").GetInt32());
+        Assert.Equal("include", policyDocument.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(
+            "com.example.allowed",
+            policyDocument.RootElement.GetProperty("packageNames")[0].GetString());
+
+        var restored = store.Load();
+        Assert.True(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Include, restored.Mode);
+        Assert.Equal(["com.example.allowed"], restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_MigratesLegacyBlacklistToExclude()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson, PolicyJson) VALUES (1, 1, '[\" com.foo \", \"com.foo\"]', NULL);";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.True(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.Exclude, restored.Mode);
+        Assert.Equal(["com.foo"], restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_MigratesEmptyLegacyBlacklistToAll()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson, PolicyJson) VALUES (1, 1, '[]', NULL);";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.True(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, restored.Mode);
+        Assert.Empty(restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_FailsClosedForWhitespaceOnlyLegacyPackage()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson, PolicyJson) VALUES (1, 1, '[\"   \"]', NULL);";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, restored.Mode);
+        Assert.Empty(restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_FailsClosedForMalformedCanonicalPolicy()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson, PolicyJson) VALUES (1, 1, '[\"com.stale\"]', 'not-json');";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, restored.Mode);
+        Assert.Empty(restored.PackageNames);
+    }
+
+    [Fact]
+    public void NotificationSyncPolicyStore_FailsClosedForMalformedPersistedBlacklist()
+    {
+        _databaseContext.Initialize();
+        using (var connection = _databaseContext.CreateOpenConnection())
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText =
+                "INSERT INTO NotificationSyncPolicy (Id, Enabled, BlacklistedPackagesJson) VALUES (1, 0, 'not-json');";
+            command.ExecuteNonQuery();
+        }
+
+        var restored = new SqliteNotificationSyncPolicyStore(_databaseContext).Load();
+
+        Assert.False(restored.Enabled);
+        Assert.Equal(NotificationSyncPolicyModes.All, restored.Mode);
+        Assert.Empty(restored.PackageNames);
     }
 
     [Fact]

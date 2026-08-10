@@ -143,6 +143,7 @@ public sealed class SessionCapabilityCoordinatorTests
 
         Assert.Equal(initiatorSelected, responderSelected);
         Assert.Contains(initiatorSelected, capability => capability.Name == "clipboard.offer_fetch" && capability.Version == 1);
+        Assert.Contains(initiatorSelected, capability => capability.Name == "notification.sync" && capability.Version == 1);
         Assert.Contains(initiatorSelected, capability => capability.Name == "presence.basic" && capability.Version == 1);
     }
 

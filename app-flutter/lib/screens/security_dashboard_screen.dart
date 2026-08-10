@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 import 'event_log_screen.dart';
-import 'dart:async';
+import '../src/ui/theme.dart';
+import 'blocked_peers_screen.dart';
 
 class SecurityDashboardScreen extends StatefulWidget {
   const SecurityDashboardScreen({super.key});
@@ -21,6 +23,8 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   int _pendingCount = 0;
   int _discoveredCount = 0;
 
+  List<Map<String, dynamic>> _trustedPeers = [];
+  List<Map<String, dynamic>> _discoveredPeers = [];
   List<Map<String, dynamic>> _recentEvents = [];
   Map<String, dynamic>? _criticalAlert;
 
@@ -117,9 +121,7 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
       if (!client.isConnected) {
         try {
           await client.connect();
-        } catch (_) {
-          // Surface the formatted connection error below if reconnect did not succeed.
-        }
+        } catch (_) {}
       }
 
       if (!client.isConnected) {
@@ -166,8 +168,6 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
         }
       }
 
-      // Look for a critical alert in recent events (e.g. auth.failed with critical severity)
-      // If none, we leave it null.
       Map<String, dynamic>? alert;
       for (final ev in events) {
         if (_isSecurityEvent(ev) && _isErrorEvent(ev)) {
@@ -182,6 +182,8 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
           _blockedCount = blocked;
           _pendingCount = pending;
           _discoveredCount = discovered.length;
+          _trustedPeers = peers;
+          _discoveredPeers = discovered;
           _recentEvents = events;
           _criticalAlert = alert;
           _isLoading = false;
@@ -218,148 +220,245 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
     }
   }
 
-  Widget _buildBentoCard({
-    required BuildContext context,
+  String _peerDisplayName(String? deviceId) {
+    if (deviceId == null || deviceId.isEmpty) return 'Unknown device';
+    for (final peer in _trustedPeers) {
+      if (peer['deviceId']?.toString() == deviceId) {
+        final name = peer['displayName']?.toString().trim();
+        if (name != null && name.isNotEmpty) return name;
+      }
+    }
+    for (final peer in _discoveredPeers) {
+      if (peer['deviceId']?.toString() == deviceId) {
+        final name = peer['displayName']?.toString().trim();
+        if (name != null && name.isNotEmpty) return name;
+      }
+    }
+    if (deviceId.length > 12) {
+      return '${deviceId.substring(0, 8)}…${deviceId.substring(deviceId.length - 4)}';
+    }
+    return deviceId;
+  }
+
+  String _formatEventTypeLabel(String eventType) {
+    switch (eventType.toLowerCase()) {
+      case 'trust.transitioned':
+        return 'Pairing completed';
+      case 'auth.failed':
+        return 'Authentication failed';
+      case 'peer.discovered':
+        return 'Device discovered';
+      case 'peer.lost':
+        return 'Device lost';
+      default:
+        return eventType;
+    }
+  }
+
+  Widget _buildStatCard({
     required String label,
-    required IconData icon,
     required int count,
-    required Color color,
     required Color labelColor,
+    VoidCallback? onTap,
   }) {
     final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.all(16),
+    final cardContent = Container(
+      padding: RiftDesign.padCard,
       decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: theme.colorScheme.outlineVariant,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontFamily: 'JetBrains Mono',
-                  letterSpacing: 1.0,
-                  color: labelColor,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              Icon(icon, color: color, size: 20),
-            ],
-          ),
-          const Spacer(),
           Text(
             count.toString(),
             style: theme.textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
               color: theme.colorScheme.onSurface,
+              height: 1.0,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: labelColor,
             ),
           ),
         ],
       ),
     );
+
+    if (onTap == null) return cardContent;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        hoverColor: theme.colorScheme.primary.withValues(alpha: 0.04),
+        child: cardContent,
+      ),
+    );
   }
 
-  Widget _buildEventItem(Map<String, dynamic> event) {
+  Widget _buildStatsGrid(ThemeData theme) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cards = [
+          _buildStatCard(
+            label: 'TRUSTED',
+            count: _trustedCount,
+            labelColor: theme.colorScheme.primary,
+          ),
+          _buildStatCard(
+            label: 'BLOCKED',
+            count: _blockedCount,
+            labelColor: theme.colorScheme.error,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const BlockedPeersScreen()),
+              );
+            },
+          ),
+          _buildStatCard(
+            label: 'PENDING',
+            count: _pendingCount,
+            labelColor: theme.colorScheme.tertiary,
+          ),
+          _buildStatCard(
+            label: 'DISCOVERED',
+            count: _discoveredCount,
+            labelColor: theme.colorScheme.secondary,
+          ),
+        ];
+
+        if (constraints.maxWidth <= 550) {
+          return Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(child: cards[0]),
+                  const SizedBox(width: 12),
+                  Expanded(child: cards[1]),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: cards[2]),
+                  const SizedBox(width: 12),
+                  Expanded(child: cards[3]),
+                ],
+              ),
+            ],
+          );
+        }
+
+        return Row(
+          children: [
+            Expanded(child: cards[0]),
+            const SizedBox(width: 12),
+            Expanded(child: cards[1]),
+            const SizedBox(width: 12),
+            Expanded(child: cards[2]),
+            const SizedBox(width: 12),
+            Expanded(child: cards[3]),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildEventRow(Map<String, dynamic> event) {
     final theme = Theme.of(context);
     final eventType = event['eventType']?.toString() ?? 'unknown';
     final timestamp = _formatTimeOnly(event['timestamp']?.toString());
-    final peer = event['peerDeviceId']?.toString() ?? 'unknown';
+    final peerId = event['peerDeviceId']?.toString();
+    final peerName = _peerDisplayName(peerId);
     final reason = event['failureReason']?.toString();
+    final outcome = event['outcome']?.toString() ?? '';
 
-    Color color = theme.colorScheme.outline;
-    Color bgColor = theme.colorScheme.surfaceContainerHighest;
-    IconData icon = Icons.info;
-    String title = eventType;
-    String subtitle = 'Device: $peer';
+    final isError = _isErrorEvent(event);
+    final isSecurity = _isSecurityEvent(event);
 
-    if (_isErrorEvent(event)) {
-      color = theme.colorScheme.onErrorContainer;
-      bgColor = theme.colorScheme.errorContainer;
-      icon = _isSecurityEvent(event) ? Icons.gpp_bad : Icons.error_outline;
-      title = _isSecurityEvent(event)
-          ? 'Security Event: $peer'
-          : 'Error: $eventType';
-      if (reason != null) subtitle = reason;
-    } else if (_isSecurityEvent(event)) {
-      color = theme.colorScheme.onSecondaryContainer;
-      bgColor = theme.colorScheme.secondaryContainer;
-      icon = Icons.gpp_good;
+    Color dotColor;
+    String title;
+    String subtitle;
+
+    if (isError) {
+      dotColor = theme.colorScheme.error;
+      title = isSecurity ? 'Security Event: $peerName' : 'Error: $eventType';
+      subtitle = reason != null && reason.isNotEmpty
+          ? 'Failure — $reason'
+          : 'Outcome: ${outcome.isNotEmpty ? outcome : "failed"}';
+    } else if (isSecurity) {
+      dotColor = const Color(0xFF10B981);
       title = eventType.startsWith('auth')
-          ? 'Auth Event: $peer'
-          : 'Trust Updated: $peer';
-      if (reason != null) subtitle = reason;
+          ? 'Auth Event: $peerName'
+          : 'Trust Updated: $peerName';
+      subtitle = reason != null && reason.isNotEmpty
+          ? reason
+          : '${_formatEventTypeLabel(eventType)} — trust state: ${event['trustState'] ?? "trusted"}';
     } else {
-      color = theme.colorScheme.onSurfaceVariant;
-      bgColor = theme.colorScheme.surfaceContainerHighest;
-      icon = Icons.sync;
+      dotColor = theme.colorScheme.outlineVariant;
       title = eventType;
-      if (reason != null) subtitle = reason;
+      subtitle = peerId != null && peerId.isNotEmpty
+          ? '$peerName — local network'
+          : 'System event — $outcome';
     }
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
-            child: Icon(icon, color: color, size: 20),
+            width: 8,
+            height: 8,
+            margin: const EdgeInsets.only(top: 6),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dotColor,
+            ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      timestamp,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        fontFamily: 'JetBrains Mono',
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                Text(
+                  title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
                 Text(
                   subtitle,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    fontFamily: 'JetBrains Mono',
+                  style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Text(
+            timestamp,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
             ),
           ),
         ],
@@ -370,6 +469,12 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final screenPadding =
+        isDesktop ? RiftDesign.padScreenDesktop : RiftDesign.padScreenMobile;
+    final isConnected = _error == null;
+    final statusColor =
+        isConnected ? theme.colorScheme.primary : theme.colorScheme.error;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
@@ -378,204 +483,238 @@ class _SecurityDashboardScreenState extends State<SecurityDashboardScreen> {
         child: _isLoading && _trustedCount == 0 && _recentEvents.isEmpty
             ? const Center(child: CircularProgressIndicator())
             : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
+                padding: screenPadding,
                 children: [
-                  Text(
-                    'Security',
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.onSurface,
-                      letterSpacing: -0.5,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Security',
+                              style: theme.textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: theme.colorScheme.onSurface,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: statusColor,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              isConnected ? 'Connected' : 'Disconnected',
+                              style: theme.textTheme.labelMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: statusColor,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'System status and recent operations.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: RiftDesign.spaceMd),
+                  _buildStatsGrid(theme),
+                  const SizedBox(height: RiftDesign.spaceXl),
                   if (_criticalAlert != null) ...[
                     Container(
-                      padding: const EdgeInsets.all(16),
+                      margin: const EdgeInsets.only(bottom: RiftDesign.spaceLg),
+                      padding: RiftDesign.padCard,
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.error,
+                        color: theme.colorScheme.errorContainer,
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
-                            color: theme.colorScheme.onErrorContainer),
+                          color: theme.colorScheme.error.withValues(alpha: 0.5),
+                        ),
                       ),
                       child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.warning, color: theme.colorScheme.onError),
+                          Icon(Icons.error_outline,
+                              size: 24, color: theme.colorScheme.error),
                           const SizedBox(width: 16),
                           Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'CRITICAL: ${_criticalAlert!['eventType']}',
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    color: theme.colorScheme.onError,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _criticalAlert!['failureReason']
-                                          ?.toString() ??
-                                      'Security incident detected',
-                                  style: theme.textTheme.bodyMedium?.copyWith(
-                                    color: theme.colorScheme.onError
-                                        .withAlpha(230),
-                                  ),
-                                ),
-                                const SizedBox(height: 12),
-                                Row(
-                                  children: [
-                                    ElevatedButton(
-                                      onPressed: () {
-                                        Navigator.of(context).push(
-                                            MaterialPageRoute(
-                                                builder: (_) =>
-                                                    const EventLogScreen()));
-                                      },
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor:
-                                            theme.colorScheme.onError,
-                                        foregroundColor:
-                                            theme.colorScheme.error,
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 8),
-                                      ),
-                                      child: const Text('REVIEW LOGS',
-                                          style: TextStyle(
-                                              fontFamily: 'JetBrains Mono',
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600)),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    OutlinedButton(
-                                      onPressed: () {
-                                        setState(() => _criticalAlert = null);
-                                      },
-                                      style: OutlinedButton.styleFrom(
-                                        foregroundColor:
-                                            theme.colorScheme.onError,
-                                        side: BorderSide(
-                                            color: theme.colorScheme.onError),
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 8),
-                                      ),
-                                      child: const Text('DISMISS',
-                                          style: TextStyle(
-                                              fontFamily: 'JetBrains Mono',
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600)),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                            child: Text(
+                              '${_criticalAlert!['eventType'] ?? 'alert'} from ${_peerDisplayName(_criticalAlert!['peerDeviceId']?.toString())} — ${_criticalAlert!['failureReason'] ?? 'Security incident detected'}',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onErrorContainer,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          IconButton(
+                            icon: Icon(Icons.close,
+                                color: theme.colorScheme.onErrorContainer),
+                            onPressed: () =>
+                                setState(() => _criticalAlert = null),
+                            tooltip: 'Dismiss alert',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (_error != null) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: RiftDesign.spaceLg),
+                      padding: RiftDesign.padCard,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: theme.colorScheme.error.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.error_outline,
+                              size: 24, color: theme.colorScheme.error),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(
+                              _error!,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onErrorContainer,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 24),
                   ],
-                  if (_error != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      color: theme.colorScheme.errorContainer,
-                      child: Text(_error!,
-                          style: TextStyle(
-                              color: theme.colorScheme.onErrorContainer)),
-                    ),
-                    const SizedBox(height: 24),
-                  ],
-                  GridView.count(
-                    crossAxisCount: 2,
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    mainAxisSpacing: 16,
-                    crossAxisSpacing: 16,
-                    childAspectRatio: 1.5,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildBentoCard(
-                        context: context,
-                        label: 'TRUSTED',
-                        icon: Icons.check_circle,
-                        count: _trustedCount,
-                        color: theme.colorScheme.secondary,
-                        labelColor: theme.colorScheme.secondary,
+                      Text(
+                        'Recent Events',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
-                      _buildBentoCard(
-                        context: context,
-                        label: 'BLOCKED',
-                        icon: Icons.block,
-                        count: _blockedCount,
-                        color: theme.colorScheme.error,
-                        labelColor: theme.colorScheme.error,
-                      ),
-                      _buildBentoCard(
-                        context: context,
-                        label: 'PENDING',
-                        icon: Icons.hourglass_top,
-                        count: _pendingCount,
-                        color: Colors.amber.shade700,
-                        labelColor: Colors.amber.shade700,
-                      ),
-                      _buildBentoCard(
-                        context: context,
-                        label: 'DISCOVERED',
-                        icon: Icons.wifi_tethering,
-                        count: _discoveredCount,
-                        color: theme.colorScheme.primary,
-                        labelColor: theme.colorScheme.primary,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primaryContainer
+                              .withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '${_recentEvents.length} Events',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: theme.colorScheme.primary,
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 32),
-                  Text(
-                    'Recent Events',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: theme.colorScheme.onSurface,
-                    ),
-                  ),
                   const SizedBox(height: 16),
                   if (_recentEvents.isEmpty)
-                    Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32.0),
-                        child: Text(
-                          'No recent events',
-                          style: TextStyle(
-                              color: theme.colorScheme.onSurfaceVariant),
-                        ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 64, horizontal: 24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border:
+                            Border.all(color: theme.colorScheme.outlineVariant),
+                      ),
+                      alignment: Alignment.center,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.event_busy,
+                              size: 48,
+                              color: theme.colorScheme.outlineVariant),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No recent events',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   else
-                    ..._recentEvents.map((e) => _buildEventItem(e)),
-                  const SizedBox(height: 16),
-                  OutlinedButton(
-                    onPressed: () {
-                      Navigator.of(context).push(MaterialPageRoute(
-                          builder: (_) => const EventLogScreen()));
-                    },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: theme.colorScheme.primary,
-                      side: BorderSide(color: theme.colorScheme.primary),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8)),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          for (int i = 0; i < _recentEvents.length; i++) ...[
+                            if (i > 0)
+                              Divider(
+                                height: 1,
+                                thickness: 1,
+                                color: theme.colorScheme.outlineVariant
+                                    .withValues(alpha: 0.5),
+                              ),
+                            _buildEventRow(_recentEvents[i]),
+                          ],
+                        ],
+                      ),
                     ),
-                    child: const Text('VIEW FULL LOG',
-                        style: TextStyle(
-                            fontFamily: 'JetBrains Mono',
-                            letterSpacing: 1.0,
-                            fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (navContext) => EventLogScreen(
+                              onBack: () => Navigator.of(navContext).pop(),
+                            ),
+                          ),
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(4)),
+                        side:
+                            BorderSide(color: theme.colorScheme.outlineVariant),
+                      ),
+                      child: Text(
+                        'VIEW FULL LOG',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),

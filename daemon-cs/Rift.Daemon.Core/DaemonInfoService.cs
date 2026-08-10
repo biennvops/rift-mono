@@ -9,15 +9,20 @@ public sealed class DaemonInfoService(
     ITrustStore trustStore,
     IDiscoveryCoordinator discoveryCoordinator,
     IPresenceService presenceService,
-    ITransport transport) : IDaemonInfoService
+    ITransport transport,
+    IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider = null,
+    IDeviceStatusService? deviceStatusService = null) : IDaemonInfoService
 {
     private static readonly CapabilityInfo[] Capabilities =
     [
-        new() { Name = "clipboard.offer_fetch", Version = 1 },
-        new() { Name = "file.transfer", Version = 1 },
-        new() { Name = "presence.basic", Version = 1 },
-        new() { Name = "operation.lifecycle", Version = 1 },
-        new() { Name = "security.event_log", Version = 1 }
+        DaemonCapabilities.ClipboardOfferFetch,
+        DaemonCapabilities.DeviceStatus,
+        DaemonCapabilities.FileTransfer,
+        DaemonCapabilities.MediaPlayback,
+        DaemonCapabilities.NotificationSync,
+        DaemonCapabilities.PresenceBasic,
+        DaemonCapabilities.OperationLifecycle,
+        DaemonCapabilities.SecurityEventLog
     ];
 
     public DeviceInfoResult GetDeviceInfo()
@@ -31,6 +36,7 @@ public sealed class DaemonInfoService(
             Fingerprint = identityManager.GetFingerprint(),
             ImplementationId = "riftd-cs/0.1.0",
             ProtocolVersion = "0.1-draft",
+            IdentityProtectionBackend = GetIdentityProtectionBackend(identityProtectionKeyProvider),
             Capabilities = Capabilities
         };
     }
@@ -61,7 +67,10 @@ public sealed class DaemonInfoService(
                     PairedAt = peer.State == TrustState.Trusted ? peer.LastStateTransitionAt.ToString("O") : null,
                     LastSeenAt = presence?.LastSeenAt,
                     Presence = presence?.Status ?? "offline",
-                    Capabilities = presence?.Capabilities ?? []
+                    Capabilities = presence?.Capabilities ?? [],
+                    DeviceStatus = peer.State == TrustState.Trusted
+                        ? deviceStatusService?.GetDeviceStatus(peer.DeviceId)
+                        : null
                 };
             })
             .ToArray();
@@ -107,7 +116,25 @@ public sealed class DaemonInfoService(
         };
     }
 
-    private static string GetLocalPlatform()
+    private static string GetIdentityProtectionBackend(
+        IUnixIdentityProtectionKeyProvider? identityProtectionKeyProvider)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return "dpapi";
+        }
+        if (OperatingSystem.IsMacOS())
+        {
+            return "keychain";
+        }
+        if (OperatingSystem.IsLinux())
+        {
+            return identityProtectionKeyProvider?.BackendName ?? "file";
+        }
+        return "unknown";
+    }
+
+    internal static string GetLocalPlatform()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -147,6 +174,11 @@ public sealed class DaemonInfoService(
         if (displayName.StartsWith("Windows ", StringComparison.OrdinalIgnoreCase))
         {
             return "windows";
+        }
+
+        if (displayName.StartsWith("iOS ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "ios";
         }
 
         if (displayName.StartsWith("macOS ", StringComparison.OrdinalIgnoreCase))

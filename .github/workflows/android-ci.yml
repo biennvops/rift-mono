@@ -1,0 +1,50 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'app-flutter/android/**'
+      - 'app-flutter/lib/**'
+      - 'app-flutter/test/**'
+      - 'app-flutter/pubspec.yaml'
+      - 'app-flutter/pubspec.lock'
+      - 'daemon-dart/**'
+      - '.github/workflows/android-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'app-flutter/android/**'
+      - 'app-flutter/lib/**'
+      - 'app-flutter/test/**'
+      - 'app-flutter/pubspec.yaml'
+      - 'app-flutter/pubspec.lock'
+      - 'daemon-dart/**'
+      - '.github/workflows/android-ci.yml'
+
+jobs:
+  android-unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: app-flutter
+        run: flutter pub get
+
+      - name: Run Android unit tests and Kotlin compilation
+        working-directory: app-flutter/android
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugKotlin

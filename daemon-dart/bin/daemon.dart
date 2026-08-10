@@ -4,7 +4,6 @@ import 'dart:io';
 
 import 'package:daemon_dart/daemon_dart.dart';
 import 'package:path/path.dart' as p;
-import 'package:daemon_dart/src/core/rift_exceptions.dart';
 
 Future<void> main(List<String> args) async {
   final socketPath = _resolveSocketPath();
@@ -59,12 +58,20 @@ Future<void> _handleClient(Socket client, RiftDaemon daemon) async {
           final headerText = ascii.decode(buffer.sublist(0, headerEnd));
           final len = _parseContentLength(headerText);
           if (len == null) {
-            client.add(_encodeError(null, -32600, 'Missing or invalid Content-Length header'));
+            client.add(
+              _encodeError(
+                null,
+                -32600,
+                'Missing or invalid Content-Length header',
+              ),
+            );
             buffer.clear();
             break;
           }
           if (len < 0 || len > maxContentLength) {
-            client.add(_encodeError(null, -32600, 'Content-Length out of range'));
+            client.add(
+              _encodeError(null, -32600, 'Content-Length out of range'),
+            );
             buffer.clear();
             break;
           }
@@ -90,7 +97,11 @@ Future<void> _handleClient(Socket client, RiftDaemon daemon) async {
   }
 }
 
-Future<void> _processMessage(String body, Socket client, RiftDaemon daemon) async {
+Future<void> _processMessage(
+  String body,
+  Socket client,
+  RiftDaemon daemon,
+) async {
   Object? id;
   try {
     final decoded = jsonDecode(body);
@@ -119,7 +130,11 @@ Future<void> _processMessage(String body, Socket client, RiftDaemon daemon) asyn
   }
 }
 
-Future<void> _shutdown(ServerSocket server, RiftDaemon daemon, File socketFile) async {
+Future<void> _shutdown(
+  ServerSocket server,
+  RiftDaemon daemon,
+  File socketFile,
+) async {
   await server.close();
   await daemon.stop();
   if (await socketFile.exists()) {
@@ -144,7 +159,9 @@ Future<File> _prepareSocketPath(String socketPath) async {
       timeout: const Duration(milliseconds: 300),
     );
     await probe.close();
-    throw StateError('Another Rift daemon is already listening on unix://$socketPath');
+    throw StateError(
+      'Another Rift daemon is already listening on unix://$socketPath',
+    );
   } on SocketException {
     await socketFile.delete();
     return socketFile;
@@ -178,7 +195,10 @@ List<int> _encodeError(Object? id, int code, String message) {
 
 int _indexOfHeaderEnd(List<int> data) {
   for (var i = 0; i + 3 < data.length; i++) {
-    if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10) {
+    if (data[i] == 13 &&
+        data[i + 1] == 10 &&
+        data[i + 2] == 13 &&
+        data[i + 3] == 10) {
       return i;
     }
   }
@@ -221,7 +241,10 @@ String? _resolveUid() {
     }
     for (final line in statusFile.readAsLinesSync()) {
       if (!line.startsWith('Uid:')) continue;
-      final parts = line.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+      final parts = line
+          .split(RegExp(r'\s+'))
+          .where((p) => p.isNotEmpty)
+          .toList();
       if (parts.length >= 2) {
         return parts[1];
       }

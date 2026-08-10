@@ -364,7 +364,34 @@ public sealed class ClipboardService : IClipboardService
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+                // The response can complete the fetch concurrently with the
+                // timeout firing; a delivered result must win over expiry.
+                if (pendingFetch.CompletionSource.Task.IsCompletedSuccessfully)
+                {
+                    return await pendingFetch.CompletionSource.Task;
+                }
+
+                try
+                {
+                    _operationService.TransitionOperation(operationId, OperationState.Expired, "Timeout");
+                }
+                catch (OperationTransitionException)
+                {
+                    // The response handler transitions to Done just before
+                    // resolving the completion source, so a rejected expiry
+                    // means the result is about to arrive.
+                    try
+                    {
+                        return await pendingFetch.CompletionSource.Task.WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // Keep the typed error contract even if the imminent
+                        // result never materializes.
+                        LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
+                        throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
+                    }
+                }
                 LogEvent(SecurityEventTypes.ClipboardFetched, offer.SourceDeviceId, SecurityEventSeverity.Warning, SecurityEventOutcome.Failure, "Timeout");
                 throw new ClipboardFailureException("Timeout", -32011, $"Clipboard fetch for offer '{offerId}' timed out.");
             }
@@ -721,32 +748,25 @@ public sealed class ClipboardService : IClipboardService
     private async Task ReconnectTrustedPeerCoreAsync(string peerDeviceId, PeerIdentity peer, CancellationToken cancellationToken)
     {
         Exception? lastError = null;
-        foreach (var endpoint in peer.TrustedEndpoints)
+        try
         {
-            try
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Reconnected trusted peer {DeviceId} using persisted endpoint {Address}:{Port} from {Source}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    endpoint.Source);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _logger.LogWarning(
-                    ex,
-                    "Trusted reconnect attempt failed for peer {DeviceId} via {Address}:{Port} from {Source}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    endpoint.Source);
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                peer.TrustedEndpoints,
+                async (endpoint, token) =>
+                {
+                    await _transport.ConnectToPeerAsync(
+                        endpoint.Address,
+                        endpoint.Port,
+                        token).ConfigureAwait(false);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         if (_discoveryCoordinator.TryGetDiscoveredPeer(peerDeviceId, out var discoveredPeer) &&
@@ -780,31 +800,25 @@ public sealed class ClipboardService : IClipboardService
             ? peer.ObservedEndpoints
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
         Exception? lastError = null;
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeoutCts.CancelAfter(TrustedReconnectTimeout);
-                await _transport.ConnectToPeerAsync(endpoint.Address, endpoint.Port, timeoutCts.Token).ConfigureAwait(false);
-                _logger.LogInformation(
-                    "Reconnected trusted peer {DeviceId} using discovery endpoint {Address}:{Port}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port);
-                return;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-            {
-                lastError = ex;
-                _logger.LogWarning(
-                    ex,
-                    "Discovery reconnect attempt failed for trusted peer {DeviceId} via {Address}:{Port}.",
-                    peerDeviceId,
-                    endpoint.Address,
-                    endpoint.Port);
-            }
+            await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                async (endpoint, token) =>
+                {
+                    await _transport.ConnectToPeerAsync(
+                        endpoint.Address,
+                        endpoint.Port,
+                        token).ConfigureAwait(false);
+                    return true;
+                },
+                TrustedReconnectTimeout,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            lastError = ex;
         }
 
         throw new ClipboardFailureException(

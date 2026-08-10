@@ -14,7 +14,20 @@ public sealed class DeviceInfoResult
     public string Fingerprint { get; init; } = string.Empty;
     public string ImplementationId { get; init; } = string.Empty;
     public string ProtocolVersion { get; init; } = string.Empty;
+    public string? IdentityProtectionBackend { get; init; }
     public IReadOnlyList<CapabilityInfo> Capabilities { get; init; } = [];
+}
+
+public static class DaemonCapabilities
+{
+    public static readonly CapabilityInfo ClipboardOfferFetch = new() { Name = "clipboard.offer_fetch", Version = 1 };
+    public static readonly CapabilityInfo DeviceStatus = new() { Name = "device.status", Version = 1 };
+    public static readonly CapabilityInfo FileTransfer = new() { Name = "file.transfer", Version = 2 };
+    public static readonly CapabilityInfo MediaPlayback = new() { Name = "media.playback", Version = 1 };
+    public static readonly CapabilityInfo NotificationSync = new() { Name = "notification.sync", Version = 1 };
+    public static readonly CapabilityInfo PresenceBasic = new() { Name = "presence.basic", Version = 1 };
+    public static readonly CapabilityInfo OperationLifecycle = new() { Name = "operation.lifecycle", Version = 1 };
+    public static readonly CapabilityInfo SecurityEventLog = new() { Name = "security.event_log", Version = 1 };
 }
 
 public sealed class QueryEventLogResult
@@ -33,6 +46,7 @@ public sealed class TrustedPeerInfo
     public string? LastSeenAt { get; init; }
     public string Presence { get; init; } = "offline";
     public IReadOnlyList<string> Capabilities { get; init; } = [];
+    public DeviceStatusRecord? DeviceStatus { get; init; }
 }
 
 public sealed class ListTrustedPeersResult

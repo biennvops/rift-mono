@@ -1,8 +1,8 @@
-# Rift Android Daemon (Dart)
+# Rift Mobile Daemon (Dart)
 
-`daemon-dart` is the Android daemon implementation for Rift. It owns device
-identity, peer transport, trust, and the Flutter-facing isolate/JSON-RPC
-bridge on Android.
+`daemon-dart` is the shared mobile daemon implementation for Rift. It owns
+identity, peer transport, trust, and the Flutter-facing JSON-RPC bridge through
+an Android isolate or an iOS in-process channel.
 
 ## Scope
 
@@ -10,7 +10,7 @@ bridge on Android.
 - fail-closed X.509 extension parsing
 - peer discovery, mTLS session bootstrap, and pairing
 - clipboard and operation lifecycle handling
-- local JSON-RPC IPC through the Android isolate bridge
+- local JSON-RPC IPC through the platform-specific mobile bridge
 
 Normative behavior lives in:
 
@@ -43,8 +43,8 @@ dart test
 ```
 
 The standalone runner at `bin/daemon.dart` is for local IPC smoke tests and
-development workflows. Android production hosting remains the foreground-service
-plus isolate model used by the Flutter app.
+development workflows. Android production hosting uses the foreground-service
+plus isolate model; iOS hosts the daemon in-process through the Flutter app.
 
 ## Security Notes
 

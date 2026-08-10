@@ -112,17 +112,27 @@ public class LinuxIpcListener(
         }
     }
 
-    internal static string ResolveSocketPath(Func<string, bool>? validateFallbackDir = null)
+    internal static string ResolveSocketPath(
+        Func<string, bool>? validateFallbackDir = null,
+        Func<string, bool>? validatePrimaryDir = null)
     {
         var xdgRuntimeDir = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
 
         if (!string.IsNullOrEmpty(xdgRuntimeDir))
         {
-            if (Directory.Exists(xdgRuntimeDir) && IsDirectoryWritable(xdgRuntimeDir))
+            var primaryDir = Path.Combine(xdgRuntimeDir, SocketDirName);
+            var primary = Path.Combine(primaryDir, SocketFileName);
+            if (Directory.Exists(xdgRuntimeDir) && FitsInSunPath(primary))
             {
-                var primary = Path.Combine(xdgRuntimeDir, SocketDirName, SocketFileName);
-                if (FitsInSunPath(primary))
-                    return primary;
+                try
+                {
+                    EnsureDirectoryWithMode(primaryDir);
+                    if ((validatePrimaryDir ?? IsDirectoryWritable)(primaryDir))
+                        return primary;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
             }
         }
 
@@ -163,17 +173,7 @@ public class LinuxIpcListener(
         if (mode != Dir0700)
             return false;
 
-        var probe = Path.Combine(dirPath, $".probe-{Guid.NewGuid():N}");
-        try
-        {
-            File.WriteAllText(probe, "");
-            File.Delete(probe);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
+        return IsDirectoryWritable(dirPath);
     }
 
     private static bool IsDirectoryWritable(string dirPath)
@@ -182,12 +182,22 @@ public class LinuxIpcListener(
         try
         {
             File.WriteAllText(probe, "");
-            File.Delete(probe);
             return true;
         }
-        catch (UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return false;
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(probe))
+                    File.Delete(probe);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
         }
     }
 

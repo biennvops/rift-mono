@@ -16,16 +16,45 @@ README.
 ## Current Contents
 
 - `test/` - lightweight automated interop-oriented tests and harness code
+- `mobile-device-matrix.md` - manual real-device test matrix for mobile pairs
 - `pubspec.*` - Dart package metadata for the harness
+
+Most tests in this package run two in-memory **Dart** daemon session stacks
+against each other. Notification icon/update coverage additionally runs the
+production C# icon normalizer through `runners/dotnet/`, then applies those
+C#-parsed wire records to a Dart daemon inbox. The remaining tests validate
+Android-side protocol behavior, not desktop-to-desktop interoperability.
+
+## Desktop-to-Desktop Interop
+
+Desktop-to-desktop (Windows/macOS/Linux) interoperability is exercised by the
+C# live-transport interop suites in
+`daemon-cs/Rift.Daemon.Tests/Core/`:
+
+- `TlsTransportTests` - mutual TLS bootstrap, capability negotiation, and
+  bidirectional protected traffic between two live transports
+- `PairingInteropTests` - pairing, trusted reconnect, and block enforcement
+  between two full daemon-core stacks over loopback sockets
+- `ClipboardFileInteropTests` - clipboard text/binary offer+fetch with hash
+  verification, and the file transfer lifecycle (complete, reject, cancel,
+  resume-after-disconnect) through the production message router
+
+Run them on each desktop platform with:
+
+```bash
+dotnet test daemon-cs/Rift.Daemon.Tests/Rift.Daemon.Tests.csproj
+```
 
 ## Usage
 
 Run from `tests-interop/`:
 
 ```bash
-dart pub get
-dart test
+flutter pub get
+flutter test
 ```
+
+The notification interop test also requires the .NET SDK used by `daemon-cs`.
 
 Use this directory for reproducible interop procedures and evidence templates.
 Do not treat it as the project roadmap or source of current completion status.

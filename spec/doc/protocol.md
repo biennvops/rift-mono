@@ -149,6 +149,8 @@ Rift uses mutual TLS with ECDSA P-256 certificates. TLS 1.3 is preferred. TLS 1.
 
 Both peers MUST present certificates. A successful TLS handshake is necessary but not sufficient for trust. Trusted peers are accepted by Ed25519 public-key match, not by certificate chain trust alone.
 
+When a second connection for the same authenticated peer arrives while an established authenticated session remains usable, implementations SHOULD retain the established session and close the duplicate. Cleanup for a rejected, replaced, or stale connection MUST NOT remove or close a different connection that currently owns the peer session.
+
 For pairing candidates, the TLS layer MAY provisionally accept a self-signed peer certificate only to complete the handshake and extract the Ed25519 extension. Before post-handshake Ed25519 verification succeeds, the peer may exchange only `session.hello`, `session.accept`, `session.reject`, and pairing messages.
 
 ### 5.2 Post-Handshake Ed25519 Verification
@@ -244,7 +246,7 @@ Unknown optional fields MUST be ignored. Unknown values in `requiredExtensions` 
 
 Any device ID field inside a message payload (e.g., `sourceDeviceId` in `clipboard.offer`, `requestingDeviceId` in `clipboard.fetchRequest`) MUST be validated against the authenticated `sourceDeviceId` from the envelope. If a payload identity field does not match the envelope's authenticated identity, the message MUST be rejected with `Unauthorized` and a `critical` security event MUST be logged. Implementations MUST use only the envelope's authenticated `sourceDeviceId` for all business logic, state updates, and audit logging — never an unverified payload field.
 
-Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
+Discovery advertises `minVersion` and `maxVersion` as unauthenticated hints. The first encrypted peer message MUST be `session.hello` using `rift: "0.1-draft"`. `session.hello` includes `supportedVersions`, `deviceId`, `implementationId`, `capabilities`, and `identityProof` (Section 5.3). It MUST NOT include real user-assigned or platform-derived presentation metadata; those values are exchanged only after the peer is trusted. The selected version is the highest mutually supported version; v0.1-draft only supports `0.1-draft`. If there is no mutually supported version, the session fails with `VersionMismatch`. The receiver MUST verify `identityProof` before sending `session.accept`. No protected operation may run until `session.accept` confirms the selected version and identity verification has passed.
 
 Each TLS connection MUST process at most one `session.hello` message in each direction. If a peer sends a second `session.hello` on the same connection, the receiver MUST reject it with `ProtocolError` and terminate the session. This prevents application-layer state confusion from replayed or duplicated session initiation messages.
 
@@ -274,13 +276,17 @@ The `bindingType` field is REQUIRED. It MUST be one of `"tls-exporter"`, `"tls-u
 
 The `sessionNonce` field is REQUIRED when `bindingType` is `"app-nonce"` and MUST be absent otherwise. It contains a base64-encoded 32-byte cryptographically random nonce used in the Tier 3 channel binding computation.
 
+Real user-assigned or platform-derived `displayName` and `platform` values MUST NOT appear in `session.hello` or `session.accept`. Proof of Possession authenticates control of an identity but does not establish user trust, so exposing presentation metadata during session bootstrap would disclose it to any active local-network peer capable of creating a fresh Rift identity.
+
 `session.accept` payload fields: `selectedVersion` string, `deviceId` device ID, `identityVerified` boolean, `bindingType` string (REQUIRED, same values as in `session.hello`), `sessionNonce` string (REQUIRED when `bindingType` is `"app-nonce"`), `identityProof` hex string (REQUIRED, same construction as in `session.hello`), `capabilities` array of capability objects.
 
 `session.reject` payload fields: `failureReason` failure reason, optional `message` string.
 
+`device.metadata` is a protected post-trust message. Its payload fields are `displayName` string, `platform` string, and optional `requestPeerMetadata` boolean (default `false`). `displayName` MUST NOT exceed 128 characters after trimming and MUST NOT contain control characters. `platform` MUST be one of `android`, `ios`, `windows`, `macos`, `linux`, or `unknown`. A sender MUST send this message only when the peer is locally trusted, after capability negotiation completes or immediately after the active session becomes trusted. A receiver MUST persist it only while the authenticated peer remains locally trusted. When `requestPeerMetadata` is `true`, a trusted receiver SHOULD reply with its own `device.metadata` carrying `requestPeerMetadata: false`; this closes the brief race where one side completes pairing before the other. Implementations SHOULD initiate this exchange on every trusted reconnect so platform renames propagate in both directions. Display names and platform values MUST NOT be used as identity, authorization, or trust inputs.
+
 ### 7.2 Capability Messages
 
-Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`.
+Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and `security.event_log`, all with version `1`. The optional file-transfer capability is `file.transfer`, with version `1` for legacy completion semantics and version `2` for receiver-confirmed publication. The optional notification-sync capability is `notification.sync` version `1`. The optional media-playback capability is `media.playback` version `1`. The optional device-status capability is `device.status` version `1`.
 
 `capability.advertise` payload fields: `capabilities` array of `{ "name": string, "version": integer, "policyFlags": array<string> }`.
 
@@ -288,7 +294,7 @@ Required MVP capability names are `clipboard.offer_fetch`, `presence.basic`, `op
 
 ### 7.3 Pairing Messages
 
-`pairing.start` payload fields: `expiresInMs` duration, optional `displayName` string.
+`pairing.start` payload fields: `expiresInMs` duration. Real `displayName` and `platform` values MUST NOT be sent before pairing completes. Pairing UI identifies an untrusted peer by its authenticated device ID and locally derived fingerprint.
 
 `pairing.approve` payload fields: `approvedAt` RFC 3339 timestamp.
 
@@ -302,6 +308,35 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 
 `presence.update` payload fields: `status` one of `online`, `offline`, `away`; optional `lastSeenAt` RFC 3339 timestamp; `capabilities` array of selected capability names.
 
+### 7.4A Device Status Sync
+
+Device status sync v1 shares a coarse power-state snapshot between trusted
+peers. Peers MUST negotiate `device.status@1` before sending or accepting a
+`device.statusUpdated` message. Device status is informational only and MUST NOT
+be used as a trust, identity, authorization, or transport-reachability input.
+
+`device.statusUpdated` payload fields:
+
+| Field             | Required | Type                | Notes |
+| ----------------- | -------- | ------------------- | ----- |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity |
+| `sourcePlatform`  | No       | string              | Source hint such as `android`, `ios`, `windows`, `macos`, `linux` |
+| `batteryPresent`  | No       | boolean             | Whether a battery is physically present; false means battery fields are omitted |
+| `batteryPercent`  | No       | integer             | Inclusive range `0` through `100` when a battery is present |
+| `chargingState`   | No       | string              | One of `charging`, `discharging`, `full`, `notCharging`, or `unknown` |
+| `powerSource`     | No       | string              | One of `battery`, `ac`, `usb`, or `unknown` |
+| `lowPowerMode`    | No       | boolean             | Whether the platform's battery-saver or low-power mode is active |
+| `observedAt`      | Yes      | RFC 3339 UTC string | Audit/display timestamp for the local observation |
+
+At least one of `batteryPresent`, `batteryPercent`, `chargingState`,
+`powerSource`, or `lowPowerMode` MUST be present. When `batteryPresent` is
+false, senders MUST omit `batteryPercent` and `chargingState`. Unsupported values MUST be omitted rather than
+fabricated. Receivers MUST replace the cached status for `sourceDeviceId` with
+the complete new snapshot. `observedAt` is audit and display metadata only;
+receivers MUST measure freshness from local receipt time using a monotonic
+clock. `isStale` is an IPC-derived field and MUST NOT be transmitted between
+peers.
+
 ### 7.5 Clipboard Messages
 
 `clipboard.offer` payload fields: `offerId`, `contentType` string, `byteSize` non-negative integer, `sha256` clipboard hash, `expiresInMs` duration, `sourceDeviceId` device ID, `requiredCapability` string, `offerSequence` non-negative integer.
@@ -311,6 +346,93 @@ The `fingerprint` field MUST NOT appear in pairing message payloads. The receivi
 `clipboard.fetchResponse` payload fields: `offerId`, `contentBase64` string, `byteSize` non-negative integer, `sha256` clipboard hash.
 
 `clipboard.fetchReject` payload fields: `offerId`, `failureReason`, optional `message` string.
+
+### 7.5 Notification Sync
+
+Notification sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate `notification.posted`, `notification.updated`, and `notification.removed` for locally observed or locally generated notifications. Peers MUST negotiate `notification.sync@1` before sending or accepting any notification-sync message.
+
+The v1 notification record fields are:
+
+| Field             | Required | Type                | Notes                                                                 |
+| ----------------- | -------- | ------------------- | --------------------------------------------------------------------- |
+| `notificationId`  | Yes      | string              | Stable source-origin identifier scoped to `sourceDeviceId`            |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                        |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `ios`, `windows`, `macos`, `linux` |
+| `packageName`     | Yes      | string              | Stable source application identifier                                  |
+| `appName`         | Yes      | string              | Human-readable app label                                              |
+| `title`           | No       | string              | Mirrored title preview only                                           |
+| `bodyPreview`     | No       | string              | Mirrored body preview only                                            |
+| `postedAt`        | Yes      | RFC 3339 UTC string | Audit timestamp for the Android-side post/update event                |
+| `isDismissible`   | Yes      | boolean             | Whether remote `dismiss` is currently allowed                         |
+| `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed                            |
+| `icon`            | No       | object              | Optional presentation metadata; when present it MUST use the bounded PNG schema below |
+
+When present, `icon` MUST contain exactly the canonical v1 presentation fields below. Senders MUST normalize source artwork to PNG before transport:
+
+```json
+{
+  "mediaType": "image/png",
+  "dataBase64": "<Base64-encoded PNG bytes>",
+  "byteSize": 38142,
+  "sha256": "64-lowercase-hex"
+}
+```
+
+`mediaType` MUST be `image/png`. The decoded bytes MUST be a structurally valid PNG with valid chunk CRCs, a width and height from 1 through 512 pixels, and a total size of at most 131072 bytes. `byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase SHA-256 digest of those exact bytes. Receivers MUST reject an icon before decoding when the Base64 string exceeds 174764 characters (the encoded bound for 131072 raw bytes), and MUST ignore malformed, oversized, over-dimensioned, or hash-mismatched icon metadata while retaining the notification. SVG, animated GIF, WebP, JPEG, resource IDs, local paths, content URIs, and remote URLs are not supported. Icons are presentation metadata only and MUST NOT be used as authorization, identity, or notification lifecycle inputs.
+
+`notification.posted` payload fields: the full notification record above.
+
+`notification.updated` payload fields: the full notification record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, notificationId)` tuple, including replacing the icon with the updated record's icon or removing it when absent.
+
+`notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
+
+`notification.actionRequest` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `operationId` identifies the requester's operation and MUST be echoed unchanged by the corresponding result. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
+
+`notification.actionResult` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `operationId` MUST identify the corresponding action request; receivers MUST correlate results by this identifier and MUST NOT reuse notification identity fields as the result correlation key. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
+
+### 7.5A Media Playback Sync
+
+Media playback sync v1 is bidirectional between trusted peers. Android and desktop implementations MAY both originate current playback state. Peers MUST negotiate `media.playback@1` before sending or accepting media-playback messages.
+
+The v1 playback record fields are:
+
+| Field             | Required | Type                | Notes                                                               |
+| ----------------- | -------- | ------------------- | ------------------------------------------------------------------- |
+| `playbackId`      | Yes      | string              | Stable per-source playback session identifier                       |
+| `sourceDeviceId`  | Yes      | device ID string    | MUST match the authenticated envelope identity                      |
+| `sourcePlatform`  | No       | string              | Source platform hint such as `android`, `ios`, `windows`, `macos`, `linux` |
+| `appId`           | Yes      | string              | Stable source application identifier                                |
+| `appName`         | Yes      | string              | Human-readable app label                                            |
+| `title`           | No       | string              | Current media title                                                 |
+| `artist`          | No       | string              | Current media artist                                                |
+| `album`           | No       | string              | Current media album                                                 |
+| `artwork`         | No       | object              | Optional metadata for artwork payloads                              |
+| `playbackState`   | Yes      | string              | One of `playing`, `paused`, `stopped`, or `buffering`               |
+| `positionMs`      | Yes      | integer             | Non-negative current playback position                              |
+| `durationMs`      | No       | integer             | Non-negative media duration when known                              |
+| `canPlay`         | Yes      | boolean             | Whether remote `play` is currently allowed                          |
+| `canPause`        | Yes      | boolean             | Whether remote `pause` is currently allowed                         |
+| `canSkipNext`     | Yes      | boolean             | Whether remote `next` is currently allowed                          |
+| `canSkipPrevious` | Yes      | boolean             | Whether remote `previous` is currently allowed                      |
+| `canSeek`         | Yes      | boolean             | Whether remote `seek` is currently allowed                          |
+| `updatedAt`       | Yes      | RFC 3339 UTC string | Audit timestamp for the latest local observation                    |
+
+When `artwork` is present, it contains `dataBase64` with the encoded image bytes and
+`mediaType` with the detected image MIME type. Implementations MAY additionally
+include the source `uri` as diagnostic metadata, but receivers MUST NOT fetch a
+source-device-local URI. Originators MUST omit artwork that is unavailable,
+unsupported, malformed, or larger than 20 MiB before Base64 encoding. Media
+playback sync v1 supports PNG, JPEG, GIF, and WebP artwork.
+
+`media.playbackPosted` payload fields: the full playback record above.
+
+`media.playbackUpdated` payload fields: the full playback record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, playbackId)` tuple.
+
+`media.playbackRemoved` payload fields: `playbackId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
+
+`media.playbackActionRequest` payload fields: `playbackId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `positionMs`, optional `requestedAt` RFC 3339 timestamp. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `play`, `pause`, `togglePlayPause`, `next`, `previous`, and `seek`. `positionMs` is REQUIRED only for `seek`.
+
+`media.playbackActionResult` payload fields: `playbackId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
 In v0.1-draft, clipboard payload bytes are the exact raw bytes represented by
 `contentBase64` before Base64 encoding. The `byteSize` and `sha256` values
@@ -345,10 +467,39 @@ string.
 hash, `contentBase64` string, `isLastChunk` boolean.
 
 `file.complete` payload fields: `transferId`, `byteSize` non-negative integer,
-`sha256` file hash, `chunkCount` positive integer.
+`sha256` file hash, `chunkCount` positive integer. In `file.transfer` version 1,
+this message is the sender's terminal completion signal after all content has
+been written to the authenticated session. In version 2, it means only that the
+sender finished transmitting the declared content; the sender MUST remain
+non-terminal until it receives `file.committed`.
+
+`file.committed` is available in `file.transfer` version 2. The receiver MUST
+send it only after validating chunk order, total byte count, whole-file
+SHA-256, and successful publication into the receiver's final destination.
+Its payload fields are `transferId`, `byteSize` non-negative integer, and
+`sha256` file hash. The sender MUST validate that the fields match the
+outstanding transfer and MUST treat a mismatch as `HashMismatch`.
+Duplicate matching `file.committed` messages MUST be harmless. A receiver MUST
+NOT send `file.committed` merely because it received `file.complete`; local
+publication is part of completion.
 
 `file.cancel` payload fields: `transferId`, `failureReason`, optional `message`
 string.
+
+`file.resume` payload fields: `transferId`, `receivingDeviceId` device ID,
+`nextChunkIndex` non-negative integer, and `offset` non-negative integer. A
+receiver with a partial transfer sends `file.resume` after re-establishing an
+authenticated session. The sender MUST continue the original transfer from the
+requested chunk boundary rather than creating a new offer.
+
+For `file.transfer` version 2, loss of the authenticated session while the
+sender awaits `file.committed` MUST leave the transfer resumable rather than
+marking it done. After reconnect, a receiver that has not finished network
+receipt sends `file.resume`; a receiver that has already published the verified
+file resends the matching `file.committed`. A publication failure MUST produce
+a typed local failure and a peer-visible `file.cancel` using the existing
+closed failure vocabulary. A sender timeout while awaiting confirmation MUST
+fail with `Timeout`, never success.
 
 File transfer content MUST remain on the authenticated peer session. Receivers
 MUST verify chunk bounds and integrity before accepting a chunk, and MUST
@@ -423,17 +574,21 @@ Capability negotiation proceeds as follows:
 
 If either peer does not send `capability.advertise` within a reasonable timeout after `session.accept`, the session MUST fail with `Timeout`.
 
-### 9.3 Required v0.1-Draft Capabilities
+### 9.3 v0.1-Draft Capability Profile
 
-The following capabilities are REQUIRED for a conformant v0.1-draft session:
+The following capability names and versions are defined for v0.1-draft. The
+required session subset is specified immediately below; the remaining
+capabilities are optional extensions:
 
 | Name                    | Version | Minimum | Description                                              |
 | ----------------------- | ------- | ------- | -------------------------------------------------------- |
 | `clipboard.offer_fetch` | 1       | 1       | Clipboard metadata offer and authenticated content fetch |
-| `file.transfer`         | 1       | 1       | Optional authenticated file offer and chunk transfer     |
+| `device.status`         | 1       | 1       | Optional coarse battery and power-state synchronization |
+| `file.transfer`         | 2       | 1       | Optional authenticated file offer, chunk transfer, and receiver-confirmed publication |
 | `presence.basic`        | 1       | 1       | Online/offline status and last-seen tracking             |
 | `operation.lifecycle`   | 1       | 1       | Operation state machine transitions                      |
 | `security.event_log`    | 1       | 1       | Security event logging for audit                         |
+| `notification.sync`     | 1       | 1       | Android-to-desktop mirrored notification sync           |
 
 The required capability set for a clipboard-first v0.1-draft session is
 `clipboard.offer_fetch`, `presence.basic`, `operation.lifecycle`, and
@@ -441,6 +596,8 @@ The required capability set for a clipboard-first v0.1-draft session is
 independently. If any required capability is absent after negotiation, the
 session MAY remain open for diagnostic purposes but MUST NOT permit clipboard,
 presence, or operation messages.
+
+`notification.sync`, `media.playback`, and `device.status` are optional. When absent, peers MUST reject traffic for the corresponding capability with `CapabilityUnavailable`.
 
 ### 9.4 Version Mismatch and Forward Compatibility
 
@@ -464,6 +621,8 @@ All cross-device actions flow through this transition table:
 
 Duplicate reports for the same terminal state are idempotent. Conflicting terminal reports MUST be rejected with `InvalidTransition` and logged. Each transition MUST record the operation ID, source device ID, destination device ID, operation type, previous state, next state, timestamp or monotonic-relative timing data, and typed failure reason when applicable.
 
+Notification sync remote actions reuse this lifecycle with operation types `notification.open` and `notification.dismiss`.
+
 ## 11. Clipboard Offer/Fetch
 
 Clipboard continuity uses metadata-only offers and authenticated fetch. A device MUST NOT eagerly push clipboard content to all peers.
@@ -477,13 +636,38 @@ are optional extensions on the same authenticated fetch path.
 
 Expiry is measured from local receipt time using monotonic timers. Wall-clock timestamps are audit-only. Expired, rejected, unauthorized, payload-too-large, or mismatched-hash fetches MUST fail with typed failure reasons and produce security event log entries. Clipboard event log entries MUST record metadata only, never clipboard content.
 
-## 12. Presence
+## 12. Notification Sync
+
+Notification sync mirrors limited notification metadata between trusted peers. The mirrored payload is intentionally preview-only. Implementations MUST NOT mirror full private content beyond the negotiated record fields, MUST NOT expose hidden custom actions, and MUST treat icons as optional metadata subject to local size/policy limits.
+
+The originating daemon is the source of truth for notification state and policy. The default v1 local policy is sync all observed notifications except locally blacklisted packages/apps. Local policy MUST be enforced before any `notification.posted` or `notification.updated` message is sent. Untrusted, blocked, or revoked peers MUST NOT receive mirrored notifications and MUST NOT issue notification action requests.
+
+Desktop observers MAY provide only forward-observed state when the platform has no supported active-notification enumeration API. Linux notification identifiers derived from `org.freedesktop.Notifications` server IDs are stable for the lifetime of that notification-server instance. An implementation that cannot safely map local actions MUST advertise `isDismissible: false` and `isOpenable: false`.
+
+Receivers MUST key mirrored records by `(sourceDeviceId, notificationId)` and mutate them in place on `notification.updated` / `notification.removed`. Senders and receivers SHOULD log accepted, denied, expired, malformed, and action-result flows with metadata only. Event details MUST NOT include full unredacted notification content beyond the mirrored title/body preview already permitted on the wire.
+
+## 12A. Device Status
+
+A device SHOULD send its latest status snapshot after a trusted session
+negotiates `device.status@1`, and thereafter when a power-state field changes.
+Implementations SHOULD coalesce frequent battery changes and SHOULD periodically
+refresh the snapshot while connected. Charging-state and low-power-mode changes
+SHOULD be sent promptly. Implementations MUST NOT expose device status through
+mDNS or before trust is established.
+
+Receivers SHOULD retain the most recent snapshot while the peer remains trusted
+and mark it stale after a bounded local interval or when the peer becomes
+offline. Stale status MAY remain visible with an explicit stale indicator. A
+stale or missing status MUST NOT change presence, routing, authorization, or
+operation lifecycle decisions.
+
+## 13. Presence
 
 Presence provides basic trusted-peer visibility: online/offline state, last-seen information, reachability, and authenticated capability summary. Presence is not a trust source.
 
 Presence heartbeats and status updates MUST be exchanged only after transport and identity verification. A peer observed only through discovery is `discovered`, not authenticated online. Offline detection SHOULD use local monotonic timers and configurable timeout thresholds so clock skew does not decide reachability.
 
-## 13. Security Event Log Schema
+## 14. Security Event Log Schema
 
 Each daemon maintains an append-only security event log for audit, debugging, conformance, and attack-simulation evidence. Event logs are local audit records; peers do not exchange event-log contents as protocol data.
 
@@ -514,6 +698,9 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `clipboard.fetched`          | Clipboard content fetched by or from a peer                              |
 | `clipboard.expired`          | Clipboard offer expired without fetch                                    |
 | `clipboard.offer_replay`     | Clipboard offer rejected due to out-of-order or replayed sequence number |
+| `notification.synced`        | Mirrored notification posted or updated accepted locally                 |
+| `notification.removed`       | Mirrored notification removed locally                                    |
+| `notification.actioned`      | Remote notification action request/result processed                      |
 | `message.malformed`          | Received peer message failed envelope or schema validation               |
 | `certificate.malformed`      | Peer certificate failed extension parsing                                |
 | `policy.denied`              | Action denied by local policy                                            |
@@ -535,7 +722,7 @@ The v0.1-draft `eventType` vocabulary is a closed set. Implementations MUST NOT 
 | `failure` | Event failed; `failureReason` MUST be present and MUST use a value from Section 14 |
 | `denied`  | Event blocked by local policy; `failureReason` MUST be present                     |
 
-## 14. Failure Reasons
+## 15. Failure Reasons
 
 The v0.1-draft failure reason vocabulary is:
 
@@ -557,7 +744,7 @@ The v0.1-draft failure reason vocabulary is:
 
 Implementations MUST NOT invent peer-visible failure reason strings in v0.1-draft. Additional diagnostics may appear in local event `details` or optional human-readable `message` fields.
 
-## 15. Test Vectors
+## 16. Test Vectors
 
 The protocol requires deterministic test vectors for both daemon implementations. The full certificate bytes are future conformance material and are not defined in this draft. Machine-readable JSON versions of these vectors will be maintained in `spec/vectors/`.
 

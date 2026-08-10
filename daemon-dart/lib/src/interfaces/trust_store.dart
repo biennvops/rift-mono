@@ -24,6 +24,7 @@ enum TrustState {
 class PeerRecord {
   final String deviceId;
   final String? displayName;
+  final String? platform;
   final Uint8List certDer;
   final TrustState state;
   final DateTime? pairedAt;
@@ -34,6 +35,7 @@ class PeerRecord {
   PeerRecord({
     required this.deviceId,
     this.displayName,
+    this.platform,
     required this.certDer,
     required this.state,
     this.pairedAt,
@@ -48,6 +50,7 @@ class PeerRecord {
     return PeerRecord(
       deviceId: deviceId,
       displayName: displayName,
+      platform: platform,
       certDer: Uint8List.fromList(certDer),
       state: state,
       pairedAt: pairedAt,

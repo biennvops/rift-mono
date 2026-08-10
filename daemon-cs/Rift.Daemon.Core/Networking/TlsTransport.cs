@@ -30,11 +30,12 @@ public sealed class TlsTransport : ITransport, IDisposable
     private readonly SessionBootstrap _sessionBootstrap;
     private readonly SessionCapabilityCoordinator _sessionCapabilityCoordinator = new();
     private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly int _listenPort;
     private TcpListener? _listener;
     private readonly ConcurrentDictionary<string, ActiveSession> _sessions = new();
     private readonly ConcurrentDictionary<int, Task> _backgroundTasks = new();
     private int _nextBackgroundTaskId;
-    
+
     public event EventHandler<MessageReceivedEventArgs>? MessageReceived;
     public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
 
@@ -42,23 +43,27 @@ public sealed class TlsTransport : ITransport, IDisposable
         ILogger<TlsTransport> logger,
         IIdentityManager identityManager,
         ITrustStore? trustStore = null,
-        ISecurityEventLog? securityEventLog = null)
+        ISecurityEventLog? securityEventLog = null,
+        int listenPort = RiftNetworkDefaults.DefaultPort)
     {
         _logger = logger;
         _identityManager = identityManager;
         _trustStore = trustStore;
         _securityEventLog = securityEventLog;
+        _listenPort = listenPort;
         _sessionBootstrap = new SessionBootstrap(NullLogger<SessionBootstrap>.Instance, identityManager);
     }
+
+    internal int? ListeningPort => (_listener?.LocalEndpoint as IPEndPoint)?.Port;
 
     public async Task StartListeningAsync(CancellationToken cancellationToken)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
 
-        _listener = new TcpListener(IPAddress.Any, RiftNetworkDefaults.DefaultPort);
+        _listener = new TcpListener(IPAddress.Any, _listenPort);
         _listener.Start();
-        _logger.LogInformation("TlsTransport listening on port {Port}.", RiftNetworkDefaults.DefaultPort);
+        _logger.LogInformation("TlsTransport listening on port {Port}.", ListeningPort);
 
         try
         {
@@ -85,9 +90,9 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             var stream = client.GetStream();
             var sslStream = new SslStream(stream, false, RemoteCertificateValidationCallback);
-            
+
             var serverCert = _identityManager.GetTlsCertificate();
-            
+
             // Spec §5.1: Mutual TLS with TLS 1.3 preferred.
             await sslStream.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
             {
@@ -126,7 +131,11 @@ public sealed class TlsTransport : ITransport, IDisposable
     public Task ConnectToPeerAsync(string host, int port, CancellationToken cancellationToken) =>
         ConnectToPeerWithIdentityAsync(host, port, cancellationToken);
 
-    public async Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken)
+    public async Task<string> ConnectToPeerWithIdentityAsync(
+        string host,
+        int port,
+        CancellationToken cancellationToken,
+        string? expectedDeviceId = null)
     {
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdownCts.Token);
         var linkedToken = linkedCts.Token;
@@ -155,6 +164,27 @@ public sealed class TlsTransport : ITransport, IDisposable
             var remoteCert = sslStream.RemoteCertificate as X509Certificate2 ??
                 X509CertificateLoader.LoadCertificate(sslStream.RemoteCertificate!.GetRawCertData());
             var deviceId = ExtractDeviceIdFromCertificate(remoteCert);
+            if (expectedDeviceId is not null &&
+                !string.Equals(deviceId, expectedDeviceId, StringComparison.Ordinal))
+            {
+                await LogSecurityEventAsync(
+                    SecurityEventTypes.AuthFailed,
+                    deviceId,
+                    SecurityEventSeverity.Critical,
+                    SecurityEventOutcome.Failure,
+                    "AuthenticationFailed",
+                    new Dictionary<string, object>
+                    {
+                        ["expectedDeviceId"] = expectedDeviceId,
+                        ["authenticatedDeviceId"] = deviceId,
+                        ["endpoint"] = $"{host}:{port}"
+                    }).ConfigureAwait(false);
+                throw new UnexpectedPeerIdentityException(
+                    host,
+                    port,
+                    expectedDeviceId,
+                    deviceId);
+            }
             await ValidatePeerBeforeHandshakeAsync(remoteCert, deviceId);
             var session = new ActiveSession(sslStream, client, deviceId, isInitiator: true);
 
@@ -206,11 +236,7 @@ public sealed class TlsTransport : ITransport, IDisposable
                 () => RegisterOrReuseSession(deviceId, session),
                 token),
             _ => RunSessionLifetimeAsync(session, cancellationToken),
-            () =>
-            {
-                _sessions.TryRemove(deviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(deviceId, session),
             cancellationToken);
     }
 
@@ -246,14 +272,55 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         if (_sessions.TryGetValue(deviceId, out var existingSession) && existingSession.IsAuthenticated)
         {
-            _logger.LogInformation("Replacing existing authenticated session for peer {DeviceId} with a fresh connection (likely a stale reconnect).", deviceId);
-            existingSession.Dispose();
-            _sessions[deviceId] = session;
-            return SessionRegistrationResult.RegisteredNew;
+            var preferredInitiator = string.CompareOrdinal(
+                _identityManager.GetDeviceId(),
+                deviceId) < 0;
+            var keepExisting = existingSession.IsInitiator == preferredInitiator ||
+                session.IsInitiator != preferredInitiator;
+            if (keepExisting)
+            {
+                _logger.LogInformation(
+                    "Keeping the deterministic {Role} session for peer {DeviceId} and dropping the duplicate.",
+                    preferredInitiator ? "outbound" : "inbound",
+                    deviceId);
+                session.Dispose();
+                return SessionRegistrationResult.ReusedExisting;
+            }
+
+            if (_sessions.TryUpdate(deviceId, session, existingSession))
+            {
+                _logger.LogInformation(
+                    "Replacing the non-preferred session for peer {DeviceId} with the deterministic {Role} session.",
+                    deviceId,
+                    preferredInitiator ? "outbound" : "inbound");
+                existingSession.Dispose();
+                return SessionRegistrationResult.RegisteredNew;
+            }
         }
 
         session.Dispose();
         return SessionRegistrationResult.Conflict;
+    }
+
+    private bool RemoveSessionIfCurrent(string deviceId, ActiveSession session)
+    {
+        var removed = _sessions.TryGetValue(deviceId, out var current) &&
+            ReferenceEquals(current, session) &&
+            _sessions.TryRemove(new KeyValuePair<string, ActiveSession>(deviceId, session));
+
+        session.Dispose();
+        return removed;
+    }
+
+    internal bool ShouldAllowProtectedTraffic(string deviceId)
+    {
+        if (_trustStore is null)
+        {
+            return false;
+        }
+
+        var peer = _trustStore.GetPeer(deviceId);
+        return peer?.State == TrustState.Trusted;
     }
 
     private async Task CompleteSessionHandshakeAsync(ActiveSession session, X509Certificate2 remoteCert, CancellationToken cancellationToken)
@@ -283,14 +350,22 @@ public sealed class TlsTransport : ITransport, IDisposable
                 throw new InvalidOperationException("Peer closed connection before sending session.accept.");
             }
             _logger.LogInformation("Received session.accept from peer {DeviceId}.", session.DeviceId);
-            VerifySessionControlMessage(session.Stream, remoteCert, acceptPayload, expectedType: "session.accept");
+            VerifySessionControlMessage(
+                session.Stream,
+                remoteCert,
+                acceptPayload,
+                expectedType: "session.accept");
         }
         else if (session.IsInitiator && string.Equals(firstMessageType, "session.accept", StringComparison.Ordinal))
         {
             _logger.LogInformation(
                 "Received session.accept from peer {DeviceId} without a preceding peer session.hello. Accepting responder-style handshake.",
                 session.DeviceId);
-            VerifySessionControlMessage(session.Stream, remoteCert, firstPayload, expectedType: "session.accept");
+            VerifySessionControlMessage(
+                session.Stream,
+                remoteCert,
+                firstPayload,
+                expectedType: "session.accept");
         }
         else
         {
@@ -306,13 +381,19 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.IsInitiator,
             ReadNegotiationFramePayloadAsync,
             cancellationToken);
-        _logger.LogInformation("Capability negotiation completed for peer {DeviceId}. AllowsProtectedTraffic={AllowsProtectedTraffic}.", session.DeviceId, SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities));
-        session.AllowsProtectedTraffic = SessionCapabilityCoordinator.HasRequiredCapabilities(session.SelectedCapabilities);
+        var allowsProtectedTraffic = ShouldAllowProtectedTraffic(session.DeviceId);
+        _logger.LogInformation("Capability negotiation completed for peer {DeviceId}. AllowsProtectedTraffic={AllowsProtectedTraffic}.", session.DeviceId, allowsProtectedTraffic);
+        session.AllowsProtectedTraffic = allowsProtectedTraffic;
         session.PeerContext = new SessionPeerContext(
             session.DeviceId,
             session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
-            session.AllowsProtectedTraffic);
+            session.AllowsProtectedTraffic,
+            session.SelectedCapabilities.ToDictionary(
+                capability => capability.Name,
+                capability => capability.Version,
+                StringComparer.Ordinal));
         session.IsAuthenticated = true;
+        await SendTrustedDeviceMetadataAsync(session, cancellationToken);
     }
 
     private static string? GetMessageType(byte[] payloadBuffer)
@@ -338,6 +419,12 @@ public sealed class TlsTransport : ITransport, IDisposable
                 break;
             }
 
+            if (string.Equals(GetMessageType(payloadBuffer), "device.metadata", StringComparison.Ordinal))
+            {
+                await PersistTrustedDeviceMetadataAsync(session, payloadBuffer, cancellationToken);
+                continue;
+            }
+
             MessageReceived?.Invoke(this, new MessageReceivedEventArgs(
                 session.DeviceId,
                 payloadBuffer,
@@ -352,11 +439,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             session.SelectedCapabilities,
             session.AllowsProtectedTraffic,
             token => RunRegisteredSessionLoopAsync(session, token),
-            () =>
-            {
-                _sessions.TryRemove(session.DeviceId, out _);
-                session.Dispose();
-            },
+            () => RemoveSessionIfCurrent(session.DeviceId, session),
             cancellationToken);
     }
 
@@ -365,10 +448,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         IReadOnlyList<CapabilityDescriptor> selectedCapabilities,
         bool allowsProtectedTraffic,
         Func<CancellationToken, Task> sessionLoop,
-        Action cleanup,
+        Func<bool> cleanup,
         CancellationToken cancellationToken)
     {
         var capabilityNames = selectedCapabilities.Select(capability => capability.Name).ToArray();
+        var capabilityVersions = selectedCapabilities.ToDictionary(
+            capability => capability.Name,
+            capability => capability.Version,
+            StringComparer.Ordinal);
 
         try
         {
@@ -376,17 +463,21 @@ public sealed class TlsTransport : ITransport, IDisposable
                 deviceId,
                 isOnline: true,
                 capabilityNames,
-                allowsProtectedTraffic));
+                allowsProtectedTraffic,
+                capabilityVersions));
             await sessionLoop(cancellationToken);
         }
         finally
         {
-            cleanup();
-            SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
-                deviceId,
-                isOnline: false,
-                capabilityNames,
-                allowsProtectedTraffic));
+            if (cleanup())
+            {
+                SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+                    deviceId,
+                    isOnline: false,
+                    capabilityNames,
+                    allowsProtectedTraffic,
+                    capabilityVersions));
+            }
         }
     }
 
@@ -412,7 +503,14 @@ public sealed class TlsTransport : ITransport, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+            if (IsExpectedSessionTermination(ex, cancellationToken))
+            {
+                _logger.LogDebug(ex, "Session loop ended for peer {DeviceId}.", deviceId);
+            }
+            else
+            {
+                _logger.LogWarning(ex, "Session loop error for peer {DeviceId}", deviceId);
+            }
         }
         finally
         {
@@ -489,6 +587,7 @@ public sealed class TlsTransport : ITransport, IDisposable
             {
                 throw new InvalidOperationException($"{expectedType} identityProof verification failed.");
             }
+
         }
         catch (KeyNotFoundException ex)
         {
@@ -502,6 +601,146 @@ public sealed class TlsTransport : ITransport, IDisposable
         {
             throw new InvalidOperationException($"{expectedType} identityProof was not valid lowercase hexadecimal.", ex);
         }
+    }
+
+    private static DeviceMetadata ParseDeviceMetadata(JsonElement payload, string messageType)
+    {
+        string? displayName = null;
+        if (payload.TryGetProperty("displayName", out var displayNameElement))
+        {
+            if (displayNameElement.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"{messageType} displayName must be a string.");
+            }
+
+            var rawDisplayName = displayNameElement.GetString();
+            var trimmedDisplayName = rawDisplayName?.Trim();
+            if (string.IsNullOrEmpty(trimmedDisplayName) ||
+                trimmedDisplayName.Length > 128 ||
+                trimmedDisplayName.Any(char.IsControl))
+            {
+                throw new InvalidOperationException($"{messageType} contained an invalid displayName.");
+            }
+
+            displayName = trimmedDisplayName;
+        }
+
+        string? platform = null;
+        if (payload.TryGetProperty("platform", out var platformElement))
+        {
+            if (platformElement.ValueKind != JsonValueKind.String)
+            {
+                throw new InvalidOperationException($"{messageType} platform must be a string.");
+            }
+
+            platform = platformElement.GetString();
+            if (platform is not ("android" or "ios" or "windows" or "macos" or "linux" or "unknown"))
+            {
+                throw new InvalidOperationException($"{messageType} contained an invalid platform.");
+            }
+        }
+
+        if (displayName is null || platform is null)
+        {
+            throw new InvalidOperationException($"{messageType} requires displayName and platform.");
+        }
+
+        var requestPeerMetadata = false;
+        if (payload.TryGetProperty("requestPeerMetadata", out var requestElement))
+        {
+            if (requestElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new InvalidOperationException($"{messageType} requestPeerMetadata must be a boolean.");
+            }
+            requestPeerMetadata = requestElement.GetBoolean();
+        }
+
+        return new DeviceMetadata(displayName, platform, requestPeerMetadata);
+    }
+
+    private async Task SendTrustedDeviceMetadataAsync(
+        ActiveSession session,
+        CancellationToken cancellationToken,
+        bool requestPeerMetadata = true)
+    {
+        if (!session.IsAuthenticated ||
+            !session.AllowsProtectedTraffic ||
+            !ShouldAllowProtectedTraffic(session.DeviceId))
+        {
+            return;
+        }
+
+        var envelope = new
+        {
+            rift = "0.1-draft",
+            type = "device.metadata",
+            messageId = Guid.NewGuid().ToString("D"),
+            sourceDeviceId = _identityManager.GetDeviceId(),
+            destinationDeviceId = session.DeviceId,
+            payload = new
+            {
+                displayName = _identityManager.GetDisplayName(),
+                platform = DaemonInfoService.GetLocalPlatform(),
+                requestPeerMetadata
+            }
+        };
+        var frame = RiftFrame.Encode(System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope)));
+        await session.WriteGate.RunAsync(
+            token => session.Stream.WriteAsync(frame, token).AsTask(),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task PersistTrustedDeviceMetadataAsync(
+        ActiveSession session,
+        byte[] payloadBuffer,
+        CancellationToken cancellationToken)
+    {
+        if (_trustStore is null)
+        {
+            return;
+        }
+
+        using var document = JsonDocument.Parse(payloadBuffer);
+        var root = document.RootElement;
+        var sourceDeviceId = root.GetProperty("sourceDeviceId").GetString();
+        if (!string.Equals(sourceDeviceId, session.DeviceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("device.metadata sourceDeviceId did not match the authenticated peer identity.");
+        }
+
+        if (root.TryGetProperty("destinationDeviceId", out var destinationElement) &&
+            !string.Equals(destinationElement.GetString(), _identityManager.GetDeviceId(), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("device.metadata destinationDeviceId did not match the local device identity.");
+        }
+
+        var metadata = ParseDeviceMetadata(root.GetProperty("payload"), "device.metadata");
+        if (!session.AllowsProtectedTraffic || !ShouldAllowProtectedTraffic(session.DeviceId))
+        {
+            return;
+        }
+
+        SaveTrustedDeviceMetadata(session.DeviceId, metadata);
+        if (metadata.RequestPeerMetadata)
+        {
+            await SendTrustedDeviceMetadataAsync(
+                session,
+                cancellationToken,
+                requestPeerMetadata: false);
+        }
+    }
+
+    private void SaveTrustedDeviceMetadata(string deviceId, DeviceMetadata metadata)
+    {
+        var peer = _trustStore?.GetPeer(deviceId);
+        if (peer?.State != TrustState.Trusted)
+        {
+            return;
+        }
+
+        peer.DisplayName = metadata.DisplayName;
+        peer.Platform = metadata.Platform;
+        _trustStore!.SavePeer(peer);
     }
 
     internal async Task ValidatePeerBeforeHandshakeAsync(X509Certificate2 remoteCert, string deviceId)
@@ -573,7 +812,8 @@ public sealed class TlsTransport : ITransport, IDisposable
         string peerDeviceId,
         SecurityEventSeverity severity,
         SecurityEventOutcome outcome,
-        string? failureReason)
+        string? failureReason,
+        IDictionary<string, object>? details = null)
     {
         if (_securityEventLog is null)
         {
@@ -587,7 +827,8 @@ public sealed class TlsTransport : ITransport, IDisposable
             LocalDeviceId = _identityManager.GetDeviceId(),
             PeerDeviceId = peerDeviceId,
             Outcome = outcome,
-            FailureReason = failureReason
+            FailureReason = failureReason,
+            Details = details
         });
     }
 
@@ -626,6 +867,37 @@ public sealed class TlsTransport : ITransport, IDisposable
             totalRead += read;
         }
         return totalRead;
+    }
+
+    private static bool IsExpectedSessionTermination(Exception ex, CancellationToken cancellationToken)
+    {
+        if (ex is OperationCanceledException)
+        {
+            return true;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return true;
+        }
+
+        if (ex is IOException ioEx)
+        {
+            if (ioEx.InnerException is SocketException socketEx)
+            {
+                if (socketEx.SocketErrorCode is SocketError.OperationAborted or SocketError.Interrupted)
+                {
+                    return true;
+                }
+            }
+
+            if (ioEx.Message.Contains("Operation canceled", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool RemoteCertificateValidationCallback(object sender, X509Certificate? certificate, X509Chain? chain, SslPolicyErrors sslPolicyErrors)
@@ -673,9 +945,11 @@ public sealed class TlsTransport : ITransport, IDisposable
             int maxFrameSize = GetMaxOutboundFrameSize(session.IsAuthenticated);
             if (frameBody.Length > maxFrameSize)
                 throw new InvalidOperationException("PayloadTooLarge");
-                 
+
             var frame = RiftFrame.Encode(frameBody.Span);
-            await session.Stream.WriteAsync(frame, cancellationToken);
+            await session.WriteGate.RunAsync(
+                writeCancellationToken => session.Stream.WriteAsync(frame, writeCancellationToken).AsTask(),
+                cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -686,6 +960,46 @@ public sealed class TlsTransport : ITransport, IDisposable
     public bool HasActiveSession(string peerDeviceId)
     {
         return _sessions.TryGetValue(peerDeviceId, out var session) && session.IsAuthenticated;
+    }
+
+    public bool HasProtectedSession(string peerDeviceId)
+    {
+        return _sessions.TryGetValue(peerDeviceId, out var session) &&
+            session.IsAuthenticated &&
+            session.AllowsProtectedTraffic;
+    }
+
+    public void RefreshSessionAuthorization(string peerDeviceId)
+    {
+        if (!_sessions.TryGetValue(peerDeviceId, out var session) || !session.IsAuthenticated)
+        {
+            return;
+        }
+
+        var allowsProtectedTraffic = ShouldAllowProtectedTraffic(peerDeviceId);
+        if (session.AllowsProtectedTraffic == allowsProtectedTraffic)
+        {
+            return;
+        }
+
+        session.AllowsProtectedTraffic = allowsProtectedTraffic;
+        session.PeerContext = new SessionPeerContext(
+            session.DeviceId,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic);
+
+        SessionStateChanged?.Invoke(this, new SessionStateChangedEventArgs(
+            peerDeviceId,
+            isOnline: true,
+            session.SelectedCapabilities.Select(capability => capability.Name).ToArray(),
+            allowsProtectedTraffic));
+
+        if (allowsProtectedTraffic)
+        {
+            TrackBackgroundTask(
+                SendTrustedDeviceMetadataAsync(session, _shutdownCts.Token),
+                "trusted device metadata sync");
+        }
     }
 
     public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId)
@@ -700,7 +1014,10 @@ public sealed class TlsTransport : ITransport, IDisposable
             return null;
         }
 
-        return new PeerSessionEndpoint(remoteEndPoint.Address.ToString(), remoteEndPoint.Port);
+        return new PeerSessionEndpoint(
+            remoteEndPoint.Address.ToString(),
+            remoteEndPoint.Port,
+            session.IsInitiator);
     }
 
     public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken)
@@ -764,6 +1081,11 @@ public sealed class TlsTransport : ITransport, IDisposable
         return isAuthenticated ? RiftFrame.MaxPostAuthSize : RiftFrame.MaxPreAuthSize;
     }
 
+    private sealed record DeviceMetadata(
+        string DisplayName,
+        string Platform,
+        bool RequestPeerMetadata);
+
     private class ActiveSession : IDisposable
     {
         public SslStream Stream { get; }
@@ -774,6 +1096,7 @@ public sealed class TlsTransport : ITransport, IDisposable
         public IReadOnlyList<CapabilityDescriptor> SelectedCapabilities { get; set; }
         public bool AllowsProtectedTraffic { get; set; }
         public SessionPeerContext PeerContext { get; set; }
+        public SessionWriteGate WriteGate { get; } = new();
 
         public ActiveSession(SslStream stream, TcpClient client, string deviceId, bool isInitiator)
         {
@@ -789,6 +1112,7 @@ public sealed class TlsTransport : ITransport, IDisposable
 
         public void Dispose()
         {
+            WriteGate.Dispose();
             Stream.Dispose();
             Client.Dispose();
         }

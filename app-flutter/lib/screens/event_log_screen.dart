@@ -4,7 +4,9 @@ import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
 
 class EventLogScreen extends StatefulWidget {
-  const EventLogScreen({super.key});
+  final VoidCallback? onBack;
+
+  const EventLogScreen({super.key, this.onBack});
 
   @override
   State<EventLogScreen> createState() => _EventLogScreenState();
@@ -52,8 +54,7 @@ class _EventLogScreenState extends State<EventLogScreen> {
           Map<String, dynamic>.from(event),
           ..._allEvents.where(
             (existing) =>
-                existing is! Map ||
-                existing['eventId']?.toString() != eventId,
+                existing is! Map || existing['eventId']?.toString() != eventId,
           ),
         ];
         _events = _applyFilter(_allEvents);
@@ -76,32 +77,31 @@ class _EventLogScreenState extends State<EventLogScreen> {
   bool _isErrorEvent(Map event) {
     final severity = event['severity']?.toString() ?? '';
     final outcome = event['outcome']?.toString() ?? '';
-    return severity == 'error' ||
-        outcome == 'failure' ||
-        outcome == 'denied';
+    return severity == 'error' || outcome == 'failure' || outcome == 'denied';
+  }
+
+  bool _isConnectionEvent(Map event) {
+    final type = event['eventType']?.toString() ?? '';
+    return type.startsWith('connection.');
+  }
+
+  bool _matchesFilter(Map event, String filterLabel) {
+    final type = event['eventType']?.toString() ?? '';
+    return switch (filterLabel) {
+      'Security' => _isSecurityEvent(event),
+      'Pairing' => type.startsWith('pairing.'),
+      'Session' => _isConnectionEvent(event),
+      'Clipboard' => type.startsWith('clipboard.'),
+      'Errors' => _isErrorEvent(event),
+      _ => true,
+    };
   }
 
   List<dynamic> _applyFilter(List<dynamic> events) {
     if (_activeFilter == 'All') return events;
-    return events.where((event) {
-      if (event is! Map) return false;
-      final type = event['eventType']?.toString() ?? '';
-
-      switch (_activeFilter) {
-        case 'Security':
-          return _isSecurityEvent(event);
-        case 'Pairing':
-          return type.startsWith('pairing');
-        case 'Session':
-          return type.startsWith('session');
-        case 'Clipboard':
-          return type.startsWith('clipboard');
-        case 'Errors':
-          return _isErrorEvent(event);
-        default:
-          return true;
-      }
-    }).toList();
+    return events
+        .where((event) => event is Map && _matchesFilter(event, _activeFilter))
+        .toList();
   }
 
   Future<void> _loadEvents() async {
@@ -151,207 +151,286 @@ class _EventLogScreenState extends State<EventLogScreen> {
   }
 
   Widget _buildFilterChip(String label, ThemeData theme) {
-    final isActive = _activeFilter == label;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
+    final isSelected = _activeFilter == label;
+    final primaryColor = theme.colorScheme.primary;
+    final onSurfaceVariant = theme.colorScheme.onSurfaceVariant;
+
+    int badgeCount = 0;
+    if (label == 'All') {
+      badgeCount = _allEvents.length;
+    } else {
+      badgeCount = _applyFilterForLabel(_allEvents, label).length;
+    }
+
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
         onTap: () {
           setState(() {
             _activeFilter = label;
-            _events = _applyFilter(_allEvents);
+            _events = _applyFilterForLabel(_allEvents, _activeFilter);
           });
         },
-        borderRadius: BorderRadius.circular(16),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+          margin: const EdgeInsets.only(right: 24),
           decoration: BoxDecoration(
-            color: isActive ? theme.colorScheme.primaryContainer : theme.colorScheme.surfaceContainerLow,
-            border: Border.all(
-              color: isActive ? theme.colorScheme.primary : theme.colorScheme.outline,
+            border: Border(
+              bottom: BorderSide(
+                color: isSelected ? primaryColor : Colors.transparent,
+                width: 2,
+              ),
             ),
-            borderRadius: BorderRadius.circular(16),
           ),
-          child: Text(
-            label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: isActive ? theme.colorScheme.onPrimaryContainer : theme.colorScheme.onSurfaceVariant,
-              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? primaryColor : onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+              if (badgeCount > 0) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  constraints: const BoxConstraints(minWidth: 18),
+                  decoration: BoxDecoration(
+                    color: isSelected
+                        ? primaryColor
+                        : theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Center(
+                    child: Text(
+                      badgeCount.toString(),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: isSelected
+                            ? theme.colorScheme.onPrimary
+                            : theme.colorScheme.onSurfaceVariant,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildEventCard(Map<String, dynamic> event, ThemeData theme) {
+  List<dynamic> _applyFilterForLabel(List<dynamic> events, String filterLabel) {
+    if (filterLabel == 'All') return events;
+    return events
+        .where((event) => event is Map && _matchesFilter(event, filterLabel))
+        .toList();
+  }
+
+  String _descriptionForEvent(
+    String eventType,
+    String? peer,
+    Map<String, dynamic> details,
+  ) {
+    final message = details['message']?.toString();
+    if (message != null && message.isNotEmpty) return message;
+    final peerSuffix = peer == null || peer.isEmpty ? '' : ' with $peer';
+
+    return switch (eventType) {
+      'pairing.attempted' => 'Pairing flow initiated$peerSuffix',
+      'pairing.completed' => 'Pairing completed$peerSuffix',
+      'pairing.rejected' => 'Pairing rejected$peerSuffix',
+      'trust.transitioned' => 'Trust state changed$peerSuffix',
+      'trust.removed' => 'Trust removed$peerSuffix',
+      'auth.failed' => 'Authentication failed$peerSuffix',
+      'auth.identity_proof_failed' =>
+        'Identity proof verification failed$peerSuffix',
+      'connection.established' => 'Connection established$peerSuffix',
+      'connection.rejected' => 'Connection rejected$peerSuffix',
+      'connection.lost' => 'Connection lost$peerSuffix',
+      'certificate.rotated' => 'Certificate rotated$peerSuffix',
+      'capability.negotiated' => 'Capabilities negotiated$peerSuffix',
+      'operation.transitioned' => 'Operation state changed$peerSuffix',
+      'clipboard.offered' => 'Clipboard offer recorded$peerSuffix',
+      'clipboard.fetched' => 'Clipboard content fetched$peerSuffix',
+      'clipboard.expired' => 'Clipboard offer expired$peerSuffix',
+      'clipboard.offer_replay' => 'Clipboard offer replay rejected$peerSuffix',
+      'notification.synced' => 'Notification synchronized$peerSuffix',
+      'notification.removed' => 'Notification removed$peerSuffix',
+      'notification.actioned' => 'Notification action processed$peerSuffix',
+      'message.malformed' => 'Malformed message rejected$peerSuffix',
+      'certificate.malformed' => 'Malformed certificate rejected$peerSuffix',
+      'policy.denied' => 'Action denied by local policy$peerSuffix',
+      _ => 'Event recorded: $eventType',
+    };
+  }
+
+  String _formatEventMeta(
+    Map<String, dynamic> event,
+    Map<String, dynamic> details,
+  ) {
+    final parts = <String>[];
+    final peer = event['peerDeviceId']?.toString();
+    final outcome = event['outcome']?.toString();
+    final operationId = event['operationId']?.toString();
+    final failureReason = event['failureReason']?.toString();
+
+    if (peer != null && peer.isNotEmpty) {
+      parts.add('peer: ${peer.length > 8 ? peer.substring(0, 8) : peer}');
+    }
+    if (outcome != null && outcome.isNotEmpty) parts.add('outcome: $outcome');
+    if (operationId != null && operationId.isNotEmpty) {
+      parts.add('operationId: $operationId');
+    }
+    if (failureReason != null && failureReason.isNotEmpty) {
+      parts.add('failureReason: $failureReason');
+    }
+    for (final entry in details.entries) {
+      parts.add('${entry.key}: ${entry.value}');
+    }
+    return parts.join(' · ');
+  }
+
+  Widget _buildEventCard(
+      Map<String, dynamic> event, bool isLast, ThemeData theme) {
     final eventType = event['eventType']?.toString() ?? 'unknown';
-    final outcome = event['outcome']?.toString() ?? 'unknown';
     final timestamp = _formatTimeOnly(event['timestamp']?.toString());
     final peer = event['peerDeviceId']?.toString();
     final reason = event['failureReason']?.toString();
+    final details = event['details'] is Map
+        ? Map<String, dynamic>.from(event['details'] as Map)
+        : <String, dynamic>{};
 
-    // Determine category, color, icon
-    String category = 'System';
-    Color color = theme.colorScheme.outline;
-    IconData icon = Icons.info;
-    String description = '';
-
+    Color dotColor = theme.colorScheme.outlineVariant;
     if (_isErrorEvent(event)) {
-      category = 'Error';
-      color = theme.colorScheme.error;
-      icon = Icons.error;
-      description = reason ?? 'Operation failed';
-    } else if (_isSecurityEvent(event)) {
-      category = 'Security';
-      color = theme.colorScheme.error; // Match HTML for security
-      icon = Icons.security;
-      if (eventType.startsWith('auth')) {
-        description = reason ?? 'Authentication check failed';
-      } else if (reason != null && reason.isNotEmpty) {
-        description = reason;
-      } else if (eventType.startsWith('trust')) {
-        description = 'Trust state changed for ${peer ?? 'peer'}';
-      } else {
-        description = 'Trust established with ${peer ?? 'peer'}';
-        if (outcome != 'success') description = 'Pairing $outcome';
-      }
-    } else if (eventType.startsWith('clipboard')) {
-      category = 'Clipboard';
-      color = theme.colorScheme.primary;
-      icon = Icons.content_copy;
-      description = 'Offer from ${peer ?? 'peer'}';
-    } else if (eventType.startsWith('session')) {
-      category = 'Session';
-      color = theme.colorScheme.secondary;
-      icon = Icons.check_circle;
-      description = 'Secure channel opened with ${peer ?? 'peer'}';
-    } else {
-      category = 'General';
-      color = theme.colorScheme.primary;
-      icon = Icons.circle;
-      description = 'System event recorded';
+      dotColor = theme.colorScheme.error;
+    } else if (_isSecurityEvent(event) || _isConnectionEvent(event)) {
+      dotColor = const Color(0xFF10B981);
+    } else if (eventType.startsWith('clipboard') ||
+        eventType.startsWith('file')) {
+      dotColor = theme.colorScheme.primary;
     }
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLowest,
-        border: Border.all(color: theme.colorScheme.outlineVariant),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Left color bar
-            Container(
-              width: 4,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(8),
-                  bottomLeft: Radius.circular(8),
+    final description = reason != null && reason.isNotEmpty
+        ? reason
+        : _descriptionForEvent(eventType, peer, details);
+    final meta = _formatEventMeta(event, details);
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 28,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: 4,
+                  top: 0,
+                  bottom: isLast ? null : 0,
+                  height: isLast ? 18 : null,
+                  width: 1.5,
+                  child: Container(
+                    color:
+                        theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+                  ),
                 ),
-              ),
-            ),
-            // Timeline line & dot
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Column(
-                children: [
-                  const SizedBox(height: 16),
-                  Container(
-                    width: 12,
-                    height: 12,
+                Positioned(
+                  left: 0,
+                  top: 13,
+                  width: 10,
+                  height: 10,
+                  child: Container(
                     decoration: BoxDecoration(
-                      color: color,
+                      color: Colors.white,
                       shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: color.withValues(alpha: 0.4),
-                          blurRadius: 8,
-                          spreadRadius: 2,
-                        ),
-                      ],
+                      border: Border.all(color: dotColor, width: 2),
                     ),
                   ),
-                  Expanded(
-                    child: Container(
-                      width: 1,
-                      margin: const EdgeInsets.only(top: 8),
-                      color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            // Content
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          ),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: null,
+                  borderRadius: BorderRadius.circular(8),
+                  hoverColor: theme.colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.3),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainer,
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '[$timestamp]',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: color.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(icon, size: 12, color: color),
-                              const SizedBox(width: 4),
-                              Text(
-                                category,
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: color,
-                                  fontWeight: FontWeight.bold,
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                eventType,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.colorScheme.onSurface,
+                                  height: 1.4,
                                 ),
                               ),
-                            ],
+                            ),
+                            const SizedBox(width: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.outlineVariant
+                                    .withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                timestamp,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  fontSize: 10,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          description,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          meta,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                            fontSize: 11,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      eventType,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: theme.colorScheme.onSurface,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      description,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: category == 'Error' ? theme.colorScheme.error : theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -359,89 +438,160 @@ class _EventLogScreenState extends State<EventLogScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     final displayEvents = _events;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
       appBar: AppBar(
-        title: Row(
-          children: [
-            Icon(Icons.shield, color: theme.colorScheme.primary),
-            const SizedBox(width: 8),
-            Text(
-              'Event Log',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: theme.colorScheme.surface,
+        backgroundColor: Colors.transparent,
         elevation: 0,
-        actions: [
-          IconButton(
-            icon: Icon(Icons.settings, color: theme.colorScheme.onSurfaceVariant),
-            onPressed: () {},
+        scrolledUnderElevation: 0,
+        shadowColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: IconThemeData(color: theme.colorScheme.onSurface),
+        leading: widget.onBack != null
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: widget.onBack,
+              )
+            : null,
+        titleSpacing: widget.onBack != null ? 0 : 16,
+        title: Text(
+          'Event Log',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: theme.colorScheme.onSurface,
+            letterSpacing: -0.5,
           ),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5), height: 1),
         ),
       ),
       body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Filter Chips
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surface.withValues(alpha: 0.9),
-              border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3))),
+              border: Border(
+                bottom: BorderSide(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.6),
+                ),
+              ),
             ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: _filters.map((f) => _buildFilterChip(f, theme)).toList(),
+                children:
+                    _filters.map((f) => _buildFilterChip(f, theme)).toList(),
               ),
             ),
           ),
-          // Event List
+          const SizedBox(height: 16),
           Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text('Error loading event log: $_error', textAlign: TextAlign.center),
-                            const SizedBox(height: 16),
-                            FilledButton(onPressed: _loadEvents, child: const Text('Retry')),
-                          ],
-                        ),
-                      )
-                    : displayEvents.isEmpty
-                        ? Center(
-                            child: Text(
-                              'No events recorded.',
-                              style: theme.textTheme.bodyLarge?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
+            child: RefreshIndicator(
+              onRefresh: _loadEvents,
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null
+                      ? SingleChildScrollView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color: theme.colorScheme.outlineVariant),
                             ),
-                          )
-                        : RefreshIndicator(
-                            onRefresh: _loadEvents,
-                            child: ListView.builder(
-                              padding: const EdgeInsets.all(16),
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              itemCount: displayEvents.length,
-                              itemBuilder: (context, index) {
-                                return _buildEventCard(Map<String, dynamic>.from(displayEvents[index] as Map), theme);
-                              },
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Error loading event log: $_error',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.error,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                FilledButton(
+                                  onPressed: _loadEvents,
+                                  style: FilledButton.styleFrom(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                  ),
+                                  child: const Text('Retry'),
+                                ),
+                              ],
                             ),
                           ),
+                        )
+                      : displayEvents.isEmpty
+                          ? SingleChildScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 64, horizontal: 24),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: theme.colorScheme.outlineVariant),
+                                ),
+                                alignment: Alignment.center,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.event_busy,
+                                        size: 48,
+                                        color:
+                                            theme.colorScheme.outlineVariant),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      'No events recorded.',
+                                      style:
+                                          theme.textTheme.bodyLarge?.copyWith(
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : SingleChildScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: theme.colorScheme.outlineVariant),
+                                ),
+                                child: Column(
+                                  children: [
+                                    for (int i = 0;
+                                        i < displayEvents.length;
+                                        i++) ...[
+                                      _buildEventCard(
+                                        Map<String, dynamic>.from(
+                                            displayEvents[i] as Map),
+                                        i == displayEvents.length - 1,
+                                        theme,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+            ),
           ),
         ],
       ),

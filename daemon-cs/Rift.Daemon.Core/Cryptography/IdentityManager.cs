@@ -20,15 +20,20 @@ namespace Rift.Daemon.Core.Cryptography;
 
 public class IdentityManager : IIdentityManager
 {
+    private const int MaxDisplayNameLength = 128;
     private readonly ILocalIdentityStore? _localIdentityStore;
+    private readonly Func<string?> _displayNameProvider;
     private volatile Ed25519PublicKeyParameters _ed25519PublicKey = null!;
     private volatile Ed25519PrivateKeyParameters _ed25519PrivateKey = null!;
     private volatile X509Certificate2 _tlsCertificate = null!;
     private readonly object _syncRoot = new();
 
-    public IdentityManager(ILocalIdentityStore? localIdentityStore = null)
+    public IdentityManager(
+        ILocalIdentityStore? localIdentityStore = null,
+        Func<string?>? displayNameProvider = null)
     {
         _localIdentityStore = localIdentityStore;
+        _displayNameProvider = displayNameProvider ?? (() => Environment.MachineName);
     }
 
     public void EnsureIdentityInitialized()
@@ -175,7 +180,38 @@ public class IdentityManager : IIdentityManager
     public string GetDisplayName()
     {
         EnsureIdentityInitialized();
+        try
+        {
+            var platformDisplayName = NormalizeDisplayName(_displayNameProvider());
+            if (platformDisplayName is not null)
+            {
+                return platformDisplayName;
+            }
+        }
+        catch
+        {
+            // Fall back to the stable identity-derived name when platform lookup fails.
+        }
+
         return DeriveDisplayName(_ed25519PublicKey.GetEncoded());
+    }
+
+    internal static string? NormalizeDisplayName(string? displayName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+        {
+            return null;
+        }
+
+        var normalized = new string(displayName.Where(character => !char.IsControl(character)).ToArray()).Trim();
+        if (normalized.Length == 0)
+        {
+            return null;
+        }
+
+        return normalized.Length <= MaxDisplayNameLength
+            ? normalized
+            : normalized[..MaxDisplayNameLength];
     }
     
     public static string DeriveDeviceId(byte[] edKeyBytes)

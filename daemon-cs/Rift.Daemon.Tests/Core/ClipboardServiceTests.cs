@@ -281,6 +281,7 @@ public sealed class ClipboardServiceTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-response", CancellationToken.None);
+        await WaitForFetchRequestSentAsync("rift-peer-owner-removed");
         RemoveRemoteOffer("offer-removed-response");
 
         await _clipboardService.HandleFetchResponseAsync(
@@ -337,6 +338,7 @@ public sealed class ClipboardServiceTests : IDisposable
         });
 
         var fetchTask = _clipboardService.FetchClipboardContentAsync("offer-removed-reject", CancellationToken.None);
+        await WaitForFetchRequestSentAsync("rift-peer-owner-reject");
         RemoveRemoteOffer("offer-removed-reject");
 
         await _clipboardService.HandleFetchRejectAsync(
@@ -739,6 +741,24 @@ public sealed class ClipboardServiceTests : IDisposable
         }
     }
 
+    // The fetch request is sent asynchronously inside FetchClipboardContentAsync;
+    // spoofed response/reject tests must not race ahead of it.
+    private async Task WaitForFetchRequestSentAsync(string peerDeviceId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!_transport.SentMessages.Any(message =>
+                   message.PeerDeviceId == peerDeviceId &&
+                   message.Type == "clipboard.fetchRequest"))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"clipboard.fetchRequest to {peerDeviceId} was never sent.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
     private void RemoveRemoteOffer(string offerId)
     {
         var field = typeof(ClipboardService).GetField("_remoteOffers", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -804,7 +824,7 @@ public sealed class ClipboardServiceTests : IDisposable
             throw new InvalidOperationException($"No fake peer configured for endpoint {host}:{port}");
         }
 
-        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken) =>
+        public Task<string> ConnectToPeerWithIdentityAsync(string host, int port, CancellationToken cancellationToken, string? expectedDeviceId = null) =>
             Task.FromResult("rift-test-peer");
 
         public Task SendAsync(string peerDeviceId, ReadOnlyMemory<byte> frameBody, CancellationToken cancellationToken)
@@ -831,6 +851,14 @@ public sealed class ClipboardServiceTests : IDisposable
                 return AssumeConnectedByDefault || ActiveSessions.Contains(peerDeviceId);
             }
         }
+        public bool HasProtectedSession(string peerDeviceId)
+        {
+            lock (_gate)
+            {
+                return AssumeConnectedByDefault || ActiveSessions.Contains(peerDeviceId);
+            }
+        }
+        public void RefreshSessionAuthorization(string peerDeviceId) { }
         public PeerSessionEndpoint? GetPeerSessionEndpoint(string peerDeviceId) => null;
         public Task DisconnectPeerAsync(string peerDeviceId, CancellationToken cancellationToken) => Task.CompletedTask;
     }

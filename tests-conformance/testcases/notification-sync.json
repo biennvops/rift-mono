@@ -1,0 +1,186 @@
+{
+  "suite": "notification-sync",
+  "description": "Validate bounded notification app icon presentation metadata (protocol.md §7.5)",
+  "testCases": [
+    {
+      "id": "valid-icon-001",
+      "description": "A canonical PNG icon is retained exactly",
+      "input": {
+        "notificationAccepted": true,
+        "notificationId": "icon-test",
+        "sourceDeviceId": "rift-cpgwo6wefdkxwxfugsvcjbwj6mhp4gfq",
+        "sourcePlatform": "android",
+        "packageName": "org.example.chat",
+        "appName": "Example Chat",
+        "postedAt": "2026-08-08T00:00:00Z",
+        "isDismissible": true,
+        "isOpenable": false,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          "byteSize": 68,
+          "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+        }
+      },
+      "expected": {
+        "result": "accept",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "extra-field-001",
+      "description": "Canonical icon metadata with an unknown field is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+          "byteSize": 70,
+          "sha256": "4ff6ab670a58c14270e034e2090d9a432caa263a14e0a25785386b0c12f880b5",
+          "unknown": "ignored"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "unsupported-media-001",
+      "description": "Unsupported MIME types are dropped while the notification remains accepted",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/svg+xml",
+          "dataBase64": "AQID",
+          "byteSize": 3,
+          "sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "invalid-png-001",
+      "description": "Arbitrary bytes labeled image/png are dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "AQID",
+          "byteSize": 3,
+          "sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "invalid-png-structure-001",
+      "description": "A PNG with an invalid chunk CRC is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4zsDwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+          "byteSize": 70,
+          "sha256": "5381cfec02a0abe3105997114962ee9c1eb2cfd9bafae69c62d74af98b66aefe"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "oversized-dimensions-001",
+      "description": "A structurally valid PNG wider than 512 pixels is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAgEAAAABCAYAAABHeX1IAAAAF0lEQVR4nGNgGAWjYBSMglEwCkbBiAQACAUAAVbgEW4AAAAASUVORK5CYII=",
+          "byteSize": 80,
+          "sha256": "354b8fe823f16773bc780679a811a97a233d1e25ed2b8264a722779d59af86e4"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "invalid-base64-001",
+      "description": "Invalid Base64 is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "not base64",
+          "byteSize": 3,
+          "sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "incorrect-size-001",
+      "description": "A mismatched byteSize is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "AQID",
+          "byteSize": 2,
+          "sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "incorrect-hash-001",
+      "description": "A mismatched SHA-256 is dropped",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64": "AQID",
+          "byteSize": 3,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    },
+    {
+      "id": "oversized-001",
+      "description": "An obviously oversized Base64 field is dropped before decode",
+      "input": {
+        "notificationAccepted": true,
+        "icon": {
+          "mediaType": "image/png",
+          "dataBase64Length": 174765,
+          "dataBase64": "",
+          "byteSize": 131072,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "expected": {
+        "result": "drop",
+        "notificationAccepted": true
+      }
+    }
+  ]
+}

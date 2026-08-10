@@ -14,7 +14,6 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     , IDisposable
 {
     private const int PairingExpiryMs = 120000;
-    private const int MaxRemoteDisplayNameLength = 128;
     // Android's Dart SecureServerSocket cannot provisionally accept arbitrary
     // self-signed client certificates on inbound TLS, so when pairing against
     // Android we prefer to wait longer for a peer-initiated authenticated
@@ -76,6 +75,12 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             _ => CreatePairingSessionState(),
             (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
         state.MarkLocalApproved();
+
+        var existingPeer = _trustStore.GetPeer(deviceId);
+        if (existingPeer?.State == TrustState.Discovered && !_trustStore.TryTransition(deviceId, TrustState.PairingPending))
+        {
+            throw new InvalidOperationException($"Failed to transition peer {deviceId} into pairing_pending before sending pairing.start.");
+        }
 
         if (!_transport.HasActiveSession(deviceId) &&
             await WaitForActiveSessionAsync(deviceId, InitialSessionReuseWindow, cancellationToken))
@@ -177,8 +182,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
 
             await SendProtocolMessageAsync(deviceId, "pairing.start", new
             {
-                expiresInMs = PairingExpiryMs,
-                displayName = _identityManager.GetDisplayName()
+                expiresInMs = PairingExpiryMs
             }, cancellationToken);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("No open session exists", StringComparison.Ordinal))
@@ -271,42 +275,32 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         var endpoints = peer.ObservedEndpoints.Count > 0
             ? peer.ObservedEndpoints
             : [new DiscoveredPeerEndpoint { Address = peer.Address, Port = peer.Port }];
-        var failures = new List<(DiscoveredPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(deviceId, endpoint, token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            var connectedDeviceId = winner.Result;
+            _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
             {
-                var connectedDeviceId = await ConnectToEndpointWithRetryAsync(deviceId, endpoint, cancellationToken);
-                _pendingTrustedEndpointHints[connectedDeviceId] = new TrustedPeerEndpoint
-                {
-                    Address = endpoint.Address,
-                    Port = endpoint.Port,
-                    Source = "discovery-pairing",
-                    AddressFamily = System.Net.IPAddress.TryParse(endpoint.Address, out var ipAddress)
-                        ? ipAddress.AddressFamily.ToString()
-                        : null,
-                    LastSuccessAt = _timeProvider.GetUtcNow()
-                };
-                return connectedDeviceId;
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-                _logger.LogInformation(
-                    ex,
-                    "Outbound pairing connect attempt for {DeviceId} via {Address}:{Port} failed. Classification={Classification}",
-                    deviceId,
-                    endpoint.Address,
-                    endpoint.Port,
-                    ClassifyConnectFailure(ex));
-            }
+                Address = winner.Endpoint.Address,
+                Port = winner.Endpoint.Port,
+                Source = "discovery-pairing",
+                AddressFamily = System.Net.IPAddress.TryParse(winner.Endpoint.Address, out var ipAddress)
+                    ? ipAddress.AddressFamily.ToString()
+                    : null,
+                LastSuccessAt = _timeProvider.GetUtcNow()
+            };
+            return connectedDeviceId;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All discovered endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All discovered endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToTrustedEndpointsAsync(
@@ -314,24 +308,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         IReadOnlyList<TrustedPeerEndpoint> endpoints,
         CancellationToken cancellationToken)
     {
-        var failures = new List<(TrustedPeerEndpoint Endpoint, Exception Exception)>();
-
-        foreach (var endpoint in endpoints)
+        try
         {
-            try
-            {
-                return await ConnectToEndpointWithRetryAsync(deviceId, new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port }, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                failures.Add((endpoint, ex));
-            }
+            var winner = await Rift.Daemon.Core.Networking.ParallelEndpointConnector.FirstSuccessAsync(
+                endpoints,
+                (endpoint, token) => ConnectToEndpointWithRetryAsync(
+                    deviceId,
+                    new DiscoveredPeerEndpoint { Address = endpoint.Address, Port = endpoint.Port },
+                    token),
+                ActiveSessionFallbackWindow,
+                cancellationToken);
+            return winner.Result;
         }
-
-        var lastFailure = failures[^1];
-        throw new InvalidOperationException(
-            $"All persisted endpoints failed for {deviceId}. Last endpoint {lastFailure.Endpoint.Address}:{lastFailure.Endpoint.Port}. {DescribeConnectFailure(lastFailure.Exception)}",
-            lastFailure.Exception);
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"All persisted endpoints failed for {deviceId}. {DescribeConnectFailure(ex)}",
+                ex);
+        }
     }
 
     private async Task<string> ConnectToEndpointWithRetryAsync(
@@ -368,40 +362,101 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     {
         _logger.LogInformation("Pairing approve requested locally for peer {DeviceId}.", deviceId);
         await PruneExpiredSessionsAsync(cancellationToken);
+        var resolvedDeviceId = await EnsureActiveSessionForPairingAsync(deviceId, cancellationToken);
         var state = _pairingStates.AddOrUpdate(
-            deviceId,
+            resolvedDeviceId,
             _ => CreatePairingSessionState(),
             (_, existing) => existing.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs)));
         state.MarkLocalApproved();
 
         var approvedAt = _timeProvider.GetUtcNow().ToString("O");
-        await SendProtocolMessageAsync(deviceId, "pairing.approve", new
+        await SendProtocolMessageAsync(resolvedDeviceId, "pairing.approve", new
         {
             approvedAt
         }, cancellationToken);
-        _logger.LogInformation("Sent pairing.approve to peer {DeviceId}.", deviceId);
+        _logger.LogInformation("Sent pairing.approve to peer {DeviceId}.", resolvedDeviceId);
 
-        await TrySendPairingCompleteAsync(deviceId, state, approvedAt, cancellationToken);
+        await TrySendPairingCompleteAsync(resolvedDeviceId, state, approvedAt, cancellationToken);
+
+        var peer = _trustStore.GetPeer(resolvedDeviceId);
+        if (peer is not null &&
+            peer.State == TrustState.PairingPending &&
+            state.HasMutualApproval())
+        {
+            var persistedAt = state.TryGetRemoteCompletionPersistedAt(out var remotePersistedAt)
+                ? remotePersistedAt
+                : approvedAt;
+            await PromotePeerToTrustedAsync(resolvedDeviceId, peer, persistedAt, cancellationToken);
+        }
     }
 
-    public Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default)
+    public async Task NotifyLocalPairingRejectedAsync(string deviceId, CancellationToken cancellationToken = default)
     {
-        _pairingStates.TryRemove(deviceId, out _);
-        return SendProtocolMessageAsync(deviceId, "pairing.reject", new
+        var resolvedDeviceId = await EnsureActiveSessionForPairingAsync(deviceId, cancellationToken);
+        _pairingStates.TryRemove(resolvedDeviceId, out _);
+        await SendProtocolMessageAsync(resolvedDeviceId, "pairing.reject", new
         {
             failureReason = "PeerRejected",
             message = "pairing rejected locally"
         }, cancellationToken);
     }
 
-    public Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
+    public async Task NotifyLocalTrustRemovedAsync(string deviceId, string reason, CancellationToken cancellationToken = default)
     {
-        return SendProtocolMessageAsync(deviceId, "trust.remove", new
+        try
         {
-            removedDeviceId = deviceId,
-            reason,
-            removedAt = _timeProvider.GetUtcNow().ToString("O")
-        }, cancellationToken);
+            await SendProtocolMessageAsync(deviceId, "trust.remove", new
+            {
+                removedDeviceId = deviceId,
+                reason,
+                removedAt = _timeProvider.GetUtcNow().ToString("O")
+            }, cancellationToken);
+        }
+        finally
+        {
+            await _transport.DisconnectPeerAsync(deviceId, CancellationToken.None);
+            _pairingStates.TryRemove(deviceId, out _);
+            TryStartDiscoveryAfterTrustRemoval();
+        }
+    }
+
+    private async Task<string> EnsureActiveSessionForPairingAsync(string deviceId, CancellationToken cancellationToken)
+    {
+        if (_transport.HasActiveSession(deviceId))
+        {
+            return deviceId;
+        }
+
+        if (_discoveryCoordinator.TryGetDiscoveredPeer(deviceId, out var discoveredPeer) &&
+            discoveredPeer is not null)
+        {
+            var connectedDeviceId = await ConnectToDiscoveredPeerAsync(deviceId, discoveredPeer, cancellationToken);
+            if (connectedDeviceId != deviceId &&
+                _pairingStates.TryRemove(deviceId, out var existingState))
+            {
+                _pairingStates[connectedDeviceId] = existingState;
+            }
+            return connectedDeviceId;
+        }
+
+        var trustRecord = _trustStore.GetPeer(deviceId);
+        if (trustRecord is not null && trustRecord.TrustedEndpoints.Count > 0)
+        {
+            var connectedDeviceId = await ConnectToTrustedEndpointsAsync(deviceId, trustRecord.TrustedEndpoints, cancellationToken);
+            if (connectedDeviceId != deviceId &&
+                _pairingStates.TryRemove(deviceId, out var existingState))
+            {
+                _pairingStates[connectedDeviceId] = existingState;
+            }
+            return connectedDeviceId;
+        }
+
+        if (await WaitForActiveSessionAsync(deviceId, ActiveSessionFallbackWindow, cancellationToken))
+        {
+            return deviceId;
+        }
+
+        throw new InvalidOperationException($"Failed to establish an authenticated session with {deviceId} for pairing.");
     }
 
     public async Task HandleMessageAsync(string peerDeviceId, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
@@ -466,6 +521,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         _trustStore.DeletePeer(peerDeviceId);
         _pairingStates.TryRemove(peerDeviceId, out _);
         await _transport.DisconnectPeerAsync(peerDeviceId, cancellationToken);
+        TryStartDiscoveryAfterTrustRemoval();
         await LogEventAsync(SecurityEventTypes.TrustRemoved, peerDeviceId, SecurityEventOutcome.Success, reason, cancellationToken);
         await NotifyTrustChangedAsync(peerDeviceId, "trusted", "removed", reason ?? "Peer removed trust.", cancellationToken);
     }
@@ -478,10 +534,32 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
+        if (peer.State == TrustState.Trusted)
+        {
+            _pairingStates.TryRemove(peerDeviceId, out _);
+            await SendProtocolMessageAsync(peerDeviceId, "pairing.reject", new
+            {
+                failureReason = "PolicyDenied",
+                message = "Peer trust must be removed locally before pairing again."
+            }, cancellationToken);
+            await LogEventAsync(
+                SecurityEventTypes.PairingRejected,
+                peerDeviceId,
+                SecurityEventOutcome.Failure,
+                "PolicyDenied",
+                cancellationToken);
+            return;
+        }
+
         var previousState = peer.State;
         if (peer.State == TrustState.Discovered)
         {
-            _trustStore.TryTransition(peerDeviceId, TrustState.PairingPending);
+            if (!_trustStore.TryTransition(peerDeviceId, TrustState.PairingPending))
+            {
+                return;
+            }
+
+            peer.State = TrustState.PairingPending;
             await NotifyTrustChangedAsync(peerDeviceId, "discovered", "pairing_pending", "Remote pairing started.", cancellationToken);
         }
 
@@ -508,20 +586,10 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 ? expiresElement.GetInt32()
                 : PairingExpiryMs;
             expiresInMs = expiresInMs <= 0 ? PairingExpiryMs : Math.Clamp(expiresInMs, 1000, PairingExpiryMs);
-            var displayName = payload.TryGetProperty("displayName", out var displayNameElement) && displayNameElement.ValueKind == JsonValueKind.String
-                ? NormalizeRemoteDisplayName(displayNameElement.GetString())
-                : null;
-            if (!string.IsNullOrWhiteSpace(displayName))
-            {
-                peer.DisplayName = displayName;
-                peer.Platform = DaemonInfoService.NormalizePlatform(peer.Platform, displayName);
-                _trustStore.SavePeer(peer);
-            }
-
             await NotifyPairingRequestAsync(
                 peerDeviceId,
                 IdentityManager.DeriveFingerprint(peer.Ed25519PublicKey),
-                displayName ?? peerDeviceId,
+                peer.DisplayName ?? peerDeviceId,
                 expiresInMs,
                 cancellationToken);
         }
@@ -546,21 +614,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
     private async Task HandlePairingRejectAsync(string peerDeviceId)
     {
         _pairingStates.TryRemove(peerDeviceId, out _);
-        _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
+        var peer = _trustStore.GetPeer(peerDeviceId);
+        var transitioned = peer?.State == TrustState.PairingPending &&
+            _trustStore.TryTransition(peerDeviceId, TrustState.Discovered);
         await LogEventAsync(SecurityEventTypes.PairingRejected, peerDeviceId, SecurityEventOutcome.Failure, "PeerRejected", CancellationToken.None);
-        await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
-    }
-
-    private static string? NormalizeRemoteDisplayName(string? displayName)
-    {
-        if (string.IsNullOrWhiteSpace(displayName))
+        if (transitioned)
         {
-            return displayName;
+            await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer rejected pairing.", CancellationToken.None);
         }
-
-        return displayName.Length <= MaxRemoteDisplayNameLength
-            ? displayName
-            : displayName[..MaxRemoteDisplayNameLength];
     }
 
     private async Task HandlePairingCompleteAsync(string peerDeviceId, JsonElement payload, CancellationToken cancellationToken)
@@ -592,6 +653,8 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }
 
         state.Refresh(_timeProvider.GetUtcNow().AddMilliseconds(PairingExpiryMs));
+        var persistedAt = payload.GetProperty("persistedAt").GetString() ?? _timeProvider.GetUtcNow().ToString("O");
+        state.MarkRemoteCompletionReceived(persistedAt);
 
         if (peer.State == TrustState.Trusted)
         {
@@ -600,19 +663,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
 
         if (peer.State == TrustState.PairingPending && state.HasMutualApproval())
         {
-            _trustStore.TryTransition(peerDeviceId, TrustState.Trusted);
-            PersistTrustedEndpointIfAvailable(peerDeviceId, source: "pairing-session");
-            await LogEventAsync(SecurityEventTypes.PairingCompleted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
-            await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "trusted", "Pairing completed.", cancellationToken);
-            if (peer.Ed25519PublicKey is not null)
-            {
-                var persistedAt = payload.GetProperty("persistedAt").GetString() ?? _timeProvider.GetUtcNow().ToString("O");
-                await NotifyPairingCompleteAsync(
-                    peerDeviceId,
-                    IdentityManager.DeriveFingerprint(peer.Ed25519PublicKey),
-                    persistedAt,
-                    cancellationToken);
-            }
+            await PromotePeerToTrustedAsync(peerDeviceId, peer, persistedAt, cancellationToken);
         }
     }
 
@@ -780,6 +831,27 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         }, cancellationToken);
     }
 
+    private async Task PromotePeerToTrustedAsync(string peerDeviceId, PeerIdentity peer, string persistedAt, CancellationToken cancellationToken)
+    {
+        if (!_trustStore.TryTransition(peerDeviceId, TrustState.Trusted))
+        {
+            return;
+        }
+
+        PersistTrustedEndpointIfAvailable(peerDeviceId, source: "pairing-session");
+        _transport.RefreshSessionAuthorization(peerDeviceId);
+        await LogEventAsync(SecurityEventTypes.PairingCompleted, peerDeviceId, SecurityEventOutcome.Success, null, cancellationToken);
+        await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "trusted", "Pairing completed.", cancellationToken);
+        if (peer.Ed25519PublicKey is not null)
+        {
+            await NotifyPairingCompleteAsync(
+                peerDeviceId,
+                IdentityManager.DeriveFingerprint(peer.Ed25519PublicKey),
+                persistedAt,
+                cancellationToken);
+        }
+    }
+
     private void OnSessionStateChanged(object? sender, SessionStateChangedEventArgs args)
     {
         if (args.IsOnline)
@@ -814,26 +886,15 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             return;
         }
 
-        _pairingStates.TryRemove(peerDeviceId, out _);
-
         var peer = _trustStore.GetPeer(peerDeviceId);
         if (peer is null || peer.State != TrustState.PairingPending)
         {
             return;
         }
 
-        if (!_trustStore.TryTransition(peerDeviceId, TrustState.Discovered))
-        {
-            return;
-        }
-
-        await LogEventAsync(
-            SecurityEventTypes.PairingRejected,
-            peerDeviceId,
-            SecurityEventOutcome.Failure,
-            "PeerUnreachable",
-            CancellationToken.None).ConfigureAwait(false);
-        await NotifyTrustChangedAsync(peerDeviceId, "pairing_pending", "discovered", "Peer became unreachable during pairing.", CancellationToken.None).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Preserving pairing_pending for peer {DeviceId} after disconnect; waiting for user action or pairing expiry.",
+            peerDeviceId);
     }
 
     private void PersistTrustedEndpointIfAvailable(string peerDeviceId, string source)
@@ -922,9 +983,14 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             };
         }
 
-        if (peer.TrustedEndpoints.Count > 0)
+        if (peer.TrustedEndpoints.Count > 0 && !activeEndpoint.IsInitiator)
         {
-            var existingEndpoint = peer.TrustedEndpoints[0];
+            return peer.TrustedEndpoints[0];
+        }
+
+        if (peer.TrustedEndpoints.Count > 0 || activeEndpoint.IsInitiator)
+        {
+            var existingEndpoint = peer.TrustedEndpoints.FirstOrDefault();
             return new TrustedPeerEndpoint
             {
                 Address = activeEndpoint.Address,
@@ -932,12 +998,24 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
                 Source = source,
                 AddressFamily = System.Net.IPAddress.TryParse(activeEndpoint.Address, out var activeIpAddress)
                     ? activeIpAddress.AddressFamily.ToString()
-                    : existingEndpoint.AddressFamily,
+                    : existingEndpoint?.AddressFamily,
                 LastSuccessAt = _timeProvider.GetUtcNow()
             };
         }
 
         return null;
+    }
+
+    private void TryStartDiscoveryAfterTrustRemoval()
+    {
+        try
+        {
+            _discoveryCoordinator.StartDiscovery();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to resume discovery after trust removal.");
+        }
     }
 
     private Task NotifyTrustChangedAsync(string deviceId, string previousState, string newState, string reason, CancellationToken cancellationToken)
@@ -1006,6 +1084,7 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
         private bool _localApproved;
         private bool _remoteApproved;
         private bool _completionSent;
+        private string? _remoteCompletionPersistedAt;
 
         public PairingSessionState(DateTimeOffset expiresAt)
         {
@@ -1045,6 +1124,29 @@ public sealed class PairingProtocolCoordinator : IPairingProtocolCoordinator
             lock (_syncRoot)
             {
                 return _localApproved && _remoteApproved;
+            }
+        }
+
+        public void MarkRemoteCompletionReceived(string persistedAt)
+        {
+            lock (_syncRoot)
+            {
+                _remoteCompletionPersistedAt = persistedAt;
+            }
+        }
+
+        public bool TryGetRemoteCompletionPersistedAt(out string persistedAt)
+        {
+            lock (_syncRoot)
+            {
+                if (_remoteCompletionPersistedAt is null)
+                {
+                    persistedAt = string.Empty;
+                    return false;
+                }
+
+                persistedAt = _remoteCompletionPersistedAt;
+                return true;
             }
         }
 

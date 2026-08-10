@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:meta/meta.dart';
 
 import '../core/rift_exceptions.dart';
 import '../core/rift_log.dart';
@@ -11,15 +12,22 @@ import '../interfaces/identity_manager.dart';
 import '../crypto/cert_decoder.dart';
 import '../crypto/base32_utils.dart';
 import 'frame_codec.dart';
+import 'peer_write_gate.dart';
 
-class TransportImpl implements Transport {
+class TransportImpl implements Transport, BoundTransport {
+  @visibleForTesting
+  static bool retainExistingSessionOnDuplicate({
+    required bool isAuthenticated,
+  }) => isAuthenticated;
+
   final IdentityManager _identityManager;
   final int port;
-  
+
   SecureServerSocket? _serverSocket;
   final Map<String, SecureSocket> _peers = {};
   final Map<String, bool> _peerSocketIsServer = {};
   final Map<String, Uint8List> _peerCerts = {};
+  final Map<String, PeerWriteGate> _peerWriteGates = {};
   final Set<String> _authenticatedPeers = {};
   final Map<String, Timer> _unauthenticatedTimeouts = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
@@ -27,6 +35,7 @@ class TransportImpl implements Transport {
 
   TransportImpl(this._identityManager, {required this.port});
 
+  @override
   int get boundPort => _serverSocket?.port ?? port;
 
   @override
@@ -34,10 +43,10 @@ class TransportImpl implements Transport {
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
-    
+
     context.useCertificateChainBytes(certBytes);
     context.usePrivateKeyBytes(keyBytes);
-    
+
     _serverSocket = await SecureServerSocket.bind(
       InternetAddress.anyIPv4,
       port,
@@ -53,17 +62,15 @@ class TransportImpl implements Transport {
 
     _serverSocket!.listen(
       (socket) {
-        unawaited(
-          () async {
-            try {
-              await _handleConnection(socket, isServer: true);
-            } catch (error) {
-              RiftLog.debug(
-                '[TLS] Inbound connection setup finished with a handled error: $error',
-              );
-            }
-          }(),
-        );
+        unawaited(() async {
+          try {
+            await _handleConnection(socket, isServer: true);
+          } catch (error) {
+            RiftLog.debug(
+              '[TLS] Inbound connection setup finished with a handled error: $error',
+            );
+          }
+        }());
       },
       onError: (Object error, StackTrace stackTrace) {
         RiftLog.error(
@@ -95,6 +102,7 @@ class TransportImpl implements Transport {
     }
     _peers.clear();
     _peerCerts.clear();
+    _peerWriteGates.clear();
     await _messageController.close();
     await _disconnectController.close();
   }
@@ -114,7 +122,7 @@ class TransportImpl implements Transport {
     final context = SecurityContext();
     final certBytes = utf8.encode(_identityManager.tlsCertificatePem);
     final keyBytes = utf8.encode(_identityManager.tlsPrivateKeyPem);
-    
+
     context.useCertificateChainBytes(certBytes);
     context.usePrivateKeyBytes(keyBytes);
 
@@ -125,15 +133,21 @@ class TransportImpl implements Transport {
       onBadCertificate: (X509Certificate cert) {
         if (expectedDeviceId != null) {
           try {
-            final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(cert.pem);
+            final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(
+              cert.pem,
+            );
             final hash = sha256.convert(peerEd25519Key);
-            final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
+            final base32Str = Base32Utils.encode(
+              Uint8List.fromList(hash.bytes),
+            ).toLowerCase();
             final actualDeviceId = 'rift-${base32Str.substring(0, 32)}';
             RiftLog.debug(
               '[TLS] peer cert check host=$host port=$port actualDeviceId=$actualDeviceId expectedDeviceId=$expectedDeviceId',
             );
             // Only enforce strict pinning if expectedDeviceId is a real device ID (matches regex)
-            final isRealDeviceId = RegExp(r'^rift-[a-z2-7]{32}$').hasMatch(expectedDeviceId);
+            final isRealDeviceId = RegExp(
+              r'^rift-[a-z2-7]{32}$',
+            ).hasMatch(expectedDeviceId);
             if (isRealDeviceId && actualDeviceId != expectedDeviceId) {
               RiftLog.warn(
                 '[TLS] Device ID mismatch during TLS pinning. Rejecting certificate.',
@@ -180,9 +194,13 @@ class TransportImpl implements Transport {
     }
 
     try {
-      final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(peerCert.pem);
+      final peerEd25519Key = RiftCertDecoder.extractEd25519PublicKey(
+        peerCert.pem,
+      );
       final hash = sha256.convert(peerEd25519Key);
-      final base32Str = Base32Utils.encode(Uint8List.fromList(hash.bytes)).toLowerCase();
+      final base32Str = Base32Utils.encode(
+        Uint8List.fromList(hash.bytes),
+      ).toLowerCase();
       final peerDeviceId = 'rift-${base32Str.substring(0, 32)}';
       RiftLog.info(
         '[TLS] TLS session established with peerDeviceId=$peerDeviceId host=${socket.remoteAddress.address}:${socket.remotePort}',
@@ -193,81 +211,91 @@ class TransportImpl implements Transport {
       if (previousSocket != null &&
           previousIsServer != null &&
           !identical(previousSocket, socket)) {
-        if (_authenticatedPeers.contains(peerDeviceId)) {
+        final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
+        final keepExisting =
+            previousIsServer == preferredIsServer ||
+            isServer != preferredIsServer;
+        if (keepExisting) {
           RiftLog.info(
-            '[TLS] Replacing existing authenticated session for '
-            'peerDeviceId=$peerDeviceId with a fresh connection (likely a stale reconnect).',
+            '[TLS] Keeping the deterministic ${preferredIsServer ? "inbound" : "outbound"} '
+            'session for peerDeviceId=$peerDeviceId and dropping the duplicate.',
           );
-          disconnect(peerDeviceId);
-        } else {
-          final preferredIsServer = _preferIncomingSocketForPeer(peerDeviceId);
-          if (previousIsServer == preferredIsServer) {
-            RiftLog.warn(
-              '[TLS] Peer $peerDeviceId reconnected using the preferred role. '
-              'The existing pre-auth socket is likely stale. Replacing it.',
-            );
-            try {
-              previousSocket.destroy();
-            } catch (_) {}
-            // Do not destroy the new socket! We must accept the new connection
-            // because the peer initiated it, implying their side of the old connection is dead.
-          } else {
-            RiftLog.debug(
-              '[TLS] Replacing pre-auth socket for peerDeviceId=$peerDeviceId '
-              'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
-              'existingRole=${previousIsServer ? "inbound" : "outbound"} '
-              'replacementRole=${isServer ? "inbound" : "outbound"}',
-            );
-            try {
-              previousSocket.destroy();
-            } catch (_) {
-              // Best-effort cleanup while switching to the preferred bootstrap path.
-            }
+          try {
+            socket.destroy();
+          } catch (_) {
+            // Best-effort cleanup for a duplicate connection.
           }
+          return peerDeviceId;
+        }
+
+        RiftLog.debug(
+          '[TLS] Replacing duplicate socket for peerDeviceId=$peerDeviceId '
+          'preferredRole=${preferredIsServer ? "inbound" : "outbound"} '
+          'existingRole=${previousIsServer ? "inbound" : "outbound"} '
+          'replacementRole=${isServer ? "inbound" : "outbound"}',
+        );
+        try {
+          previousSocket.destroy();
+        } catch (_) {
+          // Best-effort cleanup while switching to the deterministic role.
         }
       }
 
       _peers[peerDeviceId] = socket;
       _peerSocketIsServer[peerDeviceId] = isServer;
       _peerCerts[peerDeviceId] = peerCert.der;
+      _peerWriteGates.putIfAbsent(peerDeviceId, PeerWriteGate.new);
       RiftLog.info(
         '[TLS] Registered socket for peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
       );
 
       int frameSizeProvider() {
-        return _authenticatedPeers.contains(peerDeviceId) 
-            ? RiftFrameCodec.maxFrameSizePostAuth 
+        return _authenticatedPeers.contains(peerDeviceId)
+            ? RiftFrameCodec.maxFrameSizePostAuth
             : RiftFrameCodec.maxFrameSizePreAuth;
       }
 
-      socket.cast<List<int>>().transform(RiftFrameTransformer(maxFrameSizeProvider: frameSizeProvider)).listen(
-        (frameJson) {
-          _messageController.add(TransportMessage(
-            peerDeviceId: peerDeviceId,
-            payload: Uint8List.fromList(utf8.encode(json.encode(frameJson))),
-            peerEd25519Key: peerEd25519Key,
-            peerCertDer: peerCert.der,
-          ));
-        },
-        onError: (e) {
-          _disconnectIfCurrent(peerDeviceId, socket);
-        },
-        onDone: () {
-          _disconnectIfCurrent(peerDeviceId, socket);
-        },
-        cancelOnError: true,
-      );
+      socket
+          .cast<List<int>>()
+          .transform(
+            RiftFrameTransformer(maxFrameSizeProvider: frameSizeProvider),
+          )
+          .listen(
+            (frameJson) {
+              _messageController.add(
+                TransportMessage(
+                  peerDeviceId: peerDeviceId,
+                  payload: Uint8List.fromList(
+                    utf8.encode(json.encode(frameJson)),
+                  ),
+                  peerEd25519Key: peerEd25519Key,
+                  peerCertDer: peerCert.der,
+                ),
+              );
+            },
+            onError: (e) {
+              _disconnectIfCurrent(peerDeviceId, socket);
+            },
+            onDone: () {
+              _disconnectIfCurrent(peerDeviceId, socket);
+            },
+            cancelOnError: true,
+          );
 
       // Disconnect unauthenticated peers after 10 s to prevent connection-slot exhaustion.
       _unauthenticatedTimeouts[peerDeviceId]?.cancel();
-      _unauthenticatedTimeouts[peerDeviceId] = Timer(const Duration(seconds: 10), () {
-        if (identical(_peers[peerDeviceId], socket) && !_authenticatedPeers.contains(peerDeviceId)) {
-          RiftLog.warn(
-            '[TLS] Closing unauthenticated peer after timeout peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
-          );
-          disconnect(peerDeviceId);
-        }
-      });
+      _unauthenticatedTimeouts[peerDeviceId] = Timer(
+        const Duration(seconds: 10),
+        () {
+          if (identical(_peers[peerDeviceId], socket) &&
+              !_authenticatedPeers.contains(peerDeviceId)) {
+            RiftLog.warn(
+              '[TLS] Closing unauthenticated peer after timeout peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
+            );
+            disconnect(peerDeviceId);
+          }
+        },
+      );
 
       return peerDeviceId;
     } catch (e) {
@@ -281,13 +309,18 @@ class TransportImpl implements Transport {
   void disconnect(String peerDeviceId) {
     RiftLog.debug(
       '[TLS] disconnect(peerDeviceId=$peerDeviceId) authenticated=${_authenticatedPeers.contains(peerDeviceId)} '
-      'role=${_peerSocketIsServer[peerDeviceId] == true ? "inbound" : _peerSocketIsServer.containsKey(peerDeviceId) ? "outbound" : "unknown"}',
+      'role=${_peerSocketIsServer[peerDeviceId] == true
+          ? "inbound"
+          : _peerSocketIsServer.containsKey(peerDeviceId)
+          ? "outbound"
+          : "unknown"}',
     );
     _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
     _peers[peerDeviceId]?.destroy();
     _peers.remove(peerDeviceId);
     _peerSocketIsServer.remove(peerDeviceId);
     _peerCerts.remove(peerDeviceId);
+    _peerWriteGates.remove(peerDeviceId);
     _authenticatedPeers.remove(peerDeviceId);
     if (!_disconnectController.isClosed) {
       _disconnectController.add(peerDeviceId);
@@ -331,6 +364,7 @@ class TransportImpl implements Transport {
     if (socket == null) {
       throw StateError('Peer $deviceId is not connected');
     }
+    final writeGate = _peerWriteGates.putIfAbsent(deviceId, PeerWriteGate.new);
     RiftLog.info(
       '[TLS] transport.sendMessage peerDeviceId=$deviceId '
       'bytes=${message.length} remote=${socket.remoteAddress.address}:${socket.remotePort}',
@@ -353,9 +387,20 @@ class TransportImpl implements Transport {
     // - framing only needs the length prefix
     final frame = RiftFrameCodec.encodeBytes(message);
     try {
-      socket.add(frame);
-      await socket.flush();
-      RiftLog.info('[TLS] transport.sendMessage flushed peerDeviceId=$deviceId');
+      await writeGate.run(() async {
+        final currentSocket = _peers[deviceId];
+        if (currentSocket == null || !identical(currentSocket, socket)) {
+          throw StateError(
+            'Peer $deviceId is no longer connected on the current socket',
+          );
+        }
+
+        currentSocket.add(frame);
+        await currentSocket.flush();
+        RiftLog.info(
+          '[TLS] transport.sendMessage flushed peerDeviceId=$deviceId',
+        );
+      });
     } on SocketException {
       disconnect(deviceId);
       rethrow;

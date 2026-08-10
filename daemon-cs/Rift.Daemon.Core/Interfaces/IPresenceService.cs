@@ -17,4 +17,6 @@ public interface IPresenceService
     void MarkPeerOffline(string deviceId);
 
     PeerPresenceInfo? GetPeerPresence(string deviceId);
+
+    IReadOnlyList<PeerPresenceInfo> ListPeers();
 }

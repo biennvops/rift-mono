@@ -21,7 +21,7 @@ not in repo markdown.
 
 - `spec/` - normative protocol, IPC, ADRs, ASN.1, vectors, and examples
 - `daemon-cs/` - shared C#/.NET daemon core with Windows, macOS, and Linux hosts
-- `daemon-dart/` - Android daemon implementation in Dart
+- `daemon-dart/` - shared Dart mobile daemon for Android and iOS
 - `app-flutter/` - Flutter client and transport-agnostic JSON-RPC consumer
 - `tests-conformance/` - cross-implementation protocol conformance harness
 - `tests-interop/` - interoperability harness and runbook material
@@ -37,6 +37,3 @@ The canonical documentation surface for engineers and agents is:
 - `spec/decisions/*.md`
 - curated files under `docs/`
 - concise component `README.md` files
-
-Historical plans, reviews, milestone notes, and audit writeups are archived
-under `docs/archive/` and are not current source of truth.

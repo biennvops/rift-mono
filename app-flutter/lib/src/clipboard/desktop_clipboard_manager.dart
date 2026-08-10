@@ -38,7 +38,7 @@ class ClipboardContentPayload {
   String get contentBase64 => base64Encode(bytes);
 }
 
-class DesktopClipboardManager {
+class DesktopClipboardManager extends ChangeNotifier {
   DesktopClipboardManager(
     this._client, {
     Stream<Object?>? clipboardChanges,
@@ -47,6 +47,7 @@ class DesktopClipboardManager {
     ClipboardContentReader? readClipboardContent,
     ClipboardContentWriter? writeClipboardContent,
     Set<String>? supportedContentTypes,
+    bool autoApplyIncomingOffers = true,
   })  : _readClipboardContent = readClipboardContent ??
             _contentReaderFromTextReader(
               readClipboardText ?? _defaultReadClipboardText,
@@ -58,6 +59,7 @@ class DesktopClipboardManager {
         _supportedContentTypes = Set<String>.unmodifiable(
           supportedContentTypes ?? const <String>{textPlainContentType},
         ),
+        _autoApplyIncomingOffers = autoApplyIncomingOffers,
         _clipboardChanges = clipboardChanges ??
             _defaultClipboardChanges(
               readClipboardContent ??
@@ -71,10 +73,60 @@ class DesktopClipboardManager {
     if (Platform.isWindows) {
       return const EventChannel(_clipboardEventsChannelName)
           .receiveBroadcastStream();
-    } else if (Platform.isMacOS || Platform.isLinux) {
+    } else if (Platform.isLinux) {
+      return nativeClipboardChangesWithPollingFallbackForTesting(
+        const EventChannel(_clipboardEventsChannelName)
+            .receiveBroadcastStream(),
+        reader,
+      );
+    } else if (Platform.isMacOS) {
       return _pollClipboard(reader);
     }
     return const Stream.empty();
+  }
+
+  @visibleForTesting
+  static Stream<Object?> nativeClipboardChangesWithPollingFallbackForTesting(
+    Stream<Object?> nativeChanges,
+    ClipboardContentReader reader,
+  ) {
+    late StreamController<Object?> controller;
+    StreamSubscription<Object?>? nativeSubscription;
+    StreamSubscription<Object?>? pollingSubscription;
+    var fallbackStarted = false;
+
+    void startPollingFallback() {
+      if (fallbackStarted) {
+        return;
+      }
+      fallbackStarted = true;
+      pollingSubscription = _pollClipboard(reader).listen(
+        controller.add,
+        onError: controller.addError,
+      );
+    }
+
+    controller = StreamController<Object?>.broadcast(
+      onListen: () {
+        nativeSubscription = nativeChanges.listen(
+          controller.add,
+          onError: (Object error, StackTrace stackTrace) {
+            debugPrint(
+              'Native Linux clipboard events unavailable; using polling: $error',
+            );
+            unawaited(nativeSubscription?.cancel());
+            startPollingFallback();
+          },
+          onDone: startPollingFallback,
+        );
+      },
+      onCancel: () async {
+        await nativeSubscription?.cancel();
+        await pollingSubscription?.cancel();
+      },
+    );
+
+    return controller.stream;
   }
 
   static Stream<Object?> _pollClipboard(ClipboardContentReader reader) {
@@ -148,6 +200,7 @@ class DesktopClipboardManager {
   final ClipboardContentReader _readClipboardContent;
   final ClipboardContentWriter _writeClipboardContent;
   final Set<String> _supportedContentTypes;
+  final bool _autoApplyIncomingOffers;
   final Logger _log = Logger('DesktopClipboardManager');
   final Map<String, Map<String, dynamic>> _activeOffers = {};
   final Set<String> _handledOfferIds = <String>{};
@@ -207,6 +260,7 @@ class DesktopClipboardManager {
     }
   }
 
+  @override
   Future<void> dispose() async {
     _isDisposed = true;
     await _clipboardChangeSub?.cancel();
@@ -218,6 +272,7 @@ class DesktopClipboardManager {
     _handledOfferIds.clear();
     _suppressedLocalSha256Deadlines.clear();
     await _statusController.close();
+    super.dispose();
   }
 
   Future<void> _setClipboardMonitoringEnabled(bool enabled) async {
@@ -265,18 +320,27 @@ class DesktopClipboardManager {
     }
 
     final startedAt = DateTime.now();
-    await _client.notifyClipboardChange(
-      contentType: payload.contentType,
-      byteSize: payload.byteSize,
-      sha256: payload.sha256Hex,
-      contentBase64: payload.contentBase64,
-    );
-    final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
-    _log.info(
-      'Sent ${payload.contentType} clipboard payload '
-      '(${payload.byteSize} bytes) in ${elapsedMs}ms.',
-    );
-    _emitStatus(_sentStatusForContentType(payload.contentType));
+    try {
+      await _client.notifyClipboardChange(
+        contentType: payload.contentType,
+        byteSize: payload.byteSize,
+        sha256: payload.sha256Hex,
+        contentBase64: payload.contentBase64,
+      );
+      final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
+      _log.info(
+        'Sent ${payload.contentType} clipboard payload '
+        '(${payload.byteSize} bytes) in ${elapsedMs}ms.',
+      );
+      _emitStatus(_sentStatusForContentType(payload.contentType));
+    } catch (error, stackTrace) {
+      _log.warning(
+        'Failed to send ${payload.contentType} clipboard payload via IPC.',
+        error,
+        stackTrace,
+      );
+      _emitStatus('Clipboard sync unavailable.');
+    }
   }
 
   Future<void> _resyncOffers() async {
@@ -342,15 +406,33 @@ class DesktopClipboardManager {
     if (offerId == null || offerId.isEmpty) {
       return;
     }
-    _activeOffers[offerId] = Map<String, dynamic>.from(offer);
+    final normalized = Map<String, dynamic>.from(offer);
+    if (DateTime.tryParse(normalized['expiresAt']?.toString() ?? '') == null) {
+      final expiresInMs = (normalized['expiresInMs'] as num?)?.toInt();
+      if (expiresInMs != null && expiresInMs > 0) {
+        normalized['expiresAt'] = DateTime.now()
+            .toUtc()
+            .add(Duration(milliseconds: expiresInMs))
+            .toIso8601String();
+      }
+    }
+    _activeOffers[offerId] = normalized;
+    notifyListeners();
   }
 
   void _removeOfferState(String offerId) {
-    _activeOffers.remove(offerId);
-    _handledOfferIds.remove(offerId);
+    if (_activeOffers.remove(offerId) != null) {
+      _handledOfferIds.remove(offerId);
+      notifyListeners();
+    } else {
+      _handledOfferIds.remove(offerId);
+    }
   }
 
   Future<void> _maybeFetchAndApplyOffer(Map<String, dynamic> offer) async {
+    if (!_autoApplyIncomingOffers) {
+      return;
+    }
     final offerId = offer['offerId']?.toString();
     if (offerId == null ||
         offerId.isEmpty ||
@@ -366,55 +448,90 @@ class DesktopClipboardManager {
     }
 
     _handledOfferIds.add(offerId);
+    await fetchAndApplyOffer(offerId);
+  }
+
+  Future<ClipboardContentPayload?> fetchOfferPayload(String offerId) async {
+    final offer = _activeOffers[offerId];
+    if (offer == null) {
+      return null;
+    }
+    final contentType = offer['contentType']?.toString() ?? '';
     try {
-      _emitStatus('Fetching clipboard from peer...');
-      final startedAt = DateTime.now();
       final result =
           await _client.fetchClipboardContent(offerId) as Map<dynamic, dynamic>;
-      if (_isDisposed) {
-        return;
-      }
+      if (_isDisposed) return null;
       final canonical = Map<String, dynamic>.from(result);
       if (canonical['verified'] != true) {
         _log.warning('Clipboard fetch for $offerId was not verified.');
-        _emitStatus('Clipboard fetch failed: unverified');
-        return;
+        return null;
       }
-
       final contentBase64 = canonical['contentBase64']?.toString();
-      final sha256 = canonical['sha256']?.toString();
-      if (contentBase64 == null || sha256 == null) {
+      if (contentBase64 == null) {
         _log.warning(
             'Clipboard fetch for $offerId returned an incomplete payload.');
-        _emitStatus('Clipboard fetch failed: incomplete payload');
-        return;
+        return null;
+      }
+      final bytes = Uint8List.fromList(base64Decode(contentBase64));
+      return ClipboardContentPayload(contentType: contentType, bytes: bytes);
+    } catch (error, stackTrace) {
+      if (error.toString().contains('-32009') ||
+          error.toString().toLowerCase().contains('not found') ||
+          error.toString().toLowerCase().contains('expired')) {
+        _removeOfferState(offerId);
+      }
+      _log.warning(
+          'Failed to fetch offer payload $offerId.', error, stackTrace);
+      return null;
+    }
+  }
+
+  Future<bool> fetchAndApplyOffer(String offerId) async {
+    _emitStatus('Fetching clipboard from peer...');
+    final startedAt = DateTime.now();
+    final payload = await fetchOfferPayload(offerId);
+    if (payload == null || _isDisposed) {
+      _handledOfferIds.remove(offerId);
+      _emitStatus('Clipboard fetch failed');
+      return false;
+    }
+
+    try {
+      if (_supportedContentTypes.contains(payload.contentType)) {
+        await _writeClipboardContent(payload);
+      } else if (payload.contentType == textPlainContentType ||
+          payload.contentType == 'clipboard') {
+        final text = utf8.decode(payload.bytes);
+        await Clipboard.setData(ClipboardData(text: text));
+      } else {
+        _log.warning(
+            'Unsupported content type for clipboard copy: ${payload.contentType}');
+        _emitStatus('Unsupported clipboard format');
+        return false;
       }
 
-      final bytes = Uint8List.fromList(base64Decode(contentBase64));
       if (_isDisposed) {
-        return;
+        return false;
       }
-      await _writeClipboardContent(
-        ClipboardContentPayload(
-          contentType: contentType,
-          bytes: bytes,
-        ),
-      );
-      if (_isDisposed) {
-        return;
-      }
-      _enqueueSuppressedLocalHash(sha256);
+      _enqueueSuppressedLocalHash(payload.sha256Hex);
       final elapsedMs = DateTime.now().difference(startedAt).inMilliseconds;
       _log.info(
-        'Fetched and applied $contentType clipboard payload '
-        '(${bytes.length} bytes) in ${elapsedMs}ms.',
+        'Fetched and applied ${payload.contentType} clipboard payload '
+        '(${payload.bytes.length} bytes) in ${elapsedMs}ms.',
       );
-      _emitStatus(_receivedStatusForContentType(contentType));
+      _emitStatus(_receivedStatusForContentType(payload.contentType));
+      return true;
     } catch (error, stackTrace) {
       _handledOfferIds.remove(offerId);
+      if (error.toString().contains('-32009') ||
+          error.toString().toLowerCase().contains('not found') ||
+          error.toString().toLowerCase().contains('expired')) {
+        _removeOfferState(offerId);
+      }
       _log.warning(
-          'Failed to fetch/apply clipboard offer $offerId.', error, stackTrace);
+          'Failed to apply clipboard offer $offerId.', error, stackTrace);
       _emitStatus('Clipboard fetch failed');
+      return false;
     }
   }
 

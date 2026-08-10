@@ -8,23 +8,30 @@ namespace Rift.Daemon.Core.Networking;
 internal sealed class SessionHeartbeatManager : IAsyncDisposable
 {
     internal const string PresenceBasicCapability = "presence.basic";
-    private static readonly TimeSpan HeartbeatCadence = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan OfflineThreshold = TimeSpan.FromSeconds(90);
+    internal static readonly TimeSpan HeartbeatCadence = TimeSpan.FromSeconds(15);
+    internal static readonly TimeSpan OfflineThreshold = TimeSpan.FromSeconds(45);
 
     private readonly ITransport _transport;
     private readonly IIdentityManager _identityManager;
     private readonly IPresenceService _presenceService;
     private readonly ConcurrentDictionary<string, TrackedSession> _sessions = new(StringComparer.Ordinal);
+    private readonly Lock _sessionsGate = new();
     private readonly Lock _sync = new();
     private PeriodicTimer? _timer;
     private Task? _runLoopTask;
     private CancellationTokenSource? _runLoopCts;
+    private readonly Func<long> _tickProvider;
 
-    public SessionHeartbeatManager(ITransport transport, IIdentityManager identityManager, IPresenceService presenceService)
+    public SessionHeartbeatManager(
+        ITransport transport,
+        IIdentityManager identityManager,
+        IPresenceService presenceService,
+        Func<long>? tickProvider = null)
     {
         _transport = transport;
         _identityManager = identityManager;
         _presenceService = presenceService;
+        _tickProvider = tickProvider ?? (() => Environment.TickCount64);
     }
 
     public void EnsureStarted(CancellationToken stoppingToken)
@@ -44,28 +51,32 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
 
     public void OnSessionStateChanged(SessionStateChangedEventArgs args)
     {
-        var now = Environment.TickCount64;
-        if (!args.IsOnline)
+        var now = _tickProvider();
+        lock (_sessionsGate)
         {
-            _sessions.TryRemove(args.PeerDeviceId, out _);
-            _presenceService.MarkPeerOffline(args.PeerDeviceId);
-            return;
-        }
+            if (!args.IsOnline)
+            {
+                _sessions.TryRemove(args.PeerDeviceId, out _);
+                _presenceService.MarkPeerOffline(args.PeerDeviceId);
+                return;
+            }
 
-        if (!ShouldTrackPresence(args))
-        {
-            _sessions.TryRemove(args.PeerDeviceId, out _);
-            return;
-        }
+            if (!ShouldTrackPresence(args))
+            {
+                _sessions.TryRemove(args.PeerDeviceId, out _);
+                _presenceService.MarkPeerOffline(args.PeerDeviceId);
+                return;
+            }
 
-        _sessions[args.PeerDeviceId] = new TrackedSession(args.SelectedCapabilities, now);
+            _sessions[args.PeerDeviceId] = new TrackedSession(args.SelectedCapabilities, now);
+        }
     }
 
     public void ObserveAuthenticatedMessage(SessionPeerContext session)
     {
         if (_sessions.TryGetValue(session.PeerDeviceId, out var tracked))
         {
-            tracked.WriteLastHeardTick(Environment.TickCount64);
+            tracked.MarkHeard(_tickProvider());
         }
     }
 
@@ -90,24 +101,44 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
     private async Task EmitHeartbeatsAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var now = Environment.TickCount64;
+        var now = _tickProvider();
         var sendTasks = new List<Task>(_sessions.Count);
 
         foreach (var entry in _sessions)
         {
             var tracked = entry.Value;
-            if (now - tracked.ReadLastSentTick() < HeartbeatCadence.TotalMilliseconds)
+            if (tracked.IsTimedOut ||
+                now - tracked.ReadLastSentTick() < HeartbeatCadence.TotalMilliseconds)
             {
                 continue;
             }
 
-            sendTasks.Add(SendHeartbeatAsync(entry.Key, tracked, now, cancellationToken));
+            sendTasks.Add(SendHeartbeatAsync(entry.Key, tracked, now, "online", cancellationToken));
         }
 
         await Task.WhenAll(sendTasks);
     }
 
-    private async Task SendHeartbeatAsync(string peerDeviceId, TrackedSession tracked, long now, CancellationToken cancellationToken)
+    internal async Task SendOfflinePresenceAsync(CancellationToken cancellationToken)
+    {
+        var sendTasks = _sessions
+            .Select(entry => SendHeartbeatAsync(
+                entry.Key,
+                entry.Value,
+                _tickProvider(),
+                "offline",
+                cancellationToken))
+            .ToArray();
+
+        await Task.WhenAll(sendTasks);
+    }
+
+    private async Task SendHeartbeatAsync(
+        string peerDeviceId,
+        TrackedSession tracked,
+        long now,
+        string status,
+        CancellationToken cancellationToken)
     {
         var envelope = new
         {
@@ -117,7 +148,7 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
             sourceDeviceId = _identityManager.GetDeviceId(),
             payload = new
             {
-                status = "online",
+                status,
                 lastSeenAt = DateTimeOffset.UtcNow.ToString("O"),
                 capabilities = tracked.SelectedCapabilities
             }
@@ -140,20 +171,45 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         }
     }
 
-    private void MarkTimedOutSessionsOffline()
+    internal void MarkTimedOutSessionsOffline()
     {
-        var now = Environment.TickCount64;
+        var now = _tickProvider();
         foreach (var entry in _sessions)
         {
-            if (now - entry.Value.ReadLastHeardTick() < OfflineThreshold.TotalMilliseconds)
+            var lastHeardTick = entry.Value.ReadLastHeardTick();
+            if (now - lastHeardTick < OfflineThreshold.TotalMilliseconds)
             {
                 continue;
             }
 
-            if (_sessions.TryRemove(entry.Key, out _))
+            TryMarkSessionTimedOut(entry.Key, entry.Value, lastHeardTick);
+        }
+    }
+
+    internal TrackedSession? GetTrackedSession(string peerDeviceId)
+    {
+        lock (_sessionsGate)
+        {
+            return _sessions.TryGetValue(peerDeviceId, out var tracked) ? tracked : null;
+        }
+    }
+
+    internal bool TryMarkSessionTimedOut(
+        string peerDeviceId,
+        TrackedSession tracked,
+        long observedLastHeardTick)
+    {
+        lock (_sessionsGate)
+        {
+            if (!_sessions.TryGetValue(peerDeviceId, out var current) ||
+                !ReferenceEquals(current, tracked))
             {
-                _presenceService.MarkPeerOffline(entry.Key);
+                return false;
             }
+
+            return tracked.TryMarkTimedOut(
+                observedLastHeardTick,
+                () => _presenceService.MarkPeerOffline(peerDeviceId));
         }
     }
 
@@ -192,10 +248,12 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
         return args.AllowsProtectedTraffic && args.SelectedCapabilities.Contains(PresenceBasicCapability, StringComparer.Ordinal);
     }
 
-    private sealed class TrackedSession
+    internal sealed class TrackedSession
     {
         private long _lastSentTick;
         private long _lastHeardTick;
+        private int _timedOut;
+        private readonly Lock _sync = new();
 
         public TrackedSession(IReadOnlyList<string> selectedCapabilities, long now)
         {
@@ -206,12 +264,37 @@ internal sealed class SessionHeartbeatManager : IAsyncDisposable
 
         public IReadOnlyList<string> SelectedCapabilities { get; }
 
+        public bool IsTimedOut => Volatile.Read(ref _timedOut) != 0;
+
         public long ReadLastSentTick() => Interlocked.Read(ref _lastSentTick);
 
         public void WriteLastSentTick(long value) => Interlocked.Exchange(ref _lastSentTick, value);
 
         public long ReadLastHeardTick() => Interlocked.Read(ref _lastHeardTick);
 
-        public void WriteLastHeardTick(long value) => Interlocked.Exchange(ref _lastHeardTick, value);
+        public void MarkHeard(long value)
+        {
+            lock (_sync)
+            {
+                Interlocked.Exchange(ref _lastHeardTick, value);
+                Interlocked.Exchange(ref _timedOut, 0);
+            }
+        }
+
+        public bool TryMarkTimedOut(long observedLastHeardTick, Action onTimedOut)
+        {
+            lock (_sync)
+            {
+                if (Interlocked.Read(ref _lastHeardTick) != observedLastHeardTick ||
+                    Volatile.Read(ref _timedOut) != 0)
+                {
+                    return false;
+                }
+
+                Interlocked.Exchange(ref _timedOut, 1);
+                onTimedOut();
+                return true;
+            }
+        }
     }
 }

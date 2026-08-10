@@ -16,10 +16,19 @@ public interface IRiftApi
     Task<ListClipboardOffersResult> ListClipboardOffersAsync();
     Task<FetchClipboardContentResult> FetchClipboardContentAsync(string offerId);
     Task<OfferFileResult> OfferFileAsync(string targetDeviceId, string localPath, string? fileName = null, string? mediaType = null);
+    Task<EnqueueFileSendResult> EnqueueFileSendAsync(string localPath, string? fileName = null, string? mediaType = null, string? targetDeviceId = null, string? origin = null);
+    Task<ListSendQueueResult> ListSendQueueAsync();
+    Task<SendQueueItemInfo> GetSendQueueItemAsync(string queueItemId);
+    Task<SendQueueItemInfo> AssignSendQueueTargetAsync(string queueItemId, string targetDeviceId);
+    Task<SendQueueItemInfo> RetrySendQueueItemAsync(string queueItemId);
+    Task<RemoveSendQueueItemResult> RemoveSendQueueItemAsync(string queueItemId);
     Task<ListIncomingFileOffersResult> ListIncomingFileOffersAsync();
     Task<AcceptFileOfferResult> AcceptFileOfferAsync(string transferId, string destinationPath, bool overwrite = false);
     Task<RejectFileOfferResult> RejectFileOfferAsync(string transferId, string failureReason, string? message = null);
     Task<ListFileTransfersResult> ListFileTransfersAsync();
+    Task<ListPendingFileCommitsResult> ListPendingFileCommitsAsync();
+    Task<ConfirmFileCommitResult> ConfirmFileCommitAsync(string transferId, string destinationPath);
+    Task<FailFileCommitResult> FailFileCommitAsync(string transferId, string failureReason, string? message = null);
     Task<StartPairingResult> StartPairingAsync(string deviceId);
     Task<StartPairingResult> StartPairingByEndpointAsync(string address, int port);
     Task<ApprovePairingResult> ApprovePairingAsync(string deviceId, string fingerprint);
@@ -35,4 +44,27 @@ public interface IRiftApi
         int offset = 0);
     Task<ListOperationsResult> ListOperationsAsync(int limit = 50, int offset = 0);
     Task<OperationRecord> GetOperationAsync(string operationId);
+    Task<NotifyLocalNotificationEventResult> NotifyLocalNotificationEventAsync(
+        string eventType,
+        string notificationId,
+        string? packageName = null,
+        string? appName = null,
+        string? title = null,
+        string? bodyPreview = null,
+        string? postedAt = null,
+        bool? isDismissible = null,
+        bool? isOpenable = null,
+        string? sourcePlatform = null,
+        string? removedAt = null,
+        Dictionary<string, object?>? icon = null);
+    Task<ListNotificationsResult> ListNotificationsAsync();
+    Task<PerformNotificationActionResult> PerformNotificationActionAsync(
+        string sourceDeviceId,
+        string notificationId,
+        string action);
+    Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
+        bool enabled,
+        string? mode = null,
+        string[]? packageNames = null,
+        string[]? blacklistedPackages = null);
 }

@@ -11,12 +11,15 @@ import 'package:stream_channel/stream_channel.dart';
 import 'android_root_discovery_bridge.dart';
 import 'ipc_transport.dart';
 import 'android_daemon_isolate_entrypoint.dart';
+import 'native_tls_api.dart';
 
 /// Android transport that spawns the Dart daemon in a background isolate and
 /// connects to its JSON-RPC bridge using SendPort/ReceivePort.
 ///
 /// This is the real IPC binding described in `spec/doc/ipc.md` for Android.
 class AndroidDaemonIsolateTransport implements IpcTransport {
+  static const _identityChannel = MethodChannel('rift/android/identity');
+
   Isolate? _daemonIsolate;
   ReceivePort? _uiReceive;
   SendPort? _rpcPort;
@@ -28,10 +31,12 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
   StreamController<String>? _incoming;
   StreamController<String>? _outgoing;
+  NativeTlsProxyHost? _tlsProxyHost;
   AndroidRootDiscoveryBridge? _discoveryBridge;
+  Future<AndroidRootDiscoveryBridge>? _discoveryBridgeFuture;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryAddedSub;
   StreamSubscription<AndroidDiscoveredPeer>? _discoveryLostSub;
-  StreamSubscription<AndroidDiscoveredPeer>? _reverseTcpPingSub;
+  StreamSubscription<AndroidDiscoveredPeer>? _discoveryRetrySub;
   int _nextSyntheticId = 1000000;
   int _nextBootstrapRequestId = -1;
   String? _daemonDeviceId;
@@ -49,8 +54,24 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     final storageDir = await getApplicationSupportDirectory();
     final storagePath = storageDir.path;
 
+    // Load the identity seed on the root isolate (platform channels are
+    // unavailable in the daemon isolate). The seed is wrapped by an Android
+    // Keystore AES key; a legacy plaintext identity.key is migrated once.
+    final identityKey = await _identityChannel.invokeMethod<Uint8List>(
+      'loadOrCreate',
+      {'legacyPath': '$storagePath/identity.key'},
+    );
+    if (identityKey == null) {
+      throw StateError('Android identity keystore returned no identity key.');
+    }
+    final nativeDeviceInfo =
+        await _identityChannel.invokeMethod<Map<Object?, Object?>>(
+      'getDeviceInfo',
+    );
+    final localDisplayName = nativeDeviceInfo?['displayName']?.toString();
+
     _uiReceive = ReceivePort();
-    _incoming = StreamController<String>();
+    _incoming = StreamController<String>.broadcast();
     _errorPort = ReceivePort();
     _exitPort = ReceivePort();
 
@@ -62,12 +83,20 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
           'RootIsolateToken is null; cannot start Android daemon isolate');
     }
 
+    // TLS platform-channel calls must run on the root isolate: replies to a
+    // dead daemon isolate's binary messenger response handle abort the engine.
+    _tlsProxyHost?.dispose();
+    _tlsProxyHost = NativeTlsProxyHost()..start();
+
     _daemonIsolate = await Isolate.spawn(
       androidDaemonIsolateEntrypoint,
       <String, dynamic>{
         'storagePath': storagePath,
         'sendPort': _uiReceive!.sendPort,
         'rootIsolateToken': token,
+        'tlsProxyPort': _tlsProxyHost!.requestPort,
+        'identityKey': identityKey,
+        if (localDisplayName != null) 'localDisplayName': localDisplayName,
         // Keep discovery on the root isolate so MethodChannel-based plugins
         // like `nsd` never run inside the daemon isolate.
         'enableDiscovery': false,
@@ -214,7 +243,7 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
 
     await _discoveryAddedSub?.cancel();
     await _discoveryLostSub?.cancel();
-    await _reverseTcpPingSub?.cancel();
+    await _discoveryRetrySub?.cancel();
 
     _discoveryAddedSub = bridge.onPeerDiscovered.listen((peer) {
       _incoming?.add(jsonEncode({
@@ -236,18 +265,13 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
       _syncDiscoverySnapshotToDaemon();
     });
 
-    _reverseTcpPingSub = bridge.onReverseTcpPingRequested.listen((peer) {
+    _discoveryRetrySub = bridge.onReverseTcpPingRequested.listen((peer) {
       final port = _rpcPort;
-      if (port == null) return;
-      // Send a ping command to the daemon isolate to establish a TCP connection
-      // with the Linux machine. This completely bypasses the Hotspot UDP block!
+      final deviceId = peer.deviceIdHint;
+      if (port == null || deviceId == null) return;
       port.send({
-        'jsonrpc': '2.0',
-        'method': 'rift.pingEndpoint',
-        'params': {
-          'address': peer.address,
-          'port': peer.port,
-        },
+        'internal': 'android.prefetchPeer',
+        'deviceId': deviceId,
       });
     });
 
@@ -310,12 +334,27 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     }
   }
 
-  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() async {
+  Future<AndroidRootDiscoveryBridge> _ensureDiscoveryBridge() {
     final existing = _discoveryBridge;
     if (existing != null) {
-      return existing;
+      return Future.value(existing);
     }
 
+    final pending = _discoveryBridgeFuture;
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _bootstrapDiscoveryBridge();
+    _discoveryBridgeFuture = future;
+    return future.whenComplete(() {
+      if (identical(_discoveryBridgeFuture, future)) {
+        _discoveryBridgeFuture = null;
+      }
+    });
+  }
+
+  Future<AndroidRootDiscoveryBridge> _bootstrapDiscoveryBridge() async {
     if (_daemonDeviceId == null || _daemonAdvertisedPort == null) {
       throw StateError(
         'Android discovery is not ready yet. Wait a moment for the daemon to finish startup, then try again.',
@@ -419,14 +458,28 @@ class AndroidDaemonIsolateTransport implements IpcTransport {
     });
   }
 
+  Stream<String> get rawIncoming =>
+      _incoming?.stream ?? const Stream<String>.empty();
+
+  Future<void> sendRaw(String message) async {
+    final outgoing = _outgoing;
+    if (outgoing == null) {
+      throw StateError('Android daemon is not connected');
+    }
+    outgoing.add(message);
+  }
+
   @override
   Future<void> disconnect() async {
+    await _tlsProxyHost?.dispose();
+    _tlsProxyHost = null;
     await _discoveryAddedSub?.cancel();
     _discoveryAddedSub = null;
     await _discoveryLostSub?.cancel();
     _discoveryLostSub = null;
     await _discoveryBridge?.dispose();
     _discoveryBridge = null;
+    _discoveryBridgeFuture = null;
 
     await _incoming?.close();
     await _outgoing?.close();

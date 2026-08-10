@@ -1,61 +1,37 @@
-# AGENTS.md
+# Rift Project Context
 
-This file provides guidance to AI agents when working with code in this repository.
+Rift is a security-first, local-first, cross-platform device continuity platform. It follows a protocol-first model: `spec/doc/protocol.md` is authoritative, and both daemon implementations must conform independently.
 
-## Project Overview
+## Agent Verification
 
-Rift is a security-first, local-first, cross-platform device continuity platform. It uses a protocol-first development approach: the written protocol specification (`spec/doc/protocol.md`) is the source of truth, and two independent daemon implementations must conform to it.
+- Run `tools/verify.sh <daemon-cs|daemon-dart|app-flutter|tests-conformance|tests-interop|changed|all>` from the repository root.
+- The script prints concise status/errors and overwrites complete logs under `logs/agent/`. `changed` uses the `origin/main` merge base; override with `RIFT_VERIFY_BASE`. Override the log directory with `RIFT_AGENT_LOG_DIR`.
+- Inspect logs with focused `rg` or `tail` commands; never dump an entire log into the agent conversation.
 
-## Repository Layout
+## Canonical Sources
 
-- `spec/doc/protocol.md` — the normative protocol specification (v0.1-draft). Start here.
-- `spec/doc/ipc.md` — the normative local JSON-RPC IPC specification.
-- `spec/decisions/` — Architecture Decision Records (ADRs), currently `0001-*` through `0011-*`. See `spec/decisions/README.md`.
-- `spec/asn1/` — ASN.1 module definitions for the custom X.509 extension.
-- `spec/vectors/` — deterministic test vectors for cross-implementation conformance.
-- `spec/examples/` — example certificates and message flows.
-- `spec/references/` — gitignored directory for local copies of RFCs and reference documents.
-- `daemon-cs/` — Multi-platform daemon (C#/.NET 10). Includes `Rift.Daemon.Core` (shared library), `Rift.Daemon.Windows`, `Rift.Daemon.macOS`, `Rift.Daemon.Linux`, `Rift.Daemon.Tests`, and `Tools/`. Uses BouncyCastle.NET + native .NET crypto, StreamJsonRpc for IPC, SQLite via Microsoft.Data.Sqlite.
-- `daemon-dart/` — Android daemon (Dart). Uses PointyCastle for crypto, SecureSocket for mTLS, json_rpc_2 over SendPort/ReceivePort, SQLite via sqflite. Includes a purpose-built ASN.1 parser for X.509 extension extraction (security-critical component).
-- `app-flutter/` — Single Flutter/Dart codebase targeting Android and the active desktop targets in this repository. Material 3. One `JsonRpcRiftClient` consumes both daemons via JSON-RPC 2.0.
-- `tests-conformance/` — Cross-implementation protocol conformance tests (one harness, two daemons).
-- `tests-interop/` — Cross-platform interop tests (C# daemon paired with Dart daemon end-to-end).
-- `docs/` — Curated project documentation, documentation governance, and archive.
+- `spec/doc/protocol.md` — normative peer protocol specification; start here for protocol or security changes.
+- `spec/doc/ipc.md` — normative local JSON-RPC IPC specification.
+- `spec/decisions/` — architecture decision records and their index.
+- `spec/vectors/` — deterministic cross-implementation test vectors.
 
-## Architecture
+## Repository Map
 
-**Dual-daemon model:** Two independent daemon implementations conform to one protocol spec: the shared C#/.NET daemon family for Windows, macOS, and Linux, and the Dart daemon for Android. Both are runnable as standalone console processes for dev/CI and as platform services where applicable. The C# daemon uses a shared core library (`Rift.Daemon.Core`) with platform-specific entry points for IPC and service hosting.
+- `daemon-cs/` — shared C#/.NET daemon core, desktop platform hosts, tests, and tools.
+- `daemon-dart/` — shared Dart mobile daemon used by Android isolate and iOS in-process hosting.
+- `app-flutter/` — cross-platform Flutter client consuming daemon JSON-RPC IPC.
+- `tests-conformance/` — protocol conformance harness.
+- `tests-interop/` — cross-platform interoperability harness and procedures.
+- `docs/` — curated project documentation and governance.
 
-**Dual-keypair identity:** Ed25519 for permanent device identity (fingerprint, device ID, trust store). ECDSA P-256 for TLS certificates. The Ed25519 public key is embedded in the P-256 cert via a custom X.509 extension (OID `2.25.293029629918709742181702189012786017422`).
+## Architecture Constraints
 
-**Trust state machine:** discovered → pairing_pending → trusted → blocked → revoked. Only `trusted` peers access protected operations. Revocation keeps negative-trust evidence.
+- Keep the C# desktop daemon family and Dart mobile daemon as independent implementations of the same protocol.
+- Keep Flutter daemon access transport-agnostic; UI code must not branch on named pipes, Unix sockets, or mobile in-process transports.
+- On Windows, the service owns background core behavior while the user-session process owns clipboard, tray, and notification integration.
+- Use "Operation" for cross-device protocol actions; avoid unqualified "Intent" because of Android terminology.
 
-**Transport-agnostic IPC:** JSON-RPC 2.0 between daemon and Flutter client. Named pipes on Windows, Unix domain sockets on macOS/Linux, and SendPort/ReceivePort on Android. The Flutter UI never distinguishes transports.
+## Documentation
 
-**Windows runtime split:** Windows Service owns background core (discovery, trust, transport, persistence, event log). User-session Flutter process owns clipboard, tray, notifications — because Session 0 isolation prevents services from accessing user clipboard.
-
-**Protocol term:** "Operation" is the protocol-level term for cross-device actions. Avoid unqualified "Intent" on Android to prevent collision with `android.content.Intent`.
-
-## Security Model Context
-
-The protocol design specifically mitigates three KDE Connect vulnerability classes:
-- CVE-2025-66270 (identity switching) — device ID derived from Ed25519 key, validated on every message
-- CVE-2025-32900 (device spoofing) — device info exchanged only over authenticated TLS
-- CVE-2025-32898 (weak verification) — pairing uses full Ed25519 fingerprint, not short codes
-
-The Dart daemon's custom X.509 ASN.1 parser is a known high-risk component (required because dart:io doesn't expose cert extensions). It must fail closed on all malformed input and is subject to dedicated fuzz testing.
-
-## Protocol Conventions
-
-- Wire framing: 4-byte big-endian length prefix + UTF-8 JSON object, max 32 MiB
-- IDs (message, operation, offer, event): lowercase RFC 4122 UUIDv4
-- Device ID format: `rift-` + first 32 chars of lowercase Base32(SHA-256(Ed25519 pubkey)), no padding
-- Timestamps: RFC 3339 UTC (audit only). Durations/expiries: integer milliseconds with monotonic timers
-- Failure reasons are a closed vocabulary (15 values in v0.1-draft) — implementations must not invent new peer-visible reasons
-- Unknown optional fields must be ignored; unknown `requiredExtensions` values must cause `ProtocolError`
-
-## Documentation Rules
-
-- Treat `README.md`, `AGENTS.md`, `spec/doc/*.md`, `spec/decisions/*.md`, curated files under `docs/`, and concise component `README.md` files as the canonical documentation surface.
-- Treat `docs/archive/` as historical context only, not current source of truth.
-- Current delivery status, roadmap, and task ownership live in GitHub Projects, not repo markdown.
+- Treat `README.md`, `AGENTS.md`, `spec/doc/*.md`, `spec/decisions/*.md`, curated `docs/` files, and concise component `README.md` files as the canonical documentation surface.
+- Current delivery status, roadmap, and task ownership belong in GitHub Projects, not repository markdown.

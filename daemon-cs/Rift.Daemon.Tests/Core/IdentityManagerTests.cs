@@ -30,6 +30,30 @@ public class IdentityManagerTests
     }
     
     [Fact]
+    public void GetDisplayName_UsesNormalizedPlatformName()
+    {
+        var manager = new IdentityManager(displayNameProvider: () => "  Office\nDesktop  ");
+
+        Assert.Equal("OfficeDesktop", manager.GetDisplayName());
+    }
+
+    [Fact]
+    public void GetDisplayName_FallsBackWhenPlatformNameIsUnavailable()
+    {
+        var manager = new IdentityManager(displayNameProvider: () => " \t ");
+
+        Assert.Matches("^(Windows|macOS|Linux|Unknown) (Desktop|Device) [0-9]{2}$", manager.GetDisplayName());
+    }
+
+    [Fact]
+    public void GetDisplayName_TruncatesPlatformName()
+    {
+        var manager = new IdentityManager(displayNameProvider: () => new string('A', 129));
+
+        Assert.Equal(new string('A', 128), manager.GetDisplayName());
+    }
+
+    [Fact]
     public void Test_EnsureIdentityInitialized_CreatesValidExtensions()
     {
         var manager = new IdentityManager();

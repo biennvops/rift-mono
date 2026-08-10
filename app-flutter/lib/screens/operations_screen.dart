@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../src/ui/theme.dart';
+
 import '../src/ipc/json_rpc_client.dart';
 
 class OperationsScreen extends StatefulWidget {
@@ -15,9 +17,10 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
   final List<String> _filters = [
     'All Ops',
+    'In Progress',
+    'Pending',
     'Completed',
     'Failed',
-    'In Progress',
   ];
 
   List<Map<String, dynamic>> _operations = [];
@@ -47,7 +50,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
       final result = await client.listOperations();
       if (mounted) {
         setState(() {
-          _operations = List<Map<String, dynamic>>.from(result['operations'] ?? []);
+          _operations =
+              List<Map<String, dynamic>>.from(result['operations'] ?? []);
           _isLoading = false;
         });
       }
@@ -63,9 +67,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
   void _subscribeToTransitions() {
     final client = context.read<JsonRpcRiftClient>();
-    _transitionSub = client.onOperationTransition.listen((event) {
-      // In a real implementation we would update the specific operation
-      // or just reload the list.
+    _transitionSub = client.onOperationTransition.listen((_) {
       _loadOperations();
     });
   }
@@ -79,6 +81,7 @@ class _OperationsScreenState extends State<OperationsScreen> {
       case 'Error':
         return 'Failed';
       case 'Created':
+        return 'Pending';
       case 'Pending':
         return 'Pending';
       default:
@@ -93,14 +96,24 @@ class _OperationsScreenState extends State<OperationsScreen> {
     return Icons.terminal;
   }
 
-  Widget _buildLegendItem(String label, Color color, ThemeData theme, {bool isOutlined = false, bool isBold = false}) {
+  Widget _buildLegendItem(
+    String label,
+    Color color,
+    ThemeData theme, {
+    bool isOutlined = false,
+    bool isBold = false,
+  }) {
     return Container(
       margin: const EdgeInsets.only(right: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: isOutlined ? theme.colorScheme.surface : color.withValues(alpha: 0.15),
-        border: Border.all(color: isOutlined ? theme.colorScheme.outlineVariant : color.withValues(alpha: 0.3)),
-        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
+        border: Border.all(
+          color: isOutlined
+              ? theme.colorScheme.outlineVariant
+              : color.withValues(alpha: 0.3),
+        ),
+        borderRadius: BorderRadius.circular(4),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -126,30 +139,34 @@ class _OperationsScreenState extends State<OperationsScreen> {
     );
   }
 
-  Widget _buildFilterChip(String label, ThemeData theme) {
+  Widget _buildFilterTab(String label, ThemeData theme) {
     final isActive = _activeFilter == label;
+    final primaryColor = theme.colorScheme.primary;
+    final onSurfaceVariant = theme.colorScheme.onSurfaceVariant;
+
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            _activeFilter = label;
-          });
-        },
-        borderRadius: BorderRadius.circular(24),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          decoration: BoxDecoration(
-            color: isActive ? theme.colorScheme.primary : theme.colorScheme.surface,
-            border: Border.all(
-              color: isActive ? theme.colorScheme.primary : theme.colorScheme.outlineVariant,
+      padding: const EdgeInsets.only(right: 24),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => setState(() => _activeFilter = label),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+            decoration: BoxDecoration(
+              border: Border(
+                bottom: BorderSide(
+                  color: isActive ? primaryColor : Colors.transparent,
+                  width: 2,
+                ),
+              ),
             ),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Text(
-            label,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: isActive ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isActive ? primaryColor : onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
             ),
           ),
         ),
@@ -174,9 +191,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
     switch (status) {
       case 'Completed':
-        statusColor = theme.colorScheme.secondary;
-        iconBgColor = theme.colorScheme.secondaryContainer.withValues(alpha: 0.3);
-        iconColor = theme.colorScheme.secondary;
+        statusColor = theme.colorScheme.primary;
+        iconBgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.5);
+        iconColor = theme.colorScheme.primary;
         borderColor = theme.colorScheme.outlineVariant;
         break;
       case 'Failed':
@@ -187,30 +204,90 @@ class _OperationsScreenState extends State<OperationsScreen> {
         break;
       case 'In Progress':
         statusColor = theme.colorScheme.primary;
-        iconBgColor = theme.colorScheme.primaryContainer.withValues(alpha: 0.3);
+        iconBgColor =
+            theme.colorScheme.primaryContainer.withValues(alpha: 0.15);
         iconColor = theme.colorScheme.primary;
-        borderColor = theme.colorScheme.primary.withValues(alpha: 0.5);
+        borderColor = theme.colorScheme.primary.withValues(alpha: 0.4);
+        break;
+      case 'Pending':
+        statusColor = theme.colorScheme.tertiary;
+        iconBgColor =
+            theme.colorScheme.tertiaryContainer.withValues(alpha: 0.5);
+        iconColor = theme.colorScheme.tertiary;
+        borderColor = theme.colorScheme.outlineVariant;
         break;
       default:
         statusColor = theme.colorScheme.outline;
-        iconBgColor = theme.colorScheme.surfaceContainerHighest;
+        iconBgColor = Colors.white;
         iconColor = theme.colorScheme.onSurfaceVariant;
         borderColor = theme.colorScheme.outlineVariant;
     }
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: borderColor),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
       ),
-      color: status == 'Failed' ? theme.colorScheme.errorContainer.withValues(alpha: 0.1) : theme.colorScheme.surface,
       clipBehavior: Clip.antiAlias,
       child: Theme(
-        data: theme.copyWith(dividerColor: Colors.transparent),
+        data: theme.copyWith(
+          dividerColor: Colors.transparent,
+          splashColor: theme.colorScheme.primary.withValues(alpha: 0.08),
+          highlightColor: theme.colorScheme.primary.withValues(alpha: 0.04),
+        ),
         child: ExpansionTile(
           tilePadding: const EdgeInsets.all(16),
+          childrenPadding: EdgeInsets.zero,
+          shape: const Border(),
+          collapsedShape: const Border(),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: statusColor,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        status.toUpperCase(),
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: statusColor,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.03,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    timeAgo,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.expand_more,
+                size: 20,
+                color: theme.colorScheme.outline,
+              ),
+            ],
+          ),
           title: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -218,10 +295,10 @@ class _OperationsScreenState extends State<OperationsScreen> {
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: iconBgColor,
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(4),
                   border: Border.all(color: iconColor.withValues(alpha: 0.2)),
                 ),
-                child: Icon(icon, color: iconColor, size: 24),
+                child: Icon(icon, color: iconColor, size: 20),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -233,19 +310,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
                         Flexible(
                           child: Text(
                             name,
-                            style: theme.textTheme.titleMedium?.copyWith(
+                            style: theme.textTheme.bodyLarge?.copyWith(
                               color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w600,
                             ),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainer,
+                            color: Colors.white,
                             borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
+                            ),
                           ),
                           child: Text(
                             opId,
@@ -259,12 +340,14 @@ class _OperationsScreenState extends State<OperationsScreen> {
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        Icon(Icons.devices, size: 16, color: theme.colorScheme.onSurfaceVariant),
+                        Icon(Icons.devices,
+                            size: 14,
+                            color: theme.colorScheme.onSurfaceVariant),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
                             peer,
-                            style: theme.textTheme.bodyMedium?.copyWith(
+                            style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
                             overflow: TextOverflow.ellipsis,
@@ -277,57 +360,30 @@ class _OperationsScreenState extends State<OperationsScreen> {
               ),
             ],
           ),
-          trailing: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    status.toUpperCase(),
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: statusColor,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                timeAgo,
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: theme.colorScheme.outline,
-                ),
-              ),
-            ],
-          ),
           children: [
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceContainerLowest,
-                border: Border(top: BorderSide(color: theme.colorScheme.outlineVariant)),
+                color: Colors.white,
+                border: Border(
+                  top: BorderSide(color: theme.colorScheme.outlineVariant),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Transition History',
-                    style: theme.textTheme.labelMedium?.copyWith(
+                    'TRANSITION HISTORY',
+                    style: theme.textTheme.labelSmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.05,
                     ),
                   ),
                   const SizedBox(height: 16),
                   Padding(
-                    padding: const EdgeInsets.only(left: 8.0),
+                    padding: const EdgeInsets.only(left: 4),
                     child: Column(
                       children: timeline.asMap().entries.map((entry) {
                         final index = entry.key;
@@ -341,13 +397,13 @@ class _OperationsScreenState extends State<OperationsScreen> {
                             stateColor = theme.colorScheme.outline;
                             break;
                           case 'Pending':
-                            stateColor = Colors.yellow.shade700;
+                            stateColor = theme.colorScheme.tertiary;
                             break;
                           case 'In Progress':
                             stateColor = theme.colorScheme.primary;
                             break;
                           case 'Completed':
-                            stateColor = theme.colorScheme.secondary;
+                            stateColor = theme.colorScheme.primary;
                             break;
                           case 'Failed':
                             stateColor = theme.colorScheme.error;
@@ -363,19 +419,23 @@ class _OperationsScreenState extends State<OperationsScreen> {
                               Column(
                                 children: [
                                   Container(
-                                    width: 12,
-                                    height: 12,
+                                    width: 10,
+                                    height: 10,
                                     decoration: BoxDecoration(
                                       color: stateColor,
                                       shape: BoxShape.circle,
-                                      border: Border.all(color: theme.colorScheme.surfaceContainerLowest, width: 2),
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
+                                      ),
                                     ),
                                   ),
                                   if (!isLast)
                                     Expanded(
                                       child: Container(
                                         width: 2,
-                                        color: theme.colorScheme.outlineVariant.withValues(alpha: 0.3),
+                                        color: theme.colorScheme.outlineVariant
+                                            .withValues(alpha: 0.3),
                                       ),
                                     ),
                                 ],
@@ -383,20 +443,27 @@ class _OperationsScreenState extends State<OperationsScreen> {
                               const SizedBox(width: 16),
                               Expanded(
                                 child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 16.0),
+                                  padding: const EdgeInsets.only(bottom: 16),
                                   child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Text(
                                         state,
-                                        style: theme.textTheme.labelMedium?.copyWith(
-                                          color: isLast ? stateColor : theme.colorScheme.onSurface,
-                                          fontWeight: isLast ? FontWeight.bold : FontWeight.normal,
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                          color: isLast
+                                              ? stateColor
+                                              : theme.colorScheme.onSurface,
+                                          fontWeight: isLast
+                                              ? FontWeight.w600
+                                              : FontWeight.w400,
                                         ),
                                       ),
                                       Text(
                                         time,
-                                        style: theme.textTheme.labelSmall?.copyWith(
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
                                           color: theme.colorScheme.outline,
                                         ),
                                       ),
@@ -410,15 +477,31 @@ class _OperationsScreenState extends State<OperationsScreen> {
                       }).toList(),
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  Container(
+                    height: 1,
+                    color: theme.colorScheme.outlineVariant,
+                  ),
                   const SizedBox(height: 16),
-                  const Divider(),
                   Align(
                     alignment: Alignment.centerRight,
                     child: OutlinedButton(
-                      onPressed: () {},
+                      onPressed: null,
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: theme.colorScheme.onSurface,
-                        side: BorderSide(color: theme.colorScheme.outlineVariant),
+                        foregroundColor: theme.colorScheme.onSurfaceVariant,
+                        side: BorderSide(
+                          color: theme.colorScheme.outlineVariant,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        textStyle: theme.textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       child: const Text('View Full Payload'),
                     ),
@@ -435,6 +518,9 @@ class _OperationsScreenState extends State<OperationsScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDesktop = MediaQuery.of(context).size.width >= 1024;
+    final screenPadding =
+        isDesktop ? RiftDesign.padScreenDesktop : RiftDesign.padScreenMobile;
 
     List<Map<String, dynamic>> filteredOps = _operations;
     if (_activeFilter != 'All Ops') {
@@ -446,24 +532,31 @@ class _OperationsScreenState extends State<OperationsScreen> {
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surface,
-
       body: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: screenPadding,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Operations', style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold, color: theme.colorScheme.onSurface)),
-                  const SizedBox(height: 16),
-                  // Legend
+                  Text(
+                    'Operations',
+                    style: theme.textTheme.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onSurface,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  const SizedBox(height: RiftDesign.spaceMd),
                   Container(
-                    padding: const EdgeInsets.all(16),
+                    padding: RiftDesign.padCard,
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.surfaceContainer,
-                      border: Border.all(color: theme.colorScheme.outlineVariant),
-                      borderRadius: BorderRadius.circular(12),
+                      color: Colors.white,
+                      border: Border.all(
+                        color: theme.colorScheme.outlineVariant,
+                      ),
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -472,7 +565,8 @@ class _OperationsScreenState extends State<OperationsScreen> {
                           'STATE TRANSITION LEGEND',
                           style: theme.textTheme.labelSmall?.copyWith(
                             color: theme.colorScheme.onSurfaceVariant,
-                            letterSpacing: 1.0,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.05,
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -480,14 +574,25 @@ class _OperationsScreenState extends State<OperationsScreen> {
                           scrollDirection: Axis.horizontal,
                           child: Row(
                             children: [
-                              _buildLegendItem('Created', theme.colorScheme.outline, theme, isOutlined: true),
-                              const Icon(Icons.arrow_right, color: Colors.grey, size: 20),
-                              _buildLegendItem('Pending', Colors.yellow.shade700, theme, isOutlined: true),
-                              const Icon(Icons.arrow_right, color: Colors.grey, size: 20),
-                              _buildLegendItem('In Progress', theme.colorScheme.primary, theme, isBold: true),
-                              const Icon(Icons.arrow_right, color: Colors.grey, size: 20),
-                              _buildLegendItem('Completed', theme.colorScheme.secondary, theme),
-                              _buildLegendItem('Failed', theme.colorScheme.error, theme),
+                              _buildLegendItem(
+                                  'Created', theme.colorScheme.outline, theme,
+                                  isOutlined: true),
+                              const Icon(Icons.arrow_right,
+                                  color: Colors.grey, size: 16),
+                              _buildLegendItem(
+                                  'Pending', theme.colorScheme.tertiary, theme,
+                                  isOutlined: true),
+                              const Icon(Icons.arrow_right,
+                                  color: Colors.grey, size: 16),
+                              _buildLegendItem('In Progress',
+                                  theme.colorScheme.primary, theme,
+                                  isBold: true),
+                              const Icon(Icons.arrow_right,
+                                  color: Colors.grey, size: 16),
+                              _buildLegendItem('Completed',
+                                  theme.colorScheme.primary, theme),
+                              _buildLegendItem(
+                                  'Failed', theme.colorScheme.error, theme),
                             ],
                           ),
                         ),
@@ -495,11 +600,22 @@ class _OperationsScreenState extends State<OperationsScreen> {
                     ),
                   ),
                   const SizedBox(height: 24),
-                  // Filters
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: _filters.map((f) => _buildFilterChip(f, theme)).toList(),
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: theme.colorScheme.outlineVariant
+                              .withValues(alpha: 0.6),
+                        ),
+                      ),
+                    ),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: _filters
+                            .map((f) => _buildFilterTab(f, theme))
+                            .toList(),
+                      ),
                     ),
                   ),
                 ],
@@ -508,37 +624,91 @@ class _OperationsScreenState extends State<OperationsScreen> {
           ),
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            sliver: _isLoading 
-                ? const SliverToBoxAdapter(
+            sliver: _isLoading
+                ? SliverToBoxAdapter(
                     child: Center(
                       child: Padding(
-                        padding: EdgeInsets.all(32.0),
-                        child: CircularProgressIndicator(),
+                        padding: const EdgeInsets.all(32.0),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: theme.colorScheme.primary,
+                        ),
                       ),
                     ),
                   )
                 : _error != null && _operations.isEmpty
                     ? SliverToBoxAdapter(
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(32.0),
-                            child: Column(
-                              children: [
-                                Icon(Icons.error_outline, size: 48, color: theme.colorScheme.error),
-                                const SizedBox(height: 16),
-                                Text('Failed to load operations:', style: theme.textTheme.titleMedium),
-                                Text(_error!, style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.error), textAlign: TextAlign.center),
-                              ],
+                        child: Container(
+                          key: const ValueKey('operations-load-error-card'),
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 24,
+                            horizontal: 16,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: theme.colorScheme.outlineVariant,
                             ),
+                          ),
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.errorContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.error_outline,
+                                  size: 28,
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                'Failed to load operations',
+                                style: theme.textTheme.bodyLarge
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                            ],
                           ),
                         ),
                       )
                     : filteredOps.isEmpty
                         ? SliverToBoxAdapter(
-                            child: Center(
-                              child: Padding(
-                                padding: const EdgeInsets.all(48.0),
-                                child: Text('No operations found.', style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 64,
+                                horizontal: 24,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: theme.colorScheme.outlineVariant,
+                                ),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.inbox_outlined,
+                                    size: 40,
+                                    color: theme.colorScheme.outline
+                                        .withValues(alpha: 0.5),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'No operations found.',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           )
@@ -546,21 +716,32 @@ class _OperationsScreenState extends State<OperationsScreen> {
                             delegate: SliverChildBuilderDelegate(
                               (context, index) {
                                 final op = filteredOps[index];
-                                final opId = op['operationId']?.toString() ?? 'unknown';
-                                final shortId = opId.length > 8 ? 'op_${opId.substring(0, 4)}' : opId;
-                                final status = _mapStateToStatus(op['state']?.toString() ?? '');
-                                
+                                final opId =
+                                    op['operationId']?.toString() ?? 'unknown';
+                                final shortId = opId.length > 8
+                                    ? 'op_${opId.substring(0, 4)}'
+                                    : opId;
+                                final status = _mapStateToStatus(
+                                    op['state']?.toString() ?? '');
+
                                 return _buildOperationCard(
                                   theme: theme,
-                                  name: op['operationType']?.toString() ?? 'unknown',
+                                  name: op['operationType']?.toString() ??
+                                      'unknown',
                                   opId: shortId,
-                                  peer: op['destinationDeviceId']?.toString() ?? op['sourceDeviceId']?.toString() ?? 'unknown',
-                                  icon: _mapTypeToIcon(op['operationType']?.toString() ?? ''),
+                                  peer: op['destinationDeviceId']?.toString() ??
+                                      op['sourceDeviceId']?.toString() ??
+                                      'unknown',
+                                  icon: _mapTypeToIcon(
+                                      op['operationType']?.toString() ?? ''),
                                   status: status,
-                                  timeAgo: 'recently', // We could parse createdAt here
+                                  timeAgo: 'recently',
                                   timeline: [
-                                    {'state': status, 'time': op['updatedAt']?.toString() ?? ''}
-                                  ], // Mock timeline for now unless getOperation is called
+                                    {
+                                      'state': status,
+                                      'time': op['updatedAt']?.toString() ?? '',
+                                    },
+                                  ],
                                 );
                               },
                               childCount: filteredOps.length,
