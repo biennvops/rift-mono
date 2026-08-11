@@ -34,6 +34,8 @@ import 'src/ui/local_events_notifier.dart';
 import 'src/platform/android_shell.dart';
 import 'src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'src/media_playback/macos_remote_media_playback_coordinator.dart';
+import 'src/media_playback/windows_media_playback_publisher.dart';
+import 'src/media_playback/windows_remote_media_playback_coordinator.dart';
 import 'src/platform/macos_send_files.dart';
 import 'src/platform/ios_notifications.dart';
 import 'src/platform/linux_notifications.dart';
@@ -251,6 +253,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
       <Map<String, String>>[];
   IOSRemoteMediaPlaybackCoordinator? _iosRemoteMediaPlayback;
   MacOSRemoteMediaPlaybackCoordinator? _macOSRemoteMediaPlayback;
+  WindowsMediaPlaybackPublisher? _windowsMediaPlaybackPublisher;
+  WindowsRemoteMediaPlaybackCoordinator? _windowsRemoteMediaPlayback;
   DeviceStatusPublisher? _deviceStatusPublisher;
   TrustedPeerNameResolver? _trustedPeerNameResolver;
   String? _lastExternalClipboardFingerprint;
@@ -475,6 +479,12 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     } else if (Platform.isMacOS) {
       _macOSRemoteMediaPlayback = MacOSRemoteMediaPlaybackCoordinator(client);
       unawaited(_macOSRemoteMediaPlayback!.start());
+    } else if (Platform.isWindows) {
+      _windowsMediaPlaybackPublisher = WindowsMediaPlaybackPublisher(client);
+      _windowsRemoteMediaPlayback =
+          WindowsRemoteMediaPlaybackCoordinator(client);
+      unawaited(_windowsMediaPlaybackPublisher!.start());
+      unawaited(_windowsRemoteMediaPlayback!.start());
     }
   }
 
@@ -1084,6 +1094,8 @@ class _RiftAppState extends State<RiftApp> with TrayListener, WindowListener {
     _connectionChangedSub?.cancel();
     unawaited(_iosRemoteMediaPlayback?.dispose());
     unawaited(_macOSRemoteMediaPlayback?.dispose());
+    unawaited(_windowsMediaPlaybackPublisher?.dispose());
+    unawaited(_windowsRemoteMediaPlayback?.dispose());
     unawaited(_deviceStatusPublisher?.dispose());
     unawaited(_clipboardManager?.dispose());
     super.dispose();

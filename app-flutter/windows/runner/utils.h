@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 
+inline constexpr wchar_t kRiftAppUserModelId[] = L"dev.rift.app";
+inline constexpr char kRiftAppUserModelIdUtf8[] = "dev.rift.app";
+
 // Creates a console for the process, and redirects stdout and stderr to
 // it for both the runner and the Flutter library.
 void CreateAndAttachConsole();

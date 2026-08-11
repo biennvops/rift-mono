@@ -7,8 +7,13 @@
 #include <flutter/event_sink.h>
 #include <flutter/flutter_view_controller.h>
 #include <flutter/method_channel.h>
+#include <winrt/Windows.Media.h>
+#include <winrt/Windows.Media.Control.h>
+#include <winrt/Windows.Media.Playback.h>
 
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -36,8 +41,28 @@ class FlutterWindow : public Win32Window {
   void RegisterClipboardEventChannel();
   void RegisterClipboardMethodChannel();
   void RegisterWindowsShellMethodChannel();
+  void RegisterWindowsMediaPlaybackEventChannel();
+  void RegisterWindowsMediaPlaybackMethodChannel();
   void RegisterSendFilesMethodChannel();
   void DispatchQueuedSendFiles();
+  bool ShowWindowsMediaPlayback(const flutter::EncodableMap& playback);
+  bool ClearWindowsMediaPlayback();
+  bool StartWindowsMediaPlaybackObservation();
+  bool StopWindowsMediaPlaybackObservation();
+  void PollWindowsMediaPlaybackObservation();
+  bool EnsureWindowsMediaPlaybackWorker();
+  void QueueObservedWindowsPlaybackAction(
+      const std::string& playback_id,
+      const std::string& action,
+      std::optional<int64_t> position_ms,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void RunWindowsMediaPlaybackWorker();
+  void StopWindowsMediaPlaybackWorker();
+  void DispatchWindowsMediaPlaybackWorkerResults();
+  void QueueWindowsMediaPlaybackAction(
+      const std::string& action,
+      std::optional<int64_t> position_ms = std::nullopt);
+  void DispatchPendingWindowsMediaPlaybackActions();
   void InitializeShellNotificationIcon();
   void CleanupShellNotificationIcon();
   bool ShowTransferNotification(
@@ -68,12 +93,28 @@ class FlutterWindow : public Win32Window {
       clipboard_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       windows_shell_method_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      windows_media_playback_event_channel_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>>
+      windows_media_playback_event_sink_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      windows_media_playback_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       send_files_method_channel_;
   flutter::EncodableList pending_send_files_;
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
+  struct WindowsMediaPlaybackWorkerState;
+  std::unique_ptr<WindowsMediaPlaybackWorkerState> windows_media_worker_;
+  winrt::Windows::Media::SystemMediaTransportControls
+      media_transport_controls_{nullptr};
+  winrt::event_token media_playback_button_pressed_token_{};
+  winrt::event_token media_playback_position_change_token_{};
+  std::mutex media_playback_mutex_;
+  std::string current_media_playback_source_device_id_;
+  std::string current_media_playback_playback_id_;
+  std::vector<flutter::EncodableValue> pending_media_playback_actions_;
   std::wstring pending_notification_destination_path_;
   std::string pending_notification_route_;
   flutter::EncodableMap pending_notification_payload_;

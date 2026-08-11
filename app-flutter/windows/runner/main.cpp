@@ -1,5 +1,6 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <shobjidl_core.h>
 #include <windows.h>
 
 #include <string>
@@ -94,6 +95,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   if (ForwardFilesToRunningInstance(opened_files)) {
     return EXIT_SUCCESS;
   }
+
+  ::SetCurrentProcessExplicitAppUserModelID(kRiftAppUserModelId);
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
