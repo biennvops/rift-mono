@@ -46,6 +46,7 @@ constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
 constexpr UINT kRiftMediaPlaybackActionMessage = WM_APP + 2;
 constexpr UINT_PTR kWindowsMediaPlaybackObservationTimerId = 0x52504D57;  // 'WMPR'
 constexpr UINT kWindowsMediaPlaybackObservationIntervalMs = 1000;
+constexpr int64_t kTimeSpanTicksPerMillisecond = 10000;
 // tray_manager owns icon 1 and WM_USER + 1. Native balloons temporarily
 // borrow that icon so Rift has only one notification-area entry.
 constexpr UINT kTrayManagerNotifyMessage = WM_USER + 1;
@@ -141,6 +142,15 @@ bool IsTrue(const flutter::EncodableMap& map, const char* key) {
   auto it = map.find(flutter::EncodableValue(key));
   return it != map.end() && std::get_if<bool>(&it->second) != nullptr &&
          std::get<bool>(it->second);
+}
+
+std::optional<int64_t> MillisecondsToTimeSpanTicks(int64_t milliseconds) {
+  const int64_t normalized_milliseconds = std::max<int64_t>(0, milliseconds);
+  if (normalized_milliseconds >
+      std::numeric_limits<int64_t>::max() / kTimeSpanTicksPerMillisecond) {
+    return std::nullopt;
+  }
+  return normalized_milliseconds * kTimeSpanTicksPerMillisecond;
 }
 
 std::string EncodeBase64(const std::vector<uint8_t>& input) {
@@ -1612,10 +1622,11 @@ bool FlutterWindow::PerformObservedWindowsPlaybackAction(
       ok = session.TrySkipPreviousAsync().get();
     } else if (action == "seek" && controls.IsPlaybackPositionEnabled() &&
                position_ms.has_value()) {
-      ok = session
-               .TryChangePlaybackPositionAsync(
-                   std::max<int64_t>(0, position_ms.value()))
-               .get();
+      const auto position_ticks =
+          MillisecondsToTimeSpanTicks(position_ms.value());
+      if (position_ticks.has_value()) {
+        ok = session.TryChangePlaybackPositionAsync(*position_ticks).get();
+      }
     }
     *response = {{flutter::EncodableValue("success"), flutter::EncodableValue(ok)}};
     if (!ok) {
