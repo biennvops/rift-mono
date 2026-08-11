@@ -99,10 +99,7 @@ linux/tools/build_linux_app.sh
 linux/tools/install_user_app.sh
 ```
 
-The Linux build pins the SQLite amalgamation to an official mirror with a
-checksum because the upstream plugin download can intermittently return
-truncated archives. Validate the published daemon and app installers together
-with:
+Validate the published daemon and app installers together with:
 
 ```bash
 linux/tools/smoke_test_installed_stack.sh
