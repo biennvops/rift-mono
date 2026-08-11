@@ -230,8 +230,7 @@ CreateArtworkReference(const flutter::EncodableMap& playback) {
   winrt::com_ptr<IStream> stream_owner;
   stream_owner.attach(memory_stream);
 
-  winrt::com_ptr<winrt::Windows::Storage::Streams::IRandomAccessStream>
-      random_access_stream;
+  winrt::com_ptr<::IInspectable> random_access_stream;
   const HRESULT hr = CreateRandomAccessStreamOverStream(
       stream_owner.get(), BSOS_DEFAULT,
       winrt::guid_of<winrt::Windows::Storage::Streams::IRandomAccessStream>(),
