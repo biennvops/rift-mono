@@ -579,6 +579,46 @@ def test_data_entity_na_does_not_leak_to_unrelated_entities() -> None:
     assert session.status == Status.FAIL
 
 
+def test_unknown_data_na_subject_is_not_treated_as_global() -> None:
+    spec = _spec(
+        {
+            "id": "XT-004",
+            "handler": "data_entity",
+            "source_domain": "report3",
+            "source_kind": "entity_or_data_object",
+            "targets": [
+                {
+                    "domain": "report4",
+                    "kind": "entity_or_data_object",
+                    "requirement": "CONDITIONAL",
+                    "allow_explicit_na": True,
+                }
+            ],
+        }
+    )
+    result = CrossDocumentValidator(spec).audit(
+        _set_for_documents(
+            {
+                "report3": _combined_document(
+                    "report3",
+                    [
+                        ("Entity Relationship Diagram", "ENT-01 User Session"),
+                        ("Entity Relationship Diagram", "ENT-02 User Profile"),
+                    ],
+                ),
+                "report4": _document(
+                    "report4",
+                    "Database Design",
+                    ["Cache: N/A - no persistent database"],
+                ),
+            }
+        )
+    )
+    entity_findings = [item for item in result.findings if item.rule_id == "XT-004"]
+    assert {item.source_entity["identifiers"][0] for item in entity_findings} == {"ENT-01", "ENT-02"}
+    assert all(item.status == Status.FAIL for item in entity_findings)
+
+
 def test_missing_report_is_reported_in_set_and_trace_results() -> None:
     spec = _spec(
         {

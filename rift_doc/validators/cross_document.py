@@ -296,7 +296,7 @@ class CrossDocumentValidator:
         if applicability is False:
             match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="Configured applicability is deterministically false.")
             return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
-        if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target, index):
+        if target.allow_explicit_na and self._has_explicit_na(document_set, target_domain, source, target):
             match = MatchResult(TraceLinkStatus.NOT_APPLICABLE, MatchMethod.STRUCTURAL_MAPPING, reason="An explicit N/A rationale is present in the target scope.")
             return TraceLinkStatus.NOT_APPLICABLE, match, self._link_finding(rule, source, target, TraceLinkStatus.NOT_APPLICABLE, match)
         if applicability is None and target.condition is not None:
@@ -923,18 +923,10 @@ class CrossDocumentValidator:
         domain: str,
         source: TraceEntity,
         target: TraceTargetRule,
-        index: TraceIndex,
     ) -> bool:
         hints = " ".join(target.kinds).casefold()
         source_identifiers = set(source.identifiers)
         source_names = {normalize_name(name) for name in source.comparison_names if normalize_name(name)}
-        source_domain = str(source.metadata.get("domain", source.source_report))
-        peer_names = {
-            normalize_name(name)
-            for peer in index.candidates(source_domain, (source.kind,))
-            for name in peer.comparison_names
-            if normalize_name(name)
-        }
         for document in document_set.domain_documents(domain):
             for text, section in _document_text(document):
                 if not _contains_explicit_na(text):
@@ -947,7 +939,7 @@ class CrossDocumentValidator:
                 subject = _explicit_na_subject(text)
                 if subject in source_names:
                     return True
-                if subject in peer_names:
+                if subject is not None:
                     continue
                 if "entity" in hints or "data" in hints:
                     if any(word in normalize_name(section or "") for word in ("database", "erd", "data")):
