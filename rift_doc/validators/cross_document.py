@@ -25,6 +25,12 @@ from ..trace_model import (
 )
 
 
+_EXPLICIT_NA_RE = re.compile(
+    r"\b(?:n/?a|not applicable|does not apply|no database|no persistent)\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class _StructuredValue:
     semantic_field: str
@@ -920,33 +926,28 @@ class CrossDocumentValidator:
         index: TraceIndex,
     ) -> bool:
         hints = " ".join(target.kinds).casefold()
-        source_tokens = {token for token in normalize_name(source.canonical_name).split() if len(token) > 2}
         source_identifiers = set(source.identifiers)
-        target_entities = index.candidates(domain, target.kinds)
+        source_names = {normalize_name(name) for name in source.comparison_names if normalize_name(name)}
+        source_domain = str(source.metadata.get("domain", source.source_report))
+        peer_names = {
+            normalize_name(name)
+            for peer in index.candidates(source_domain, (source.kind,))
+            for name in peer.comparison_names
+            if normalize_name(name)
+        }
         for document in document_set.domain_documents(domain):
             for text, section in _document_text(document):
-                value = text.casefold()
-                if not re.search(r"\b(?:n/?a|not applicable|does not apply|no database|no persistent)\b", value):
+                if not _contains_explicit_na(text):
                     continue
-                if source_identifiers and any(identifier.casefold() in value for identifier in source_identifiers):
+                explicit_ids = set(_extract_identifiers(text))
+                if source_identifiers.intersection(explicit_ids):
                     return True
-                normalized_text = normalize_name(text)
-                if source_tokens and source_tokens.intersection(set(normalized_text.split())):
-                    return True
-                explicit_ids = set(_extract_identifiers(text)) - source_identifiers
                 if explicit_ids:
                     continue
-                unrelated_entity = any(
-                    candidate is not source
-                    and any(
-                        normalized_name
-                        and normalized_name in normalized_text
-                        and normalized_name != normalize_name(source.canonical_name)
-                        for normalized_name in (normalize_name(name) for name in candidate.comparison_names)
-                    )
-                    for candidate in target_entities
-                )
-                if unrelated_entity:
+                subject = _explicit_na_subject(text)
+                if subject in source_names:
+                    return True
+                if subject in peer_names:
                     continue
                 if "entity" in hints or "data" in hints:
                     if any(word in normalize_name(section or "") for word in ("database", "erd", "data")):
@@ -1185,6 +1186,19 @@ def _normalize_test_level(value: Any) -> str:
         "uat": "acceptance",
         "user acceptance test": "acceptance",
     }.get(normalized, normalized.replace(" ", "_"))
+
+
+def _contains_explicit_na(text: str) -> bool:
+    return bool(_EXPLICIT_NA_RE.search(text))
+
+
+def _explicit_na_subject(text: str) -> str | None:
+    match = _EXPLICIT_NA_RE.search(text)
+    if match is None:
+        return None
+    subject = normalize_name(text[:match.start()])
+    subject = re.sub(r"\b(?:is|are|was|were|has|have|marked|considered)\s*$", "", subject).strip()
+    return subject or None
 
 
 def _document_text(document: NormalizedDocument) -> Iterable[tuple[str, str | None]]:

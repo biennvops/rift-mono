@@ -560,9 +560,16 @@ def test_data_entity_na_does_not_leak_to_unrelated_entities() -> None:
             {
                 "report3": _combined_document(
                     "report3",
-                    [("Entity Relationship Diagram", "ENT-01 Device"), ("Entity Relationship Diagram", "ENT-02 Session")],
+                    [
+                        ("Entity Relationship Diagram", "ENT-01 User Session"),
+                        ("Entity Relationship Diagram", "ENT-02 User Profile"),
+                    ],
                 ),
-                "report4": _document("report4", "Database Design", ["ENT-01 Device: N/A - no persistent database"]),
+                "report4": _document(
+                    "report4",
+                    "Database Design",
+                    ["ENT-01 User Session: N/A - no persistent database"],
+                ),
             }
         )
     )
