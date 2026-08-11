@@ -7,6 +7,7 @@
 #include <VersionHelpers.h>
 
 #include <winrt/Windows.ApplicationModel.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.UI.Notifications.h>
@@ -423,7 +424,7 @@ void WindowsNotificationListener::GetAccessStatus(
   }
 
   try {
-    UserNotificationListener listener;
+    UserNotificationListener listener{nullptr};
     {
       std::lock_guard<std::mutex> lock(state_->gate);
       listener = state_->listener;
@@ -464,7 +465,7 @@ winrt::fire_and_forget WindowsNotificationListener::RequestAccessAsync(
     std::shared_ptr<State> state,
     std::shared_ptr<MethodResult> result) {
   try {
-    UserNotificationListener listener;
+    UserNotificationListener listener{nullptr};
     {
       std::lock_guard<std::mutex> lock(state->gate);
       listener = state->listener;
@@ -505,7 +506,7 @@ winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
     uint64_t generation,
     std::shared_ptr<MethodResult> result) {
   try {
-    UserNotificationListener listener;
+    UserNotificationListener listener{nullptr};
     {
       std::lock_guard<std::mutex> lock(state->gate);
       listener = state->listener;
@@ -585,7 +586,7 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
   }
 
   try {
-    UserNotificationListener listener;
+    UserNotificationListener listener{nullptr};
     {
       std::lock_guard<std::mutex> lock(state_->gate);
       listener = state_->listener;
@@ -618,7 +619,7 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
     const auto token = listener.NotificationChanged(
         [state = state_, generation](
             UserNotificationListener const&,
-            winrt::Windows::UI::Notifications::Management::UserNotificationChangedEventArgs const& args) {
+            winrt::Windows::UI::Notifications::UserNotificationChangedEventArgs const& args) {
           WindowsNotificationListener::QueueNotificationChange(
               state, generation, args.ChangeKind(), args.UserNotificationId());
         });
@@ -745,7 +746,7 @@ void WindowsNotificationListener::DrainNotificationChanges(
   }
 
   try {
-    UserNotificationListener listener;
+    UserNotificationListener listener{nullptr};
     {
       std::lock_guard<std::mutex> lock(state->gate);
       listener = state->listener;
