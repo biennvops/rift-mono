@@ -1770,6 +1770,9 @@ void FlutterWindow::RunWindowsMediaPlaybackWorker() {
             ok = observed->session.TryPlayAsync().get();
           } else if (request.action == "pause" && controls.IsPauseEnabled()) {
             ok = observed->session.TryPauseAsync().get();
+          } else if (request.action == "togglePlayPause" &&
+                     (controls.IsPlayEnabled() || controls.IsPauseEnabled())) {
+            ok = observed->session.TryTogglePlayPauseAsync().get();
           } else if (request.action == "next" && controls.IsNextEnabled()) {
             ok = observed->session.TrySkipNextAsync().get();
           } else if (request.action == "previous" &&
