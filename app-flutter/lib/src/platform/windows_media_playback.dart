@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class WindowsMediaPlayback {
+  static const riftAppUserModelId = 'dev.rift.app';
+
   static const MethodChannel _channel =
       MethodChannel('rift/windows/media_playback');
   static const EventChannel _eventChannel =
@@ -13,11 +15,18 @@ class WindowsMediaPlayback {
   @visibleForTesting
   static bool? debugIsWindowsOverride;
 
+  @visibleForTesting
+  static Stream<Map<String, dynamic>>? debugEventsOverride;
+
   static bool get isSupported => debugIsWindowsOverride ?? Platform.isWindows;
 
   static Stream<Map<String, dynamic>> get events {
     if (!isSupported) {
       return const Stream<Map<String, dynamic>>.empty();
+    }
+    final eventsOverride = debugEventsOverride;
+    if (eventsOverride != null) {
+      return eventsOverride;
     }
     return _eventChannel.receiveBroadcastStream().map((event) {
       return Map<String, dynamic>.from(event as Map);

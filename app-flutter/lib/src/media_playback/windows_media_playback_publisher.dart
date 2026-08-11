@@ -37,6 +37,10 @@ class WindowsMediaPlaybackPublisher {
   }
 
   Future<void> _handlePlaybackEvent(Map<String, dynamic> event) async {
+    if (event['appId']?.toString() == WindowsMediaPlayback.riftAppUserModelId) {
+      return;
+    }
+
     final eventType = event['eventType']?.toString();
     final playbackId = event['playbackId']?.toString();
     if (eventType == null ||

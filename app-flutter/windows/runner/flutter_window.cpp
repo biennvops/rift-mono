@@ -1688,7 +1688,7 @@ void FlutterWindow::RunWindowsMediaPlaybackWorker() {
           if (existing == state->sessions.end()) {
             const std::string app_id =
                 Utf8FromUtf16(session.SourceAppUserModelId().c_str());
-            if (app_id.empty()) {
+            if (app_id.empty() || app_id == kRiftAppUserModelIdUtf8) {
               continue;
             }
             WindowsMediaPlaybackWorkerState::ObservedSession observed;

@@ -8,6 +8,7 @@ import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/media_playback/android_remote_media_playback_coordinator.dart';
 import 'package:rift/src/media_playback/ios_remote_media_playback_coordinator.dart';
 import 'package:rift/src/media_playback/macos_remote_media_playback_coordinator.dart';
+import 'package:rift/src/media_playback/windows_media_playback_publisher.dart';
 import 'package:rift/src/media_playback/windows_remote_media_playback_coordinator.dart';
 import 'package:rift/src/platform/android_shell.dart';
 import 'package:rift/src/platform/ios_media_playback.dart';
@@ -1561,6 +1562,65 @@ void main() {
         nativeCalls.map((call) => call.method),
         contains('clearRemotePlayback'),
       );
+    });
+
+    test('Windows publisher does not echo Rift playback to a Windows peer',
+        () async {
+      const mediaPlaybackChannel = MethodChannel('rift/windows/media_playback');
+      final events = StreamController<Map<String, dynamic>>.broadcast();
+      WindowsMediaPlayback.debugIsWindowsOverride = true;
+      WindowsMediaPlayback.debugEventsOverride = events.stream;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(mediaPlaybackChannel, (_) async => true);
+      await client.connect();
+      final publisher = WindowsMediaPlaybackPublisher(client);
+
+      try {
+        await publisher.start();
+        transport.requests.clear();
+        events.add({
+          'eventType': 'posted',
+          'playbackId': 'rift-mirror-1',
+          'appId': WindowsMediaPlayback.riftAppUserModelId,
+          'title': 'Mirrored from Windows peer A',
+          'canPlay': true,
+          'canPause': true,
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          transport.requests.where(
+            (request) =>
+                request['method'] == 'rift.notifyLocalMediaPlaybackEvent',
+          ),
+          isEmpty,
+        );
+
+        events.add({
+          'eventType': 'posted',
+          'playbackId': 'local-player-1',
+          'appId': 'com.example.player',
+          'title': 'Actually local playback',
+          'canPlay': true,
+          'canPause': true,
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          transport.requests.where(
+            (request) =>
+                request['method'] == 'rift.notifyLocalMediaPlaybackEvent',
+          ),
+          hasLength(1),
+        );
+      } finally {
+        await publisher.dispose();
+        await events.close();
+        WindowsMediaPlayback.debugIsWindowsOverride = null;
+        WindowsMediaPlayback.debugEventsOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(mediaPlaybackChannel, null);
+      }
     });
 
     test('Windows mirrors playback state and routes seek actions', () async {
