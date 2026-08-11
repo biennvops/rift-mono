@@ -50,21 +50,15 @@ class FlutterWindow : public Win32Window {
   bool StartWindowsMediaPlaybackObservation();
   bool StopWindowsMediaPlaybackObservation();
   void PollWindowsMediaPlaybackObservation();
-  std::optional<flutter::EncodableMap> BuildObservedWindowsPlaybackSnapshot(
-      winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession session,
-      const std::string& updated_at);
-  std::optional<flutter::EncodableMap> FindObservedWindowsPlayback(
-      const std::string& playback_id,
-      const std::string& updated_at);
-  std::optional<flutter::EncodableMap> ReadObservedWindowsPlaybackState();
-  flutter::EncodableMap BuildRemovedWindowsPlaybackEvent(
-      const flutter::EncodableMap& previous,
-      const std::string& removed_at);
-  bool PerformObservedWindowsPlaybackAction(
+  bool EnsureWindowsMediaPlaybackWorker();
+  void QueueObservedWindowsPlaybackAction(
       const std::string& playback_id,
       const std::string& action,
       std::optional<int64_t> position_ms,
-      flutter::EncodableMap* response);
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  void RunWindowsMediaPlaybackWorker();
+  void StopWindowsMediaPlaybackWorker();
+  void DispatchWindowsMediaPlaybackWorkerResults();
   void QueueWindowsMediaPlaybackAction(
       const std::string& action,
       std::optional<int64_t> position_ms = std::nullopt);
@@ -111,10 +105,8 @@ class FlutterWindow : public Win32Window {
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
   bool shell_notification_icon_registered_ = false;
-  bool windows_media_playback_observing_ = false;
-  winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager
-      observed_media_session_manager_{nullptr};
-  std::optional<flutter::EncodableMap> last_observed_media_playback_;
+  struct WindowsMediaPlaybackWorkerState;
+  std::unique_ptr<WindowsMediaPlaybackWorkerState> windows_media_worker_;
   winrt::Windows::Media::SystemMediaTransportControls
       media_transport_controls_{nullptr};
   winrt::event_token media_playback_button_pressed_token_{};

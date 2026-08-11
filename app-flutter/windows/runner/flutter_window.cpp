@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
 #include <cstring>
+#include <deque>
 
 namespace Gdiplus {
 using std::max;
@@ -26,6 +29,7 @@ using std::min;
 #include <shlwapi.h>
 #include <systemmediatransportcontrolsinterop.h>
 #include <string>
+#include <thread>
 #include <vector>
 #include <wincodec.h>
 #include <winrt/Windows.Foundation.h>
@@ -44,6 +48,7 @@ namespace {
 
 constexpr UINT kRiftShellNotifyMessage = WM_APP + 1;
 constexpr UINT kRiftMediaPlaybackActionMessage = WM_APP + 2;
+constexpr UINT kRiftMediaPlaybackWorkerMessage = WM_APP + 3;
 constexpr UINT_PTR kWindowsMediaPlaybackObservationTimerId = 0x52504D57;  // 'WMPR'
 constexpr UINT kWindowsMediaPlaybackObservationIntervalMs = 1000;
 constexpr int64_t kTimeSpanTicksPerMillisecond = 10000;
@@ -559,10 +564,51 @@ HICON CreateHiconFromPng(const std::vector<uint8_t>& png_bytes) {
 
 }  // namespace
 
+struct FlutterWindow::WindowsMediaPlaybackWorkerState {
+  struct ActionRequest {
+    std::string playback_id;
+    std::string action;
+    std::optional<int64_t> position_ms;
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result;
+  };
+
+  struct ActionCompletion {
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result;
+    flutter::EncodableMap response;
+  };
+
+  struct ObservedSession {
+    std::string playback_id;
+    winrt::com_ptr<::IUnknown> identity;
+    winrt::Windows::Media::Control::
+        GlobalSystemMediaTransportControlsSession session{nullptr};
+    std::optional<flutter::EncodableMap> last_snapshot;
+  };
+
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool stopping = false;
+  bool observing = false;
+  bool poll_requested = false;
+  bool reset_requested = false;
+  uint64_t observation_generation = 0;
+  uint64_t next_session_id = 1;
+  HWND window = nullptr;
+  std::thread thread;
+  std::deque<ActionRequest> action_requests;
+  std::deque<ActionCompletion> action_completions;
+  std::vector<flutter::EncodableMap> observation_events;
+  winrt::Windows::Media::Control::
+      GlobalSystemMediaTransportControlsSessionManager manager{nullptr};
+  std::vector<ObservedSession> sessions;
+};
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
-FlutterWindow::~FlutterWindow() {}
+FlutterWindow::~FlutterWindow() {
+  StopWindowsMediaPlaybackWorker();
+}
 
 bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
@@ -610,6 +656,7 @@ void FlutterWindow::OnDestroy() {
   clipboard_method_channel_.reset();
   CleanupShellNotificationIcon();
   StopWindowsMediaPlaybackObservation();
+  StopWindowsMediaPlaybackWorker();
   ClearWindowsMediaPlayback();
   windows_shell_method_channel_.reset();
   windows_media_playback_event_sink_.reset();
@@ -711,6 +758,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       break;
     case kRiftMediaPlaybackActionMessage:
       DispatchPendingWindowsMediaPlaybackActions();
+      return 0;
+    case kRiftMediaPlaybackWorkerMessage:
+      DispatchWindowsMediaPlaybackWorkerResults();
       return 0;
   }
 
@@ -1148,19 +1198,8 @@ void FlutterWindow::RegisterWindowsMediaPlaybackMethodChannel() {
             result->Error("invalid_args", "playbackId and action are required.");
             return;
           }
-          flutter::EncodableMap response;
-          result->Success(flutter::EncodableValue(
-              PerformObservedWindowsPlaybackAction(*playback_id, *action,
-                                                  position_ms, &response)
-                  ? response
-                  : flutter::EncodableMap{
-                        {flutter::EncodableValue("success"),
-                         flutter::EncodableValue(false)},
-                        {flutter::EncodableValue("failureReason"),
-                         flutter::EncodableValue("CapabilityUnavailable")},
-                        {flutter::EncodableValue("message"),
-                         flutter::EncodableValue(
-                             "The Windows playback bridge is unavailable.")}}));
+          QueueObservedWindowsPlaybackAction(
+              *playback_id, *action, position_ms, std::move(result));
           return;
         }
         if (method_name != "show") {
@@ -1372,40 +1411,12 @@ bool FlutterWindow::ClearWindowsMediaPlayback() {
   return true;
 }
 
-bool FlutterWindow::StartWindowsMediaPlaybackObservation() {
-  if (GetHandle() == nullptr) {
-    return false;
-  }
-  try {
-    if (!observed_media_session_manager_) {
-      observed_media_session_manager_ =
-          winrt::Windows::Media::Control::
-              GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-                  .get();
-    }
-  } catch (...) {
-    return false;
-  }
-  windows_media_playback_observing_ = true;
-  SetTimer(GetHandle(), kWindowsMediaPlaybackObservationTimerId,
-           kWindowsMediaPlaybackObservationIntervalMs, nullptr);
-  PollWindowsMediaPlaybackObservation();
-  return true;
-}
+namespace {
 
-bool FlutterWindow::StopWindowsMediaPlaybackObservation() {
-  windows_media_playback_observing_ = false;
-  last_observed_media_playback_.reset();
-  if (GetHandle() != nullptr) {
-    KillTimer(GetHandle(), kWindowsMediaPlaybackObservationTimerId);
-  }
-  return true;
-}
-
-std::optional<flutter::EncodableMap>
-FlutterWindow::BuildObservedWindowsPlaybackSnapshot(
-    winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession
-        session,
+std::optional<flutter::EncodableMap> BuildObservedWindowsPlaybackSnapshot(
+    const winrt::Windows::Media::Control::
+        GlobalSystemMediaTransportControlsSession& session,
+    const std::string& playback_id,
     const std::string& updated_at) {
   if (!session) {
     return std::nullopt;
@@ -1445,8 +1456,7 @@ FlutterWindow::BuildObservedWindowsPlaybackSnapshot(
 
     flutter::EncodableMap snapshot = {
         {flutter::EncodableValue("playbackId"),
-         flutter::EncodableValue(app_id + "\n" + title + "\n" + artist +
-                                 "\n" + album)},
+         flutter::EncodableValue(playback_id)},
         {flutter::EncodableValue("sourcePlatform"),
          flutter::EncodableValue("windows")},
         {flutter::EncodableValue("appId"), flutter::EncodableValue(app_id)},
@@ -1479,13 +1489,16 @@ FlutterWindow::BuildObservedWindowsPlaybackSnapshot(
           flutter::EncodableValue(duration_ms);
     }
     if (!title.empty()) {
-      snapshot[flutter::EncodableValue("title")] = flutter::EncodableValue(title);
+      snapshot[flutter::EncodableValue("title")] =
+          flutter::EncodableValue(title);
     }
     if (!artist.empty()) {
-      snapshot[flutter::EncodableValue("artist")] = flutter::EncodableValue(artist);
+      snapshot[flutter::EncodableValue("artist")] =
+          flutter::EncodableValue(artist);
     }
     if (!album.empty()) {
-      snapshot[flutter::EncodableValue("album")] = flutter::EncodableValue(album);
+      snapshot[flutter::EncodableValue("album")] =
+          flutter::EncodableValue(album);
     }
     return snapshot;
   } catch (...) {
@@ -1493,54 +1506,13 @@ FlutterWindow::BuildObservedWindowsPlaybackSnapshot(
   }
 }
 
-std::optional<flutter::EncodableMap> FlutterWindow::FindObservedWindowsPlayback(
-    const std::string& playback_id,
-    const std::string& updated_at) {
-  if (!observed_media_session_manager_) {
-    return std::nullopt;
-  }
-  try {
-    const auto sessions = observed_media_session_manager_.GetSessions();
-    const auto size = sessions.Size();
-    for (uint32_t index = 0; index < size; ++index) {
-      auto snapshot =
-          BuildObservedWindowsPlaybackSnapshot(sessions.GetAt(index), updated_at);
-      if (!snapshot.has_value()) {
-        continue;
-      }
-      const std::string* snapshot_playback_id =
-          FindString(*snapshot, "playbackId");
-      if (snapshot_playback_id != nullptr && *snapshot_playback_id == playback_id) {
-        return snapshot;
-      }
-    }
-  } catch (...) {
-  }
-  return std::nullopt;
-}
-
-std::optional<flutter::EncodableMap>
-FlutterWindow::ReadObservedWindowsPlaybackState() {
-  if (!observed_media_session_manager_) {
-    return std::nullopt;
-  }
-  try {
-    const auto session = observed_media_session_manager_.GetCurrentSession();
-    if (!session) {
-      return std::nullopt;
-    }
-    return BuildObservedWindowsPlaybackSnapshot(session, NowUtcIso8601());
-  } catch (...) {
-    return std::nullopt;
-  }
-}
-
-flutter::EncodableMap FlutterWindow::BuildRemovedWindowsPlaybackEvent(
+flutter::EncodableMap BuildRemovedWindowsPlaybackEvent(
     const flutter::EncodableMap& previous,
     const std::string& removed_at) {
   flutter::EncodableMap event = {
       {flutter::EncodableValue("eventType"), flutter::EncodableValue("removed")},
-      {flutter::EncodableValue("removedAt"), flutter::EncodableValue(removed_at)}};
+      {flutter::EncodableValue("removedAt"),
+       flutter::EncodableValue(removed_at)}};
   for (const auto& key : {"playbackId", "sourcePlatform", "appId", "appName",
                           "title", "artist", "album"}) {
     auto it = previous.find(flutter::EncodableValue(key));
@@ -1551,98 +1523,342 @@ flutter::EncodableMap FlutterWindow::BuildRemovedWindowsPlaybackEvent(
   return event;
 }
 
-void FlutterWindow::PollWindowsMediaPlaybackObservation() {
-  if (!windows_media_playback_observing_ || !windows_media_playback_event_sink_) {
-    return;
-  }
-
-  auto snapshot = ReadObservedWindowsPlaybackState();
-  if (!snapshot.has_value()) {
-    if (last_observed_media_playback_.has_value()) {
-      windows_media_playback_event_sink_->Success(flutter::EncodableValue(
-          BuildRemovedWindowsPlaybackEvent(*last_observed_media_playback_,
-                                           NowUtcIso8601())));
-      last_observed_media_playback_.reset();
-    }
-    return;
-  }
-
-  flutter::EncodableMap event = *snapshot;
-  const std::string* current_playback_id = FindString(*snapshot, "playbackId");
-  const std::string* previous_playback_id =
-      last_observed_media_playback_.has_value()
-          ? FindString(*last_observed_media_playback_, "playbackId")
-          : nullptr;
-  event[flutter::EncodableValue("eventType")] = flutter::EncodableValue(
-      previous_playback_id == nullptr || current_playback_id == nullptr ||
-              *previous_playback_id != *current_playback_id
-          ? "posted"
-          : "updated");
-  windows_media_playback_event_sink_->Success(flutter::EncodableValue(event));
-  last_observed_media_playback_ = *snapshot;
+flutter::EncodableMap BuildWindowsPlaybackActionFailure(
+    const std::string& reason,
+    const std::string& message) {
+  return {{flutter::EncodableValue("success"), flutter::EncodableValue(false)},
+          {flutter::EncodableValue("failureReason"),
+           flutter::EncodableValue(reason)},
+          {flutter::EncodableValue("message"),
+           flutter::EncodableValue(message)}};
 }
 
-bool FlutterWindow::PerformObservedWindowsPlaybackAction(
+}  // namespace
+
+bool FlutterWindow::EnsureWindowsMediaPlaybackWorker() {
+  if (windows_media_worker_) {
+    return true;
+  }
+  if (GetHandle() == nullptr) {
+    return false;
+  }
+
+  windows_media_worker_ =
+      std::make_unique<WindowsMediaPlaybackWorkerState>();
+  windows_media_worker_->window = GetHandle();
+  try {
+    windows_media_worker_->thread =
+        std::thread([this]() { RunWindowsMediaPlaybackWorker(); });
+  } catch (...) {
+    windows_media_worker_.reset();
+    return false;
+  }
+  return true;
+}
+
+bool FlutterWindow::StartWindowsMediaPlaybackObservation() {
+  if (!EnsureWindowsMediaPlaybackWorker()) {
+    return false;
+  }
+
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    windows_media_worker_->observing = true;
+    windows_media_worker_->poll_requested = true;
+    ++windows_media_worker_->observation_generation;
+  }
+  windows_media_worker_->condition.notify_one();
+  SetTimer(GetHandle(), kWindowsMediaPlaybackObservationTimerId,
+           kWindowsMediaPlaybackObservationIntervalMs, nullptr);
+  return true;
+}
+
+bool FlutterWindow::StopWindowsMediaPlaybackObservation() {
+  if (GetHandle() != nullptr) {
+    KillTimer(GetHandle(), kWindowsMediaPlaybackObservationTimerId);
+  }
+  if (!windows_media_worker_) {
+    return true;
+  }
+
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    windows_media_worker_->observing = false;
+    windows_media_worker_->poll_requested = false;
+    windows_media_worker_->reset_requested = true;
+    ++windows_media_worker_->observation_generation;
+  }
+  windows_media_worker_->condition.notify_one();
+  return true;
+}
+
+void FlutterWindow::PollWindowsMediaPlaybackObservation() {
+  if (!windows_media_worker_) {
+    return;
+  }
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    if (!windows_media_worker_->observing) {
+      return;
+    }
+    windows_media_worker_->poll_requested = true;
+  }
+  windows_media_worker_->condition.notify_one();
+}
+
+void FlutterWindow::QueueObservedWindowsPlaybackAction(
     const std::string& playback_id,
     const std::string& action,
     std::optional<int64_t> position_ms,
-    flutter::EncodableMap* response) {
-  if (response == nullptr) {
-    return false;
-  }
-  auto snapshot = FindObservedWindowsPlayback(playback_id, NowUtcIso8601());
-  if (!snapshot.has_value()) {
-    *response = {{flutter::EncodableValue("success"), flutter::EncodableValue(false)},
-                 {flutter::EncodableValue("failureReason"),
-                  flutter::EncodableValue("CapabilityUnavailable")},
-                 {flutter::EncodableValue("message"),
-                  flutter::EncodableValue("The requested Windows playback was not found.")}};
-    return true;
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  if (!EnsureWindowsMediaPlaybackWorker()) {
+    result->Success(flutter::EncodableValue(BuildWindowsPlaybackActionFailure(
+        "CapabilityUnavailable",
+        "The Windows playback bridge is unavailable.")));
+    return;
   }
 
-  try {
-    const std::string* target_playback_id = FindString(*snapshot, "playbackId");
-    if (target_playback_id == nullptr) {
-      return false;
+  WindowsMediaPlaybackWorkerState::ActionRequest request;
+  request.playback_id = playback_id;
+  request.action = action;
+  request.position_ms = position_ms;
+  request.result = std::move(result);
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    windows_media_worker_->action_requests.push_back(std::move(request));
+  }
+  windows_media_worker_->condition.notify_one();
+}
+
+void FlutterWindow::RunWindowsMediaPlaybackWorker() {
+  auto* state = windows_media_worker_.get();
+  const HRESULT apartment_result =
+      CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  const bool apartment_initialized = SUCCEEDED(apartment_result);
+
+  while (true) {
+    bool reset_requested = false;
+    bool poll_requested = false;
+    uint64_t observation_generation = 0;
+    std::deque<WindowsMediaPlaybackWorkerState::ActionRequest> requests;
+    {
+      std::unique_lock lock(state->mutex);
+      state->condition.wait(lock, [state]() {
+        return state->stopping || state->reset_requested ||
+               (state->observing && state->poll_requested) ||
+               !state->action_requests.empty();
+      });
+      if (state->stopping) {
+        break;
+      }
+      reset_requested = state->reset_requested;
+      state->reset_requested = false;
+      poll_requested = state->observing && state->poll_requested;
+      state->poll_requested = false;
+      observation_generation = state->observation_generation;
+      requests.swap(state->action_requests);
     }
-    auto session = observed_media_session_manager_.GetCurrentSession();
-    if (!session) {
-      return false;
+
+    if (reset_requested) {
+      state->sessions.clear();
+      state->manager = nullptr;
     }
-    const std::string requested_id = *target_playback_id;
-    const auto controls = session.GetPlaybackInfo().Controls();
-    bool ok = false;
-    if (action == "play" && controls.IsPlayEnabled()) {
-      ok = session.TryPlayAsync().get();
-    } else if (action == "pause" && controls.IsPauseEnabled()) {
-      ok = session.TryPauseAsync().get();
-    } else if (action == "next" && controls.IsNextEnabled()) {
-      ok = session.TrySkipNextAsync().get();
-    } else if (action == "previous" && controls.IsPreviousEnabled()) {
-      ok = session.TrySkipPreviousAsync().get();
-    } else if (action == "seek" && controls.IsPlaybackPositionEnabled() &&
-               position_ms.has_value()) {
-      const auto position_ticks =
-          MillisecondsToTimeSpanTicks(position_ms.value());
-      if (position_ticks.has_value()) {
-        ok = session.TryChangePlaybackPositionAsync(*position_ticks).get();
+
+    std::vector<flutter::EncodableMap> events;
+    if (poll_requested && apartment_initialized) {
+      try {
+        if (!state->manager) {
+          state->manager =
+              winrt::Windows::Media::Control::
+                  GlobalSystemMediaTransportControlsSessionManager::
+                      RequestAsync()
+                          .get();
+        }
+
+        const auto current_sessions = state->manager.GetSessions();
+        std::vector<std::string> seen_playback_ids;
+        for (uint32_t index = 0; index < current_sessions.Size(); ++index) {
+          const auto session = current_sessions.GetAt(index);
+          winrt::com_ptr<::IUnknown> identity = session.as<::IUnknown>();
+          auto existing = std::find_if(
+              state->sessions.begin(), state->sessions.end(),
+              [&identity](const auto& candidate) {
+                return candidate.identity.get() == identity.get();
+              });
+          if (existing == state->sessions.end()) {
+            const std::string app_id =
+                Utf8FromUtf16(session.SourceAppUserModelId().c_str());
+            if (app_id.empty()) {
+              continue;
+            }
+            WindowsMediaPlaybackWorkerState::ObservedSession observed;
+            observed.playback_id =
+                app_id + ":" + std::to_string(state->next_session_id++);
+            observed.identity = std::move(identity);
+            observed.session = session;
+            state->sessions.push_back(std::move(observed));
+            existing = std::prev(state->sessions.end());
+          } else {
+            existing->session = session;
+          }
+
+          seen_playback_ids.push_back(existing->playback_id);
+          auto snapshot = BuildObservedWindowsPlaybackSnapshot(
+              existing->session, existing->playback_id, NowUtcIso8601());
+          if (!snapshot.has_value()) {
+            continue;
+          }
+          flutter::EncodableMap event = *snapshot;
+          event[flutter::EncodableValue("eventType")] =
+              flutter::EncodableValue(existing->last_snapshot.has_value()
+                                           ? "updated"
+                                           : "posted");
+          events.push_back(std::move(event));
+          existing->last_snapshot = std::move(snapshot);
+        }
+
+        for (auto it = state->sessions.begin(); it != state->sessions.end();) {
+          const bool still_present =
+              std::find(seen_playback_ids.begin(), seen_playback_ids.end(),
+                        it->playback_id) != seen_playback_ids.end();
+          if (still_present) {
+            ++it;
+            continue;
+          }
+          if (it->last_snapshot.has_value()) {
+            events.push_back(BuildRemovedWindowsPlaybackEvent(
+                *it->last_snapshot, NowUtcIso8601()));
+          }
+          it = state->sessions.erase(it);
+        }
+      } catch (...) {
       }
     }
-    *response = {{flutter::EncodableValue("success"), flutter::EncodableValue(ok)}};
-    if (!ok) {
-      (*response)[flutter::EncodableValue("failureReason")] =
-          flutter::EncodableValue("PeerRejected");
-      (*response)[flutter::EncodableValue("message")] =
-          flutter::EncodableValue("The Windows playback action was rejected.");
+
+    if (!events.empty()) {
+      bool should_post = false;
+      {
+        std::scoped_lock lock(state->mutex);
+        if (state->observing &&
+            state->observation_generation == observation_generation) {
+          state->observation_events.insert(
+              state->observation_events.end(),
+              std::make_move_iterator(events.begin()),
+              std::make_move_iterator(events.end()));
+          should_post = true;
+        }
+      }
+      if (should_post) {
+        PostMessageW(state->window, kRiftMediaPlaybackWorkerMessage, 0, 0);
+      }
     }
-    return true;
-  } catch (...) {
-    *response = {{flutter::EncodableValue("success"), flutter::EncodableValue(false)},
-                 {flutter::EncodableValue("failureReason"),
-                  flutter::EncodableValue("PeerRejected")},
-                 {flutter::EncodableValue("message"),
-                  flutter::EncodableValue("The Windows playback action failed.")}};
-    return true;
+
+    for (auto& request : requests) {
+      flutter::EncodableMap response = BuildWindowsPlaybackActionFailure(
+          "CapabilityUnavailable",
+          "The requested Windows playback was not found.");
+      auto observed = std::find_if(
+          state->sessions.begin(), state->sessions.end(),
+          [&request](const auto& candidate) {
+            return candidate.playback_id == request.playback_id;
+          });
+      if (apartment_initialized && observed != state->sessions.end()) {
+        try {
+          const auto controls = observed->session.GetPlaybackInfo().Controls();
+          bool ok = false;
+          if (request.action == "play" && controls.IsPlayEnabled()) {
+            ok = observed->session.TryPlayAsync().get();
+          } else if (request.action == "pause" && controls.IsPauseEnabled()) {
+            ok = observed->session.TryPauseAsync().get();
+          } else if (request.action == "next" && controls.IsNextEnabled()) {
+            ok = observed->session.TrySkipNextAsync().get();
+          } else if (request.action == "previous" &&
+                     controls.IsPreviousEnabled()) {
+            ok = observed->session.TrySkipPreviousAsync().get();
+          } else if (request.action == "seek" &&
+                     controls.IsPlaybackPositionEnabled() &&
+                     request.position_ms.has_value()) {
+            const auto position_ticks =
+                MillisecondsToTimeSpanTicks(*request.position_ms);
+            if (position_ticks.has_value()) {
+              ok = observed->session
+                       .TryChangePlaybackPositionAsync(*position_ticks)
+                       .get();
+            }
+          }
+          response = {{flutter::EncodableValue("success"),
+                       flutter::EncodableValue(ok)}};
+          if (!ok) {
+            response[flutter::EncodableValue("failureReason")] =
+                flutter::EncodableValue("PeerRejected");
+            response[flutter::EncodableValue("message")] =
+                flutter::EncodableValue(
+                    "The Windows playback action was rejected.");
+          }
+        } catch (...) {
+          response = BuildWindowsPlaybackActionFailure(
+              "PeerRejected", "The Windows playback action failed.");
+        }
+      }
+
+      WindowsMediaPlaybackWorkerState::ActionCompletion completion;
+      completion.result = std::move(request.result);
+      completion.response = std::move(response);
+      {
+        std::scoped_lock lock(state->mutex);
+        state->action_completions.push_back(std::move(completion));
+        if (state->observing) {
+          state->poll_requested = true;
+        }
+      }
+      PostMessageW(state->window, kRiftMediaPlaybackWorkerMessage, 0, 0);
+    }
+  }
+
+  state->sessions.clear();
+  state->manager = nullptr;
+  if (apartment_initialized) {
+    CoUninitialize();
+  }
+}
+
+void FlutterWindow::StopWindowsMediaPlaybackWorker() {
+  if (!windows_media_worker_) {
+    return;
+  }
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    windows_media_worker_->stopping = true;
+  }
+  windows_media_worker_->condition.notify_one();
+  if (windows_media_worker_->thread.joinable()) {
+    windows_media_worker_->thread.join();
+  }
+  windows_media_worker_.reset();
+}
+
+void FlutterWindow::DispatchWindowsMediaPlaybackWorkerResults() {
+  if (!windows_media_worker_) {
+    return;
+  }
+
+  std::vector<flutter::EncodableMap> events;
+  std::deque<WindowsMediaPlaybackWorkerState::ActionCompletion> completions;
+  {
+    std::scoped_lock lock(windows_media_worker_->mutex);
+    events.swap(windows_media_worker_->observation_events);
+    completions.swap(windows_media_worker_->action_completions);
+  }
+
+  if (windows_media_playback_event_sink_) {
+    for (auto& event : events) {
+      windows_media_playback_event_sink_->Success(
+          flutter::EncodableValue(std::move(event)));
+    }
+  }
+  for (auto& completion : completions) {
+    completion.result->Success(
+        flutter::EncodableValue(std::move(completion.response)));
   }
 }
 
