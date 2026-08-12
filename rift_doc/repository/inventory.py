@@ -363,11 +363,13 @@ def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, An
         except (ET.ParseError, OSError):
             root = None
         if root is not None:
-            tests = [
-                str(element.attrib.get("name"))
-                for element in root.iter()
-                if element.tag.rsplit("}", 1)[-1] in {"testcase", "UnitTestResult"} and element.attrib.get("name")
-            ][:100]
+            for element in root.iter():
+                tag = element.tag.rsplit("}", 1)[-1]
+                attribute = "testName" if tag == "UnitTestResult" else "name" if tag == "testcase" else None
+                if attribute and element.attrib.get(attribute):
+                    tests.append(str(element.attrib[attribute]))
+                    if len(tests) == 100:
+                        break
             failed = any(
                 element.tag.rsplit("}", 1)[-1] in {"failure", "error"}
                 for element in root.iter()

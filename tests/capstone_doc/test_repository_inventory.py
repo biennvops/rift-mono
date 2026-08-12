@@ -151,6 +151,23 @@ def test_artifact_directory_indexes_deliverables_and_test_results(tmp_path: Path
     assert snapshot.audit_metadata["artifact_root"] == str(artifacts.resolve())
 
 
+def test_trx_artifact_indexes_passed_and_failed_test_names(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    artifacts = tmp_path / "artifacts"
+    repository.mkdir()
+    fixture = Path(__file__).parent / "fixtures" / "results" / "mixed.trx"
+    _write(artifacts / "results" / "mixed.trx", fixture.read_text(encoding="utf-8"))
+
+    snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
+
+    result = snapshot.test_results[0]
+    assert result.metadata["latest_result"] == "FAIL"
+    assert result.metadata["test_names"] == [
+        "SyncsNotifications",
+        "LeavesUnchangedNotificationsAlone",
+    ]
+
+
 def test_current_rift_repository_inventory_detects_actual_build_systems() -> None:
     root = Path(__file__).resolve().parents[2]
     snapshot = RepositoryInventory(InventoryOptions(excluded_paths=("capstone-documents",))).scan(root)

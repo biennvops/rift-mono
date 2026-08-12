@@ -12,6 +12,7 @@ from rift_doc.repository import (
     RepositoryEvidence,
     RepositoryEvidenceLinker,
     RepositoryEvidenceStatus,
+    RepositoryInventory,
     RepositoryLineRange,
     RepositoryMappingConfig,
     RepositoryMappingError,
@@ -313,6 +314,37 @@ def test_recorded_result_only_contradicts_an_explicit_documented_outcome() -> No
     )
     assert no_claimed_outcome.status == RepositoryEvidenceStatus.VERIFIED
     assert EvidenceTestState.LATEST_RESULT_FAIL in no_claimed_outcome.test_states
+
+
+def test_trx_result_name_links_to_dotnet_test_claim(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    artifacts = tmp_path / "artifacts"
+    repository.mkdir()
+    (repository / "tests").mkdir()
+    (repository / "tests" / "SyncTests.cs").write_text(
+        """
+public class SyncTests {
+    [Fact]
+    public void SyncsNotifications() {}
+}
+""",
+        encoding="utf-8",
+    )
+    fixture = Path(__file__).parent / "fixtures" / "results" / "mixed.trx"
+    (artifacts / "results").mkdir(parents=True)
+    (artifacts / "results" / "mixed.trx").write_text(
+        fixture.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
+
+    match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications", metadata={"status": "Passed"})
+    )
+
+    assert match.status == RepositoryEvidenceStatus.CONTRADICTED
+    assert match.metadata["test_result_conflict"] == {"documented": "PASS", "repository": "FAIL"}
+    assert any(item.kind == EvidenceKind.TEST_RESULT for item in match.evidence)
 
 
 def test_test_source_without_ci_or_result_does_not_imply_them() -> None:
