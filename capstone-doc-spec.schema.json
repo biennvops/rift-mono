@@ -42,6 +42,9 @@
       "type": "array",
       "items": { "$ref": "#/$defs/orphan_rule" }
     },
+    "repository_evidence_extension": {
+      "$ref": "#/$defs/repository_evidence_extension"
+    },
     "source_ambiguities": {
       "type": "array",
       "items": { "$ref": "#/$defs/ambiguity" }
@@ -262,6 +265,45 @@
         "target_kinds": { "type": "array", "items": { "type": "string" } },
         "status": { "type": "string" },
         "severity": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "repository_evidence_extension": {
+      "type": "object",
+      "required": ["finding_domain", "claims"],
+      "properties": {
+        "finding_domain": { "const": "repository_evidence" },
+        "claims": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/repository_claim_projection" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "repository_claim_projection": {
+      "type": "object",
+      "required": ["claim_kind", "source_kinds", "expected_evidence_types"],
+      "properties": {
+        "claim_kind": {
+          "enum": ["FUNCTION_OR_FEATURE", "ARCHITECTURE_COMPONENT", "TEST_CLAIM", "DELIVERABLE_OR_PACKAGE"]
+        },
+        "source_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "source_domains": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "expected_evidence_types": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["FILE", "DIRECTORY", "MODULE", "PACKAGE", "SYMBOL", "MANIFEST_ENTRY", "TEST", "TEST_RESULT", "CI_JOB", "BUILD_TARGET", "RELEASE_ARTIFACT", "CONFIGURATION"]
+          }
+        }
       },
       "additionalProperties": true
     },

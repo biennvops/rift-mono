@@ -886,6 +886,29 @@ cross_document_orphan_checks:
     target_kind: [feature, function, deliverable]
     status: REVIEW_REQUIRED
     severity: warning
+repository_evidence_extension:
+  finding_domain: repository_evidence
+  claims:
+    functions_and_features:
+      claim_kind: FUNCTION_OR_FEATURE
+      source_kinds: [feature, function]
+      source_domains: [report1, report3, report4]
+      expected_evidence_types: [SYMBOL, MODULE, CONFIGURATION]
+    architecture_components:
+      claim_kind: ARCHITECTURE_COMPONENT
+      source_kinds: [architecture_component]
+      source_domains: [report4]
+      expected_evidence_types: [MODULE, PACKAGE, DIRECTORY, BUILD_TARGET]
+    tests:
+      claim_kind: TEST_CLAIM
+      source_kinds: [test_case_or_test_group]
+      source_domains: [report5, tests]
+      expected_evidence_types: [TEST, CI_JOB, TEST_RESULT]
+    deliverables:
+      claim_kind: DELIVERABLE_OR_PACKAGE
+      source_kinds: [deliverable, final_report_item]
+      source_domains: [report2, report6, report7]
+      expected_evidence_types: [RELEASE_ARTIFACT, PACKAGE, BUILD_TARGET, DIRECTORY]
 workbooks:
   report3_project_tracking:
     short_name: "Project Tracking"

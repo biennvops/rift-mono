@@ -175,6 +175,11 @@ class CapstoneSpec:
         value = self.data.get("cross_document_orphan_checks", [])
         return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
+    @property
+    def repository_evidence_extension(self) -> dict[str, Any]:
+        value = self.data.get("repository_evidence_extension", {})
+        return value if isinstance(value, dict) else {}
+
     def iter_trace_rules(self) -> Iterator[TraceRule]:
         for index, raw in enumerate(self.cross_document_traceability):
             rule_id = str(raw.get("id", raw.get("rule_id", f"XT-UNNAMED-{index + 1}")))
