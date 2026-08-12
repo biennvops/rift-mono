@@ -1,5 +1,6 @@
 """Local repository evidence inspection and claim-linking APIs."""
 
+from .inventory import InventoryOptions, RepositoryInventory
 from .model import (
     EvidenceKind,
     RepositoryClaim,
@@ -16,6 +17,7 @@ from .model import (
 
 __all__ = [
     "EvidenceKind",
+    "InventoryOptions",
     "RepositoryClaim",
     "RepositoryClaimKind",
     "RepositoryEvidence",
@@ -23,6 +25,7 @@ __all__ = [
     "RepositoryEvidenceStatus",
     "RepositoryLineRange",
     "RepositoryMatchMethod",
+    "RepositoryInventory",
     "RepositorySnapshot",
     "RepositoryVcsMetadata",
     "TestEvidenceState",

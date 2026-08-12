@@ -1,0 +1,476 @@
+"""Read-only local repository inventory and evidence indexing."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import fnmatch
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import time
+from typing import Any, Iterable
+import xml.etree.ElementTree as ET
+
+import yaml
+
+from .languages import DEFAULT_ADAPTERS
+from .manifests import is_manifest, parse_manifest
+from .model import (
+    EvidenceKind,
+    RepositoryEvidence,
+    RepositoryLineRange,
+    RepositorySnapshot,
+    RepositoryVcsMetadata,
+)
+from ..trace_model import normalize_identifier, normalize_name
+
+
+_DEFAULT_EXCLUDED_COMPONENTS = frozenset(
+    {
+        ".git",
+        ".hg",
+        ".svn",
+        ".dart_tool",
+        ".gradle",
+        ".idea",
+        ".pytest_cache",
+        ".tox",
+        ".venv",
+        ".vs",
+        "__pycache__",
+        "build",
+        "coverage",
+        "dist",
+        "logs",
+        "node_modules",
+        "obj",
+        "Pods",
+        "TestResults",
+        "vendor",
+    }
+)
+_CI_PATH_PATTERNS = (
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    ".gitlab-ci.yml",
+    "azure-pipelines.yml",
+)
+_TEST_RESULT_SUFFIXES = {".trx", ".junit", ".tap"}
+_SOURCE_LIMIT_BYTES = 2 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class InventoryOptions:
+    excluded_paths: tuple[str, ...] = ()
+    max_source_bytes: int = _SOURCE_LIMIT_BYTES
+
+
+class RepositoryInventory:
+    """Inventory one worktree once without running its build or test code."""
+
+    def __init__(self, options: InventoryOptions | None = None) -> None:
+        self.options = options or InventoryOptions()
+        self.adapters = DEFAULT_ADAPTERS
+        self.adapters_by_suffix = {
+            suffix: adapter
+            for adapter in self.adapters
+            for suffix in adapter.suffixes
+        }
+
+    def scan(
+        self,
+        root: str | Path,
+        *,
+        artifact_root: str | Path | None = None,
+    ) -> RepositorySnapshot:
+        started = time.monotonic()
+        repository_root = Path(root).expanduser().resolve()
+        if not repository_root.is_dir():
+            raise ValueError(f"repository path is not a directory: {repository_root}")
+
+        paths, source = self._repository_paths(repository_root)
+        vcs = _git_metadata(repository_root)
+        snapshot = RepositorySnapshot(root=str(repository_root), vcs_metadata=vcs)
+        snapshot.metadata.update(
+            {
+                "inventory_source": source,
+                "excluded_paths": sorted(self.options.excluded_paths),
+                "max_source_bytes": self.options.max_source_bytes,
+                "network_access": False,
+                "repository_code_executed": False,
+            }
+        )
+
+        scanned_files = 0
+        skipped_large = 0
+        languages: dict[str, int] = {}
+        directory_paths: set[str] = set()
+        for relative_path in paths:
+            if self._is_excluded(relative_path):
+                continue
+            absolute_path = repository_root / relative_path
+            if absolute_path.is_symlink() or not absolute_path.is_file():
+                continue
+            size = absolute_path.stat().st_size
+            scanned_files += 1
+            directory_paths.update(_ancestor_directories(relative_path))
+            suffix = PurePosixPath(relative_path).suffix.casefold()
+            adapter = self.adapters_by_suffix.get(suffix)
+            manifest = is_manifest(relative_path)
+            ci_config = _is_ci_path(relative_path)
+            if not adapter and not manifest and not ci_config:
+                continue
+            if size > self.options.max_source_bytes:
+                skipped_large += 1
+                continue
+            data = absolute_path.read_bytes()
+            if _looks_binary(data):
+                continue
+            text = data.decode("utf-8", errors="replace")
+
+            if adapter is not None:
+                languages[adapter.language] = languages.get(adapter.language, 0) + 1
+                snapshot.source_files.append(
+                    RepositoryEvidence(
+                        evidence_id=f"file:{relative_path}",
+                        kind=EvidenceKind.FILE,
+                        path=relative_path,
+                        module=_source_module(relative_path),
+                        metadata={"language": adapter.language, "size_bytes": size},
+                    )
+                )
+                result = adapter.scan(relative_path, text)
+                snapshot.symbols.extend(result.symbols)
+                snapshot.tests.extend(result.tests)
+
+            if manifest:
+                result = parse_manifest(relative_path, data, text)
+                snapshot.manifests.extend(result.manifests)
+                snapshot.modules.extend(result.modules)
+                snapshot.build_configs.extend(result.build_configs)
+
+            if ci_config:
+                snapshot.ci_configs.extend(_parse_ci_config(relative_path, text))
+
+        snapshot.modules.extend(_directory_evidence(path) for path in sorted(directory_paths))
+        if artifact_root is not None:
+            self._scan_artifacts(snapshot, Path(artifact_root).expanduser().resolve())
+        snapshot.generated_indexes = _build_serialized_indexes(snapshot)
+        snapshot.metadata.update(
+            {
+                "scanned_file_count": scanned_files,
+                "skipped_large_file_count": skipped_large,
+                "languages": dict(sorted(languages.items())),
+                "duration_ms": round((time.monotonic() - started) * 1000, 3),
+                "counts": _snapshot_counts(snapshot),
+            }
+        )
+        return snapshot
+
+    def _repository_paths(self, root: Path) -> tuple[list[str], str]:
+        git_paths = _git_file_paths(root)
+        if git_paths is not None:
+            return sorted(dict.fromkeys(git_paths)), "git"
+        ignore_patterns = _read_plain_gitignore(root)
+        paths: list[str] = []
+        for directory, names, filenames in os.walk(root, followlinks=False):
+            relative_directory = Path(directory).relative_to(root)
+            names[:] = sorted(
+                name
+                for name in names
+                if not self._is_excluded(_posix(relative_directory / name))
+                and not _matches_ignore(_posix(relative_directory / name), ignore_patterns, directory=True)
+            )
+            for filename in sorted(filenames):
+                relative_path = _posix(relative_directory / filename)
+                if self._is_excluded(relative_path) or _matches_ignore(relative_path, ignore_patterns):
+                    continue
+                paths.append(relative_path)
+        return paths, "filesystem"
+
+    def _is_excluded(self, path: str) -> bool:
+        value = path.strip("/")
+        parts = PurePosixPath(value).parts
+        if any(part in _DEFAULT_EXCLUDED_COMPONENTS for part in parts):
+            return True
+        return _matches_configured_exclusion(value, self.options.excluded_paths)
+
+    def _scan_artifacts(self, snapshot: RepositorySnapshot, root: Path) -> None:
+        if not root.is_dir():
+            raise ValueError(f"artifact path is not a directory: {root}")
+        snapshot.metadata["artifact_root"] = str(root)
+        for absolute_path in sorted(root.rglob("*")):
+            if absolute_path.is_symlink() or not absolute_path.is_file():
+                continue
+            relative_path = _posix(absolute_path.relative_to(root))
+            if _matches_configured_exclusion(relative_path, self.options.excluded_paths):
+                continue
+            size = absolute_path.stat().st_size
+            metadata: dict[str, Any] = {"artifact_root": str(root), "size_bytes": size}
+            release = RepositoryEvidence(
+                evidence_id=f"release_artifact:{relative_path}",
+                kind=EvidenceKind.RELEASE_ARTIFACT,
+                path=relative_path,
+                metadata=metadata,
+                excerpt_or_signature=absolute_path.name,
+            )
+            snapshot.release_artifacts.append(release)
+            if _is_test_result_path(relative_path):
+                snapshot.release_artifacts.append(_test_result_evidence(absolute_path, relative_path, metadata))
+
+
+def _git_file_paths(root: Path) -> list[str] | None:
+    result = _run_git(root, "rev-parse", "--is-inside-work-tree")
+    if result is None or result.stdout.strip() != "true":
+        return None
+    files = _run_git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ".")
+    if files is None:
+        return None
+    return [value for value in files.stdout.split("\0") if value]
+
+
+def _git_metadata(root: Path) -> RepositoryVcsMetadata | None:
+    inside = _run_git(root, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.stdout.strip() != "true":
+        return None
+    commit = _run_git(root, "rev-parse", "HEAD")
+    branch = _run_git(root, "symbolic-ref", "--quiet", "--short", "HEAD")
+    status = _run_git(root, "status", "--porcelain", "--untracked-files=normal", "--", ".")
+    return RepositoryVcsMetadata(
+        commit_sha=commit.stdout.strip() if commit and commit.returncode == 0 else None,
+        dirty=bool(status.stdout) if status is not None and status.returncode == 0 else None,
+        branch=branch.stdout.strip() if branch and branch.returncode == 0 else None,
+    )
+
+
+def _run_git(root: Path, *arguments: str) -> subprocess.CompletedProcess[str] | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
+    result = [
+        RepositoryEvidence(
+            evidence_id=f"configuration:{path}",
+            kind=EvidenceKind.CONFIGURATION,
+            path=path,
+            line_range=RepositoryLineRange(1),
+            metadata={"configuration_type": "ci"},
+            excerpt_or_signature=PurePosixPath(path).name,
+        )
+    ]
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError:
+        raw = {}
+    jobs = raw.get("jobs", {}) if isinstance(raw, dict) else {}
+    if not isinstance(jobs, dict):
+        return result
+    for job_name, raw_job in jobs.items():
+        job = raw_job if isinstance(raw_job, dict) else {}
+        commands = [
+            str(step.get("run"))
+            for step in job.get("steps", [])
+            if isinstance(step, dict) and step.get("run") is not None
+        ] if isinstance(job.get("steps", []), list) else []
+        line = _yaml_key_line(text, str(job_name))
+        signature = " ".join(command.replace("\n", " ") for command in commands)
+        result.append(
+            RepositoryEvidence(
+                evidence_id=f"ci_job:{path}:{job_name}",
+                kind=EvidenceKind.CI_JOB,
+                path=path,
+                line_range=RepositoryLineRange(line),
+                symbol=str(job_name),
+                module=str(job.get("name") or job_name),
+                metadata={
+                    "job_name": str(job_name),
+                    "display_name": job.get("name"),
+                    "commands": commands,
+                    "invokes_tests": bool(re.search(r"\b(?:test|pytest|ctest|xcodebuild\s+test)\b", signature, re.IGNORECASE)),
+                },
+                excerpt_or_signature=signature or str(job_name),
+            )
+        )
+    return result
+
+
+def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, Any]) -> RepositoryEvidence:
+    result_metadata = dict(metadata)
+    result_metadata["result_format"] = path.suffix.casefold().lstrip(".") or "unknown"
+    status = "UNKNOWN"
+    tests: list[str] = []
+    if path.suffix.casefold() in {".xml", ".trx", ".junit"} and path.stat().st_size <= _SOURCE_LIMIT_BYTES:
+        try:
+            root = ET.fromstring(path.read_bytes())
+        except (ET.ParseError, OSError):
+            root = None
+        if root is not None:
+            tests = [
+                str(element.attrib.get("name"))
+                for element in root.iter()
+                if element.tag.rsplit("}", 1)[-1] in {"testcase", "UnitTestResult"} and element.attrib.get("name")
+            ][:100]
+            failed = any(
+                element.tag.rsplit("}", 1)[-1] in {"failure", "error"}
+                for element in root.iter()
+            ) or any(
+                str(element.attrib.get("outcome", "")).casefold() == "failed"
+                for element in root.iter()
+            )
+            status = "FAIL" if failed else "PASS" if tests else "UNKNOWN"
+    result_metadata.update({"latest_result": status, "test_names": tests})
+    return RepositoryEvidence(
+        evidence_id=f"test_result:{relative_path}",
+        kind=EvidenceKind.TEST_RESULT,
+        path=relative_path,
+        metadata=result_metadata,
+        excerpt_or_signature=f"{PurePosixPath(relative_path).name}: {status}",
+    )
+
+
+def _build_serialized_indexes(snapshot: RepositorySnapshot) -> dict[str, Any]:
+    names: dict[str, list[str]] = {}
+    identifiers: dict[str, list[str]] = {}
+    paths: dict[str, list[str]] = {}
+    for evidence in snapshot.all_evidence():
+        path_key = normalize_name(evidence.path)
+        if path_key:
+            paths.setdefault(path_key, []).append(evidence.evidence_id)
+        values = [evidence.symbol, evidence.module, PurePosixPath(evidence.path).stem]
+        values.extend(_path_names(evidence.path))
+        for value in values:
+            normalized = normalize_name(str(value or ""))
+            if normalized:
+                names.setdefault(normalized, []).append(evidence.evidence_id)
+        for identifier in evidence.metadata.get("identifiers", []):
+            normalized = normalize_identifier(str(identifier))
+            if normalized:
+                identifiers.setdefault(normalized, []).append(evidence.evidence_id)
+    return {
+        "by_name": {key: sorted(set(value)) for key, value in sorted(names.items())},
+        "by_identifier": {key: sorted(set(value)) for key, value in sorted(identifiers.items())},
+        "by_path": {key: sorted(set(value)) for key, value in sorted(paths.items())},
+    }
+
+
+def _snapshot_counts(snapshot: RepositorySnapshot) -> dict[str, int]:
+    return {
+        "manifests": len(snapshot.manifests),
+        "source_files": len(snapshot.source_files),
+        "modules": len(snapshot.modules),
+        "symbols": len(snapshot.symbols),
+        "tests": len(snapshot.tests),
+        "ci_configs": len(snapshot.ci_configs),
+        "build_configs": len(snapshot.build_configs),
+        "release_artifacts": len(snapshot.release_artifacts),
+    }
+
+
+def _directory_evidence(path: str) -> RepositoryEvidence:
+    return RepositoryEvidence(
+        evidence_id=f"directory:{path}",
+        kind=EvidenceKind.DIRECTORY,
+        path=path,
+        module=PurePosixPath(path).name,
+        metadata={"name": PurePosixPath(path).name},
+        excerpt_or_signature=path,
+    )
+
+
+def _ancestor_directories(path: str) -> set[str]:
+    result: set[str] = set()
+    parent = PurePosixPath(path).parent
+    while str(parent) not in {"", "."}:
+        result.add(str(parent))
+        parent = parent.parent
+    return result
+
+
+def _source_module(path: str) -> str | None:
+    parent = PurePosixPath(path).parent
+    return str(parent) if str(parent) != "." else None
+
+
+def _path_names(path: str) -> Iterable[str]:
+    for part in PurePosixPath(path).parts:
+        if part not in {"lib", "src", "test", "tests"}:
+            yield PurePosixPath(part).stem
+
+
+def _read_plain_gitignore(root: Path) -> list[str]:
+    path = root / ".gitignore"
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith(("#", "!"))]
+
+
+def _matches_ignore(path: str, patterns: list[str], *, directory: bool = False) -> bool:
+    value = path.strip("/")
+    for raw in patterns:
+        pattern = raw.replace("\\", "/").strip()
+        directory_only = pattern.endswith("/")
+        pattern = pattern.strip("/")
+        if directory_only and not directory:
+            if value == pattern or value.startswith(pattern + "/"):
+                return True
+            continue
+        if value == pattern or value.startswith(pattern + "/") or fnmatch.fnmatchcase(value, pattern):
+            return True
+        if "/" not in pattern and any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(value).parts):
+            return True
+    return False
+
+
+def _matches_configured_exclusion(path: str, patterns: Iterable[str]) -> bool:
+    value = path.strip("/")
+    for raw_pattern in patterns:
+        pattern = str(raw_pattern).strip().replace("\\", "/").strip("/")
+        if not pattern:
+            continue
+        if value == pattern or value.startswith(pattern + "/"):
+            return True
+        if fnmatch.fnmatchcase(value, pattern) or PurePosixPath(value).match(pattern):
+            return True
+    return False
+
+
+def _is_ci_path(path: str) -> bool:
+    return any(fnmatch.fnmatchcase(path, pattern) for pattern in _CI_PATH_PATTERNS)
+
+
+def _is_test_result_path(path: str) -> bool:
+    value = PurePosixPath(path)
+    name = value.name.casefold()
+    return (
+        value.suffix.casefold() in _TEST_RESULT_SUFFIXES
+        or (value.suffix.casefold() == ".xml" and any(word in name for word in ("test", "junit", "result")))
+        or "test-results" in (part.casefold() for part in value.parts)
+    )
+
+
+def _yaml_key_line(text: str, key: str) -> int:
+    match = re.search(rf"(?m)^\s*{re.escape(key)}\s*:", text)
+    return text.count("\n", 0, match.start()) + 1 if match else 1
+
+
+def _looks_binary(data: bytes) -> bool:
+    return b"\0" in data[:4096]
+
+
+def _posix(path: Path) -> str:
+    value = path.as_posix()
+    return "" if value == "." else value
