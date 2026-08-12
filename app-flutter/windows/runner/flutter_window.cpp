@@ -632,6 +632,10 @@ bool FlutterWindow::OnCreate() {
   RegisterWindowsMediaPlaybackEventChannel();
   RegisterWindowsMediaPlaybackMethodChannel();
   RegisterSendFilesMethodChannel();
+  windows_notification_listener_ =
+      std::make_unique<WindowsNotificationListener>(
+          flutter_controller_->engine()->messenger(), GetHandle());
+  windows_notification_listener_->RegisterChannels();
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -664,6 +668,10 @@ void FlutterWindow::OnDestroy() {
   windows_media_playback_method_channel_.reset();
   send_files_method_channel_.reset();
   send_files_channel_ready_ = false;
+  if (windows_notification_listener_) {
+    windows_notification_listener_->OnDestroy();
+    windows_notification_listener_.reset();
+  }
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -683,6 +691,11 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
     if (result) {
       return *result;
     }
+  }
+
+  if (windows_notification_listener_ &&
+      windows_notification_listener_->HandleWindowMessage(message, lparam)) {
+    return 0;
   }
 
   switch (message) {

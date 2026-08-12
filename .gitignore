@@ -83,3 +83,7 @@ temp/
 # Local generated outputs
 dist/
 app-flutter/ios/Runner.xcworkspace/xcshareddata/swiftpm/
+app-flutter/windows/identity/generated/
+*.msix
+*.pfx
+*.cer

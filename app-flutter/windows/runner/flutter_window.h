@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "win32_window.h"
+#include "windows_notification_listener.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
@@ -101,6 +102,8 @@ class FlutterWindow : public Win32Window {
       windows_media_playback_method_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       send_files_method_channel_;
+  std::unique_ptr<WindowsNotificationListener>
+      windows_notification_listener_;
   flutter::EncodableList pending_send_files_;
   bool send_files_channel_ready_ = false;
   bool clipboard_listener_registered_ = false;
