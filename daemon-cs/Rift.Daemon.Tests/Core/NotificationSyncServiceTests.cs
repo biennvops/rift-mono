@@ -1250,17 +1250,38 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public Task WaitForSendStartedAsync() => _sendStarted.Task;
     }
 
-    private sealed class RecordingIpcNotificationService : IIpcNotificationService
+    private sealed class RecordingIpcNotificationService :
+        IIpcNotificationService,
+        IIpcNotificationActionExecutorService
     {
         public bool HasClients { get; set; } = true;
+        public bool HasExecutor => HasClients;
         public List<(string Method, object Payload)> Events { get; } = [];
 
         public IDisposable RegisterClient(JsonRpc jsonRpc) => NullDisposable.Instance;
+
+        public bool TryAcquire(JsonRpc jsonRpc) => HasClients;
+
+        public bool Release(JsonRpc jsonRpc) => true;
 
         public Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
         {
             Events.Add((method, parameters));
             return Task.CompletedTask;
+        }
+
+        public Task<bool> NotifyExecutorAsync(
+            string method,
+            object parameters,
+            CancellationToken cancellationToken = default)
+        {
+            if (!HasExecutor)
+            {
+                return Task.FromResult(false);
+            }
+
+            Events.Add((method, parameters));
+            return Task.FromResult(true);
         }
 
         private sealed class NullDisposable : IDisposable

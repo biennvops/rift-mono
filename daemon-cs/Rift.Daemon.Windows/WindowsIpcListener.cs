@@ -11,7 +11,8 @@ namespace Rift.Daemon.Windows;
 public class WindowsIpcListener(
     ILogger<WindowsIpcListener> logger,
     IServiceScopeFactory scopeFactory,
-    IIpcNotificationService notificationService) : IIpcListener
+    IIpcNotificationService notificationService,
+    IIpcNotificationActionExecutorService notificationActionExecutorService) : IIpcListener
 {
     private const string PipeName = "rift-daemon-v0.1";
 
@@ -88,8 +89,13 @@ public class WindowsIpcListener(
         {
             using var scope = scopeFactory.CreateScope();
             var apiHandler = scope.ServiceProvider.GetRequiredService<IRiftApi>();
-            using var jsonRpc = JsonRpc.Attach(pipe, apiHandler);
+            using var jsonRpc = new JsonRpc(pipe);
             using var registration = notificationService.RegisterClient(jsonRpc);
+            jsonRpc.AddLocalRpcTarget(apiHandler);
+            jsonRpc.AddLocalRpcTarget(new IpcNotificationActionExecutorRpc(
+                notificationActionExecutorService,
+                jsonRpc));
+            jsonRpc.StartListening();
             await jsonRpc.Completion;
             logger.LogInformation("IPC client disconnected.");
         }

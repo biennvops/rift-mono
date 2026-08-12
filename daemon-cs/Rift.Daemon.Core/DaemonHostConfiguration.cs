@@ -26,7 +26,11 @@ public static class DaemonHostConfiguration
         services.AddSingleton<INotificationSyncPolicyStore, SqliteNotificationSyncPolicyStore>();
         services.AddSingleton<IIdentityManager, IdentityManager>();
         services.AddSingleton<IDiscoveryCoordinator, DiscoveryCoordinator>();
-        services.AddSingleton<IIpcNotificationService, IpcNotificationHub>();
+        services.AddSingleton<IpcNotificationHub>();
+        services.AddSingleton<IIpcNotificationService>(provider =>
+            provider.GetRequiredService<IpcNotificationHub>());
+        services.AddSingleton<IIpcNotificationActionExecutorService>(provider =>
+            provider.GetRequiredService<IpcNotificationHub>());
         services.AddSingleton<IPresenceService, PresenceService>();
         services.AddSingleton<IDeviceStatusService, DeviceStatusService>();
         services.AddSingleton<IDaemonInfoService, DaemonInfoService>();

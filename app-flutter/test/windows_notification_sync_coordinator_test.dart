@@ -21,7 +21,12 @@ class _FakeClient extends JsonRpcRiftClient {
   List<Map<String, dynamic>> notifications;
   final StreamController<Map<String, dynamic>> actionRequests =
       StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<bool> connectionChanges =
+      StreamController<bool>.broadcast();
   final List<Map<String, dynamic>> actionReports = <Map<String, dynamic>>[];
+  bool acquireActionExecutorResult = true;
+  int acquireActionExecutorCount = 0;
+  int releaseActionExecutorCount = 0;
 
   @override
   bool get isConnected => true;
@@ -29,6 +34,21 @@ class _FakeClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onNotificationActionRequest =>
       actionRequests.stream;
+
+  @override
+  Stream<bool> get onConnectionChanged => connectionChanges.stream;
+
+  @override
+  Future<dynamic> acquireNotificationActionExecutor() async {
+    acquireActionExecutorCount++;
+    return <String, dynamic>{'acquired': acquireActionExecutorResult};
+  }
+
+  @override
+  Future<dynamic> releaseNotificationActionExecutor() async {
+    releaseActionExecutorCount++;
+    return <String, dynamic>{'released': true};
+  }
 
   @override
   Future<dynamic> reportLocalNotificationActionHandled({
@@ -49,7 +69,13 @@ class _FakeClient extends JsonRpcRiftClient {
   void emitActionRequest(Map<String, dynamic> request) =>
       actionRequests.add(request);
 
-  Future<void> close() => actionRequests.close();
+  void emitConnectionChanged(bool connected) =>
+      connectionChanges.add(connected);
+
+  Future<void> close() async {
+    await actionRequests.close();
+    await connectionChanges.close();
+  }
 
   @override
   Future<dynamic> getDeviceInfo() async => {'deviceId': 'local-device'};
@@ -235,6 +261,26 @@ void main() {
     expect(disabledListener.startCount, 0);
     await disabledCoordinator.dispose();
     await disabledListener.close();
+  });
+
+  test('does not start when another IPC client owns the action executor',
+      () async {
+    final listener = _FakeWindowsListener();
+    final client = _FakeClient()..acquireActionExecutorResult = false;
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+
+    await coordinator.start();
+
+    expect(listener.startCount, 0);
+    expect(coordinator.isRunning, isFalse);
+    expect(client.acquireActionExecutorCount, 1);
+    expect(client.releaseActionExecutorCount, 0);
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
   });
 
   test('active snapshot posts new records and converts bounded icon metadata',
@@ -584,6 +630,47 @@ void main() {
     await client.close();
   });
 
+  test('reconnect refresh reacquires the action executor lease', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    client.emitConnectionChanged(false);
+    await _pumpAsync();
+
+    await coordinator.refresh();
+    await coordinator.dispose();
+
+    expect(client.acquireActionExecutorCount, 2);
+    expect(client.releaseActionExecutorCount, 1);
+    await listener.close();
+    await client.close();
+  });
+
+  test('refresh stops when this IPC connection loses executor ownership',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    client.acquireActionExecutorResult = false;
+
+    await coordinator.refresh();
+
+    expect(coordinator.isRunning, isFalse);
+    expect(listener.stopCount, 1);
+    expect(client.releaseActionExecutorCount, 0);
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
   test('refresh does not duplicate action subscription', () async {
     final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
     final client = _FakeClient();
@@ -615,6 +702,7 @@ void main() {
     );
     await coordinator.start();
     await coordinator.dispose();
+    expect(client.releaseActionExecutorCount, 1);
 
     client.emitActionRequest(_actionRequest());
     await _pumpAsync();

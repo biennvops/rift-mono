@@ -41,6 +41,7 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly IOperationService _operationService;
     private readonly ISecurityEventLog _securityEventLog;
     private readonly IIpcNotificationService? _ipcNotificationService;
+    private readonly IIpcNotificationActionExecutorService? _notificationActionExecutorService;
     private readonly ILocalNotificationActionHandler? _localActionHandler;
     private readonly INotificationSyncPolicyStore? _policyStore;
     private readonly ILogger<NotificationSyncService> _logger;
@@ -71,6 +72,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         _operationService = operationService;
         _securityEventLog = securityEventLog;
         _ipcNotificationService = ipcNotificationService;
+        _notificationActionExecutorService = ipcNotificationService as IIpcNotificationActionExecutorService;
         _localActionHandler = localActionHandler;
         _policyStore = policyStore;
         _logger = logger ?? NullLogger<NotificationSyncService>.Instance;
@@ -597,7 +599,8 @@ public sealed class NotificationSyncService : INotificationSyncService
             return;
         }
 
-        if (_ipcNotificationService is null || !_ipcNotificationService.HasClients)
+        if (_notificationActionExecutorService is null ||
+            !_notificationActionExecutorService.HasExecutor)
         {
             await SendIncomingActionResultAsync(
                 pending,
@@ -618,16 +621,43 @@ public sealed class NotificationSyncService : INotificationSyncService
                 Timeout.InfiniteTimeSpan);
         }
 
-        await NotifyIpcAsync("rift.onNotificationActionRequest", new
+        var delivered = await _notificationActionExecutorService.NotifyExecutorAsync(
+            "rift.onNotificationActionRequest",
+            new
+            {
+                requestId = pending.RequestId,
+                operationId = pending.OperationId,
+                notificationId = pending.NotificationId,
+                sourceDeviceId = pending.SourceDeviceId,
+                requestingDeviceId = pending.RequestingDeviceId,
+                action = pending.Action,
+                requestedAt = request.RequestedAt
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (delivered)
         {
-            requestId = pending.RequestId,
-            operationId = pending.OperationId,
-            notificationId = pending.NotificationId,
-            sourceDeviceId = pending.SourceDeviceId,
-            requestingDeviceId = pending.RequestingDeviceId,
-            action = pending.Action,
-            requestedAt = request.RequestedAt
-        }).ConfigureAwait(false);
+            return;
+        }
+
+        var removed = false;
+        lock (_gate)
+        {
+            removed = _pendingIncomingActionsByRequestId.Remove(pending.RequestId);
+            if (_pendingIncomingActionTimers.Remove(pending.RequestId, out var timer))
+            {
+                timer.Dispose();
+            }
+        }
+
+        if (removed)
+        {
+            await SendIncomingActionResultAsync(
+                pending,
+                success: false,
+                failureReason: "CapabilityUnavailable",
+                message: "No local notification action client is connected.",
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(

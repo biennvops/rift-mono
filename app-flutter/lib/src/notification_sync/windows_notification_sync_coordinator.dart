@@ -27,8 +27,10 @@ class WindowsNotificationSyncCoordinator {
   Future<void> _operationQueue = Future<void>.value();
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   StreamSubscription<Map<String, dynamic>>? _actionRequestSubscription;
+  StreamSubscription<bool>? _connectionSubscription;
   WindowsNotificationListenerRuntimeStatus? _runtime;
   bool _running = false;
+  bool _ownsActionExecutor = false;
   bool _disposed = false;
 
   bool get isRunning => _running;
@@ -51,6 +53,9 @@ class WindowsNotificationSyncCoordinator {
     final actionSubscription = _actionRequestSubscription;
     _actionRequestSubscription = null;
     await actionSubscription?.cancel();
+    final connectionSubscription = _connectionSubscription;
+    _connectionSubscription = null;
+    await connectionSubscription?.cancel();
     await _enqueue(() async {
       await _stopInternal();
     });
@@ -63,6 +68,11 @@ class WindowsNotificationSyncCoordinator {
     _actionRequestSubscription ??=
         _client.onNotificationActionRequest.listen((request) {
       unawaited(_enqueue(() => _handleActionRequest(request)));
+    });
+    _connectionSubscription ??= _client.onConnectionChanged.listen((connected) {
+      if (!connected) {
+        _ownsActionExecutor = false;
+      }
     });
   }
 
@@ -90,6 +100,19 @@ class WindowsNotificationSyncCoordinator {
         !runtime.hasPackageIdentity ||
         !policy.enabled ||
         await _listener.getAccessStatus() != 'allowed') {
+      await _stopInternal();
+      return;
+    }
+
+    try {
+      final result = await _client.acquireNotificationActionExecutor();
+      if (result is! Map || result['acquired'] != true) {
+        _ownsActionExecutor = false;
+        await _stopInternal();
+        return;
+      }
+      _ownsActionExecutor = true;
+    } catch (_) {
       await _stopInternal();
       return;
     }
@@ -127,6 +150,14 @@ class WindowsNotificationSyncCoordinator {
     }
     _running = false;
     _tracked.clear();
+    if (_ownsActionExecutor) {
+      _ownsActionExecutor = false;
+      try {
+        await _client.releaseNotificationActionExecutor();
+      } catch (_) {
+        // A disconnected IPC session has already released its executor lease.
+      }
+    }
   }
 
   Future<void> _reconcileIfRunning() async {

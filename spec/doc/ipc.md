@@ -788,6 +788,22 @@ Action availability is controlled by the mirrored record's `isDismissible` and `
 
 **Errors:** `-32003` if the source peer cannot currently perform notification sync or actions, `-32009` if `(sourceDeviceId, notificationId)` does not exist, `-32010` if the notification does not allow the requested action.
 
+#### `rift.acquireNotificationActionExecutor`
+
+Claims the connection-scoped local notification-action executor lease. The first connected client to claim the lease receives `rift.onNotificationActionRequest`; later clients receive `{ "acquired": false }` and MUST NOT advertise local notification actions. Repeated acquisition by the owner is idempotent. The daemon releases the lease when that IPC connection closes.
+
+**Params:** none.
+
+**Result:** `{ "acquired": true }` when this connection owns the lease, otherwise `{ "acquired": false }`.
+
+#### `rift.releaseNotificationActionExecutor`
+
+Releases the notification-action executor lease owned by this IPC connection. Non-owners receive `{ "released": false }`.
+
+**Params:** none.
+
+**Result:** `{ "released": true }` when this connection released the lease, otherwise `{ "released": false }`.
+
 #### `rift.reportLocalNotificationActionHandled`
 
 Reports the outcome of an action previously delivered through `rift.onNotificationActionRequest`. The local `requestId` is distinct from the peer protocol `operationId`; the daemon preserves the peer operation correlation when it emits `notification.actionResult`.

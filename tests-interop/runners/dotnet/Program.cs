@@ -187,15 +187,25 @@ file sealed class RecordingLocalNotificationActionHandler : ILocalNotificationAc
     }
 }
 
-file sealed class RecordingIpcNotificationService : IIpcNotificationService
+file sealed class RecordingIpcNotificationService :
+    IIpcNotificationService,
+    IIpcNotificationActionExecutorService
 {
     public bool HasClients => true;
+    public bool HasExecutor => true;
     public List<(string Method, object Payload)> Events { get; } = [];
     public IDisposable RegisterClient(JsonRpc jsonRpc) => NoOpDisposable.Instance;
+    public bool TryAcquire(JsonRpc jsonRpc) => true;
+    public bool Release(JsonRpc jsonRpc) => true;
     public Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
     {
         Events.Add((method, parameters));
         return Task.CompletedTask;
+    }
+    public Task<bool> NotifyExecutorAsync(string method, object parameters, CancellationToken cancellationToken = default)
+    {
+        Events.Add((method, parameters));
+        return Task.FromResult(true);
     }
 
     private sealed class NoOpDisposable : IDisposable

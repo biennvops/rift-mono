@@ -1115,6 +1115,14 @@ class JsonRpcRiftClient {
     });
   }
 
+  Future<dynamic> acquireNotificationActionExecutor() async {
+    return _sendRequest('rift.acquireNotificationActionExecutor');
+  }
+
+  Future<dynamic> releaseNotificationActionExecutor() async {
+    return _sendRequest('rift.releaseNotificationActionExecutor');
+  }
+
   Future<dynamic> reportLocalNotificationActionHandled({
     required String requestId,
     required bool success,
