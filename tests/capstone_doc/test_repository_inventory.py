@@ -126,7 +126,7 @@ def test_artifact_directory_indexes_deliverables_and_test_results(tmp_path: Path
     snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
 
     assert any(item.kind == EvidenceKind.RELEASE_ARTIFACT and item.path.endswith("rift-client.pkg") for item in snapshot.release_artifacts)
-    result = next(item for item in snapshot.release_artifacts if item.kind == EvidenceKind.TEST_RESULT)
+    result = next(item for item in snapshot.test_results if item.kind == EvidenceKind.TEST_RESULT)
     assert result.metadata["latest_result"] == "PASS"
     assert result.metadata["test_names"] == ["syncs notifications"]
     assert snapshot.audit_metadata["artifact_root"] == str(artifacts.resolve())

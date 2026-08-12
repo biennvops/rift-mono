@@ -147,7 +147,9 @@ class RepositorySnapshot:
     modules: list[RepositoryEvidence] = field(default_factory=list)
     symbols: list[RepositoryEvidence] = field(default_factory=list)
     tests: list[RepositoryEvidence] = field(default_factory=list)
+    test_results: list[RepositoryEvidence] = field(default_factory=list)
     ci_configs: list[RepositoryEvidence] = field(default_factory=list)
+    configurations: list[RepositoryEvidence] = field(default_factory=list)
     build_configs: list[RepositoryEvidence] = field(default_factory=list)
     release_artifacts: list[RepositoryEvidence] = field(default_factory=list)
     generated_indexes: dict[str, Any] = field(default_factory=dict)
@@ -170,7 +172,9 @@ class RepositorySnapshot:
             self.modules,
             self.symbols,
             self.tests,
+            self.test_results,
             self.ci_configs,
+            self.configurations,
             self.build_configs,
             self.release_artifacts,
         ):
@@ -189,7 +193,9 @@ class RepositorySnapshot:
             "modules": [item.to_dict() for item in self.modules],
             "symbols": [item.to_dict() for item in self.symbols],
             "tests": [item.to_dict() for item in self.tests],
+            "test_results": [item.to_dict() for item in self.test_results],
             "ci_configs": [item.to_dict() for item in self.ci_configs],
+            "configurations": [item.to_dict() for item in self.configurations],
             "build_configs": [item.to_dict() for item in self.build_configs],
             "release_artifacts": [item.to_dict() for item in self.release_artifacts],
             "generated_indexes": _json_value(self.generated_indexes),

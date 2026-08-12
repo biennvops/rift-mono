@@ -1,6 +1,9 @@
 """Local repository evidence inspection and claim-linking APIs."""
 
+from .claims import RepositoryClaimProjector
 from .inventory import InventoryOptions, RepositoryInventory
+from .linker import RepositoryEvidenceIndex, RepositoryEvidenceLinker
+from .mappings import RepositoryMappingConfig, RepositoryMappingEntry, RepositoryMappingError
 from .model import (
     EvidenceKind,
     RepositoryClaim,
@@ -19,13 +22,19 @@ __all__ = [
     "EvidenceKind",
     "InventoryOptions",
     "RepositoryClaim",
+    "RepositoryClaimProjector",
     "RepositoryClaimKind",
     "RepositoryEvidence",
+    "RepositoryEvidenceIndex",
+    "RepositoryEvidenceLinker",
     "RepositoryEvidenceMatch",
     "RepositoryEvidenceStatus",
     "RepositoryLineRange",
     "RepositoryMatchMethod",
     "RepositoryInventory",
+    "RepositoryMappingConfig",
+    "RepositoryMappingEntry",
+    "RepositoryMappingError",
     "RepositorySnapshot",
     "RepositoryVcsMetadata",
     "TestEvidenceState",

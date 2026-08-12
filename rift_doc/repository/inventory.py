@@ -143,6 +143,7 @@ class RepositoryInventory:
                 result = adapter.scan(relative_path, text)
                 snapshot.symbols.extend(result.symbols)
                 snapshot.tests.extend(result.tests)
+                snapshot.configurations.extend(_identifier_configurations(relative_path, text))
 
             if manifest:
                 result = parse_manifest(relative_path, data, text)
@@ -217,7 +218,7 @@ class RepositoryInventory:
             )
             snapshot.release_artifacts.append(release)
             if _is_test_result_path(relative_path):
-                snapshot.release_artifacts.append(_test_result_evidence(absolute_path, relative_path, metadata))
+                snapshot.test_results.append(_test_result_evidence(absolute_path, relative_path, metadata))
 
 
 def _git_file_paths(root: Path) -> list[str] | None:
@@ -277,11 +278,25 @@ def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
         return result
     for job_name, raw_job in jobs.items():
         job = raw_job if isinstance(raw_job, dict) else {}
+        raw_steps = job.get("steps", [])
+        steps = raw_steps if isinstance(raw_steps, list) else []
         commands = [
             str(step.get("run"))
-            for step in job.get("steps", [])
+            for step in steps
             if isinstance(step, dict) and step.get("run") is not None
-        ] if isinstance(job.get("steps", []), list) else []
+        ]
+        working_directories = [
+            str(value)
+            for step in steps
+            if isinstance(step, dict)
+            for value in [step.get("working-directory", step.get("working_directory"))]
+            if value not in (None, "")
+        ]
+        job_defaults = job.get("defaults", {})
+        if isinstance(job_defaults, dict):
+            run_defaults = job_defaults.get("run", {})
+            if isinstance(run_defaults, dict) and run_defaults.get("working-directory"):
+                working_directories.append(str(run_defaults["working-directory"]))
         line = _yaml_key_line(text, str(job_name))
         signature = " ".join(command.replace("\n", " ") for command in commands)
         result.append(
@@ -296,11 +311,36 @@ def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
                     "job_name": str(job_name),
                     "display_name": job.get("name"),
                     "commands": commands,
+                    "working_directories": list(dict.fromkeys(working_directories)),
                     "invokes_tests": bool(re.search(r"\b(?:test|pytest|ctest|xcodebuild\s+test)\b", signature, re.IGNORECASE)),
                 },
                 excerpt_or_signature=signature or str(job_name),
             )
         )
+    return result
+
+
+def _identifier_configurations(path: str, text: str) -> list[RepositoryEvidence]:
+    result: list[RepositoryEvidence] = []
+    seen: set[tuple[str, int]] = set()
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        for match in re.finditer(r"(?<![A-Za-z0-9])([A-Za-z]{1,16}\s*[-_./]?\s*\d{1,8})(?![A-Za-z0-9])", line):
+            identifier = normalize_identifier(match.group(1))
+            key = (identifier, line_number)
+            if not identifier or key in seen:
+                continue
+            seen.add(key)
+            result.append(
+                RepositoryEvidence(
+                    evidence_id=f"configuration:{path}:{line_number}:{identifier}",
+                    kind=EvidenceKind.CONFIGURATION,
+                    path=path,
+                    line_range=RepositoryLineRange(line_number),
+                    module=_source_module(path),
+                    metadata={"identifiers": [identifier], "configuration_type": "explicit_identifier_reference"},
+                    excerpt_or_signature=line.strip(),
+                )
+            )
     return result
 
 
@@ -370,7 +410,9 @@ def _snapshot_counts(snapshot: RepositorySnapshot) -> dict[str, int]:
         "modules": len(snapshot.modules),
         "symbols": len(snapshot.symbols),
         "tests": len(snapshot.tests),
+        "test_results": len(snapshot.test_results),
         "ci_configs": len(snapshot.ci_configs),
+        "configurations": len(snapshot.configurations),
         "build_configs": len(snapshot.build_configs),
         "release_artifacts": len(snapshot.release_artifacts),
     }
