@@ -1,9 +1,12 @@
 # Capstone document validation
 
-Rift includes a deterministic Phase 1 validator for the FPT SEP490 capstone
-reports and tracking workbooks. It performs structural extraction and contract
-checks only. It does not call a network service, render documents, use OCR, or
-make semantic claims about diagrams, implementation, or repository evidence.
+Rift includes deterministic tooling for the FPT SEP490 capstone reports,
+tracking workbooks, cross-document traceability, and local repository evidence.
+Phase 1 performs structural extraction and contract checks, Phase 2 links claims
+across the document set, and Phase 3 checks selected claims against a local
+worktree and optional package artifacts. None of these phases uses a network or
+LLM service, runs repository builds/tests, or makes semantic claims about
+diagrams or implementation correctness.
 
 ## Contract
 
@@ -13,10 +16,14 @@ The current machine-readable contract is:
 - [`capstone-doc-spec.schema.json`](../capstone-doc-spec.schema.json)
 
 `CapstoneSpec.load()` parses the YAML and validates it against the JSON Schema
-before any input document is opened. Unknown future fields are retained because
-the contract schema permits them unless a future schema revision forbids them.
-Source ambiguities and their resolutions remain available through
-`spec.source_ambiguities` and in JSON validation metadata.
+before any input document is opened. The contract's
+`repository_evidence_extension` defines the four initial claim projections:
+function/feature to implementation, architecture component to module/package,
+test claim to executable test evidence, and deliverable to package/artifact.
+Unknown future fields are retained because the contract schema permits them
+unless a future schema revision forbids them. Source ambiguities and their
+resolutions remain available through `spec.source_ambiguities` and in JSON
+validation metadata.
 
 The supplied Report 5 workbooks were inspected directly. The contract records
 only visible facts:
@@ -146,8 +153,82 @@ multiple candidates, mark one candidate `selected: true`, provide a
 selection remains `REVIEW_REQUIRED`. The supported rule shape is typed by
 `CapstoneSpec.iter_trace_rules()`. Unknown handler names are reported as
 configuration failures rather than ignored. `DocumentSet`, `TraceEntity`, and
-`TraceGraph` are public models so later repository-evidence phases can reuse
-stable claims and source evidence.
+`TraceGraph` are public models; Phase 3 projects repository claims from this
+same graph rather than reparsing documentation.
+
+## Repository evidence
+
+Inspect a local repository adapter/index without loading capstone documents:
+
+```bash
+rift-doc repo-inspect --repo ../rift-mono
+rift-doc repo-inspect --repo ../rift-mono --format json
+```
+
+Run repository evidence as part of the complete set audit, or by itself:
+
+```bash
+rift-doc validate-set --manifest capstone.yaml --repo ../rift-mono
+rift-doc evidence --manifest capstone.yaml --repo ../rift-mono \
+  --artifacts path/to/final-package --format json
+```
+
+`--kind function|architecture|test|deliverable` and `--claim FE-03` bound an
+evidence audit to selected projections. `--artifacts` is independent of source
+control and may point at a generated final-package directory; generated
+binaries do not need to be committed.
+
+Repository inventory uses local Git metadata when available and falls back to a
+plain source tree. It follows Git's tracked/unignored file list in a worktree,
+skips dependency caches and build outputs, supports configured exclusions, and
+records commit SHA and dirty state. It statically parses the build/package and
+source formats present in Rift, including .NET/C#, Dart/Flutter, Python,
+Gradle/Kotlin, Swift/Xcode, Java, and native host files. It does not invoke
+those toolchains or execute arbitrary repository code.
+
+Project labels that differ from code names use an explicit YAML mapping:
+
+```yaml
+repository_mappings:
+  features:
+    FE-03:
+      symbols: [syncNotifications]
+      paths: [daemon-dart/lib/src/notification_sync]
+  components:
+    "Core Daemon":
+      packages: [Rift.Daemon.Core]
+  tests:
+    TC-041:
+      tests: [dismisses remote notification]
+      executable_required: true
+  deliverables:
+    "macOS package":
+      artifacts: ["dist/*.pkg"]
+excluded_paths: [capstone-documents/source-templates]
+```
+
+Pass mappings with `--mapping repository-mapping.yaml`. The configuration is
+schema-validated and every mapped finding records the mapping source and match
+method; the tool never learns or writes mappings automatically.
+
+Evidence statuses are `VERIFIED`, `PARTIALLY_VERIFIED`, `CONTRADICTED`,
+`NOT_FOUND`, `REVIEW_REQUIRED`, `NOT_APPLICABLE`, and `SKIPPED`. `NOT_FOUND`
+means only that deterministic evidence was not located. It is not converted to
+a false-documentation claim. `CONTRADICTED` requires direct conflict evidence,
+such as an explicit mapped conflict or a matched manifest version mismatch.
+These findings use the `repository_evidence` validator/domain and are not FPT
+template violations.
+
+For tests, executable source, CI configuration, and recorded result artifacts
+are separate evidence states: `IMPLEMENTATION_PRESENT`, `CI_CONFIGURED`, and
+`RESULT_PRESENT` with latest result pass/fail/unknown. A source test does not
+imply CI execution or a passing result. Tests explicitly documented or mapped
+as manual are `NOT_APPLICABLE` to executable-test evidence. Symbol/package
+existence likewise does not prove behavioral correctness.
+
+Human output includes document and repository locations. JSON also includes
+snapshot metadata, match methods, bounded excerpts, and compact evidence
+packets for later semantic review.
 
 ## Tests
 
