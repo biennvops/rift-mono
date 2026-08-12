@@ -525,7 +525,8 @@ public sealed class ClipboardFileInteropTests : IDisposable
                 Clipboard,
                 FileTransfer,
                 mediaPlayback,
-                notificationSync);
+                notificationSync,
+                Identity);
 
             Transport.MessageReceived += OnMessageReceived;
             Transport.SessionStateChanged += OnSessionStateChanged;

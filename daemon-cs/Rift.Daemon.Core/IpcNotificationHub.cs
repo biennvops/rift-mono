@@ -9,6 +9,8 @@ public sealed class IpcNotificationHub : IIpcNotificationService
     private readonly ConcurrentDictionary<int, JsonRpc> _clients = new();
     private int _nextClientId;
 
+    public bool HasClients => !_clients.IsEmpty;
+
     public IDisposable RegisterClient(JsonRpc jsonRpc)
     {
         ArgumentNullException.ThrowIfNull(jsonRpc);

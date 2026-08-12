@@ -581,6 +581,7 @@ public sealed class MediaPlaybackSyncServiceTests : IDisposable
 
     private sealed class RecordingIpcNotificationService : IIpcNotificationService
     {
+        public bool HasClients => true;
         public List<(string Method, object Payload)> Events { get; } = [];
 
         public IDisposable RegisterClient(JsonRpc jsonRpc) => NullDisposable.Instance;

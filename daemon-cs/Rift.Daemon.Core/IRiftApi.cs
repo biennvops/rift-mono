@@ -62,6 +62,11 @@ public interface IRiftApi
         string sourceDeviceId,
         string notificationId,
         string action);
+    Task<ReportHandledNotificationActionResult> ReportLocalNotificationActionHandledAsync(
+        string requestId,
+        bool success,
+        string? failureReason = null,
+        string? message = null);
     Task<NotificationSyncPolicy> UpdateNotificationSyncPolicyAsync(
         bool enabled,
         string? mode = null,

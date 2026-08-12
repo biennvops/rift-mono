@@ -165,6 +165,8 @@ public sealed class LinuxNotificationSyncObserverTests
         public Task HandleNotificationUpdatedAsync(NotificationSyncRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task HandleNotificationActionRequestAsync(NotificationActionRequestRecord request, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(string requestId, bool success, string? failureReason, string? message, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed record RecordedEvent(

@@ -86,9 +86,9 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             _fileTransferService,
             _mediaPlaybackSyncService,
             _notificationSyncService,
+            _identityManager,
             _deviceStatusService,
-            _securityEventLog,
-            _identityManager);
+            _securityEventLog);
     }
 
     [Fact]
@@ -607,6 +607,124 @@ public sealed class ProtocolMessageRouterTests : IDisposable
             {
                 status = "online",
                 capabilities = new[] { "presence.basic" }
+            }),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationActionRequest_ValidatesIdentitiesAndRoutesRequest()
+    {
+        const string peerDeviceId = "rift-peer-notification-action";
+        const string operationId = "notification-operation-1";
+        await _notificationSyncService.HandleNotificationPostedAsync(new NotificationSyncRecord
+        {
+            NotificationId = "local-notification-1",
+            SourceDeviceId = _identityManager.GetDeviceId(),
+            SourcePlatform = "windows",
+            PackageName = "com.example.chat",
+            AppName = "Example Chat",
+            PostedAt = "2026-07-20T10:00:00Z",
+            IsDismissible = true
+        }, CancellationToken.None);
+
+        await _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["notification.sync"]),
+            CreateEnvelope(peerDeviceId, "notification.actionRequest", new
+            {
+                operationId,
+                notificationId = "local-notification-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "dismiss",
+                requestedAt = "2026-07-20T10:00:00Z"
+            }),
+            CancellationToken.None);
+
+        var result = Assert.Single(_clipboardTransport.Payloads, payload =>
+            payload.GetProperty("type").GetString() == "notification.actionResult");
+        Assert.Equal(peerDeviceId, result.GetProperty("payload").GetProperty("requestingDeviceId").GetString());
+        Assert.Equal(operationId, result.GetProperty("payload").GetProperty("operationId").GetString());
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationActionRequest_RequiresNegotiatedCapability()
+    {
+        const string peerDeviceId = "rift-peer-notification-action";
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, []),
+            CreateEnvelope(peerDeviceId, "notification.actionRequest", new
+            {
+                operationId = "notification-operation-1",
+                notificationId = "local-notification-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "dismiss"
+            }),
+            CancellationToken.None));
+
+        Assert.DoesNotContain(
+            _clipboardTransport.Payloads,
+            payload => payload.GetProperty("type").GetString() == "notification.actionResult");
+    }
+
+    [Theory]
+    [InlineData("rift-spoofed-requester", null)]
+    [InlineData(null, "rift-remote-source")]
+    public async Task HandleMessageAsync_NotificationActionRequest_RejectsIdentityMismatch(
+        string? requestingDeviceIdOverride,
+        string? sourceDeviceIdOverride)
+    {
+        const string peerDeviceId = "rift-peer-notification-action";
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["notification.sync"]),
+            CreateEnvelope(peerDeviceId, "notification.actionRequest", new
+            {
+                operationId = "notification-operation-1",
+                notificationId = "local-notification-1",
+                sourceDeviceId = sourceDeviceIdOverride ?? _identityManager.GetDeviceId(),
+                requestingDeviceId = requestingDeviceIdOverride ?? peerDeviceId,
+                action = "dismiss"
+            }),
+            CancellationToken.None));
+
+        Assert.DoesNotContain(
+            _clipboardTransport.Payloads,
+            payload => payload.GetProperty("type").GetString() == "notification.actionResult");
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationActionRequest_RejectsEnvelopeIdentityMismatch()
+    {
+        const string peerDeviceId = "rift-peer-notification-action";
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["notification.sync"]),
+            CreateEnvelope("rift-spoofed-envelope", "notification.actionRequest", new
+            {
+                operationId = "notification-operation-1",
+                notificationId = "local-notification-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "dismiss"
+            }),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HandleMessageAsync_NotificationActionRequest_RejectsMalformedPayload()
+    {
+        const string peerDeviceId = "rift-peer-notification-action";
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _router.HandleMessageAsync(
+            CreateSession(peerDeviceId, ["notification.sync"]),
+            CreateEnvelope(peerDeviceId, "notification.actionRequest", new
+            {
+                operationId = "notification-operation-1",
+                sourceDeviceId = _identityManager.GetDeviceId(),
+                requestingDeviceId = peerDeviceId,
+                action = "dismiss"
             }),
             CancellationToken.None));
     }

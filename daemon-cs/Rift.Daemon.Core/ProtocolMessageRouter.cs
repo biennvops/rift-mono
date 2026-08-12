@@ -11,9 +11,9 @@ public sealed class ProtocolMessageRouter(
     IFileTransferService fileTransferService,
     IMediaPlaybackSyncService mediaPlaybackSyncService,
     INotificationSyncService notificationSyncService,
+    IIdentityManager identityManager,
     IDeviceStatusService? deviceStatusService = null,
-    ISecurityEventLog? securityEventLog = null,
-    IIdentityManager? identityManager = null) : IProtocolMessageRouter
+    ISecurityEventLog? securityEventLog = null) : IProtocolMessageRouter
 {
     public async Task HandleMessageAsync(SessionPeerContext session, ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
     {
@@ -289,6 +289,35 @@ public sealed class ProtocolMessageRouter(
                     : null,
                 RequestedAt = mediaPayload.TryGetProperty("requestedAt", out var requestedAtElement) ? requestedAtElement.GetString() : null
             }, cancellationToken);
+            return;
+        }
+
+        if (string.Equals(messageType, "notification.actionRequest", StringComparison.Ordinal))
+        {
+            EnsureProtectedMessageAllowed(session, "notification.sync", messageType);
+            var notificationPayload = root.GetProperty("payload");
+            var requestingDeviceId = notificationPayload.GetProperty("requestingDeviceId").GetString() ?? string.Empty;
+            EnsureEnvelopeIdentityMatches(peerDeviceId, requestingDeviceId, messageType);
+            var payloadSourceDeviceId = notificationPayload.GetProperty("sourceDeviceId").GetString() ?? string.Empty;
+            if (!string.Equals(payloadSourceDeviceId, identityManager.GetDeviceId(), StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException(
+                    "notification.actionRequest sourceDeviceId did not match the local device identity.");
+            }
+
+            await notificationSyncService.HandleNotificationActionRequestAsync(
+                new NotificationActionRequestRecord
+                {
+                    OperationId = notificationPayload.GetProperty("operationId").GetString() ?? string.Empty,
+                    NotificationId = notificationPayload.GetProperty("notificationId").GetString() ?? string.Empty,
+                    SourceDeviceId = payloadSourceDeviceId,
+                    RequestingDeviceId = requestingDeviceId,
+                    Action = notificationPayload.GetProperty("action").GetString() ?? string.Empty,
+                    RequestedAt = notificationPayload.TryGetProperty("requestedAt", out var requestedAtElement)
+                        ? requestedAtElement.GetString()
+                        : null
+                },
+                cancellationToken).ConfigureAwait(false);
             return;
         }
 

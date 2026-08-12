@@ -720,6 +720,21 @@ public sealed class RiftApiHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task ReportLocalNotificationActionHandledAsync_DelegatesToNotificationService()
+    {
+        var result = await _handler.ReportLocalNotificationActionHandledAsync(
+            "notification-request-1",
+            success: false,
+            failureReason: "PeerRejected",
+            message: "native executor rejected the request");
+
+        Assert.Equal("notification-request-1", result.RequestId);
+        Assert.Equal("notif-1", result.NotificationId);
+        Assert.Equal("dismiss", result.Action);
+        Assert.False(result.Success);
+    }
+
+    [Fact]
     public async Task NotificationSyncPolicy_LegacyRequestIsProjectedToCanonicalPolicy()
     {
         var policy = await _handler.UpdateNotificationSyncPolicyAsync(
@@ -894,6 +909,22 @@ public sealed class RiftApiHandlerTests : IDisposable
         public Task HandleNotificationRemovedAsync(NotificationRemovedRecord notification, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task HandleNotificationActionResultAsync(NotificationActionResultRecord result, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task HandleNotificationActionRequestAsync(NotificationActionRequestRecord request, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<ReportHandledNotificationActionResult> ReportHandledNotificationActionAsync(
+            string requestId,
+            bool success,
+            string? failureReason,
+            string? message,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ReportHandledNotificationActionResult
+            {
+                RequestId = requestId,
+                NotificationId = "notif-1",
+                Action = "dismiss",
+                Success = success
+            });
     }
 
     private sealed class FakeMediaPlaybackSyncService : IMediaPlaybackSyncService

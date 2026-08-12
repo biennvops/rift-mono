@@ -888,6 +888,7 @@ public sealed class ClipboardServiceTests : IDisposable
 
     private sealed class FakeIpcNotificationService : IIpcNotificationService
     {
+        public bool HasClients => true;
         public List<(string Method, Dictionary<string, object?> Parameters)> Notifications { get; } = [];
 
         public IDisposable RegisterClient(StreamJsonRpc.JsonRpc jsonRpc) => new NoOpRegistration();

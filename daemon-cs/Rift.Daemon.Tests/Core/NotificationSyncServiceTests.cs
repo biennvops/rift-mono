@@ -342,6 +342,307 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task HandleNotificationActionRequestAsync_UsesDirectHandlerAndPreservesCorrelation()
+    {
+        var localActionHandler = new RecordingLocalNotificationActionHandler();
+        var service = CreateService(localActionHandler: localActionHandler);
+        var localDeviceId = _identityManager.GetDeviceId();
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: localDeviceId),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+
+        var handled = Assert.Single(localActionHandler.Performed);
+        Assert.Equal("local-notif", handled.Notification.NotificationId);
+        Assert.Equal("dismiss", handled.Action);
+        Assert.DoesNotContain(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult");
+        Assert.Equal("rift-peer", result.PeerDeviceId);
+        Assert.Equal("peer-operation", result.Payload.GetProperty("operationId").GetString());
+        Assert.Equal("local-notif", result.Payload.GetProperty("notificationId").GetString());
+        Assert.Equal(localDeviceId, result.Payload.GetProperty("sourceDeviceId").GetString());
+        Assert.Equal("rift-peer", result.Payload.GetProperty("requestingDeviceId").GetString());
+        Assert.Equal("dismiss", result.Payload.GetProperty("action").GetString());
+        Assert.True(result.Payload.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_ReportsDirectHandlerFailure()
+    {
+        var localActionHandler = new RecordingLocalNotificationActionHandler
+        {
+            Result = new LocalNotificationActionResult
+            {
+                Success = false,
+                FailureReason = "CapabilityUnavailable",
+                Message = "native target disappeared"
+            }
+        };
+        var service = CreateService(localActionHandler: localActionHandler);
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.False(result.GetProperty("success").GetBoolean());
+        Assert.Equal("CapabilityUnavailable", result.GetProperty("failureReason").GetString());
+        Assert.Equal("native target disappeared", result.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_RejectsInvalidTargetsAndActionsBeforeExecution()
+    {
+        var localActionHandler = new RecordingLocalNotificationActionHandler();
+        var service = CreateService(localActionHandler: localActionHandler);
+        var localDeviceId = _identityManager.GetDeviceId();
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("remote-only", sourceDeviceId: "rift-peer"),
+            CancellationToken.None);
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("restricted", isDismissible: false, sourceDeviceId: localDeviceId),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("missing-operation", "missing"),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("remote-operation", "remote-only"),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("restricted-operation", "restricted"),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("unknown-operation", "restricted", action: "reply"),
+            CancellationToken.None);
+
+        Assert.Empty(localActionHandler.Performed);
+        var results = _transport.Payloads
+            .Where(sent => sent.Type == "notification.actionResult")
+            .Select(sent => sent.Payload)
+            .ToArray();
+        Assert.Equal(4, results.Length);
+        Assert.Equal(
+            2,
+            results.Count(result =>
+                result.GetProperty("failureReason").GetString() == "CapabilityUnavailable"));
+        Assert.Contains(
+            results,
+            result => result.GetProperty("failureReason").GetString() == "PolicyDenied");
+        Assert.Contains(
+            results,
+            result => result.GetProperty("failureReason").GetString() == "ProtocolError");
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_FallsBackToIpcAndCompletesOnce()
+    {
+        var service = CreateService();
+        var localDeviceId = _identityManager.GetDeviceId();
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: localDeviceId),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest(
+                "peer-operation",
+                "local-notif",
+                requestedAt: "2026-07-20T10:00:00Z"),
+            CancellationToken.None);
+
+        var notification = Assert.Single(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var payload = JsonSerializer.SerializeToElement(notification.Payload);
+        var requestId = payload.GetProperty("requestId").GetString()!;
+        Assert.NotEqual("peer-operation", requestId);
+        Assert.Equal("peer-operation", payload.GetProperty("operationId").GetString());
+        Assert.Equal(localDeviceId, payload.GetProperty("sourceDeviceId").GetString());
+        Assert.Equal("rift-peer", payload.GetProperty("requestingDeviceId").GetString());
+        Assert.Equal("2026-07-20T10:00:00Z", payload.GetProperty("requestedAt").GetString());
+
+        var report = await service.ReportHandledNotificationActionAsync(
+            requestId,
+            success: true,
+            failureReason: "PeerRejected",
+            message: null,
+            CancellationToken.None);
+
+        Assert.Equal(requestId, report.RequestId);
+        Assert.True(report.Success);
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.Equal("peer-operation", result.GetProperty("operationId").GetString());
+        Assert.True(result.GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, result.GetProperty("failureReason").ValueKind);
+        var repeated = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.ReportHandledNotificationActionAsync(
+                requestId,
+                true,
+                null,
+                null,
+                CancellationToken.None));
+        Assert.Equal(-32009, repeated.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ReportHandledNotificationActionAsync_ValidatesAndDefaultsFailureReason()
+    {
+        var service = CreateService();
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+        var notification = Assert.Single(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var requestId = JsonSerializer.SerializeToElement(notification.Payload)
+            .GetProperty("requestId")
+            .GetString()!;
+
+        var invalid = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.ReportHandledNotificationActionAsync(
+                requestId,
+                false,
+                "not-allowed",
+                null,
+                CancellationToken.None));
+        Assert.Equal(-32602, invalid.ErrorCode);
+
+        await service.ReportHandledNotificationActionAsync(
+            requestId,
+            false,
+            null,
+            "native executor rejected the request",
+            CancellationToken.None);
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.Equal("PeerRejected", result.GetProperty("failureReason").GetString());
+        Assert.Equal("native executor rejected the request", result.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_ExpiresUnhandledIpcRequest()
+    {
+        var service = CreateService(actionTimeout: TimeSpan.FromMilliseconds(50));
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+        var notification = Assert.Single(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var requestId = JsonSerializer.SerializeToElement(notification.Payload)
+            .GetProperty("requestId")
+            .GetString()!;
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!_transport.Payloads.Any(sent => sent.Type == "notification.actionResult") &&
+               DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.Equal("peer-operation", result.GetProperty("operationId").GetString());
+        Assert.Equal("Timeout", result.GetProperty("failureReason").GetString());
+        var late = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.ReportHandledNotificationActionAsync(
+                requestId,
+                true,
+                null,
+                null,
+                CancellationToken.None));
+        Assert.Equal(-32009, late.ErrorCode);
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_FailsWhenNoLocalExecutorIsConnected()
+    {
+        _ipcNotificationService.HasClients = false;
+        var service = CreateService();
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+
+        Assert.DoesNotContain(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.Equal("CapabilityUnavailable", result.GetProperty("failureReason").GetString());
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_RemovesPendingRequestWhenPeerDisconnects()
+    {
+        var service = CreateService(actionTimeout: TimeSpan.FromSeconds(5));
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+        var notification = Assert.Single(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+        var requestId = JsonSerializer.SerializeToElement(notification.Payload)
+            .GetProperty("requestId")
+            .GetString()!;
+
+        _transport.RaiseSessionStateChanged(new SessionStateChangedEventArgs(
+            "rift-peer",
+            isOnline: false,
+            selectedCapabilities: [],
+            allowsProtectedTraffic: false));
+
+        var late = await Assert.ThrowsAsync<NotificationSyncFailureException>(() =>
+            service.ReportHandledNotificationActionAsync(
+                requestId,
+                true,
+                null,
+                null,
+                CancellationToken.None));
+        Assert.Equal(-32009, late.ErrorCode);
+        Assert.DoesNotContain(_transport.Payloads, sent => sent.Type == "notification.actionResult");
+    }
+
+    [Fact]
+    public async Task HandleNotificationActionRequestAsync_FallsBackWhenDirectHandlerCannotPerform()
+    {
+        var localActionHandler = new RecordingLocalNotificationActionHandler
+        {
+            CanPerformResult = false
+        };
+        var service = CreateService(localActionHandler: localActionHandler);
+        await service.HandleNotificationPostedAsync(
+            CreateNotification("local-notif", sourceDeviceId: _identityManager.GetDeviceId()),
+            CancellationToken.None);
+
+        await service.HandleNotificationActionRequestAsync(
+            CreateIncomingActionRequest("peer-operation", "local-notif"),
+            CancellationToken.None);
+
+        Assert.Empty(localActionHandler.Performed);
+        Assert.Contains(
+            _ipcNotificationService.Events,
+            evt => evt.Method == "rift.onNotificationActionRequest");
+    }
+
+    [Fact]
     public async Task HandleNotificationActionResultAsync_IgnoresMismatchedCorrelations()
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
@@ -370,7 +671,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleLocalNotificationEventAsync_DoesNotAdvertiseUnsupportedDesktopActions()
+    public async Task HandleLocalNotificationEventAsync_PreservesSourceAdapterActionAdvertisement()
     {
         _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
         _transport.ActivePeers.Add("rift-peer");
@@ -392,12 +693,12 @@ public sealed class NotificationSyncServiceTests : IDisposable
             CancellationToken.None);
 
         var payload = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.posted").Payload;
-        Assert.False(payload.GetProperty("isDismissible").GetBoolean());
-        Assert.False(payload.GetProperty("isOpenable").GetBoolean());
+        Assert.True(payload.GetProperty("isDismissible").GetBoolean());
+        Assert.True(payload.GetProperty("isOpenable").GetBoolean());
         var listed = await _service.ListNotificationsAsync(CancellationToken.None);
         var stored = Assert.Single(listed.Notifications);
-        Assert.False(stored.IsDismissible);
-        Assert.False(stored.IsOpenable);
+        Assert.True(stored.IsDismissible);
+        Assert.True(stored.IsOpenable);
     }
 
     [Fact]
@@ -744,6 +1045,52 @@ public sealed class NotificationSyncServiceTests : IDisposable
         }
     }
 
+    private NotificationSyncService CreateService(
+        TimeSpan? actionTimeout = null,
+        ILocalNotificationActionHandler? localActionHandler = null) =>
+        new(
+            _transport,
+            _presenceService,
+            _identityManager,
+            _operationService,
+            _securityEventLog,
+            _ipcNotificationService,
+            NullLogger<NotificationSyncService>.Instance,
+            actionTimeout: actionTimeout,
+            localActionHandler: localActionHandler);
+
+    private NotificationActionRequestRecord CreateIncomingActionRequest(
+        string operationId,
+        string notificationId,
+        string action = "dismiss",
+        string? requestedAt = null) => new()
+        {
+            OperationId = operationId,
+            NotificationId = notificationId,
+            SourceDeviceId = _identityManager.GetDeviceId(),
+            RequestingDeviceId = "rift-peer",
+            Action = action,
+            RequestedAt = requestedAt
+        };
+
+    private sealed class RecordingLocalNotificationActionHandler : ILocalNotificationActionHandler
+    {
+        public bool CanPerformResult { get; set; } = true;
+        public LocalNotificationActionResult Result { get; set; } = new() { Success = true };
+        public List<(NotificationSyncRecord Notification, string Action)> Performed { get; } = [];
+
+        public bool CanPerform(NotificationSyncRecord notification, string action) => CanPerformResult;
+
+        public Task<LocalNotificationActionResult> PerformAsync(
+            NotificationSyncRecord notification,
+            string action,
+            CancellationToken cancellationToken)
+        {
+            Performed.Add((notification, action));
+            return Task.FromResult(Result);
+        }
+    }
+
     private static NotificationSyncRecord CreateNotification(
         string notificationId,
         string? title = "Title",
@@ -846,11 +1193,10 @@ public sealed class NotificationSyncServiceTests : IDisposable
             remove { }
         }
 
-        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged
-        {
-            add { }
-            remove { }
-        }
+        public event EventHandler<SessionStateChangedEventArgs>? SessionStateChanged;
+
+        public void RaiseSessionStateChanged(SessionStateChangedEventArgs args) =>
+            SessionStateChanged?.Invoke(this, args);
 
         public HashSet<string> ActivePeers { get; } = new(StringComparer.Ordinal);
         public List<(string PeerDeviceId, string Type)> SentMessages { get; } = [];
@@ -904,6 +1250,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
     private sealed class RecordingIpcNotificationService : IIpcNotificationService
     {
+        public bool HasClients { get; set; } = true;
         public List<(string Method, object Payload)> Events { get; } = [];
 
         public IDisposable RegisterClient(JsonRpc jsonRpc) => NullDisposable.Instance;
