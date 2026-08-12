@@ -621,7 +621,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleNotificationActionRequestAsync_FallsBackWhenDirectHandlerCannotPerform()
+    public async Task HandleNotificationActionRequestAsync_DirectHandlerDeclineFailsWithoutIpcFallback()
     {
         var localActionHandler = new RecordingLocalNotificationActionHandler
         {
@@ -637,9 +637,11 @@ public sealed class NotificationSyncServiceTests : IDisposable
             CancellationToken.None);
 
         Assert.Empty(localActionHandler.Performed);
-        Assert.Contains(
+        Assert.DoesNotContain(
             _ipcNotificationService.Events,
             evt => evt.Method == "rift.onNotificationActionRequest");
+        var result = Assert.Single(_transport.Payloads, sent => sent.Type == "notification.actionResult").Payload;
+        Assert.Equal("CapabilityUnavailable", result.GetProperty("failureReason").GetString());
     }
 
     [Fact]

@@ -555,8 +555,19 @@ public sealed class NotificationSyncService : INotificationSyncService
             return;
         }
 
-        if (_localActionHandler is not null && _localActionHandler.CanPerform(notification, action))
+        if (_localActionHandler is not null)
         {
+            if (!_localActionHandler.CanPerform(notification, action))
+            {
+                await SendIncomingActionResultAsync(
+                    pending,
+                    success: false,
+                    failureReason: "CapabilityUnavailable",
+                    message: "No daemon-resident notification handler can perform the request.",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             LocalNotificationActionResult result;
             try
             {

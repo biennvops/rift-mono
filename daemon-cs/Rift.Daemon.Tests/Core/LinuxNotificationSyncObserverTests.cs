@@ -20,14 +20,14 @@ public sealed class LinuxNotificationSyncObserverTests
         await observer.ProcessEventAsync(CreateReply(replySerial: 10), CancellationToken.None);
         await observer.ProcessEventAsync(CreateCall(serial: 11, replacesId: 42, summary: "Updated"), CancellationToken.None);
         await observer.ProcessEventAsync(CreateReply(replySerial: 11), CancellationToken.None);
-        await observer.ProcessEventAsync(new LinuxNotificationClosed(":1.5", 42), CancellationToken.None);
+        await observer.ProcessEventAsync(new LinuxNotificationClosed(":1.5", 42, 3), CancellationToken.None);
 
         Assert.Equal(["posted", "updated", "removed"], syncService.Events.Select(evt => evt.EventType));
         Assert.Equal("linux::1.5:42", syncService.Events[0].Notification.NotificationId);
         Assert.Equal("linux", syncService.Events[0].Notification.SourcePlatform);
         Assert.Equal("org.example.Chat", syncService.Events[0].Notification.PackageName);
         Assert.Equal("Example Chat", syncService.Events[0].Notification.AppName);
-        Assert.False(syncService.Events[0].Notification.IsDismissible);
+        Assert.True(syncService.Events[0].Notification.IsDismissible);
         Assert.False(syncService.Events[0].Notification.IsOpenable);
         Assert.Equal("Updated", syncService.Events[1].Notification.Title);
         Assert.NotNull(syncService.Events[2].RemovedAt);
@@ -54,9 +54,67 @@ public sealed class LinuxNotificationSyncObserverTests
         var observer = CreateObserver(syncService);
 
         await observer.ProcessEventAsync(CreateReply(replySerial: 99), CancellationToken.None);
-        await observer.ProcessEventAsync(new LinuxNotificationClosed(":1.5", 99), CancellationToken.None);
+        await observer.ProcessEventAsync(new LinuxNotificationClosed(":1.5", 99, 2), CancellationToken.None);
 
         Assert.Empty(syncService.Events);
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_FailsClosedWhenControlIsUnavailable()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var registry = new LinuxNotificationRegistry();
+        var observer = CreateObserver(
+            syncService,
+            registry,
+            new StubNotificationControl { IsAvailable = false });
+
+        await observer.ProcessEventAsync(CreateCall(serial: 10), CancellationToken.None);
+        await observer.ProcessEventAsync(CreateReply(replySerial: 10), CancellationToken.None);
+
+        var notification = Assert.Single(syncService.Events).Notification;
+        Assert.False(notification.IsDismissible);
+        Assert.False(notification.IsOpenable);
+        Assert.False(registry.TryGet(notification.NotificationId, out _));
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_DoesNotAdvertiseWithoutUniqueServerOwner()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var registry = new LinuxNotificationRegistry();
+        var observer = CreateObserver(syncService, registry);
+
+        await observer.ProcessEventAsync(CreateCall(serial: 10), CancellationToken.None);
+        await observer.ProcessEventAsync(
+            CreateReply(replySerial: 10, sender: "org.freedesktop.Notifications"),
+            CancellationToken.None);
+
+        var notification = Assert.Single(syncService.Events).Notification;
+        Assert.False(notification.IsDismissible);
+        Assert.False(registry.TryGet(notification.NotificationId, out _));
+    }
+
+    [Fact]
+    public async Task ProcessEventAsync_ClosureRemovesRegistryAndPublishesOnce()
+    {
+        var syncService = new RecordingNotificationSyncService();
+        var registry = new LinuxNotificationRegistry();
+        var observer = CreateObserver(syncService, registry);
+
+        await observer.ProcessEventAsync(CreateCall(serial: 10), CancellationToken.None);
+        await observer.ProcessEventAsync(CreateReply(replySerial: 10), CancellationToken.None);
+        Assert.True(registry.TryGet("linux::1.5:42", out _));
+
+        await observer.ProcessEventAsync(
+            new LinuxNotificationClosed(":1.5", 42, 3),
+            CancellationToken.None);
+        await observer.ProcessEventAsync(
+            new LinuxNotificationClosed(":1.5", 42, 3),
+            CancellationToken.None);
+
+        Assert.False(registry.TryGet("linux::1.5:42", out _));
+        Assert.Equal(1, syncService.Events.Count(evt => evt.EventType == "removed"));
     }
 
     [Fact]
@@ -89,11 +147,16 @@ public sealed class LinuxNotificationSyncObserverTests
         Assert.Equal("Example Chat", Assert.Single(syncService.Events).Notification.PackageName);
     }
 
-    private static LinuxNotificationSyncObserver CreateObserver(RecordingNotificationSyncService syncService) =>
+    private static LinuxNotificationSyncObserver CreateObserver(
+        RecordingNotificationSyncService syncService,
+        LinuxNotificationRegistry? registry = null,
+        ILinuxNotificationControl? control = null) =>
         new(
             new EmptyNotificationMonitor(),
             syncService,
             new StubIdentityManager(),
+            registry ?? new LinuxNotificationRegistry(),
+            control ?? new StubNotificationControl(),
             NullLogger<LinuxNotificationSyncObserver>.Instance);
 
     private static LinuxNotificationPostedCall CreateCall(
@@ -112,9 +175,11 @@ public sealed class LinuxNotificationSyncObserverTests
             DesktopEntry: desktopEntry,
             ReceivedAt: new DateTimeOffset(2026, 8, 8, 12, 0, 0, TimeSpan.Zero));
 
-    private static LinuxNotificationPostedReply CreateReply(uint replySerial) =>
+    private static LinuxNotificationPostedReply CreateReply(
+        uint replySerial,
+        string sender = ":1.5") =>
         new(
-            Sender: ":1.5",
+            Sender: sender,
             Destination: ":1.20",
             ReplySerial: replySerial,
             NotificationId: 42);
@@ -127,6 +192,15 @@ public sealed class LinuxNotificationSyncObserverTests
             await Task.CompletedTask;
             yield break;
         }
+    }
+
+    private sealed class StubNotificationControl : ILinuxNotificationControl
+    {
+        public bool IsAvailable { get; init; } = true;
+        public Task<string> GetNotificationServerOwnerAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(":1.5");
+        public Task CloseNotificationAsync(string notificationServerOwner, uint notificationId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
     }
 
     private sealed class StubIdentityManager : IIdentityManager
