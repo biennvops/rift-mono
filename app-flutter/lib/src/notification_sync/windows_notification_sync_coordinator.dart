@@ -26,6 +26,7 @@ class WindowsNotificationSyncCoordinator {
 
   Future<void> _operationQueue = Future<void>.value();
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
+  StreamSubscription<Map<String, dynamic>>? _actionRequestSubscription;
   WindowsNotificationListenerRuntimeStatus? _runtime;
   bool _running = false;
   bool _disposed = false;
@@ -33,16 +34,35 @@ class WindowsNotificationSyncCoordinator {
   bool get isRunning => _running;
   WindowsNotificationListenerRuntimeStatus? get runtimeStatus => _runtime;
 
-  Future<void> start() => _enqueue(_startOrStop);
+  Future<void> start() {
+    _ensureActionRequestSubscription();
+    return _enqueue(_startOrStop);
+  }
 
-  Future<void> refresh() => _enqueue(_startOrStop);
+  Future<void> refresh() {
+    _ensureActionRequestSubscription();
+    return _enqueue(_startOrStop);
+  }
 
   Future<void> reconcile() => _enqueue(_reconcileIfRunning);
 
   Future<void> dispose() async {
     _disposed = true;
+    final actionSubscription = _actionRequestSubscription;
+    _actionRequestSubscription = null;
+    await actionSubscription?.cancel();
     await _enqueue(() async {
       await _stopInternal();
+    });
+  }
+
+  void _ensureActionRequestSubscription() {
+    if (_disposed) {
+      return;
+    }
+    _actionRequestSubscription ??=
+        _client.onNotificationActionRequest.listen((request) {
+      unawaited(_enqueue(() => _handleActionRequest(request)));
     });
   }
 
@@ -209,6 +229,111 @@ class WindowsNotificationSyncCoordinator {
     });
   }
 
+  Future<void> _handleActionRequest(Map<String, dynamic> request) async {
+    final requestId = _nonEmptyString(request['requestId']);
+    if (requestId == null) {
+      return;
+    }
+
+    var success = false;
+    String? failureReason;
+    String? message;
+    final sourceDeviceId = _nonEmptyString(request['sourceDeviceId']);
+    final notificationId = _nonEmptyString(request['notificationId']);
+    final action = _nonEmptyString(request['action']);
+
+    if (_disposed || !_running) {
+      failureReason = 'CapabilityUnavailable';
+      message = 'The Windows notification listener is not running.';
+    } else {
+      final localDeviceId = await _localDeviceId();
+      if (localDeviceId == null || sourceDeviceId != localDeviceId) {
+        failureReason = 'PolicyDenied';
+        message = 'The notification action does not target this device.';
+      } else if (action != 'dismiss') {
+        failureReason = 'PolicyDenied';
+        message = 'Windows notification open is not supported.';
+      } else if (_runtime?.supported != true ||
+          _runtime?.hasPackageIdentity != true ||
+          await _listener.getAccessStatus() != 'allowed') {
+        failureReason = 'CapabilityUnavailable';
+        message = 'The Windows notification listener is unavailable.';
+      } else {
+        final userNotificationId = _parseWindowsNotificationId(notificationId);
+        if (userNotificationId == null) {
+          failureReason = 'CapabilityUnavailable';
+          message = 'The Windows notification ID is invalid.';
+        } else if (!await _hasExactTarget(notificationId!)) {
+          failureReason = 'CapabilityUnavailable';
+          message = 'The Windows notification is no longer available.';
+        } else {
+          try {
+            final result =
+                await _listener.removeNotification(userNotificationId);
+            success = result.success;
+            if (!success) {
+              switch (result.status) {
+                case WindowsNotificationRemovalStatus.notFound:
+                case WindowsNotificationRemovalStatus.unavailable:
+                  failureReason = 'CapabilityUnavailable';
+                  break;
+                case WindowsNotificationRemovalStatus.error:
+                  failureReason = 'PeerRejected';
+                  break;
+                case WindowsNotificationRemovalStatus.success:
+                  break;
+              }
+              message = result.message;
+            }
+          } catch (_) {
+            failureReason = 'PeerRejected';
+            message = 'The Windows notification could not be removed.';
+          }
+        }
+      }
+    }
+
+    try {
+      await _client.reportLocalNotificationActionHandled(
+        requestId: requestId,
+        success: success,
+        failureReason: failureReason,
+        message: message,
+      );
+    } catch (_) {
+      // The daemon may already have timed out or disconnected the requester.
+    }
+  }
+
+  int? _parseWindowsNotificationId(String? notificationId) {
+    if (notificationId == null ||
+        !RegExp(r'^windows:(0|[1-9][0-9]*)$').hasMatch(notificationId)) {
+      return null;
+    }
+    final value = int.tryParse(notificationId.substring('windows:'.length));
+    if (value == null || value < 0 || value > 0xffffffff) {
+      return null;
+    }
+    return value;
+  }
+
+  Future<bool> _hasExactTarget(String notificationId) async {
+    if (_tracked.containsKey(notificationId)) {
+      return true;
+    }
+    try {
+      final active = await _listener.listActiveNotifications();
+      for (final raw in active) {
+        if (_notificationId(raw) == notificationId) {
+          return true;
+        }
+      }
+    } catch (_) {
+      return false;
+    }
+    return false;
+  }
+
   Map<String, dynamic>? _normalizeAdded(Map<String, dynamic> raw) {
     if (raw['isRiftNotification'] == true) {
       return null;
@@ -237,7 +362,7 @@ class WindowsNotificationSyncCoordinator {
       'sourcePlatform': 'windows',
       'packageName': packageName,
       'appName': appName,
-      'isDismissible': false,
+      'isDismissible': _running,
       'isOpenable': false,
       'postedAt': _nonEmptyString(raw['postedAt']) ?? _nowUtc(),
     };
@@ -280,11 +405,12 @@ class WindowsNotificationSyncCoordinator {
   String? _notificationId(Map<String, dynamic> raw) {
     final direct = _nonEmptyString(raw['notificationId']);
     if (direct != null) {
-      return direct.startsWith('windows:') ? direct : 'windows:$direct';
+      return _parseWindowsNotificationId(direct) == null ? null : direct;
     }
     final userId = raw['userNotificationId'];
     if (userId is int || userId is num) {
-      return 'windows:${userId.toInt()}';
+      final value = userId is int ? userId : userId.toInt();
+      return value < 0 || value > 0xffffffff ? null : 'windows:$value';
     }
     return null;
   }

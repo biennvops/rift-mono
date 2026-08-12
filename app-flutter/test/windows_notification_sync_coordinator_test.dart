@@ -19,9 +19,37 @@ class _FakeClient extends JsonRpcRiftClient {
       : super(FakeTransport());
 
   List<Map<String, dynamic>> notifications;
+  final StreamController<Map<String, dynamic>> actionRequests =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final List<Map<String, dynamic>> actionReports = <Map<String, dynamic>>[];
 
   @override
   bool get isConnected => true;
+
+  @override
+  Stream<Map<String, dynamic>> get onNotificationActionRequest =>
+      actionRequests.stream;
+
+  @override
+  Future<dynamic> reportLocalNotificationActionHandled({
+    required String requestId,
+    required bool success,
+    String? failureReason,
+    String? message,
+  }) async {
+    actionReports.add(<String, dynamic>{
+      'requestId': requestId,
+      'success': success,
+      if (failureReason != null) 'failureReason': failureReason,
+      if (message != null) 'message': message,
+    });
+    return <String, dynamic>{};
+  }
+
+  void emitActionRequest(Map<String, dynamic> request) =>
+      actionRequests.add(request);
+
+  Future<void> close() => actionRequests.close();
 
   @override
   Future<dynamic> getDeviceInfo() async => {'deviceId': 'local-device'};
@@ -53,6 +81,24 @@ class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
       StreamController<Map<String, dynamic>>.broadcast();
   int startCount = 0;
   int stopCount = 0;
+  final List<int> removeCalls = <int>[];
+  WindowsNotificationRemovalResult removalResult =
+      const WindowsNotificationRemovalResult(
+    status: WindowsNotificationRemovalStatus.success,
+  );
+  Object? removeError;
+
+  @override
+  Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  ) async {
+    removeCalls.add(userNotificationId);
+    final error = removeError;
+    if (error != null) {
+      throw error;
+    }
+    return removalResult;
+  }
 
   @override
   Future<WindowsNotificationListenerRuntimeStatus> getRuntimeStatus() async =>
@@ -101,6 +147,27 @@ Map<String, dynamic> _activeNotification(
     'bodyPreview': 'Body',
     'postedAt': '2026-08-09T12:00:00Z',
   };
+}
+
+Map<String, dynamic> _actionRequest({
+  String requestId = 'request-1',
+  String notificationId = 'windows:812',
+  String sourceDeviceId = 'local-device',
+  String action = 'dismiss',
+}) =>
+    <String, dynamic>{
+      'requestId': requestId,
+      'operationId': 'operation-1',
+      'notificationId': notificationId,
+      'sourceDeviceId': sourceDeviceId,
+      'requestingDeviceId': 'remote-device',
+      'action': action,
+    };
+
+Future<void> _pumpAsync() async {
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
 }
 
 Future<WindowsNotificationSyncCoordinator> _createCoordinator({
@@ -194,7 +261,7 @@ void main() {
     expect(published.single['eventType'], 'posted');
     expect(published.single['notificationId'], 'windows:812');
     expect(published.single['sourcePlatform'], 'windows');
-    expect(published.single['isDismissible'], isFalse);
+    expect(published.single['isDismissible'], isTrue);
     expect(published.single['isOpenable'], isFalse);
     expect((published.single['title'] as String).length, 256);
     expect((published.single['bodyPreview'] as String).length, 1024);
@@ -291,7 +358,7 @@ void main() {
     final client = _FakeClient(
       notifications: [
         {
-          'notificationId': 'windows:known',
+          'notificationId': 'windows:44',
           'sourceDeviceId': 'local-device',
           'sourcePlatform': 'windows',
         },
@@ -306,17 +373,257 @@ void main() {
     await coordinator.start();
     published.clear();
 
-    listener
-        .emit({'eventType': 'removed', 'notificationId': 'windows:unknown'});
-    listener.emit({'eventType': 'removed', 'notificationId': 'windows:known'});
+    listener.emit({'eventType': 'removed', 'notificationId': 'windows:43'});
+    listener.emit({'eventType': 'removed', 'notificationId': 'windows:44'});
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
 
     expect(published, hasLength(1));
-    expect(published.single['notificationId'], 'windows:known');
+    expect(published.single['notificationId'], 'windows:44');
 
     await coordinator.dispose();
     await listener.close();
+  });
+
+  test('matching dismiss removes exact target and reports success once',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, <int>[812]);
+    expect(client.actionReports, hasLength(1));
+    expect(client.actionReports.single, {
+      'requestId': 'request-1',
+      'success': true,
+    });
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('wrong source device and platform ID fail without native remove',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    client.emitActionRequest(_actionRequest(
+      requestId: 'wrong-source',
+      sourceDeviceId: 'remote-device',
+    ));
+    client.emitActionRequest(_actionRequest(
+      requestId: 'wrong-platform',
+      notificationId: 'linux:812',
+    ));
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, hasLength(2));
+    expect(client.actionReports[0]['failureReason'], 'PolicyDenied');
+    expect(client.actionReports[1]['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('rejects malformed and overflowing Windows IDs', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    final invalidIds = <String>[
+      'windows:',
+      'windows:-1',
+      'windows:abc',
+      'windows:1:2',
+      'windows:01',
+      'windows:4294967296',
+    ];
+    for (var index = 0; index < invalidIds.length; index++) {
+      client.emitActionRequest(_actionRequest(
+        requestId: 'invalid-$index',
+        notificationId: invalidIds[index],
+      ));
+    }
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, hasLength(invalidIds.length));
+    expect(
+      client.actionReports.map((report) => report['failureReason']).toSet(),
+      {'CapabilityUnavailable'},
+    );
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('stale target fails after exact active snapshot recheck', () async {
+    final listener = _FakeWindowsListener();
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(
+        client.actionReports.single['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('maps native not found, unavailable, error, and thrown failures',
+      () async {
+    for (final testCase in <({
+      WindowsNotificationRemovalResult? result,
+      Object? error,
+      String failureReason,
+    })>[
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.notFound,
+        ),
+        error: null,
+        failureReason: 'CapabilityUnavailable',
+      ),
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.unavailable,
+        ),
+        error: null,
+        failureReason: 'CapabilityUnavailable',
+      ),
+      (
+        result: const WindowsNotificationRemovalResult(
+          status: WindowsNotificationRemovalStatus.error,
+        ),
+        error: null,
+        failureReason: 'PeerRejected',
+      ),
+      (
+        result: null,
+        error: StateError('native failure'),
+        failureReason: 'PeerRejected',
+      ),
+    ]) {
+      final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+      if (testCase.result != null) {
+        listener.removalResult = testCase.result!;
+      }
+      listener.removeError = testCase.error;
+      final client = _FakeClient();
+      final coordinator = await _createCoordinator(
+        listener: listener,
+        client: client,
+      );
+      await coordinator.start();
+
+      client.emitActionRequest(_actionRequest());
+      await _pumpAsync();
+
+      expect(listener.removeCalls, <int>[812]);
+      expect(client.actionReports.single['success'], isFalse);
+      expect(
+        client.actionReports.single['failureReason'],
+        testCase.failureReason,
+      );
+
+      await coordinator.dispose();
+      await listener.close();
+      await client.close();
+    }
+  });
+
+  test('stopped coordinator reports unavailable without native remove',
+      () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    listener.accessStatus = 'denied';
+    await coordinator.refresh();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(
+        client.actionReports.single['failureReason'], 'CapabilityUnavailable');
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('refresh does not duplicate action subscription', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    await coordinator.refresh();
+    await coordinator.refresh();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, <int>[812]);
+    expect(client.actionReports, hasLength(1));
+
+    await coordinator.dispose();
+    await listener.close();
+    await client.close();
+  });
+
+  test('dispose removes action subscription', () async {
+    final listener = _FakeWindowsListener(active: [_activeNotification(812)]);
+    final client = _FakeClient();
+    final coordinator = await _createCoordinator(
+      listener: listener,
+      client: client,
+    );
+    await coordinator.start();
+    await coordinator.dispose();
+
+    client.emitActionRequest(_actionRequest());
+    await _pumpAsync();
+
+    expect(listener.removeCalls, isEmpty);
+    expect(client.actionReports, isEmpty);
+
+    await listener.close();
+    await client.close();
   });
 
   test('Rift-owned notifications are ignored before normalization', () async {

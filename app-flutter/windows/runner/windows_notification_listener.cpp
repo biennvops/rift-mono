@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "utils.h"
@@ -207,6 +208,28 @@ void AddString(EncodableMap* map,
   }
 }
 
+std::optional<int64_t> FindInt64(const EncodableMap& map, const char* key) {
+  const auto it = map.find(EncodableValue(key));
+  if (it == map.end()) {
+    return std::nullopt;
+  }
+  if (const auto* value = std::get_if<int32_t>(&it->second)) {
+    return static_cast<int64_t>(*value);
+  }
+  if (const auto* value = std::get_if<int64_t>(&it->second)) {
+    return *value;
+  }
+  return std::nullopt;
+}
+
+EncodableValue RemovalResult(const char* status,
+                             const std::string& message = {}) {
+  EncodableMap result;
+  result[EncodableValue("status")] = EncodableValue(status);
+  AddString(&result, "message", message);
+  return EncodableValue(result);
+}
+
 struct PostedEvent {
   uint64_t generation;
   EncodableValue value;
@@ -381,6 +404,8 @@ void WindowsNotificationListener::HandleMethodCall(
     RequestAccess(std::move(result));
   } else if (method == "listActive") {
     ListActive(std::move(result));
+  } else if (method == "removeNotification") {
+    RemoveNotification(call.arguments(), std::move(result));
   } else if (method == "start") {
     Start(std::move(result));
   } else if (method == "stop") {
@@ -572,6 +597,63 @@ void WindowsNotificationListener::ContinueListActive(
         }
         (*next)(index + 1);
       });
+}
+
+void WindowsNotificationListener::RemoveNotification(
+    const EncodableValue* arguments,
+    std::unique_ptr<MethodResult> result) {
+  const auto runtime = GetRuntimeInfo();
+  {
+    std::lock_guard<std::mutex> lock(state_->gate);
+    state_->runtime = runtime;
+  }
+  if (!runtime.supported || !runtime.has_package_identity) {
+    result->Success(RemovalResult("unavailable"));
+    return;
+  }
+
+  const auto* arguments_map =
+      arguments == nullptr ? nullptr : std::get_if<EncodableMap>(arguments);
+  const auto notification_id = arguments_map == nullptr
+                                   ? std::nullopt
+                                   : FindInt64(*arguments_map,
+                                               "userNotificationId");
+  if (!notification_id.has_value() || notification_id.value() < 0 ||
+      notification_id.value() > std::numeric_limits<uint32_t>::max()) {
+    result->Success(RemovalResult("unavailable"));
+    return;
+  }
+
+  try {
+    UserNotificationListener listener{nullptr};
+    {
+      std::lock_guard<std::mutex> lock(state_->gate);
+      listener = state_->listener;
+    }
+    if (listener == nullptr) {
+      listener = UserNotificationListener::Current();
+      std::lock_guard<std::mutex> lock(state_->gate);
+      state_->listener = listener;
+    }
+    if (listener.GetAccessStatus() !=
+        UserNotificationListenerAccessStatus::Allowed) {
+      result->Success(RemovalResult("unavailable"));
+      return;
+    }
+
+    const auto id = static_cast<uint32_t>(notification_id.value());
+    const auto notification = listener.GetNotification(id);
+    if (notification == nullptr) {
+      result->Success(RemovalResult("notFound"));
+      return;
+    }
+    listener.RemoveNotification(id);
+    result->Success(RemovalResult("success"));
+  } catch (const winrt::hresult_error&) {
+    result->Success(RemovalResult("error"));
+  } catch (...) {
+    result->Success(RemovalResult("error"));
+  }
 }
 
 void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {

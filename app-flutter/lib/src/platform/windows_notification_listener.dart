@@ -3,6 +3,44 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+enum WindowsNotificationRemovalStatus {
+  success,
+  notFound,
+  unavailable,
+  error,
+}
+
+class WindowsNotificationRemovalResult {
+  const WindowsNotificationRemovalResult({
+    required this.status,
+    this.message,
+  });
+
+  final WindowsNotificationRemovalStatus status;
+  final String? message;
+
+  bool get success => status == WindowsNotificationRemovalStatus.success;
+
+  factory WindowsNotificationRemovalResult.fromMap(Object? value) {
+    if (value is! Map) {
+      return const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.error,
+      );
+    }
+    final map = Map<Object?, Object?>.from(value);
+    final status = switch (map['status']?.toString()) {
+      'success' => WindowsNotificationRemovalStatus.success,
+      'notFound' => WindowsNotificationRemovalStatus.notFound,
+      'unavailable' => WindowsNotificationRemovalStatus.unavailable,
+      _ => WindowsNotificationRemovalStatus.error,
+    };
+    return WindowsNotificationRemovalResult(
+      status: status,
+      message: _nonEmptyString(map['message']),
+    );
+  }
+}
+
 /// Runtime/access states exposed by the Windows notification source adapter.
 enum WindowsNotificationAccessState {
   allowed,
@@ -105,6 +143,10 @@ abstract interface class WindowsNotificationListenerPlatform {
   Future<String> requestAccess();
 
   Future<List<Map<String, dynamic>>> listActiveNotifications();
+
+  Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  );
 
   Future<bool> start();
 
@@ -210,6 +252,41 @@ class MethodChannelWindowsNotificationListener
   }
 
   @override
+  Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  ) async {
+    if (!isSupported ||
+        userNotificationId < 0 ||
+        userNotificationId > 0xffffffff) {
+      return const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.unavailable,
+      );
+    }
+    final runtime = await getRuntimeStatus();
+    if (!runtime.supported || !runtime.hasPackageIdentity) {
+      return const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.unavailable,
+      );
+    }
+    if (await getAccessStatus() != 'allowed') {
+      return const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.unavailable,
+      );
+    }
+    try {
+      final result = await methodChannel.invokeMethod<Object>(
+        'removeNotification',
+        <String, Object>{'userNotificationId': userNotificationId},
+      );
+      return WindowsNotificationRemovalResult.fromMap(result);
+    } catch (_) {
+      return const WindowsNotificationRemovalResult(
+        status: WindowsNotificationRemovalStatus.error,
+      );
+    }
+  }
+
+  @override
   Future<bool> start() async {
     if (!isSupported) {
       return false;
@@ -280,6 +357,11 @@ class WindowsNotificationListener {
 
   static Future<List<Map<String, dynamic>>> listActiveNotifications() =>
       _platform.listActiveNotifications();
+
+  static Future<WindowsNotificationRemovalResult> removeNotification(
+    int userNotificationId,
+  ) =>
+      _platform.removeNotification(userNotificationId);
 
   static Future<void> start() async {
     await _platform.start();

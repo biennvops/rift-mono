@@ -47,6 +47,8 @@ class WindowsNotificationListener {
   void GetAccessStatus(std::unique_ptr<MethodResult> result);
   void RequestAccess(std::unique_ptr<MethodResult> result);
   void ListActive(std::unique_ptr<MethodResult> result);
+  void RemoveNotification(const EncodableValue* arguments,
+                          std::unique_ptr<MethodResult> result);
   void Start(std::unique_ptr<MethodResult> result);
   void Stop(std::unique_ptr<MethodResult> result);
 
