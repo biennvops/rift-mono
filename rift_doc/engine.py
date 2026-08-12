@@ -10,7 +10,16 @@ from .extractors.spreadsheets import extract_workbook
 from .document_set import DocumentSet, DocumentSetLoader
 from .model import Document, NormalizedDocument, Workbook
 from .results import Finding, Status, ValidationResult
+from .repository import (
+    InventoryOptions,
+    RepositoryClaimKind,
+    RepositoryEvidenceAuditor,
+    RepositoryInventory,
+    RepositoryMappingConfig,
+    RepositorySnapshot,
+)
 from .spec import CapstoneSpec, SpecError
+from .trace_entities import TraceEntityExtractor
 from .validators.cross_document import CrossDocumentValidator
 from .validators.structural import StructuralValidator
 from .validators.workbook import WorkbookValidator
@@ -25,6 +34,8 @@ class ValidationEngine:
         self.structural = StructuralValidator(spec)
         self.workbooks = WorkbookValidator(spec)
         self.cross_document = CrossDocumentValidator(spec)
+        self.trace_entities = TraceEntityExtractor(spec)
+        self.repository_evidence = RepositoryEvidenceAuditor(spec)
 
     def infer_report_id(self, path: str | Path) -> str | None:
         return self.spec.infer_report_id(path)
@@ -72,9 +83,19 @@ class ValidationEngine:
         loader = DocumentSetLoader(self.spec, self.extract)
         return loader.load(manifest_path)
 
-    def validate_set(self, document_set: DocumentSet | str | Path) -> ValidationResult:
+    def validate_set(
+        self,
+        document_set: DocumentSet | str | Path,
+        *,
+        repository: str | Path | None = None,
+        artifacts: str | Path | None = None,
+        repository_mapping: str | Path | RepositoryMappingConfig | None = None,
+        repository_kinds: list[RepositoryClaimKind | str] | None = None,
+        repository_claim: str | None = None,
+    ) -> ValidationResult:
         loaded = self.load_document_set(document_set) if isinstance(document_set, (str, Path)) else document_set
-        result = self.cross_document.audit(loaded)
+        graph = self.trace_entities.extract_document_set(loaded)
+        result = self.cross_document.audit(loaded, graph=graph)
         phase1_results = self._validate_set_phase1(loaded)
         phase1_findings = [finding for item in phase1_results for finding in item.findings]
         result.findings = [*phase1_findings, *result.findings]
@@ -90,7 +111,69 @@ class ValidationEngine:
             ],
             "finding_count": len(phase1_findings),
         }
+        if repository is not None:
+            mappings = self._repository_mappings(repository_mapping)
+            snapshot = RepositoryInventory(
+                InventoryOptions(excluded_paths=mappings.excluded_paths if mappings else ())
+            ).scan(repository, artifact_root=artifacts)
+            repository_result = self.repository_evidence.audit(
+                graph,
+                snapshot,
+                mappings=mappings,
+                kinds=repository_kinds,
+                claim_query=repository_claim,
+            )
+            result.findings.extend(repository_result.findings)
+            result.metadata["repository_evidence"] = repository_result.metadata
         return result
+
+    @staticmethod
+    def _repository_mappings(
+        value: str | Path | RepositoryMappingConfig | None,
+    ) -> RepositoryMappingConfig | None:
+        if value is None:
+            return None
+        if isinstance(value, RepositoryMappingConfig):
+            return value
+        return RepositoryMappingConfig.load(value)
+
+    def inspect_repository(
+        self,
+        repository: str | Path,
+        *,
+        artifacts: str | Path | None = None,
+        repository_mapping: str | Path | RepositoryMappingConfig | None = None,
+    ) -> RepositorySnapshot:
+        mappings = self._repository_mappings(repository_mapping)
+        return RepositoryInventory(
+            InventoryOptions(excluded_paths=mappings.excluded_paths if mappings else ())
+        ).scan(repository, artifact_root=artifacts)
+
+    def validate_repository_evidence(
+        self,
+        document_set: DocumentSet | str | Path,
+        *,
+        repository: str | Path,
+        artifacts: str | Path | None = None,
+        repository_mapping: str | Path | RepositoryMappingConfig | None = None,
+        repository_kinds: list[RepositoryClaimKind | str] | None = None,
+        repository_claim: str | None = None,
+    ) -> ValidationResult:
+        loaded = self.load_document_set(document_set) if isinstance(document_set, (str, Path)) else document_set
+        graph = self.trace_entities.extract_document_set(loaded)
+        mappings = self._repository_mappings(repository_mapping)
+        snapshot = self.inspect_repository(
+            repository,
+            artifacts=artifacts,
+            repository_mapping=mappings,
+        )
+        return self.repository_evidence.audit(
+            graph,
+            snapshot,
+            mappings=mappings,
+            kinds=repository_kinds,
+            claim_query=repository_claim,
+        )
 
     def _validate_set_phase1(self, document_set: DocumentSet) -> list[ValidationResult]:
         items: list[tuple[str, str, NormalizedDocument]] = []

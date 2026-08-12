@@ -27,8 +27,16 @@ def render_text(results: list[ValidationResult]) -> str:
             lines.append("")
         lines.append(result.source_path)
         findings = sorted(result.findings, key=lambda finding: _STATUS_ORDER[finding.status])
-        for finding in findings:
+        repository_findings = [finding for finding in findings if finding.validator == "repository_evidence"]
+        regular_findings = [finding for finding in findings if finding.validator != "repository_evidence"]
+        for finding in regular_findings:
             lines.extend(_render_finding(finding))
+        if repository_findings:
+            lines.append("")
+            lines.append("REPOSITORY EVIDENCE")
+            lines.append("Repository support checks; this is not an FPT template violation domain.")
+            for finding in repository_findings:
+                lines.extend(_render_repository_finding(finding))
         if result.format == "cross_document":
             lines.extend(_render_trace_summary(result))
         lines.append("")
@@ -95,6 +103,26 @@ def _render_trace_summary(result: ValidationResult) -> list[str]:
         lines.append(f"Report 7 freshness: {len(freshness)} structured comparison(s)")
         rendered = True
     return lines if rendered else []
+
+
+def _render_repository_finding(finding: Finding) -> list[str]:
+    evidence_status = str(finding.metadata.get("evidence_status", finding.status.value))
+    label = "REVIEW" if evidence_status == "REVIEW_REQUIRED" else evidence_status
+    source = finding.source_entity if isinstance(finding.source_entity, dict) else {}
+    claim_id = source.get("claim_id", source.get("entity_id", "claim"))
+    name = source.get("canonical_name", "")
+    lines = [f"{label:<18} {claim_id} {name}".rstrip(), f"                    {finding.message}"]
+    if finding.location:
+        lines.append(f"                    documentation: {finding.report} @ {finding.location}")
+    for location in finding.metadata.get("repository_locations", [])[:3]:
+        lines.append(f"                    repository: {location}")
+    method = finding.metadata.get("match_method")
+    if method:
+        lines.append(f"                    match: {method}")
+    test_states = finding.metadata.get("test_states", [])
+    if test_states:
+        lines.append(f"                    test evidence: {', '.join(str(value) for value in test_states)}")
+    return lines
 
 
 def _render_finding(finding: Finding) -> list[str]:

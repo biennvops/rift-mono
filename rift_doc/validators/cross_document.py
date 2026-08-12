@@ -79,7 +79,12 @@ class CrossDocumentValidator:
     def build_graph(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> TraceGraph:
         return self.extractor.extract_document_set(self._as_document_set(documents))
 
-    def audit(self, documents: DocumentSet | dict[str, NormalizedDocument]) -> ValidationResult:
+    def audit(
+        self,
+        documents: DocumentSet | dict[str, NormalizedDocument],
+        *,
+        graph: TraceGraph | None = None,
+    ) -> ValidationResult:
         document_set = self._as_document_set(documents)
         if self.spec is None:
             return ValidationResult(
@@ -89,7 +94,7 @@ class CrossDocumentValidator:
                 metadata={"document_set": document_set.to_dict(), "trace_graph": TraceGraph().to_dict()},
             )
 
-        graph = self.extractor.extract_document_set(document_set)
+        graph = graph or self.extractor.extract_document_set(document_set)
         index = TraceIndex(graph)
         findings: list[Finding] = list(document_set.load_findings)
         findings.extend(self._missing_target_domain_findings(document_set, list(self.spec.iter_trace_rules())))

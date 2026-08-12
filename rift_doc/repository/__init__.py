@@ -1,5 +1,6 @@
 """Local repository evidence inspection and claim-linking APIs."""
 
+from .audit import RepositoryEvidenceAuditor
 from .claims import RepositoryClaimProjector
 from .inventory import InventoryOptions, RepositoryInventory
 from .linker import RepositoryEvidenceIndex, RepositoryEvidenceLinker
@@ -25,6 +26,7 @@ __all__ = [
     "RepositoryClaimProjector",
     "RepositoryClaimKind",
     "RepositoryEvidence",
+    "RepositoryEvidenceAuditor",
     "RepositoryEvidenceIndex",
     "RepositoryEvidenceLinker",
     "RepositoryEvidenceMatch",

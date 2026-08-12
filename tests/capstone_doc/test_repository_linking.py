@@ -271,9 +271,39 @@ def test_test_source_ci_and_result_are_separate_states() -> None:
     assert {item.kind for item in match.evidence} == {EvidenceKind.TEST, EvidenceKind.CI_JOB, EvidenceKind.TEST_RESULT}
 
 
+def test_recorded_result_only_contradicts_an_explicit_documented_outcome() -> None:
+    test = _evidence(EvidenceKind.TEST, "daemon-dart/test/sync_test.dart", "syncs notifications")
+    failed_result = _evidence(
+        EvidenceKind.TEST_RESULT,
+        "results/junit.xml",
+        metadata={"test_names": ["syncs notifications"], "latest_result": "FAIL"},
+    )
+    contradicted = RepositoryEvidenceLinker(_snapshot(test, failed_result)).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "syncs notifications", metadata={"status": "Passed"})
+    )
+    assert contradicted.status == RepositoryEvidenceStatus.CONTRADICTED
+    assert contradicted.metadata["test_result_conflict"] == {"documented": "PASS", "repository": "FAIL"}
+
+    no_claimed_outcome = RepositoryEvidenceLinker(_snapshot(test, failed_result)).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "syncs notifications")
+    )
+    assert no_claimed_outcome.status == RepositoryEvidenceStatus.VERIFIED
+    assert EvidenceTestState.LATEST_RESULT_FAIL in no_claimed_outcome.test_states
+
+
 def test_test_source_without_ci_or_result_does_not_imply_them() -> None:
     test = _evidence(EvidenceKind.TEST, "test/sync_test.dart", "syncs notifications")
-    match = RepositoryEvidenceLinker(_snapshot(test)).link(
+    unrelated_ci = _evidence(
+        EvidenceKind.CI_JOB,
+        ".github/workflows/ci.yml",
+        "test-other",
+        metadata={
+            "invokes_tests": True,
+            "commands": ["dart test"],
+            "working_directories": ["other-package"],
+        },
+    )
+    match = RepositoryEvidenceLinker(_snapshot(test, unrelated_ci)).link(
         _claim(RepositoryClaimKind.TEST_CLAIM, "syncs notifications")
     )
     assert match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]

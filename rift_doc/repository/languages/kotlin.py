@@ -8,7 +8,10 @@ from ..model import EvidenceKind
 from .base import AdapterResult, deduplicate, evidence_for_symbol
 
 
-_DECLARATION_RE = re.compile(r"\b(?:class|interface|object|enum\s+class|fun)\s+([A-Za-z_]\w*)")
+_DECLARATION_RE = re.compile(
+    r"\b(?:class|interface|object|enum\s+class)\s+([A-Za-z_]\w*)"
+    r"|\bfun\s+(?:([A-Za-z_]\w*)|`([^`]+)`)"
+)
 _TEST_RE = re.compile(r"@Test\b")
 
 
@@ -22,7 +25,8 @@ class KotlinAdapter:
         for line_number, line in enumerate(text.splitlines(), start=1):
             test_attribute = test_attribute or bool(_TEST_RE.search(line))
             for match in _DECLARATION_RE.finditer(line):
-                symbol = match.group(1)
+                symbol = match.group(1) or match.group(2) or match.group(3)
+                is_function = match.group(2) is not None or match.group(3) is not None
                 result.symbols.append(
                     evidence_for_symbol(
                         path=path,
@@ -33,7 +37,7 @@ class KotlinAdapter:
                         metadata={"symbol_type": "declaration"},
                     )
                 )
-                if test_attribute and "fun" in line[: match.start(1)]:
+                if test_attribute and is_function:
                     result.tests.append(
                         evidence_for_symbol(
                             path=path,

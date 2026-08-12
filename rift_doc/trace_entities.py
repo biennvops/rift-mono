@@ -181,6 +181,16 @@ class TraceEntityExtractor:
         for rule in self.spec.iter_orphan_rules():
             requests[_domain_alias(rule.source_domain)].update(rule.source_kinds)
             requests[_domain_alias(rule.target_domain)].update(rule.target_kinds)
+        repository_claims = self.spec.repository_evidence_extension.get("claims", {})
+        for raw_claim in repository_claims.values() if isinstance(repository_claims, dict) else ():
+            if not isinstance(raw_claim, dict):
+                continue
+            domains = raw_claim.get("source_domains", [])
+            kinds = raw_claim.get("source_kinds", [])
+            domain_values = [domains] if isinstance(domains, str) else domains
+            kind_values = [kinds] if isinstance(kinds, str) else kinds
+            for domain in domain_values if isinstance(domain_values, list) else ():
+                requests[_domain_alias(str(domain))].update(str(kind) for kind in kind_values)
         # Report 7 freshness uses stable source concepts even if the contract
         # only names final_report_item as the target kind.
         if "report7" in requests:

@@ -9,6 +9,7 @@ from typing import Iterable
 
 from .engine import SUPPORTED_SUFFIXES, ValidationEngine
 from .output import render_json, render_text
+from .repository import InventoryOptions, RepositoryClaimKind, RepositoryInventory, RepositoryMappingConfig
 from .results import Status, ValidationResult
 from .spec import CapstoneSpec, SpecError
 
@@ -42,6 +43,32 @@ def build_parser() -> argparse.ArgumentParser:
     validate_set.add_argument("--entity", help="only show findings for an entity ID or exact normalized name")
     validate_set.add_argument("--show-graph", action="store_true", help="include a compact graph section in text output")
     validate_set.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
+    _add_repository_arguments(validate_set, include_filters=True)
+
+    evidence = subparsers.add_parser(
+        "evidence",
+        help="validate document claims against a local repository",
+    )
+    evidence.add_argument("--manifest", required=True, type=Path, help="document-set YAML manifest")
+    evidence.add_argument(
+        "--spec",
+        type=Path,
+        default=Path("capstone-doc-spec.v0.1.yaml"),
+        help="capstone YAML contract (defaults to the repository contract)",
+    )
+    evidence.add_argument("--format", choices=("text", "json"), default="text")
+    evidence.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
+    _add_repository_arguments(evidence, required=True, include_filters=True)
+
+    repo_inspect = subparsers.add_parser(
+        "repo-inspect",
+        help="inspect a local repository evidence inventory without a document audit",
+    )
+    repo_inspect.add_argument("--repo", required=True, type=Path, help="local repository/worktree")
+    repo_inspect.add_argument("--artifacts", type=Path, help="optional package/result artifact directory")
+    repo_inspect.add_argument("--mapping", type=Path, help="optional repository mapping YAML (also supplies exclusions)")
+    repo_inspect.add_argument("--exclude", action="append", default=[], help="additional repository path/glob to exclude")
+    repo_inspect.add_argument("--format", choices=("text", "json"), default="text")
 
     inspect = subparsers.add_parser("inspect", help="print the normalized document structure")
     inspect.add_argument("path", type=Path)
@@ -49,6 +76,25 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--report", help="optional report/workbook contract id")
     inspect.add_argument("--format", choices=("text", "json"), default="text")
     return parser
+
+
+def _add_repository_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    required: bool = False,
+    include_filters: bool = False,
+) -> None:
+    parser.add_argument("--repo", required=required, type=Path, help="local repository/worktree evidence source")
+    parser.add_argument("--artifacts", type=Path, help="optional package/result artifact directory")
+    parser.add_argument("--mapping", type=Path, help="schema-validated repository mapping YAML")
+    if include_filters:
+        parser.add_argument(
+            "--kind",
+            action="append",
+            choices=("function", "architecture", "test", "deliverable"),
+            help="only evaluate one or more repository claim kinds",
+        )
+        parser.add_argument("--claim", help="only evaluate an exact claim ID or name")
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -59,6 +105,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             return _run_validate(args)
         if args.command in {"validate-set", "trace"}:
             return _run_validate_set(args)
+        if args.command == "evidence":
+            return _run_evidence(args)
+        if args.command == "repo-inspect":
+            return _run_repo_inspect(args)
         if args.command == "inspect":
             return _run_inspect(args)
         parser.error(f"unknown command {args.command}")
@@ -98,7 +148,14 @@ def _run_validate(args: argparse.Namespace) -> int:
 def _run_validate_set(args: argparse.Namespace) -> int:
     spec = CapstoneSpec.load(args.spec)
     engine = ValidationEngine(spec)
-    result = engine.validate_set(args.manifest)
+    result = engine.validate_set(
+        args.manifest,
+        repository=args.repo,
+        artifacts=args.artifacts,
+        repository_mapping=args.mapping,
+        repository_kinds=_repository_kinds(args.kind),
+        repository_claim=args.claim,
+    )
     has_errors = result.has_errors
     has_strict_issues = result.has_strict_issues
     display_result = _filter_trace_result(result, args.rule, args.entity)
@@ -119,6 +176,79 @@ def _run_validate_set(args: argparse.Namespace) -> int:
     if args.strict:
         return 1 if has_strict_issues else 0
     return 1 if has_errors else 0
+
+
+def _run_evidence(args: argparse.Namespace) -> int:
+    spec = CapstoneSpec.load(args.spec)
+    result = ValidationEngine(spec).validate_repository_evidence(
+        args.manifest,
+        repository=args.repo,
+        artifacts=args.artifacts,
+        repository_mapping=args.mapping,
+        repository_kinds=_repository_kinds(args.kind),
+        repository_claim=args.claim,
+    )
+    print(render_json([result]) if args.format == "json" else render_text([result]))
+    if args.strict:
+        return 1 if result.has_strict_issues else 0
+    return 1 if result.has_errors else 0
+
+
+def _run_repo_inspect(args: argparse.Namespace) -> int:
+    mapping = RepositoryMappingConfig.load(args.mapping) if args.mapping else None
+    excluded = [*(mapping.excluded_paths if mapping else ()), *args.exclude]
+    snapshot = RepositoryInventory(InventoryOptions(excluded_paths=tuple(excluded))).scan(
+        args.repo,
+        artifact_root=args.artifacts,
+    )
+    if args.format == "json":
+        import json
+
+        print(json.dumps(snapshot.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(_repository_inspect_text(snapshot))
+    return 0
+
+
+def _repository_kinds(values: list[str] | None) -> list[RepositoryClaimKind] | None:
+    if not values:
+        return None
+    aliases = {
+        "function": RepositoryClaimKind.FUNCTION_OR_FEATURE,
+        "architecture": RepositoryClaimKind.ARCHITECTURE_COMPONENT,
+        "test": RepositoryClaimKind.TEST_CLAIM,
+        "deliverable": RepositoryClaimKind.DELIVERABLE_OR_PACKAGE,
+    }
+    return list(dict.fromkeys(aliases[value] for value in values))
+
+
+def _repository_inspect_text(snapshot: object) -> str:
+    vcs = snapshot.vcs_metadata
+    counts = snapshot.metadata.get("counts", {})
+    lines = ["Detected repository", f"Root: {snapshot.root}"]
+    if vcs is not None:
+        lines.append(f"Commit: {vcs.commit_sha or 'unknown'}")
+        lines.append(f"Dirty: {str(vcs.dirty).lower() if vcs.dirty is not None else 'unknown'}")
+        if vcs.branch:
+            lines.append(f"Branch: {vcs.branch}")
+    else:
+        lines.append("Commit: unavailable (plain source tree)")
+        lines.append("Dirty: unavailable")
+    languages = snapshot.metadata.get("languages", {})
+    lines.append("Languages: " + (", ".join(f"{key} ({value})" for key, value in languages.items()) or "none"))
+    lines.extend(
+        [
+            f"Packages/modules: {counts.get('modules', 0)}",
+            f"Symbols: {counts.get('symbols', 0)}",
+            f"Tests: {counts.get('tests', 0)}",
+            f"Test results: {counts.get('test_results', 0)}",
+            f"CI definitions/jobs: {counts.get('ci_configs', 0)}",
+            f"Build targets: {counts.get('build_configs', 0)}",
+            f"Release artifacts: {counts.get('release_artifacts', 0)}",
+            f"Scanned files: {snapshot.metadata.get('scanned_file_count', 0)}",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _filter_trace_result(

@@ -209,6 +209,9 @@ class RepositoryInventory:
                 continue
             size = absolute_path.stat().st_size
             metadata: dict[str, Any] = {"artifact_root": str(root), "size_bytes": size}
+            if _is_test_result_path(relative_path):
+                snapshot.test_results.append(_test_result_evidence(absolute_path, relative_path, metadata))
+                continue
             release = RepositoryEvidence(
                 evidence_id=f"release_artifact:{relative_path}",
                 kind=EvidenceKind.RELEASE_ARTIFACT,
@@ -217,8 +220,6 @@ class RepositoryInventory:
                 excerpt_or_signature=absolute_path.name,
             )
             snapshot.release_artifacts.append(release)
-            if _is_test_result_path(relative_path):
-                snapshot.test_results.append(_test_result_evidence(absolute_path, relative_path, metadata))
 
 
 def _git_file_paths(root: Path) -> list[str] | None:
@@ -312,12 +313,19 @@ def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
                     "display_name": job.get("name"),
                     "commands": commands,
                     "working_directories": list(dict.fromkeys(working_directories)),
-                    "invokes_tests": bool(re.search(r"\b(?:test|pytest|ctest|xcodebuild\s+test)\b", signature, re.IGNORECASE)),
+                    "invokes_tests": _invokes_tests(signature),
                 },
                 excerpt_or_signature=signature or str(job_name),
             )
         )
     return result
+
+
+def _invokes_tests(command: str) -> bool:
+    return bool(
+        re.search(r"\b(?:test|pytest|ctest|xcodebuild\s+test)\b", command, re.IGNORECASE)
+        or re.search(r"(?:^|:)test[A-Z][A-Za-z0-9]*", command)
+    )
 
 
 def _identifier_configurations(path: str, text: str) -> list[RepositoryEvidence]:

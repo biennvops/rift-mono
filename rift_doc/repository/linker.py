@@ -158,6 +158,17 @@ class RepositoryEvidenceLinker:
             )
 
         states = self._test_states(claim, selected)
+        result_conflict = _test_result_conflict(claim, selected)
+        if result_conflict is not None:
+            return RepositoryEvidenceMatch(
+                claim,
+                RepositoryEvidenceStatus.CONTRADICTED,
+                method,
+                selected,
+                reason="The documented test result directly conflicts with the matched recorded result.",
+                test_states=states,
+                metadata={**self._metadata(mapping), "test_result_conflict": result_conflict},
+            )
         status = RepositoryEvidenceStatus.VERIFIED
         if claim.kind == RepositoryClaimKind.DELIVERABLE_OR_PACKAGE and not any(
             item.kind in {EvidenceKind.RELEASE_ARTIFACT, EvidenceKind.PACKAGE, EvidenceKind.BUILD_TARGET}
@@ -261,9 +272,7 @@ class RepositoryEvidenceLinker:
         for job in jobs:
             commands = " ".join(str(value) for value in job.metadata.get("commands", []))
             directories = " ".join(str(value) for value in job.metadata.get("working_directories", []))
-            if not test_roots or any(root and (root in commands or root in directories) for root in test_roots):
-                relevant.append(job)
-            elif len(test_roots) == 1 and not directories:
+            if any(root and (root in commands or root in directories) for root in test_roots):
                 relevant.append(job)
         return relevant
 
@@ -376,6 +385,27 @@ def _version_conflict(claim: RepositoryClaim, evidence: Iterable[RepositoryEvide
     return None
 
 
+def _test_result_conflict(
+    claim: RepositoryClaim,
+    evidence: Iterable[RepositoryEvidence],
+) -> dict[str, str] | None:
+    if claim.kind != RepositoryClaimKind.TEST_CLAIM:
+        return None
+    documented = normalize_name(str(claim.metadata.get("status", claim.metadata.get("state", ""))))
+    if documented not in {"pass", "passed", "success", "successful", "fail", "failed"}:
+        return None
+    expected = "PASS" if documented in {"pass", "passed", "success", "successful"} else "FAIL"
+    recorded = {
+        str(item.metadata.get("latest_result", "UNKNOWN")).upper()
+        for item in evidence
+        if item.kind == EvidenceKind.TEST_RESULT
+    }
+    actual = "FAIL" if "FAIL" in recorded else "PASS" if recorded == {"PASS"} else "UNKNOWN"
+    if actual != "UNKNOWN" and actual != expected:
+        return {"documented": expected, "repository": actual}
+    return None
+
+
 def _verified_reason(
     claim: RepositoryClaim,
     evidence: list[RepositoryEvidence],
@@ -390,7 +420,9 @@ def _verified_reason(
 
 def _top_module(path: str) -> str:
     parts = PurePosixPath(path).parts
-    return parts[0] if parts else ""
+    if not parts or parts[0].casefold() in {"test", "tests"}:
+        return ""
+    return parts[0]
 
 
 def _unique(items: Iterable[RepositoryEvidence]) -> list[RepositoryEvidence]:

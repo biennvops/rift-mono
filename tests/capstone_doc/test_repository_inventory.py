@@ -65,6 +65,16 @@ def test_inventory_parses_dotnet_dart_gradle_and_ci_without_execution(tmp_path: 
         "void main() { test('syncs notifications', () {}); }",
     )
     _write(
+        tmp_path / "app" / "android" / "src" / "test" / "SyncTest.kt",
+        """
+import org.junit.Test
+class SyncTest {
+  @Test
+  fun `syncs remote notifications`() {}
+}
+""",
+    )
+    _write(
         tmp_path / ".github" / "workflows" / "ci.yml",
         """
 name: CI
@@ -74,6 +84,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: dart test
+  test-android:
+    runs-on: ubuntu-latest
+    steps:
+      - working-directory: app/android
+        run: ./gradlew :app:testDebugUnitTest
 """,
     )
 
@@ -84,8 +99,11 @@ jobs:
     assert any(item.metadata.get("version") == "1.2.3" for item in snapshot.manifests)
     assert any(item.metadata.get("version") == "2.0.0" for item in snapshot.manifests)
     assert any(item.symbol == "syncs notifications" for item in snapshot.tests)
-    ci_job = next(item for item in snapshot.ci_configs if item.kind == EvidenceKind.CI_JOB)
-    assert ci_job.metadata["invokes_tests"] is True
+    assert any(item.symbol == "syncs remote notifications" for item in snapshot.tests)
+    ci_jobs = [item for item in snapshot.ci_configs if item.kind == EvidenceKind.CI_JOB]
+    assert len(ci_jobs) == 2
+    assert all(item.metadata["invokes_tests"] is True for item in ci_jobs)
+    assert next(item for item in ci_jobs if item.symbol == "test-android").metadata["working_directories"] == ["app/android"]
     assert snapshot.metadata["repository_code_executed"] is False
     assert snapshot.metadata["network_access"] is False
 
@@ -126,6 +144,7 @@ def test_artifact_directory_indexes_deliverables_and_test_results(tmp_path: Path
     snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
 
     assert any(item.kind == EvidenceKind.RELEASE_ARTIFACT and item.path.endswith("rift-client.pkg") for item in snapshot.release_artifacts)
+    assert all(not item.path.endswith(".xml") for item in snapshot.release_artifacts)
     result = next(item for item in snapshot.test_results if item.kind == EvidenceKind.TEST_RESULT)
     assert result.metadata["latest_result"] == "PASS"
     assert result.metadata["test_names"] == ["syncs notifications"]
