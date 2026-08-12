@@ -347,6 +347,71 @@ public class SyncTests {
     assert any(item.kind == EvidenceKind.TEST_RESULT for item in match.evidence)
 
 
+def test_root_test_source_uses_repository_scoped_ci(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    (repository / "tests").mkdir(parents=True)
+    (repository / "tests" / "test_sync.py").write_text(
+        "def test_syncs_notifications():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(
+        """
+jobs:
+  test-python:
+    steps:
+      - run: pytest
+""",
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository)
+
+    match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+
+    assert match.test_states == [
+        EvidenceTestState.IMPLEMENTATION_PRESENT,
+        EvidenceTestState.CI_CONFIGURED,
+    ]
+
+
+def test_root_ci_job_does_not_cross_unrelated_test_ecosystems() -> None:
+    python_test = _evidence(
+        EvidenceKind.TEST,
+        "tests/test_sync.py",
+        "test_syncs_notifications",
+        metadata={"language": "python"},
+    )
+    dotnet_test = _evidence(
+        EvidenceKind.TEST,
+        "tests/SyncTests.cs",
+        "SyncsNotifications",
+        metadata={"language": "csharp"},
+    )
+    ci = _evidence(
+        EvidenceKind.CI_JOB,
+        ".github/workflows/ci.yml",
+        "test-python",
+        metadata={
+            "invokes_tests": True,
+            "commands": ["pytest"],
+            "working_directories": [],
+        },
+    )
+    snapshot = _snapshot(python_test, dotnet_test, ci)
+
+    python_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+    dotnet_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications")
+    )
+
+    assert EvidenceTestState.CI_CONFIGURED in python_match.test_states
+    assert dotnet_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
+
+
 def test_test_source_without_ci_or_result_does_not_imply_them() -> None:
     test = _evidence(EvidenceKind.TEST, "test/sync_test.dart", "syncs notifications")
     unrelated_ci = _evidence(

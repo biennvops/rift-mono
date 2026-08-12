@@ -279,12 +279,29 @@ class RepositoryEvidenceLinker:
         if not tests:
             return []
         test_roots = {_top_module(item.path) for item in tests}
+        root_test_languages = {
+            str(item.metadata.get("language"))
+            for item in self.snapshot.tests
+            if not _top_module(item.path) and item.metadata.get("language")
+        }
+        selected_languages = {
+            str(item.metadata.get("language"))
+            for item in tests
+            if not _top_module(item.path) and item.metadata.get("language")
+        }
         relevant: list[RepositoryEvidence] = []
         for job in jobs:
             commands = " ".join(str(value) for value in job.metadata.get("commands", []))
-            directories = " ".join(str(value) for value in job.metadata.get("working_directories", []))
+            working_directories = [str(value) for value in job.metadata.get("working_directories", [])]
+            directories = " ".join(working_directories)
             if any(root and (root in commands or root in directories) for root in test_roots):
                 relevant.append(job)
+            elif "" in test_roots and not working_directories:
+                command_languages = _ci_test_languages(commands)
+                if command_languages.intersection(selected_languages) or (
+                    not command_languages and len(root_test_languages) <= 1
+                ):
+                    relevant.append(job)
         return relevant
 
     def _result_evidence_for_claim(
@@ -441,6 +458,21 @@ def _top_module(path: str) -> str:
     if not parts or parts[0].casefold() in {"test", "tests"}:
         return ""
     return parts[0]
+
+
+def _ci_test_languages(command: str) -> set[str]:
+    patterns = {
+        "python": r"\b(?:pytest|python(?:3)?\s+-m\s+(?:pytest|unittest))\b",
+        "csharp": r"\bdotnet\s+test\b",
+        "dart": r"\b(?:dart|flutter)\s+test\b",
+        "kotlin": r"\bgradlew?\b[^\n]*\btest[A-Za-z0-9]*\b",
+        "swift": r"\b(?:swift\s+test|xcodebuild\s+test)\b",
+    }
+    return {
+        language
+        for language, pattern in patterns.items()
+        if re.search(pattern, command, re.IGNORECASE)
+    }
 
 
 def _unique(items: Iterable[RepositoryEvidence]) -> list[RepositoryEvidence]:
