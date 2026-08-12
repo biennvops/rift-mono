@@ -29,7 +29,13 @@ The observer forwards only normalized preview metadata:
 - `UserNotification.CreationTime` as the UTC `postedAt` value; and
 - an optional registered application logo normalized to canonical PNG metadata through the shared notification-icon helper.
 
-Raw toast XML, action arguments, input values, hidden payloads, arbitrary images, and launch parameters are not forwarded. Windows-origin records advertise `isDismissible: false` and `isOpenable: false` until a separate source-action design is approved. Rift-owned notifications are filtered by application identity, never by display name.
+Raw toast XML, action arguments, input values, hidden payloads, arbitrary images, and launch parameters are not forwarded. While the packaged listener is running with allowed access, exact active Windows-origin records advertise `isDismissible: true` and `isOpenable: false`. These flags describe what the source process can currently execute for that specific record; they are not general platform capability flags. Rift-owned notifications are filtered by application identity, never by display name.
+
+## Source actions
+
+The C# daemon delivers an incoming peer Dismiss to the connected user-session process through the existing `rift.onNotificationActionRequest` IPC notification. The Dart coordinator accepts only `dismiss` for the local device and an exact `windows:<decimal uint32>` identity, then re-checks the tracked/active listener snapshot before calling the public `UserNotificationListener.RemoveNotification(id)` API. Invalid, overflowing, stale, or unavailable targets fail closed; Open, reply, and arbitrary actions remain unsupported.
+
+The coordinator reports completion through `rift.reportLocalNotificationActionHandled`. It does not synthesize source removal: the normal `NotificationChanged(Removed)` event flows through `rift.notifyLocalNotificationEvent(removed)` and remains authoritative. Native errors are mapped to Rift's stable failure vocabulary; HRESULTs are not sent to peers.
 
 ## Lifecycle and recovery
 
@@ -43,4 +49,4 @@ This source-side reconciliation emits:
 
 Remote-origin records are never compared with Windows' local active set. Receiver-side mirror cleanup remains the existing mirrored-notification reconciliation path.
 
-If the Rift user-session process exits, observation stops. No Windows background task or second Windows-only daemon protocol is used. All events continue through `rift.notifyLocalNotificationEvent` and the existing `notification.sync@1` contract.
+If the Rift user-session process exits, observation and source-action execution stop. Incoming Windows actions then fail with `CapabilityUnavailable`; they are not queued waiting for the UI process to restart. No Windows background task or second Windows-only daemon protocol is used. All events continue through `rift.notifyLocalNotificationEvent` and the existing `notification.sync@1` contract.

@@ -363,8 +363,8 @@ The v1 notification record fields are:
 | `title`           | No       | string              | Mirrored title preview only                                           |
 | `bodyPreview`     | No       | string              | Mirrored body preview only                                            |
 | `postedAt`        | Yes      | RFC 3339 UTC string | Audit timestamp for the Android-side post/update event                |
-| `isDismissible`   | Yes      | boolean             | Whether remote `dismiss` is currently allowed                         |
-| `isOpenable`      | Yes      | boolean             | Whether remote `open` is currently allowed                            |
+| `isDismissible`   | Yes      | boolean             | Whether the source can currently execute remote `dismiss` for this exact notification |
+| `isOpenable`      | Yes      | boolean             | Whether the source can currently execute remote `open` for this exact notification |
 | `icon`            | No       | object              | Optional presentation metadata; when present it MUST use the bounded PNG schema below |
 
 When present, `icon` MUST contain exactly the canonical v1 presentation fields below. Senders MUST normalize source artwork to PNG before transport:
@@ -380,13 +380,15 @@ When present, `icon` MUST contain exactly the canonical v1 presentation fields b
 
 `mediaType` MUST be `image/png`. The decoded bytes MUST be a structurally valid PNG with valid chunk CRCs, a width and height from 1 through 512 pixels, and a total size of at most 131072 bytes. `byteSize` MUST equal the decoded byte count, and `sha256` MUST be the lowercase SHA-256 digest of those exact bytes. Receivers MUST reject an icon before decoding when the Base64 string exceeds 174764 characters (the encoded bound for 131072 raw bytes), and MUST ignore malformed, oversized, over-dimensioned, or hash-mismatched icon metadata while retaining the notification. SVG, animated GIF, WebP, JPEG, resource IDs, local paths, content URIs, and remote URLs are not supported. Icons are presentation metadata only and MUST NOT be used as authorization, identity, or notification lifecycle inputs.
 
+`isDismissible` and `isOpenable` are per-record, source-device capabilities. A source MUST set a flag only while it can resolve that exact notification and execute the corresponding action through its current native/local control path. A receiver MUST treat a false flag as unavailable and MUST NOT infer action support from `sourcePlatform` alone.
+
 `notification.posted` payload fields: the full notification record above.
 
 `notification.updated` payload fields: the full notification record above. Receivers MUST replace the existing record with the same `(sourceDeviceId, notificationId)` tuple, including replacing the icon with the updated record's icon or removing it when absent.
 
 `notification.removed` payload fields: `notificationId`, `sourceDeviceId`, optional `removedAt` RFC 3339 timestamp. Receivers MUST tombstone or delete the corresponding mirrored record.
 
-`notification.actionRequest` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `operationId` identifies the requester's operation and MUST be echoed unchanged by the corresponding result. `requestingDeviceId` MUST match the authenticated envelope identity. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
+`notification.actionRequest` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, optional `requestedAt` RFC 3339 timestamp. `operationId` identifies the requester's operation and MUST be echoed unchanged by the corresponding result. The authenticated envelope source and `requestingDeviceId` MUST both identify the requester; payload `sourceDeviceId` identifies the notification source and MUST equal the receiving source device. The source MUST resolve the exact local `(sourceDeviceId, notificationId)` record, require it to be active and local-origin, and re-check the advertised action before native execution. The v1 action vocabulary is closed: `open` and `dismiss`. Unknown action names MUST be rejected with `ProtocolError`; a known action not advertised by the record MUST fail with `PolicyDenied`; and an unknown, stale, or no-longer-controllable target MUST fail with `CapabilityUnavailable`. Inline reply and arbitrary custom notification actions are out of scope for v1 and MUST NOT be tunneled through this message.
 
 `notification.actionResult` payload fields: `operationId`, `notificationId`, `sourceDeviceId`, `requestingDeviceId`, `action`, `success` boolean, optional `failureReason`, optional `message`. `operationId` MUST identify the corresponding action request; receivers MUST correlate results by this identifier and MUST NOT reuse notification identity fields as the result correlation key. `requestingDeviceId` MUST match the original authenticated requester identity for the corresponding action request.
 
