@@ -140,6 +140,30 @@ def test_explicit_identifier_precedes_name_matching() -> None:
     assert [item.path for item in match.evidence] == ["lib/new_sync.dart"]
 
 
+def test_explicit_identifier_reference_without_implementation_requires_review() -> None:
+    reference = _evidence(
+        EvidenceKind.CONFIGURATION,
+        "core/SyncService.cs",
+        line=3,
+        metadata={
+            "identifiers": ["FE-03"],
+            "configuration_type": "explicit_identifier_reference",
+        },
+    )
+    claim = _claim(
+        RepositoryClaimKind.FUNCTION_OR_FEATURE,
+        "Notification Sync",
+        claim_id="FE-03",
+        identifiers=["FE-03"],
+    )
+
+    match = RepositoryEvidenceLinker(_snapshot(reference)).link(claim)
+
+    assert match.status == RepositoryEvidenceStatus.REVIEW_REQUIRED
+    assert match.match_method == RepositoryMatchMethod.EXPLICIT_IDENTIFIER
+    assert match.evidence == [reference]
+
+
 def test_function_feature_exact_and_conservative_normalized_matching() -> None:
     exact = _evidence(EvidenceKind.SYMBOL, "lib/direct.dart", "Notification Sync")
     exact_match = RepositoryEvidenceLinker(_snapshot(exact)).link(

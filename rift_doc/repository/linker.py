@@ -146,6 +146,17 @@ class RepositoryEvidenceLinker:
 
         selected = candidates if method == RepositoryMatchMethod.MANUAL_MAPPING else primary
         selected = self._augment_evidence(claim, selected)
+        if claim.kind == RepositoryClaimKind.FUNCTION_OR_FEATURE and all(
+            _is_explicit_identifier_reference(item) for item in selected
+        ):
+            return RepositoryEvidenceMatch(
+                claim,
+                RepositoryEvidenceStatus.REVIEW_REQUIRED,
+                method,
+                selected,
+                reason="An explicit identifier reference was located, but no implementation-level evidence was established.",
+                metadata=self._metadata(mapping),
+            )
         version_conflict = _version_conflict(claim, selected)
         if version_conflict is not None:
             return RepositoryEvidenceMatch(
@@ -368,6 +379,13 @@ def _path_matches(path: str, configured: str) -> bool:
         or path.startswith(pattern.rstrip("/") + "/")
         or fnmatch.fnmatchcase(path, pattern)
         or PurePosixPath(path).match(pattern)
+    )
+
+
+def _is_explicit_identifier_reference(evidence: RepositoryEvidence) -> bool:
+    return (
+        evidence.kind == EvidenceKind.CONFIGURATION
+        and evidence.metadata.get("configuration_type") == "explicit_identifier_reference"
     )
 
 
