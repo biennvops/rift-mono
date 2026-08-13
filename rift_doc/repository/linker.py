@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+from dataclasses import replace
 from pathlib import PurePosixPath
 import re
 from typing import Any, Iterable
@@ -316,8 +317,20 @@ class RepositoryEvidenceLinker:
         for evidence in self.snapshot.test_results:
             test_names = {_repository_name(str(value)) for value in evidence.metadata.get("test_names", [])}
             evidence_ids = {normalize_identifier(str(value)) for value in evidence.metadata.get("identifiers", [])}
-            if names.intersection(test_names) or identifiers.intersection(evidence_ids):
-                result.append(evidence)
+            matched_names = names.intersection(test_names)
+            if matched_names or identifiers.intersection(evidence_ids):
+                test_outcomes = {
+                    _repository_name(str(name)): str(outcome).upper()
+                    for name, outcome in evidence.metadata.get("test_outcomes", {}).items()
+                }
+                if matched_names and test_outcomes:
+                    metadata = dict(evidence.metadata)
+                    metadata["latest_result"] = _aggregate_result_values(
+                        test_outcomes.get(name, "UNKNOWN") for name in matched_names
+                    )
+                    result.append(replace(evidence, metadata=metadata))
+                else:
+                    result.append(evidence)
         return result
 
     def _test_states(
@@ -335,10 +348,12 @@ class RepositoryEvidenceLinker:
         test_results = [item for item in evidence if item.kind == EvidenceKind.TEST_RESULT]
         if test_results:
             result.append(TestEvidenceState.RESULT_PRESENT)
-            values = {str(item.metadata.get("latest_result", "UNKNOWN")).upper() for item in test_results}
-            if "FAIL" in values:
+            latest_result = _aggregate_result_values(
+                str(item.metadata.get("latest_result", "UNKNOWN")) for item in test_results
+            )
+            if latest_result == "FAIL":
                 result.append(TestEvidenceState.LATEST_RESULT_FAIL)
-            elif values == {"PASS"}:
+            elif latest_result == "PASS":
                 result.append(TestEvidenceState.LATEST_RESULT_PASS)
             else:
                 result.append(TestEvidenceState.LATEST_RESULT_UNKNOWN)
@@ -430,15 +445,24 @@ def _test_result_conflict(
     if documented not in {"pass", "passed", "success", "successful", "fail", "failed"}:
         return None
     expected = "PASS" if documented in {"pass", "passed", "success", "successful"} else "FAIL"
-    recorded = {
-        str(item.metadata.get("latest_result", "UNKNOWN")).upper()
+    recorded = [
+        str(item.metadata.get("latest_result", "UNKNOWN"))
         for item in evidence
         if item.kind == EvidenceKind.TEST_RESULT
-    }
-    actual = "FAIL" if "FAIL" in recorded else "PASS" if recorded == {"PASS"} else "UNKNOWN"
+    ]
+    actual = _aggregate_result_values(recorded)
     if actual != "UNKNOWN" and actual != expected:
         return {"documented": expected, "repository": actual}
     return None
+
+
+def _aggregate_result_values(values: Iterable[str]) -> str:
+    outcomes = {str(value).upper() for value in values}
+    if "FAIL" in outcomes:
+        return "FAIL"
+    if outcomes == {"PASS"}:
+        return "PASS"
+    return "UNKNOWN"
 
 
 def _verified_reason(

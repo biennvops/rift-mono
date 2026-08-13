@@ -356,7 +356,7 @@ def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, An
     result_metadata = dict(metadata)
     result_metadata["result_format"] = path.suffix.casefold().lstrip(".") or "unknown"
     status = "UNKNOWN"
-    tests: list[str] = []
+    test_outcomes: dict[str, str] = {}
     if path.suffix.casefold() in {".xml", ".trx", ".junit"} and path.stat().st_size <= _SOURCE_LIMIT_BYTES:
         try:
             root = ET.fromstring(path.read_bytes())
@@ -366,19 +366,26 @@ def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, An
             for element in root.iter():
                 tag = element.tag.rsplit("}", 1)[-1]
                 attribute = "testName" if tag == "UnitTestResult" else "name" if tag == "testcase" else None
-                if attribute and element.attrib.get(attribute):
-                    tests.append(str(element.attrib[attribute]))
-                    if len(tests) == 100:
-                        break
-            failed = any(
-                element.tag.rsplit("}", 1)[-1] in {"failure", "error"}
-                for element in root.iter()
-            ) or any(
-                str(element.attrib.get("outcome", "")).casefold() == "failed"
-                for element in root.iter()
-            )
-            status = "FAIL" if failed else "PASS" if tests else "UNKNOWN"
-    result_metadata.update({"latest_result": status, "test_names": tests})
+                if not attribute or not element.attrib.get(attribute):
+                    continue
+                name = str(element.attrib[attribute])
+                if tag == "UnitTestResult":
+                    outcome = _normalized_test_outcome(element.attrib.get("outcome"))
+                else:
+                    child_tags = {child.tag.rsplit("}", 1)[-1] for child in element}
+                    outcome = "FAIL" if child_tags.intersection({"failure", "error"}) else "UNKNOWN" if "skipped" in child_tags else "PASS"
+                previous = test_outcomes.get(name)
+                test_outcomes[name] = _aggregate_test_outcomes([previous, outcome]) if previous else outcome
+                if len(test_outcomes) == 100:
+                    break
+            status = _aggregate_test_outcomes(test_outcomes.values())
+    result_metadata.update(
+        {
+            "suite_result": status,
+            "test_names": list(test_outcomes),
+            "test_outcomes": test_outcomes,
+        }
+    )
     return RepositoryEvidence(
         evidence_id=f"test_result:{relative_path}",
         kind=EvidenceKind.TEST_RESULT,
@@ -386,6 +393,24 @@ def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, An
         metadata=result_metadata,
         excerpt_or_signature=f"{PurePosixPath(relative_path).name}: {status}",
     )
+
+
+def _normalized_test_outcome(value: Any) -> str:
+    outcome = str(value or "").casefold()
+    if outcome in {"fail", "failed", "error"}:
+        return "FAIL"
+    if outcome in {"pass", "passed", "success", "successful", "completed"}:
+        return "PASS"
+    return "UNKNOWN"
+
+
+def _aggregate_test_outcomes(outcomes: Iterable[str]) -> str:
+    values = set(outcomes)
+    if "FAIL" in values:
+        return "FAIL"
+    if values == {"PASS"}:
+        return "PASS"
+    return "UNKNOWN"
 
 
 def _build_serialized_indexes(snapshot: RepositorySnapshot) -> dict[str, Any]:

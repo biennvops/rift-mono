@@ -146,8 +146,10 @@ def test_artifact_directory_indexes_deliverables_and_test_results(tmp_path: Path
     assert any(item.kind == EvidenceKind.RELEASE_ARTIFACT and item.path.endswith("rift-client.pkg") for item in snapshot.release_artifacts)
     assert all(not item.path.endswith(".xml") for item in snapshot.release_artifacts)
     result = next(item for item in snapshot.test_results if item.kind == EvidenceKind.TEST_RESULT)
-    assert result.metadata["latest_result"] == "PASS"
+    assert result.metadata["suite_result"] == "PASS"
     assert result.metadata["test_names"] == ["syncs notifications"]
+    assert result.metadata["test_outcomes"] == {"syncs notifications": "PASS"}
+    assert "latest_result" not in result.metadata
     assert snapshot.audit_metadata["artifact_root"] == str(artifacts.resolve())
 
 
@@ -161,11 +163,32 @@ def test_trx_artifact_indexes_passed_and_failed_test_names(tmp_path: Path) -> No
     snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
 
     result = snapshot.test_results[0]
-    assert result.metadata["latest_result"] == "FAIL"
+    assert result.metadata["suite_result"] == "FAIL"
     assert result.metadata["test_names"] == [
         "SyncsNotifications",
         "LeavesUnchangedNotificationsAlone",
     ]
+    assert result.metadata["test_outcomes"] == {
+        "SyncsNotifications": "FAIL",
+        "LeavesUnchangedNotificationsAlone": "PASS",
+    }
+    assert "latest_result" not in result.metadata
+
+
+def test_skipped_junit_test_is_not_reported_as_passing(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    artifacts = tmp_path / "artifacts"
+    repository.mkdir()
+    _write(
+        artifacts / "results" / "junit.xml",
+        '<testsuite tests="1" skipped="1"><testcase name="syncs notifications"><skipped /></testcase></testsuite>',
+    )
+
+    snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
+
+    result = snapshot.test_results[0]
+    assert result.metadata["suite_result"] == "UNKNOWN"
+    assert result.metadata["test_outcomes"] == {"syncs notifications": "UNKNOWN"}
 
 
 def test_current_rift_repository_inventory_detects_actual_build_systems() -> None:

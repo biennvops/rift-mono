@@ -326,6 +326,9 @@ def test_trx_result_name_links_to_dotnet_test_claim(tmp_path: Path) -> None:
 public class SyncTests {
     [Fact]
     public void SyncsNotifications() {}
+
+    [Fact]
+    public void LeavesUnchangedNotificationsAlone() {}
 }
 """,
         encoding="utf-8",
@@ -338,13 +341,25 @@ public class SyncTests {
     )
     snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
 
-    match = RepositoryEvidenceLinker(snapshot).link(
+    failed_match = RepositoryEvidenceLinker(snapshot).link(
         _claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications", metadata={"status": "Passed"})
     )
+    passed_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(
+            RepositoryClaimKind.TEST_CLAIM,
+            "LeavesUnchangedNotificationsAlone",
+            metadata={"status": "Passed"},
+        )
+    )
 
-    assert match.status == RepositoryEvidenceStatus.CONTRADICTED
-    assert match.metadata["test_result_conflict"] == {"documented": "PASS", "repository": "FAIL"}
-    assert any(item.kind == EvidenceKind.TEST_RESULT for item in match.evidence)
+    assert failed_match.status == RepositoryEvidenceStatus.CONTRADICTED
+    assert failed_match.metadata["test_result_conflict"] == {"documented": "PASS", "repository": "FAIL"}
+    assert EvidenceTestState.LATEST_RESULT_FAIL in failed_match.test_states
+    assert passed_match.status == RepositoryEvidenceStatus.VERIFIED
+    assert EvidenceTestState.LATEST_RESULT_PASS in passed_match.test_states
+    assert next(
+        item for item in passed_match.evidence if item.kind == EvidenceKind.TEST_RESULT
+    ).metadata["latest_result"] == "PASS"
 
 
 def test_root_test_source_uses_repository_scoped_ci(tmp_path: Path) -> None:
