@@ -830,6 +830,77 @@ void main() {
         (chip('rift-peer-2').decoration as BoxDecoration).color, Colors.white);
   });
 
+  testWidgets('manual Send target override clears stale preferred target',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-a',
+          'displayName': 'Pixel A',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-b',
+          'displayName': 'Pixel B',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-a',
+        displayName: 'Pixel A',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedContainer chip(String deviceId) => tester.widget<AnimatedContainer>(
+          find.byKey(ValueKey('send-device-chip-$deviceId')),
+        );
+    expect((chip('rift-peer-a').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+    expect(
+        (chip('rift-peer-b').decoration as BoxDecoration).color, Colors.white);
+
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-b')));
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-a')));
+    await tester.pumpAndSettle();
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-peer-b',
+        'displayName': 'Pixel B',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['file.transfer'],
+      },
+    ];
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Target device is unavailable for file transfer.'),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('send-device-chip-rift-peer-a')),
+        findsNothing);
+    expect((chip('rift-peer-b').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+  });
+
   testWidgets('target scope indicator hides on unsupported Activity sections',
       (WidgetTester tester) async {
     await tester.binding.setSurfaceSize(const Size(1200, 800));

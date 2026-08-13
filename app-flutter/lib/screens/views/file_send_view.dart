@@ -84,7 +84,8 @@ class _FileSendViewState extends State<FileSendView> {
   @override
   void didUpdateWidget(FileSendView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.targetRequestVersion != widget.targetRequestVersion) {
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
+        oldWidget.preferredTargetDeviceId != widget.preferredTargetDeviceId) {
       _applyPreferredTarget();
     }
   }
