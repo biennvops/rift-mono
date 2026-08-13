@@ -586,7 +586,41 @@ jobs:
     ]
 
 
-def test_root_ci_job_does_not_cross_unrelated_test_ecosystems() -> None:
+def test_targeted_package_ci_job_only_covers_matching_test_path(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    (repository / "package" / "tests").mkdir(parents=True)
+    (repository / "package" / "tests" / "test_sync.py").write_text(
+        "def test_syncs_notifications():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / "package" / "tests" / "test_transfer.py").write_text(
+        "def test_transfers_files():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(
+        """
+jobs:
+  test-sync:
+    steps:
+      - run: pytest tests/test_sync.py
+        working-directory: package
+""",
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository)
+
+    sync_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+    transfer_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_transfers_files")
+    )
+
+    assert EvidenceTestState.CI_CONFIGURED in sync_match.test_states
+    assert transfer_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
+
+
     python_test = _evidence(
         EvidenceKind.TEST,
         "tests/test_sync.py",

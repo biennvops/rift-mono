@@ -328,18 +328,19 @@ class RepositoryEvidenceLinker:
                 if not _ci_invokes_tests(command):
                     continue
                 directory = invocation["working_directory"]
+                targeted_tests = _targeted_tests(command, self.snapshot.tests, directory)
+                if targeted_tests:
+                    if any(item.evidence_id in targeted_tests for item in tests):
+                        relevant.append(job)
+                        break
+                    continue
                 if any(root and (root in command or root == directory or directory.startswith(root + "/")) for root in test_roots):
                     relevant.append(job)
                     break
                 if "" not in test_roots or directory:
                     continue
                 command_languages = _ci_test_languages(command)
-                targeted_tests = _targeted_root_tests(command, self.snapshot.tests)
-                if targeted_tests:
-                    if any(item.evidence_id in targeted_tests for item in tests):
-                        relevant.append(job)
-                        break
-                elif command_languages.intersection(selected_languages) or (
+                if command_languages.intersection(selected_languages) or (
                     not command_languages and len(root_test_languages) <= 1
                 ):
                     relevant.append(job)
@@ -586,21 +587,32 @@ def _ci_command_invocations(job: RepositoryEvidence) -> list[dict[str, str]]:
     return []
 
 
-def _targeted_root_tests(
+def _targeted_tests(
     command: str,
     tests: Iterable[RepositoryEvidence],
+    working_directory: str,
 ) -> set[str]:
     arguments = {
         argument.split("::", 1)[0].replace("\\", "/").lstrip("./")
         for argument in _shell_arguments(command)
         if not argument.startswith("-")
     }
+    if not arguments:
+        return set()
     result: set[str] = set()
     for test in tests:
-        if _top_module(test.path):
-            continue
         path = test.path.replace("\\", "/").strip("/")
-        if any(path == argument or path.startswith(argument.rstrip("/") + "/") for argument in arguments):
+        relative_path = path
+        if working_directory:
+            prefix = working_directory.rstrip("/") + "/"
+            if not path.startswith(prefix):
+                continue
+            relative_path = path[len(prefix) :]
+        if any(
+            relative_path == argument
+            or relative_path.startswith(argument.rstrip("/") + "/")
+            for argument in arguments
+        ):
             result.add(test.evidence_id)
     return result
 
