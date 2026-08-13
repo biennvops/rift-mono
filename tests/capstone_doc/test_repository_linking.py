@@ -228,6 +228,7 @@ def test_test_augmentation_respects_projected_expected_evidence_types() -> None:
     assert [item.kind for item in match.evidence] == [EvidenceKind.TEST]
 
 
+def test_function_feature_exact_and_conservative_normalized_matching() -> None:
     exact = _evidence(EvidenceKind.SYMBOL, "lib/direct.dart", "Notification Sync")
     exact_match = RepositoryEvidenceLinker(_snapshot(exact)).link(
         _claim(RepositoryClaimKind.FUNCTION_OR_FEATURE, "Notification Sync")
@@ -621,6 +622,7 @@ jobs:
     assert transfer_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
 
 
+def test_root_ci_job_does_not_cross_unrelated_test_ecosystems() -> None:
     python_test = _evidence(
         EvidenceKind.TEST,
         "tests/test_sync.py",
@@ -654,6 +656,47 @@ jobs:
 
     assert EvidenceTestState.CI_CONFIGURED in python_match.test_states
     assert dotnet_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
+
+
+def test_package_scoped_ci_job_respects_test_language(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    (repository / "package" / "tests").mkdir(parents=True)
+    (repository / "package" / "tests" / "test_sync.py").write_text(
+        "def test_syncs_notifications():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / "package" / "tests" / "SyncTests.cs").write_text(
+        """
+using Xunit;
+public class SyncTests {
+    [Fact]
+    public void SyncsNotifications() {}
+}
+""",
+        encoding="utf-8",
+    )
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(
+        """
+jobs:
+  test-python:
+    steps:
+      - working-directory: package
+        run: pytest
+""",
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository)
+
+    python_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+    csharp_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications")
+    )
+
+    assert EvidenceTestState.CI_CONFIGURED in python_match.test_states
+    assert csharp_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
 
 
 def test_targeted_root_ci_job_only_covers_matching_test_path() -> None:

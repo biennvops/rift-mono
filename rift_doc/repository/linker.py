@@ -335,8 +335,28 @@ class RepositoryEvidenceLinker:
                         break
                     continue
                 if any(root and (root in command or root == directory or directory.startswith(root + "/")) for root in test_roots):
-                    relevant.append(job)
-                    break
+                    command_languages = _ci_test_languages(command)
+                    scope_languages = {
+                        language
+                        for item in self.snapshot.tests
+                        if _top_module(item.path) in test_roots
+                        for language in [_test_language(item)]
+                        if language
+                    }
+                    selected_test_languages = {
+                        language
+                        for item in tests
+                        for language in [_test_language(item)]
+                        if language
+                    }
+                    if command_languages:
+                        if command_languages.intersection(selected_test_languages):
+                            relevant.append(job)
+                            break
+                    elif len(scope_languages) == 1 and scope_languages.intersection(selected_test_languages):
+                        relevant.append(job)
+                        break
+                    continue
                 if "" not in test_roots or directory:
                     continue
                 command_languages = _ci_test_languages(command)
@@ -543,6 +563,11 @@ def _top_module(path: str) -> str:
     if not parts or parts[0].casefold() in {"test", "tests"}:
         return ""
     return parts[0]
+
+
+def _test_language(evidence: RepositoryEvidence) -> str | None:
+    value = evidence.metadata.get("language")
+    return str(value) if value not in (None, "") else None
 
 
 def _ci_test_languages(command: str) -> set[str]:
