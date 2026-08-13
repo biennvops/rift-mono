@@ -6,6 +6,11 @@ abstract final class RiftMotion {
   static const Duration slow = Duration(milliseconds: 500);
   static const Duration scene = Duration(milliseconds: 800);
 
+  static const Curve enter = Curves.easeOutCubic;
+  static const Curve exit = Curves.easeInCubic;
+  static const Curve move = Curves.easeInOutCubic;
+  static const Curve emphasis = Curves.easeOutQuart;
+
   static bool reducedMotionOf(BuildContext context) {
     return MediaQuery.maybeOf(context)?.disableAnimations ?? false;
   }
