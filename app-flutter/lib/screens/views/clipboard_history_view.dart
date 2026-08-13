@@ -376,7 +376,13 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
           ),
           const SizedBox(height: 12),
           if (visibleOffers.isEmpty)
-            _buildEmptyState(theme, allOffers.isEmpty)
+            _buildEmptyState(
+              theme,
+              allOffers.isEmpty,
+              scopedDeviceName: _preferredSourceDeviceId == null
+                  ? null
+                  : _sourceDisplayLabel(_preferredSourceDeviceId),
+            )
           else
             ListView.separated(
               shrinkWrap: true,
@@ -462,7 +468,11 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     );
   }
 
-  Widget _buildEmptyState(ThemeData theme, bool noOffersAtAll) {
+  Widget _buildEmptyState(
+    ThemeData theme,
+    bool noOffersAtAll, {
+    String? scopedDeviceName,
+  }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 16),
@@ -482,9 +492,11 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
           ),
           const SizedBox(height: 10),
           Text(
-            noOffersAtAll
-                ? 'No clipboard items yet.'
-                : 'No items match filters.',
+            scopedDeviceName == null
+                ? (noOffersAtAll
+                    ? 'No clipboard items yet.'
+                    : 'No items match filters.')
+                : 'No clipboard items from $scopedDeviceName.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),

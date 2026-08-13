@@ -199,7 +199,11 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
 
   String get _activityTitle {
     final target = _targetDisplayName;
-    return target == null || target.isEmpty ? 'Activity' : 'Activity — $target';
+    if (target != null && target.isNotEmpty) return 'Activity — $target';
+    final legacyDisplayName = widget.displayName;
+    return legacyDisplayName == null || legacyDisplayName.isEmpty
+        ? 'Activity'
+        : 'Activity — $legacyDisplayName';
   }
 
   @override
