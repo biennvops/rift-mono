@@ -168,7 +168,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                             data: nodes[index],
                             index: index,
                           ),
-                        if (_activeNode != null) _positionPanel(sceneSize),
+                        if (_activeNode != null)
+                          _positionPanel(sceneSize, geometry),
                       ],
                     ),
                   );
@@ -298,13 +299,35 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
-  Positioned _positionPanel(Size sceneSize) {
+  Positioned _positionPanel(
+    Size sceneSize,
+    DeviceFocusGeometry geometry,
+  ) {
+    const panelBottom = 16.0;
+    const nodeGap = 12.0;
     final panelWidth = math.min(400.0, sceneSize.width - 32).toDouble();
-    final panelHeight =
+    final lowestNodeBottom = geometry.nodeCenters.values.fold<double>(
+      0,
+      (lowest, center) => math.max(
+        lowest,
+        center.dy + geometry.nodeSize.height / 2,
+      ),
+    );
+    final availablePanelHeight =
+        sceneSize.height - panelBottom - nodeGap - lowestNodeBottom;
+    final preferredPanelHeight =
         math.min(340.0, math.max(220.0, sceneSize.height * 0.48)).toDouble();
+    final panelHeight = sceneSize.width < 600
+        ? math
+            .min(
+              preferredPanelHeight,
+              math.max(96.0, availablePanelHeight),
+            )
+            .toDouble()
+        : preferredPanelHeight;
     return Positioned(
       left: (sceneSize.width - panelWidth) / 2,
-      bottom: 16,
+      bottom: panelBottom,
       width: panelWidth,
       child: AnimatedSwitcher(
         duration: const Duration(milliseconds: 240),
