@@ -316,14 +316,12 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         sceneSize.height - panelBottom - nodeGap - lowestNodeBottom;
     final preferredPanelHeight =
         math.min(340.0, math.max(220.0, sceneSize.height * 0.48)).toDouble();
-    final panelHeight = sceneSize.width < 600
-        ? math
-            .min(
-              preferredPanelHeight,
-              math.max(96.0, availablePanelHeight),
-            )
-            .toDouble()
-        : preferredPanelHeight;
+    final panelHeight = math
+        .min(
+          preferredPanelHeight,
+          math.max(96.0, availablePanelHeight),
+        )
+        .toDouble();
     final activeNode = _activeNode;
     return Positioned(
       left: (sceneSize.width - panelWidth) / 2,

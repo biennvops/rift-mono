@@ -957,76 +957,84 @@ void main() {
     expect(onCloseCalled, isTrue);
   });
 
-  testWidgets(
-      'compact desktop focus keeps nodes reachable while a panel is open',
+  testWidgets('desktop focus keeps nodes reachable while a panel is open',
       (WidgetTester tester) async {
-    tester.view.physicalSize = const Size(1024, 768);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
 
-    final client = FakeJsonRpcRiftClient()
-      ..trustedPeers = [
-        {
-          'deviceId': 'rift-peer-compact',
-          'displayName': 'Compact Peer',
-          'platform': 'android',
-          'trustState': 'trusted',
-          'presence': 'online',
-          'capabilities': ['device.status', 'presence.basic'],
-          'deviceStatus': {
-            'sourceDeviceId': 'rift-peer-compact',
-            'batteryPercent': 64,
-            'observedAt': '2026-07-29T00:00:00Z',
+    for (final windowSize in const [
+      Size(1024, 768),
+      Size(1400, 900),
+    ]) {
+      tester.view.physicalSize = windowSize;
+      final client = FakeJsonRpcRiftClient()
+        ..trustedPeers = [
+          {
+            'deviceId': 'rift-peer-focus',
+            'displayName': 'Focus Peer',
+            'platform': 'android',
+            'trustState': 'trusted',
+            'presence': 'online',
+            'capabilities': ['device.status', 'presence.basic'],
+            'deviceStatus': {
+              'sourceDeviceId': 'rift-peer-focus',
+              'batteryPercent': 64,
+              'observedAt': '2026-07-29T00:00:00Z',
+            },
           },
-        },
-      ];
+        ];
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Provider<JsonRpcRiftClient>.value(
-          value: client,
-          child: const TrustedDevicesScreen(),
+      await tester.pumpWidget(
+        MaterialApp(
+          key: ValueKey(windowSize),
+          home: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const ValueKey('trusted-peer-card-rift-peer-compact')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-identity')),
-    );
-    await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('trusted-peer-card-rift-peer-focus')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('device-focus-node-identity')),
+      );
+      await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const ValueKey('device-focus-panel-identity')),
-      findsOneWidget,
-    );
+      expect(
+        find.byKey(const ValueKey('device-focus-panel-identity')),
+        findsOneWidget,
+        reason: 'viewport $windowSize',
+      );
 
-    await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-capabilities')),
-    );
-    await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('device-focus-node-capabilities')),
+      );
+      await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const ValueKey('device-focus-panel-capabilities')),
-      findsOneWidget,
-    );
+      expect(
+        find.byKey(const ValueKey('device-focus-panel-capabilities')),
+        findsOneWidget,
+        reason: 'viewport $windowSize',
+      );
 
-    await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-info')),
-    );
-    await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('device-focus-node-info')),
+      );
+      await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const ValueKey('device-focus-panel-info')),
-      findsOneWidget,
-    );
+      expect(
+        find.byKey(const ValueKey('device-focus-panel-info')),
+        findsOneWidget,
+        reason: 'viewport $windowSize',
+      );
+    }
   });
 
   testWidgets('desktop split view switches focus between device cards',

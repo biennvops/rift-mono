@@ -570,6 +570,8 @@ void main() {
 
   testWidgets('desktop focus revocation remains confirmation gated',
       (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     var onCloseCalled = false;
     final client = FakeDeviceDetailClient();
 
@@ -587,9 +589,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(client.revokeCalled, isFalse);
 
-    await tester.tap(
-      find.byKey(const ValueKey('device-focus-revoke-trust')),
-    );
+    final revokeButton =
+        find.byKey(const ValueKey('device-focus-revoke-trust'));
+    await tester.ensureVisible(revokeButton);
+    await tester.pumpAndSettle();
+    await tester.tap(revokeButton);
     await tester.pumpAndSettle();
     expect(find.text('Revoke Trust?'), findsOneWidget);
     expect(client.revokeCalled, isFalse);
