@@ -374,6 +374,68 @@ void main() {
     expect(find.text('0.1-draft'), findsOneWidget);
   });
 
+  testWidgets('desktop focus animates panel opening and closing',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+
+    final identityNode =
+        find.byKey(const ValueKey('device-focus-node-identity'));
+    final identityPanel =
+        find.byKey(const ValueKey('device-focus-panel-identity'));
+
+    await tester.tap(identityNode);
+    await tester.pump();
+
+    expect(identityPanel, findsOneWidget);
+    var panelFades = tester.widgetList<FadeTransition>(
+      find.ancestor(
+        of: identityPanel,
+        matching: find.byType(FadeTransition),
+      ),
+    );
+    expect(
+      panelFades.map((fade) => fade.opacity.value),
+      contains(lessThan(1)),
+    );
+
+    await tester.pump(const Duration(milliseconds: 120));
+    panelFades = tester.widgetList<FadeTransition>(
+      find.ancestor(
+        of: identityPanel,
+        matching: find.byType(FadeTransition),
+      ),
+    );
+    expect(
+      panelFades.map((fade) => fade.opacity.value),
+      contains(inExclusiveRange(0, 1)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-panel-close')),
+    );
+    await tester.pump();
+
+    expect(identityPanel, findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 120));
+    panelFades = tester.widgetList<FadeTransition>(
+      find.ancestor(
+        of: identityPanel,
+        matching: find.byType(FadeTransition),
+      ),
+    );
+    expect(
+      panelFades.map((fade) => fade.opacity.value),
+      contains(inExclusiveRange(0, 1)),
+    );
+
+    await tester.pumpAndSettle();
+    expect(identityPanel, findsNothing);
+  });
+
   testWidgets('desktop focus power panel follows live status updates',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient()

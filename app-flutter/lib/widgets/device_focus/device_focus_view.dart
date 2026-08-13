@@ -168,8 +168,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                             data: nodes[index],
                             index: index,
                           ),
-                        if (_activeNode != null)
-                          _positionPanel(sceneSize, geometry),
+                        _positionPanel(sceneSize, geometry),
                       ],
                     ),
                   );
@@ -325,6 +324,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
             )
             .toDouble()
         : preferredPanelHeight;
+    final activeNode = _activeNode;
     return Positioned(
       left: (sceneSize.width - panelWidth) / 2,
       bottom: panelBottom,
@@ -343,18 +343,22 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
             ),
           );
         },
-        child: SizedBox(
-          key: ValueKey('device-focus-panel-${_activeNode!.name}'),
-          child: DeviceFocusNodePanel(
-            kind: _activeNode!,
-            title: _panelTitle(_activeNode!),
-            icon: _nodeIcon(_activeNode!),
-            rows: _panelRows(_activeNode!),
-            maxHeight: panelHeight,
-            onClose: () => setState(() => _activeNode = null),
-            footer: _panelFooter(_activeNode!),
-          ),
-        ),
+        child: activeNode == null
+            ? const SizedBox.shrink(
+                key: ValueKey('device-focus-panel-empty'),
+              )
+            : SizedBox(
+                key: ValueKey('device-focus-panel-${activeNode.name}'),
+                child: DeviceFocusNodePanel(
+                  kind: activeNode,
+                  title: _panelTitle(activeNode),
+                  icon: _nodeIcon(activeNode),
+                  rows: _panelRows(activeNode),
+                  maxHeight: panelHeight,
+                  onClose: () => setState(() => _activeNode = null),
+                  footer: _panelFooter(activeNode),
+                ),
+              ),
       ),
     );
   }
