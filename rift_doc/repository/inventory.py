@@ -410,8 +410,6 @@ def _test_result_evidence(path: Path, relative_path: str, metadata: dict[str, An
                     outcome = "FAIL" if child_tags.intersection({"failure", "error"}) else "UNKNOWN" if "skipped" in child_tags else "PASS"
                 previous = test_outcomes.get(name)
                 test_outcomes[name] = _aggregate_test_outcomes([previous, outcome]) if previous else outcome
-                if len(test_outcomes) == 100:
-                    break
             status = _aggregate_test_outcomes(test_outcomes.values())
     result_metadata.update(
         {

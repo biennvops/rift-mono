@@ -192,7 +192,20 @@ def test_skipped_junit_test_is_not_reported_as_passing(tmp_path: Path) -> None:
     assert result.metadata["test_outcomes"] == {"syncs notifications": "UNKNOWN"}
 
 
-def test_current_rift_repository_inventory_detects_actual_build_systems() -> None:
+def test_test_result_artifact_indexes_more_than_100_tests(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    artifacts = tmp_path / "artifacts"
+    repository.mkdir()
+    testcases = "".join(f'<testcase name="test_{index}" />' for index in range(101))
+    _write(artifacts / "results" / "junit.xml", f"<testsuite>{testcases}</testsuite>")
+
+    snapshot = RepositoryInventory().scan(repository, artifact_root=artifacts)
+
+    result = snapshot.test_results[0]
+    assert len(result.metadata["test_outcomes"]) == 101
+    assert result.metadata["test_outcomes"]["test_100"] == "PASS"
+
+
     root = Path(__file__).resolve().parents[2]
     snapshot = RepositoryInventory(InventoryOptions(excluded_paths=("capstone-documents",))).scan(root)
 
