@@ -72,6 +72,7 @@ class _PlainIgnoreRule:
     negated: bool
     directory_only: bool
     anchored: bool
+    base_path: str = ""
 
 
 class RepositoryInventory:
@@ -181,18 +182,25 @@ class RepositoryInventory:
         git_paths = _git_file_paths(root)
         if git_paths is not None:
             return sorted(dict.fromkeys(git_paths)), "git"
-        ignore_patterns = _read_plain_gitignore(root)
+        ignore_rules_by_directory = {"": _read_plain_gitignore(root)}
         paths: list[str] = []
         for directory, names, filenames in os.walk(root, followlinks=False):
-            relative_directory = Path(directory).relative_to(root)
+            relative_directory = _posix(Path(directory).relative_to(root))
+            rules = ignore_rules_by_directory.get(relative_directory, [])
             names[:] = sorted(
                 name
                 for name in names
-                if not self._is_excluded(_posix(relative_directory / name))
+                if not self._is_excluded(_posix(Path(relative_directory) / name))
             )
+            for name in names:
+                relative_path = _posix(Path(relative_directory) / name)
+                ignore_rules_by_directory[relative_path] = [
+                    *rules,
+                    *_read_plain_gitignore(root / relative_path, relative_path),
+                ]
             for filename in sorted(filenames):
-                relative_path = _posix(relative_directory / filename)
-                if self._is_excluded(relative_path) or _matches_ignore(relative_path, ignore_patterns):
+                relative_path = _posix(Path(relative_directory) / filename)
+                if self._is_excluded(relative_path) or _matches_ignore(relative_path, rules):
                     continue
                 paths.append(relative_path)
         return paths, "filesystem"
@@ -523,7 +531,7 @@ def _path_names(path: str) -> Iterable[str]:
             yield PurePosixPath(part).stem
 
 
-def _read_plain_gitignore(root: Path) -> list[_PlainIgnoreRule]:
+def _read_plain_gitignore(root: Path, base_path: str = "") -> list[_PlainIgnoreRule]:
     path = root / ".gitignore"
     if not path.is_file():
         return []
@@ -541,7 +549,8 @@ def _read_plain_gitignore(root: Path) -> list[_PlainIgnoreRule]:
             value = value[1:]
         value = value.replace("\\", "/")
         directory_only = value.endswith("/")
-        value = value.rstrip("/")
+        anchored = value.startswith("/")
+        value = value.strip("/")
         if not value:
             continue
         rules.append(
@@ -549,30 +558,56 @@ def _read_plain_gitignore(root: Path) -> list[_PlainIgnoreRule]:
                 pattern=value,
                 negated=negated,
                 directory_only=directory_only,
-                anchored=value.startswith("/"),
+                anchored=anchored,
+                base_path=base_path.strip("/"),
             )
         )
     return rules
 
 
-def _matches_ignore(path: str, rules: list[_PlainIgnoreRule]) -> bool:
+def _matches_ignore(path: str, rules: list[_PlainIgnoreRule], *, directory: bool = False) -> bool:
     value = path.strip("/")
     ignored = False
     for rule in rules:
-        if _ignore_rule_matches(value, rule):
+        if _ignore_rule_matches(value, rule, directory=directory):
             ignored = not rule.negated
-    return ignored
-
-
-def _ignore_rule_matches(path: str, rule: _PlainIgnoreRule) -> bool:
-    pattern = rule.pattern.strip("/")
-    if rule.directory_only and (path == pattern or path.startswith(pattern + "/")):
-        return True
-    if path == pattern or path.startswith(pattern + "/") or fnmatch.fnmatchcase(path, pattern):
-        return True
-    if "/" not in pattern and not rule.anchored:
-        return any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(path).parts)
+    if ignored or directory:
+        return ignored
+    parent = PurePosixPath(value).parent
+    while str(parent) not in {"", "."}:
+        if _matches_ignore(str(parent), rules, directory=True):
+            return True
+        parent = parent.parent
     return False
+
+
+def _ignore_rule_matches(path: str, rule: _PlainIgnoreRule, *, directory: bool) -> bool:
+    base = rule.base_path.strip("/")
+    if base and path != base and not path.startswith(base + "/"):
+        return False
+    relative = path[len(base) :].lstrip("/") if base else path
+    pattern = rule.pattern.strip("/")
+    if not relative or not pattern:
+        return False
+    if rule.directory_only:
+        if "/" not in pattern and not rule.anchored:
+            parts = PurePosixPath(relative).parts
+            candidates = parts if directory else parts[:-1]
+            return any(fnmatch.fnmatchcase(part, pattern) for part in candidates)
+        if directory:
+            return (
+                relative == pattern
+                or relative.startswith(pattern + "/")
+                or fnmatch.fnmatchcase(relative, pattern + "/*")
+            )
+        return relative.startswith(pattern + "/") or fnmatch.fnmatchcase(relative, pattern + "/*")
+    if "/" not in pattern and not rule.anchored:
+        return any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(relative).parts)
+    return (
+        relative == pattern
+        or relative.startswith(pattern + "/")
+        or fnmatch.fnmatchcase(relative, pattern)
+    )
 
 
 def _matches_configured_exclusion(path: str, patterns: Iterable[str]) -> bool:

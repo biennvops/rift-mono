@@ -59,6 +59,7 @@ def test_plain_gitignore_reincludes_a_file_after_an_ignored_glob(tmp_path: Path)
     assert all(item.path != "other.py" for item in snapshot.all_evidence())
 
 
+def test_inventory_parses_dotnet_dart_gradle_and_ci_without_execution(tmp_path: Path) -> None:
     _write(
         tmp_path / "daemon-cs" / "Core" / "Core.csproj",
         """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Version>1.2.3</Version></PropertyGroup><ItemGroup><PackageReference Include="xunit" Version="2.9" /></ItemGroup></Project>""",
@@ -117,6 +118,19 @@ jobs:
     assert next(item for item in ci_jobs if item.symbol == "test-android").metadata["working_directories"] == ["app/android"]
     assert snapshot.metadata["repository_code_executed"] is False
     assert snapshot.metadata["network_access"] is False
+
+
+def test_nested_gitignore_excludes_files_relative_to_its_directory(tmp_path: Path) -> None:
+    _write(tmp_path / "package" / ".gitignore", "*.py\n!important.py\n")
+    _write(tmp_path / "package" / "generated.py", "def generated_sync():\n    pass\n")
+    _write(tmp_path / "package" / "important.py", "def important_sync():\n    pass\n")
+    _write(tmp_path / "package" / "keep.dart", "class Keep {}\n")
+
+    snapshot = RepositoryInventory().scan(tmp_path)
+
+    assert all(item.path != "package/generated.py" for item in snapshot.all_evidence())
+    assert any(item.symbol == "important_sync" for item in snapshot.symbols)
+    assert any(item.path == "package/keep.dart" for item in snapshot.source_files)
 
 
 def test_git_metadata_and_gitignore_semantics_are_captured(tmp_path: Path) -> None:
@@ -217,6 +231,7 @@ def test_test_result_artifact_indexes_more_than_100_tests(tmp_path: Path) -> Non
     assert result.metadata["test_outcomes"]["test_100"] == "PASS"
 
 
+def test_current_rift_repository_inventory_detects_actual_build_systems() -> None:
     root = Path(__file__).resolve().parents[2]
     snapshot = RepositoryInventory(InventoryOptions(excluded_paths=("capstone-documents",))).scan(root)
 
