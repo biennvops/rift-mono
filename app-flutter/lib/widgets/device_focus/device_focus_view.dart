@@ -8,6 +8,7 @@ import 'device_focus_connector_painter.dart';
 import 'device_focus_layout.dart';
 import 'device_focus_node.dart';
 import 'device_focus_node_panel.dart';
+import '../../src/ui/motion.dart';
 
 typedef DeviceFocusCopyCallback = void Function(String text, String message);
 
@@ -60,6 +61,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   late final AnimationController _entranceController;
   late final AnimationController _onlineController;
   late final AnimationController _wakeController;
+  bool _reducedMotion = false;
   DeviceFocusNodeKind? _activeNode;
   DeviceFocusNodeKind? _hoveredNode;
 
@@ -68,7 +70,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     super.initState();
     _entranceController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: RiftMotion.scene,
     )..forward();
     _onlineController = AnimationController(
       vsync: this,
@@ -82,22 +84,49 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reducedMotion = RiftMotion.reducedMotionOf(context);
+    if (reducedMotion == _reducedMotion && _entranceController.value != 0) {
+      return;
+    }
+    _reducedMotion = reducedMotion;
+    if (reducedMotion) {
+      _entranceController.stop();
+      _entranceController.value = 1;
+      _onlineController.value = widget.isOnline ? 1 : 0;
+      _wakeController.value = 0;
+    } else if (_entranceController.value < 1 &&
+        !_entranceController.isAnimating) {
+      _entranceController.forward();
+    }
+  }
+
+  @override
   void didUpdateWidget(DeviceFocusView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.deviceId != widget.deviceId) {
       _activeNode = null;
       _hoveredNode = null;
-      _entranceController.forward(from: 0);
+      if (_reducedMotion) {
+        _entranceController.value = 1;
+      } else {
+        _entranceController.forward(from: 0);
+      }
     } else if (widget.deviceStatus == null &&
         _activeNode == DeviceFocusNodeKind.power) {
       _activeNode = null;
     }
     if (oldWidget.isOnline != widget.isOnline) {
-      _onlineController.animateTo(
-        widget.isOnline ? 1 : 0,
-        curve: Curves.easeInOutCubic,
-      );
-      if (widget.isOnline) {
+      if (_reducedMotion) {
+        _onlineController.value = widget.isOnline ? 1 : 0;
+      } else {
+        _onlineController.animateTo(
+          widget.isOnline ? 1 : 0,
+          curve: Curves.easeInOutCubic,
+        );
+      }
+      if (widget.isOnline && !_reducedMotion) {
         _wakeController.forward(from: 0);
       } else {
         _wakeController.value = 0;
@@ -263,7 +292,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
-  Positioned _positionNode({
+  Widget _positionNode({
     required DeviceFocusGeometry geometry,
     required _DeviceFocusNodeData data,
     required int index,
@@ -334,17 +363,19 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       bottom: panelBottom,
       width: panelWidth,
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 240),
+        duration: RiftMotion.durationOf(context, RiftMotion.fast),
         switchInCurve: Curves.easeOutCubic,
         switchOutCurve: Curves.easeInCubic,
         transitionBuilder: (child, animation) {
           return FadeTransition(
             opacity: animation,
-            child: ScaleTransition(
-              scale: Tween(begin: 0.97, end: 1.0).animate(animation),
-              alignment: Alignment.bottomCenter,
-              child: child,
-            ),
+            child: _reducedMotion
+                ? child
+                : ScaleTransition(
+                    scale: Tween(begin: 0.97, end: 1.0).animate(animation),
+                    alignment: Alignment.bottomCenter,
+                    child: child,
+                  ),
           );
         },
         child: activeNode == null

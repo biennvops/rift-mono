@@ -131,12 +131,16 @@ abstract final class DeviceFocusLayout {
     }
 
     if (kinds.length == 5) {
-      return const {
-        DeviceFocusNodeKind.power: Offset(0, -1),
-        DeviceFocusNodeKind.security: Offset(-1, -0.08),
-        DeviceFocusNodeKind.identity: Offset(1, -0.08),
-        DeviceFocusNodeKind.capabilities: Offset(-0.7, 0.72),
-        DeviceFocusNodeKind.info: Offset(0.7, 0.72),
+      final normalizedSlots = const [
+        Offset(0, -1),
+        Offset(-1, -0.08),
+        Offset(1, -0.08),
+        Offset(-0.7, 0.72),
+        Offset(0.7, 0.72),
+      ];
+      return {
+        for (var index = 0; index < kinds.length; index++)
+          kinds[index]: normalizedSlots[index],
       };
     }
 

@@ -7,6 +7,7 @@ import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
 import '../src/ui/app_shell.dart';
+import '../src/ui/motion.dart';
 import '../src/platform/notification_route.dart';
 import '../widgets/bubble_background.dart';
 import '../src/ui/theme.dart';
@@ -769,7 +770,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           trustState: trustState,
           titleText: titleText),
       borderRadius: BorderRadius.circular(8),
-      child: Container(
+      child: AnimatedContainer(
+        duration: RiftMotion.durationOf(context, RiftMotion.normal),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected
@@ -1643,21 +1645,41 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           Container(width: 1, color: theme.colorScheme.outlineVariant),
           Expanded(
             flex: 6,
-            child: _selectedPeerWidget ??
-                Container(
-                  color: Colors.white,
-                  child: Center(
-                      child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                        Icon(Icons.devices_outlined,
-                            size: 64, color: theme.colorScheme.outlineVariant),
-                        const SizedBox(height: 16),
-                        Text('Select a device to view details or pair.',
-                            style: theme.textTheme.bodyLarge
-                                ?.copyWith(color: theme.colorScheme.outline)),
-                      ])),
-                ),
+            child: AnimatedSwitcher(
+              duration: RiftMotion.durationOf(context, RiftMotion.normal),
+              transitionBuilder: (child, animation) {
+                if (RiftMotion.reducedMotionOf(context)) {
+                  return FadeTransition(opacity: animation, child: child);
+                }
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.015, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: _selectedPeerWidget ??
+                  Container(
+                    key: const ValueKey('device-detail-empty'),
+                    color: Colors.white,
+                    child: Center(
+                        child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                          Icon(Icons.devices_outlined,
+                              size: 64,
+                              color: theme.colorScheme.outlineVariant),
+                          const SizedBox(height: 16),
+                          Text('Select a device to view details or pair.',
+                              style: theme.textTheme.bodyLarge
+                                  ?.copyWith(color: theme.colorScheme.outline)),
+                        ])),
+                  ),
+            ),
           ),
         ],
       ),

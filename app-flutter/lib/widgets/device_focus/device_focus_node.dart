@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'device_focus_layout.dart';
+import '../../src/ui/motion.dart';
 
 class DeviceFocusNode extends StatefulWidget {
   const DeviceFocusNode({
@@ -56,19 +57,20 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final highlighted = _isEngaged || widget.isSelected;
+    final motionDuration = RiftMotion.durationOf(context, RiftMotion.fast);
     final begin = 0.34 + widget.entranceIndex * 0.065;
     final end = (begin + 0.3).clamp(0.0, 0.92).toDouble();
 
     final interactiveNode = AnimatedSlide(
-      duration: const Duration(milliseconds: 180),
+      duration: motionDuration,
       curve: Curves.easeOutCubic,
       offset: highlighted ? const Offset(0, -0.035) : Offset.zero,
       child: AnimatedScale(
-        duration: const Duration(milliseconds: 180),
+        duration: motionDuration,
         curve: Curves.easeOutCubic,
         scale: highlighted ? 1.035 : 1,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
+          duration: motionDuration,
           curve: Curves.easeOutCubic,
           decoration: BoxDecoration(
             color: Color.alphaBlend(
