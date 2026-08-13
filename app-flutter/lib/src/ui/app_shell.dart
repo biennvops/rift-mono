@@ -7,6 +7,8 @@ import '../../screens/operations_screen.dart';
 import '../../screens/settings_screen.dart';
 import '../platform/notification_route.dart';
 import 'activity_navigation.dart';
+import '../ui/indexed_transition_stack.dart';
+import '../ui/motion.dart';
 import '../ui/theme.dart';
 
 class AppShell extends StatefulWidget {
@@ -27,8 +29,11 @@ class AppShellState extends State<AppShell> {
   final ValueNotifier<ActivityNavigationRequest?> _activityNavigation =
       ValueNotifier<ActivityNavigationRequest?>(null);
   int _currentIndex = 0;
+  int _mainSectionDirection = 1;
   bool _isSidebarCollapsed = false;
+  bool _isResizingSidebar = false;
   double _sidebarWidth = RiftDesign.sidebarWidth;
+  double _expandedSidebarWidth = RiftDesign.sidebarWidth;
   double _horizontalDragDistance = 0;
 
   @override
@@ -53,9 +58,7 @@ class AppShellState extends State<AppShell> {
   ];
 
   void showHistoryRoute(String route) {
-    setState(() {
-      _currentIndex = 1;
-    });
+    _selectMainSection(1);
     _activityNavigation.value = ActivityNavigationRequest(route: route);
     widget.historyRouteNotifier?.value = route;
   }
@@ -69,9 +72,7 @@ class AppShellState extends State<AppShell> {
     required String deviceId,
     required String displayName,
   }) {
-    setState(() {
-      _currentIndex = 1;
-    });
+    _selectMainSection(1);
     _activityNavigation.value = ActivityNavigationRequest(
       route: route,
       deviceId: deviceId,
@@ -84,10 +85,21 @@ class AppShellState extends State<AppShell> {
   }
 
   void _moveToMainSection(int direction) {
-    if (_currentIndex < 0 || _currentIndex > 4) return;
-    final nextIndex = (_currentIndex + direction).clamp(0, 4);
+    if (direction == 0) return;
+    _selectMainSection(_currentIndex + (direction < 0 ? -1 : 1));
+  }
+
+  void _selectMainSection(int nextIndex, {int? direction}) {
+    if (nextIndex < 0 || nextIndex >= _screens.length) return;
     if (nextIndex == _currentIndex) return;
-    setState(() => _currentIndex = nextIndex);
+
+    final nextDirection = direction == null || direction == 0
+        ? (nextIndex > _currentIndex ? 1 : -1)
+        : (direction < 0 ? -1 : 1);
+    setState(() {
+      _mainSectionDirection = nextDirection;
+      _currentIndex = nextIndex;
+    });
   }
 
   void _handleMainHorizontalDragEnd(DragEndDetails details) {
@@ -117,59 +129,131 @@ class AppShellState extends State<AppShell> {
 
   void showRoute(String route) {
     if (route == NotificationRoute.devices) {
-      setState(() {
-        _currentIndex = 0;
-      });
+      _selectMainSection(0);
       return;
     }
     showHistoryRoute(route);
+  }
+
+  void _toggleSidebarCollapsed() {
+    setState(() {
+      if (_isSidebarCollapsed) {
+        _isSidebarCollapsed = false;
+        _sidebarWidth = _expandedSidebarWidth;
+      } else {
+        _expandedSidebarWidth = _sidebarWidth;
+        _isSidebarCollapsed = true;
+      }
+    });
+  }
+
+  void _startSidebarResize() {
+    setState(() => _isResizingSidebar = true);
+  }
+
+  void _updateSidebarResize(DragUpdateDetails details) {
+    final width =
+        (_sidebarWidth + details.delta.dx).clamp(200.0, 500.0).toDouble();
+    setState(() {
+      _sidebarWidth = width;
+      _expandedSidebarWidth = width;
+    });
+  }
+
+  void _finishSidebarResize() {
+    if (!mounted || !_isResizingSidebar) return;
+    setState(() => _isResizingSidebar = false);
   }
 
   Widget _buildSidebarItem(
       BuildContext context, int index, IconData icon, String label) {
     final theme = Theme.of(context);
     final isSelected = _currentIndex == index;
+    final motionDuration = _isResizingSidebar
+        ? Duration.zero
+        : RiftMotion.durationOf(context, RiftMotion.fast);
+    final labelStyle =
+        (theme.textTheme.labelMedium ?? const TextStyle()).copyWith(
+      color: isSelected ? const Color(0xFFdae2ff) : const Color(0xFF8899b8),
+      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 4.0),
       child: InkWell(
-        onTap: () {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        key: ValueKey('sidebar-item-$index'),
+        onTap: () => _selectMainSection(index),
         borderRadius: BorderRadius.circular(RiftDesign.radius),
-        child: Container(
+        child: AnimatedContainer(
+          key: ValueKey('sidebar-item-container-$index'),
+          duration: motionDuration,
+          curve: RiftMotion.move,
           padding: EdgeInsets.symmetric(
-              horizontal: _isSidebarCollapsed ? 0 : 16, vertical: 12),
+            horizontal: _isSidebarCollapsed ? 0 : 16,
+            vertical: 12,
+          ),
           alignment:
               _isSidebarCollapsed ? Alignment.center : Alignment.centerLeft,
           decoration: BoxDecoration(
             color: isSelected ? const Color(0xFF0047AB) : Colors.transparent,
             borderRadius: BorderRadius.circular(RiftDesign.radius),
           ),
-          child: Row(
-            mainAxisSize:
-                _isSidebarCollapsed ? MainAxisSize.min : MainAxisSize.max,
-            children: [
-              Icon(
-                icon,
-                color: isSelected
-                    ? const Color(0xFFdae2ff)
-                    : const Color(0xFF8899b8),
-              ),
-              if (!_isSidebarCollapsed) ...[
-                const SizedBox(width: 16),
-                Text(
-                  label,
-                  style: theme.textTheme.labelMedium?.copyWith(
-                    color: isSelected
-                        ? const Color(0xFFdae2ff)
-                        : const Color(0xFF8899b8),
-                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+          child: SizedBox(
+            height: 24,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                AnimatedAlign(
+                  duration: motionDuration,
+                  curve: RiftMotion.move,
+                  alignment: _isSidebarCollapsed
+                      ? Alignment.center
+                      : Alignment.centerLeft,
+                  child: TweenAnimationBuilder<Color?>(
+                    tween: ColorTween(
+                      end: isSelected
+                          ? const Color(0xFFdae2ff)
+                          : const Color(0xFF8899b8),
+                    ),
+                    duration: motionDuration,
+                    curve: RiftMotion.move,
+                    builder: (context, color, child) => Icon(
+                      icon,
+                      color: color,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 40,
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: ClipRect(
+                    child: ExcludeSemantics(
+                      excluding: _isSidebarCollapsed,
+                      child: IgnorePointer(
+                        child: AnimatedOpacity(
+                          duration: motionDuration,
+                          opacity: _isSidebarCollapsed ? 0 : 1,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: AnimatedDefaultTextStyle(
+                              duration: motionDuration,
+                              curve: RiftMotion.move,
+                              style: labelStyle,
+                              child: Text(
+                                label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -194,7 +278,12 @@ class AppShellState extends State<AppShell> {
         body: Row(
           children: [
             // Sidebar
-            Container(
+            AnimatedContainer(
+              key: const ValueKey('sidebar-container'),
+              duration: _isResizingSidebar
+                  ? Duration.zero
+                  : RiftMotion.durationOf(context, RiftMotion.normal),
+              curve: RiftMotion.move,
               width: _isSidebarCollapsed ? 88 : _sidebarWidth,
               color: RiftDesign.sidebar,
               padding: EdgeInsets.all(_isSidebarCollapsed ? 16 : 24),
@@ -205,49 +294,79 @@ class AppShellState extends State<AppShell> {
                 children: [
                   // Header
                   InkWell(
-                    onTap: () {
-                      setState(() {
-                        _isSidebarCollapsed = !_isSidebarCollapsed;
-                      });
-                    },
+                    key: const ValueKey('sidebar-collapse-toggle'),
+                    onTap: _toggleSidebarCollapsed,
                     borderRadius: BorderRadius.circular(8),
-                    child: Row(
-                      mainAxisAlignment: _isSidebarCollapsed
-                          ? MainAxisAlignment.center
-                          : MainAxisAlignment.start,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Image.asset('assets/images/rift_nav_logo.png',
-                              width: 52, height: 52, fit: BoxFit.contain),
-                        ),
-                        if (!_isSidebarCollapsed) ...[
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Rift',
-                                  style:
-                                      theme.textTheme.headlineLarge?.copyWith(
-                                    color: const Color(
-                                        0xFFdae2ff), // primary-fixed
-                                    fontWeight: FontWeight.w700,
+                    child: SizedBox(
+                      height: 64,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          AnimatedAlign(
+                            duration: RiftMotion.durationOf(
+                              context,
+                              RiftMotion.normal,
+                            ),
+                            curve: RiftMotion.move,
+                            alignment: _isSidebarCollapsed
+                                ? Alignment.center
+                                : Alignment.centerLeft,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: Image.asset(
+                                'assets/images/rift_nav_logo.png',
+                                width: 52,
+                                height: 52,
+                                fit: BoxFit.contain,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 68,
+                            right: 0,
+                            top: 0,
+                            bottom: 0,
+                            child: ClipRect(
+                              child: AnimatedOpacity(
+                                duration: RiftMotion.durationOf(
+                                  context,
+                                  RiftMotion.normal,
+                                ),
+                                opacity: _isSidebarCollapsed ? 0 : 1,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Rift',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.headlineLarge
+                                            ?.copyWith(
+                                          color: const Color(0xFFdae2ff),
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Secure Sync v0.1',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.labelSmall
+                                            ?.copyWith(
+                                          color: const Color(0xFFb1c5ff),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                                Text(
-                                  'Secure Sync v0.1',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: const Color(
-                                        0xFFb1c5ff), // primary-fixed-dim
-                                  ),
-                                ),
-                              ],
+                              ),
                             ),
                           ),
                         ],
-                      ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 32),
@@ -277,12 +396,11 @@ class AppShellState extends State<AppShell> {
                 cursor: SystemMouseCursors.resizeColumn,
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onPanUpdate: (details) {
-                    setState(() {
-                      _sidebarWidth = (_sidebarWidth + details.delta.dx)
-                          .clamp(200.0, 500.0);
-                    });
-                  },
+                  key: const ValueKey('sidebar-resize-handle'),
+                  onPanStart: (_) => _startSidebarResize(),
+                  onPanUpdate: _updateSidebarResize,
+                  onPanEnd: (_) => _finishSidebarResize(),
+                  onPanCancel: _finishSidebarResize,
                   child: Container(
                     width: 8,
                     color: Colors.transparent,
@@ -310,8 +428,10 @@ class AppShellState extends State<AppShell> {
                     maxWidth: RiftDesign.contentMaxWidth,
                   ),
                   child: _buildMainSwipeArea(
-                    IndexedStack(
+                    RiftIndexedTransitionStack(
+                      key: const ValueKey('main-section-transition-stack'),
                       index: _currentIndex,
+                      direction: _mainSectionDirection,
                       children: _screens,
                     ),
                   ),
@@ -327,8 +447,10 @@ class AppShellState extends State<AppShell> {
       content = Scaffold(
         body: SafeArea(
           child: _buildMainSwipeArea(
-            IndexedStack(
+            RiftIndexedTransitionStack(
+              key: const ValueKey('main-section-transition-stack'),
               index: _currentIndex,
+              direction: _mainSectionDirection,
               children: _screens,
             ),
           ),
@@ -358,11 +480,7 @@ class AppShellState extends State<AppShell> {
               indicatorColor: mobileNavIndex == -1
                   ? Colors.transparent
                   : theme.colorScheme.primary.withValues(alpha: 0.08),
-              onDestinationSelected: (index) {
-                setState(() {
-                  _currentIndex = index;
-                });
-              },
+              onDestinationSelected: _selectMainSection,
               destinations: [
                 NavigationDestination(
                   icon: Icon(Icons.devices_outlined,

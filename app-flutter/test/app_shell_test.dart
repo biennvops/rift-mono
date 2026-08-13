@@ -501,6 +501,105 @@ void main() {
     expect(find.text('Send File'), findsOneWidget);
     expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
   });
+  testWidgets('AppShell lands on the final section after rapid navigation',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pump();
+
+    final navigationBar = find.byType(NavigationBar);
+    Future<void> tapDestination(IconData icon) async {
+      await tester.tap(
+        find.descendant(
+          of: navigationBar,
+          matching: find.byIcon(icon),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 24));
+    }
+
+    await tapDestination(Icons.history_outlined);
+    await tapDestination(Icons.route_outlined);
+    await tapDestination(Icons.settings_outlined);
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<NavigationBar>(navigationBar).selectedIndex,
+      4,
+    );
+    expect(find.text('Settings'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('AppShell preserves targeted Activity state across sections',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pumpAndSettle();
+
+    final shell = tester.state<AppShellState>(find.byType(AppShell));
+    shell.showActivityForDevice(
+      route: NotificationRoute.historySend,
+      deviceId: 'rift-peer-1',
+      displayName: 'Pixel 9',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Send File'), findsWidgets);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+
+    final navigationBar = find.byType(NavigationBar);
+    await tester.tap(
+      find.descendant(
+        of: navigationBar,
+        matching: find.byIcon(Icons.settings_outlined),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: navigationBar,
+        matching: find.byIcon(Icons.history_outlined),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Send File'), findsWidgets);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+    expect(find.text('Activity — Pixel 9'), findsOneWidget);
+  });
+
+  testWidgets('desktop sidebar collapse and resize preserve expanded width',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pumpAndSettle();
+
+    double sidebarWidth() =>
+        tester.getSize(find.byKey(const ValueKey('sidebar-container'))).width;
+
+    expect(sidebarWidth(), 280);
+    final handle = find.byKey(const ValueKey('sidebar-resize-handle'));
+    final gesture = await tester.startGesture(tester.getCenter(handle));
+    await gesture.moveBy(const Offset(120, 0));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    expect(sidebarWidth(), 400);
+
+    await tester.tap(find.byKey(const ValueKey('sidebar-collapse-toggle')));
+    await tester.pumpAndSettle();
+    expect(sidebarWidth(), 88);
+    expect(find.byKey(const ValueKey('sidebar-resize-handle')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('sidebar-collapse-toggle')));
+    await tester.pumpAndSettle();
+    expect(sidebarWidth(), 400);
+    expect(find.byKey(const ValueKey('sidebar-resize-handle')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test('MockClient getDeviceInfo test', () async {
     // Test the mock setup directly
     expect(mockClient.isConnected, isTrue);
