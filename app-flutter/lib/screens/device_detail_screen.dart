@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../widgets/device_focus/device_focus_view.dart';
 import '../widgets/rift_snackbar.dart';
 
 const _kSuccessColor = Color(0xFF047857);
@@ -608,6 +609,32 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           return Scaffold(
             backgroundColor: theme.colorScheme.surface,
             body: _buildRemovedState(theme, displayName),
+          );
+        }
+
+        final useDesktopRemoteFocusView = widget.onClose != null &&
+            !widget.isSelf &&
+            peer['trustState']?.toString() == 'trusted';
+        if (useDesktopRemoteFocusView) {
+          final capabilities = (peer['capabilities'] as List?)
+                  ?.map((capability) => capability.toString())
+                  .toList(growable: false) ??
+              const <String>[];
+          return DeviceFocusView(
+            deviceId: deviceId,
+            displayName: displayName,
+            fingerprint: _formatFingerprint(fingerprint),
+            protocolVersion: protocolVersion,
+            platform: platform,
+            osVersion: osVersion,
+            pairedAt: pairedAt,
+            lastSeenAt: lastSeenAt,
+            capabilities: capabilities,
+            deviceStatus: deviceStatus,
+            isOnline: isOnline,
+            onClose: widget.onClose!,
+            onRevokeTrust: _forgetPeer,
+            onCopy: _copyToClipboard,
           );
         }
 
