@@ -197,9 +197,26 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     });
   }
 
+  bool get _targetScopeVisible {
+    final targetDeviceId = _targetDeviceId;
+    if (targetDeviceId == null || targetDeviceId.isEmpty) return false;
+    return switch (_activeSection) {
+      _HistorySection.clipboard ||
+      _HistorySection.send ||
+      _HistorySection.transferActivity =>
+        true,
+      _HistorySection.incomingOffers || _HistorySection.notifications => false,
+    };
+  }
+
   String get _activityTitle {
     final target = _targetDisplayName;
-    if (target != null && target.isNotEmpty) return 'Activity — $target';
+    if (_targetScopeVisible && target != null && target.isNotEmpty) {
+      return 'Activity — $target';
+    }
+    if (!_targetScopeVisible && _targetDeviceId?.isNotEmpty == true) {
+      return 'Activity';
+    }
     final legacyDisplayName = widget.displayName;
     return legacyDisplayName == null || legacyDisplayName.isEmpty
         ? 'Activity'
@@ -250,8 +267,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               ),
             ),
             _buildRiftSectionTabBar(theme),
-            if (_targetDeviceId != null && _targetDeviceId!.isNotEmpty)
-              _buildTargetScopeChip(theme),
+            if (_targetScopeVisible) _buildTargetScopeChip(theme),
             Expanded(
               child: KeyedSubtree(
                 key: ValueKey(

@@ -1,14 +1,16 @@
 import 'dart:async';
 import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 import 'package:rift/screens/clipboard_transfer_screen.dart';
 import 'package:rift/src/file_transfer/send_queue_controller.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/platform/ios_clipboard.dart';
 import 'package:rift/src/platform/notification_route.dart';
 import 'package:rift/src/ui/activity_navigation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
+import 'package:rift/src/ui/local_events_notifier.dart';
 
 import 'test_utils/fake_transport.dart';
 
@@ -320,6 +322,10 @@ void main() {
               context.read<JsonRpcRiftClient>(),
               preferDaemonOnlyOverride,
             ),
+          ),
+          ChangeNotifierProvider<LocalEventsNotifier>(
+            create: (context) =>
+                LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
           ),
         ],
         child: ClipboardTransferScreen(
@@ -822,6 +828,47 @@ void main() {
         isNot(Colors.white));
     expect(
         (chip('rift-peer-2').decoration as BoxDecoration).color, Colors.white);
+  });
+
+  testWidgets('target scope indicator hides on unsupported Activity sections',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyClipboard,
+        deviceId: 'rift-peer-1',
+        displayName: 'Pixel 9 Pro',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Activity — Pixel 9 Pro'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+
+    await tester.tap(find.text('Incoming Offers'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsNothing);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+
+    await tester.tap(find.text('Notifications'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsNothing);
+    expect(find.text('Activity'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+
+    await tester.tap(find.text('Transfer Activity'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity — Pixel 9 Pro'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
   });
 
   testWidgets('targeted Send File disables sending when its peer disappears',
