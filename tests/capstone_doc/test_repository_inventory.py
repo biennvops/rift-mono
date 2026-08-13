@@ -47,7 +47,18 @@ public sealed class SyncServiceTests {
     assert "FE-03" in symbol.metadata["identifiers"]
 
 
-def test_inventory_parses_dotnet_dart_gradle_and_ci_without_execution(tmp_path: Path) -> None:
+def test_plain_gitignore_reincludes_a_file_after_an_ignored_glob(tmp_path: Path) -> None:
+    _write(tmp_path / ".gitignore", "*.py\n!important.py\n")
+    _write(tmp_path / "important.py", "def important_sync():\n    return True\n")
+    _write(tmp_path / "other.py", "def ignored_sync():\n    return False\n")
+
+    snapshot = RepositoryInventory().scan(tmp_path)
+
+    assert snapshot.metadata["inventory_source"] == "filesystem"
+    assert any(item.symbol == "important_sync" for item in snapshot.symbols)
+    assert all(item.path != "other.py" for item in snapshot.all_evidence())
+
+
     _write(
         tmp_path / "daemon-cs" / "Core" / "Core.csproj",
         """<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Version>1.2.3</Version></PropertyGroup><ItemGroup><PackageReference Include="xunit" Version="2.9" /></ItemGroup></Project>""",

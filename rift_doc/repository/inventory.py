@@ -66,6 +66,14 @@ class InventoryOptions:
     max_source_bytes: int = _SOURCE_LIMIT_BYTES
 
 
+@dataclass(frozen=True)
+class _PlainIgnoreRule:
+    pattern: str
+    negated: bool
+    directory_only: bool
+    anchored: bool
+
+
 class RepositoryInventory:
     """Inventory one worktree once without running its build or test code."""
 
@@ -181,7 +189,6 @@ class RepositoryInventory:
                 name
                 for name in names
                 if not self._is_excluded(_posix(relative_directory / name))
-                and not _matches_ignore(_posix(relative_directory / name), ignore_patterns, directory=True)
             )
             for filename in sorted(filenames):
                 relative_path = _posix(relative_directory / filename)
@@ -516,7 +523,7 @@ def _path_names(path: str) -> Iterable[str]:
             yield PurePosixPath(part).stem
 
 
-def _read_plain_gitignore(root: Path) -> list[str]:
+def _read_plain_gitignore(root: Path) -> list[_PlainIgnoreRule]:
     path = root / ".gitignore"
     if not path.is_file():
         return []
@@ -524,23 +531,47 @@ def _read_plain_gitignore(root: Path) -> list[str]:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
-    return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith(("#", "!"))]
-
-
-def _matches_ignore(path: str, patterns: list[str], *, directory: bool = False) -> bool:
-    value = path.strip("/")
-    for raw in patterns:
-        pattern = raw.replace("\\", "/").strip()
-        directory_only = pattern.endswith("/")
-        pattern = pattern.strip("/")
-        if directory_only and not directory:
-            if value == pattern or value.startswith(pattern + "/"):
-                return True
+    rules: list[_PlainIgnoreRule] = []
+    for line in lines:
+        value = line.strip()
+        if not value or value.startswith("#"):
             continue
-        if value == pattern or value.startswith(pattern + "/") or fnmatch.fnmatchcase(value, pattern):
-            return True
-        if "/" not in pattern and any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(value).parts):
-            return True
+        negated = value.startswith("!")
+        if negated:
+            value = value[1:]
+        value = value.replace("\\", "/")
+        directory_only = value.endswith("/")
+        value = value.rstrip("/")
+        if not value:
+            continue
+        rules.append(
+            _PlainIgnoreRule(
+                pattern=value,
+                negated=negated,
+                directory_only=directory_only,
+                anchored=value.startswith("/"),
+            )
+        )
+    return rules
+
+
+def _matches_ignore(path: str, rules: list[_PlainIgnoreRule]) -> bool:
+    value = path.strip("/")
+    ignored = False
+    for rule in rules:
+        if _ignore_rule_matches(value, rule):
+            ignored = not rule.negated
+    return ignored
+
+
+def _ignore_rule_matches(path: str, rule: _PlainIgnoreRule) -> bool:
+    pattern = rule.pattern.strip("/")
+    if rule.directory_only and (path == pattern or path.startswith(pattern + "/")):
+        return True
+    if path == pattern or path.startswith(pattern + "/") or fnmatch.fnmatchcase(path, pattern):
+        return True
+    if "/" not in pattern and not rule.anchored:
+        return any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(path).parts)
     return False
 
 
