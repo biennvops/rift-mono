@@ -5,6 +5,7 @@ import 'package:rift/src/file_transfer/send_queue_controller.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/platform/ios_clipboard.dart';
 import 'package:rift/src/platform/notification_route.dart';
+import 'package:rift/src/ui/activity_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -296,6 +297,7 @@ void main() {
     Future<List<Map<String, String>>> Function()? pickSendFilesOverride,
     ValueNotifier<String?>? routeNotifier,
     ValueNotifier<String?>? sharedClipboardTextNotifier,
+    ValueNotifier<ActivityNavigationRequest?>? activityNavigationNotifier,
     bool preferDaemonOnlyOverride = true,
     bool? exportCompletedTransfersOverride,
     Future<void> Function(String path)? openFileOverride,
@@ -333,6 +335,7 @@ void main() {
           pickSendFilesOverride: pickSendFilesOverride,
           routeNotifier: routeNotifier,
           sharedClipboardTextNotifier: sharedClipboardTextNotifier,
+          activityNavigationNotifier: activityNavigationNotifier,
         ),
       ),
     );
@@ -620,6 +623,206 @@ void main() {
     expect(find.text('Incoming Offers'), findsWidgets);
   });
 
+  testWidgets('targeted clipboard Activity filters by exact device ID',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      clipboardOffers: const [
+        {
+          'offerId': 'offer-first',
+          'sourceDeviceId': 'rift-first',
+          'contentType': 'text/plain',
+          'byteSize': 10,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+        {
+          'offerId': 'offer-second',
+          'sourceDeviceId': 'rift-second',
+          'contentType': 'text/plain',
+          'byteSize': 12,
+          'expiresAt': '2099-01-01T00:00:00Z',
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-first',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+        {
+          'deviceId': 'rift-second',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyClipboard,
+        deviceId: 'rift-second',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MultiProvider(
+          providers: [
+            Provider<JsonRpcRiftClient>.value(value: client),
+            ChangeNotifierProvider<SendQueueController>(
+              create: (_) => SendQueueController(client, false),
+            ),
+          ],
+          child: ClipboardTransferScreen(
+            activityNavigationNotifier: navigation,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-first')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-second')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+
+    final targetChip = tester.widget<InputChip>(
+      find.byKey(const ValueKey('activity-target-chip')),
+    );
+    targetChip.onDeleted!.call();
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-first')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('clipboard-offer-offer-second')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsNothing);
+  });
+  testWidgets('targeted transfer Activity filters and clears by device ID',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      transfers: const [
+        {
+          'transferId': 'transfer-first',
+          'peerDeviceId': 'rift-peer-1',
+          'fileName': 'first.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'bytesTransferred': 10,
+          'state': 'done',
+          'direction': 'outgoing',
+        },
+        {
+          'transferId': 'transfer-second',
+          'peerDeviceId': 'rift-peer-2',
+          'fileName': 'second.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 12,
+          'bytesTransferred': 12,
+          'state': 'done',
+          'direction': 'outgoing',
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel 9 Pro',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'MacBook Pro',
+          'trustState': 'trusted',
+          'presence': 'online',
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historyTransferActivity,
+        deviceId: 'rift-peer-2',
+        displayName: 'MacBook Pro',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('first.txt'), findsNothing);
+    expect(find.text('second.txt'), findsOneWidget);
+    final targetChip = tester.widget<InputChip>(
+      find.byKey(const ValueKey('activity-target-chip')),
+    );
+    targetChip.onDeleted!.call();
+    await tester.pumpAndSettle();
+
+    expect(find.text('first.txt'), findsOneWidget);
+    expect(find.text('second.txt'), findsOneWidget);
+    expect(find.text('All devices'), findsOneWidget);
+  });
+
+  testWidgets('targeted Send File prefers peer until the user changes it',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-2',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    AnimatedContainer chip(String deviceId) => tester.widget<AnimatedContainer>(
+          find.byKey(ValueKey('send-device-chip-$deviceId')),
+        );
+    expect(
+        (chip('rift-peer-1').decoration as BoxDecoration).color, Colors.white);
+    expect((chip('rift-peer-2').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-1')));
+    await tester
+        .tap(find.byKey(const ValueKey('send-device-chip-rift-peer-2')));
+    await tester.pump();
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect((chip('rift-peer-1').decoration as BoxDecoration).color,
+        isNot(Colors.white));
+    expect(
+        (chip('rift-peer-2').decoration as BoxDecoration).color, Colors.white);
+  });
   testWidgets('clipboard draft editor stays hidden until shared text arrives',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildScreen(revealInFolder: true));

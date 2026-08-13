@@ -190,6 +190,13 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     });
   }
 
+  void _clearTargetScopeFromFilter() {
+    setState(() {
+      _targetDeviceId = null;
+      _targetDisplayName = null;
+    });
+  }
+
   String get _activityTitle {
     final target = _targetDisplayName;
     return target == null || target.isEmpty ? 'Activity' : 'Activity — $target';
@@ -407,8 +414,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     switch (_activeSection) {
       case _HistorySection.clipboard:
         return ClipboardHistoryView(
+          key: ValueKey('clipboard-history-$_targetRequestVersion'),
           preferredSourceDeviceId: _targetDeviceId,
           targetRequestVersion: _targetRequestVersion,
+          onTargetScopeCleared: _clearTargetScopeFromFilter,
           iosClipboardActionsOverride: widget.iosClipboardActionsOverride,
           readClipboardContentOverride: widget.readClipboardContentOverride,
           readClipboardTextOverride: widget.readClipboardTextOverride,
@@ -419,6 +428,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         return FileSendView(
           preferredTargetDeviceId: _targetDeviceId,
           targetRequestVersion: _targetRequestVersion,
+          onTargetScopeCleared: _clearTargetScopeFromFilter,
           pickSendFilesOverride: widget.pickSendFilesOverride,
           onViewActivityRequested: () {
             setState(() => _activeSection = _HistorySection.transferActivity);
@@ -439,6 +449,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               widget.exportCompletedTransfersOverride,
           openFileOverride: widget.openFileOverride,
           exportFileOverride: widget.exportFileOverride,
+          onTargetScopeCleared: _clearTargetScopeFromFilter,
         );
       case _HistorySection.notifications:
         return const LocalActivityPanel();

@@ -33,6 +33,7 @@ class FileSendView extends StatefulWidget {
   final String? preferredTargetDeviceId;
   final int? targetRequestVersion;
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
+  final VoidCallback? onTargetScopeCleared;
   final VoidCallback? onViewActivityRequested;
 
   const FileSendView({
@@ -40,6 +41,7 @@ class FileSendView extends StatefulWidget {
     this.preferredTargetDeviceId,
     this.targetRequestVersion,
     this.pickSendFilesOverride,
+    this.onTargetScopeCleared,
     this.onViewActivityRequested,
   });
 
@@ -82,8 +84,7 @@ class _FileSendViewState extends State<FileSendView> {
   @override
   void didUpdateWidget(FileSendView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
-        oldWidget.preferredTargetDeviceId != widget.preferredTargetDeviceId) {
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion) {
       _applyPreferredTarget();
     }
   }
@@ -431,6 +432,7 @@ class _FileSendViewState extends State<FileSendView> {
         _hasUserModifiedSendDevices = true;
         _selectedSendDeviceIds.clear();
         _selectedSendDeviceIds.addAll(effectiveSelectedIds);
+        widget.onTargetScopeCleared?.call();
       }
       if (_selectedSendDeviceIds.contains(deviceId)) {
         _selectedSendDeviceIds.remove(deviceId);
@@ -918,6 +920,7 @@ class _FileSendViewState extends State<FileSendView> {
                           effectiveSelectedIds.contains(deviceId);
                       return _buildDeviceSelectChip(
                         theme,
+                        deviceId: deviceId,
                         label: _peerLabel(deviceId),
                         platform: peer['platform']?.toString(),
                         isSelected: isSelected,
@@ -989,6 +992,7 @@ class _FileSendViewState extends State<FileSendView> {
   Widget _buildDeviceSelectChip(
     ThemeData theme, {
     required String label,
+    required String deviceId,
     required String? platform,
     required bool isSelected,
     required bool isOnline,
@@ -998,7 +1002,7 @@ class _FileSendViewState extends State<FileSendView> {
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
-        key: ValueKey('send-device-chip-$label'),
+        key: ValueKey('send-device-chip-$deviceId'),
         width: width,
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),

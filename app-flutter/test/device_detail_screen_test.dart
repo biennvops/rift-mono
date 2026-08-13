@@ -606,6 +606,98 @@ void main() {
     expect(onCloseCalled, isTrue);
   });
 
+  testWidgets('desktop focus exposes capability-gated action nodes',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-actions',
+          'displayName': 'Action Peer',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'file.transfer',
+            'presence.basic',
+          ],
+        },
+      ];
+    var clipboardCount = 0;
+    var sendCount = 0;
+    var transfersCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: DeviceDetailScreen(
+            peer: client.trustedPeers.first,
+            isOnline: true,
+            onClose: () {},
+            onOpenClipboardActivity: () => clipboardCount++,
+            onSendFile: () => sendCount++,
+            onViewTransferActivity: () => transfersCount++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+        findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('device-focus-node-files')), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-node-clipboard')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-open-clipboard')));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-files')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-send-file')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-send-file')));
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-view-transfers')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-view-transfers')));
+
+    expect(clipboardCount, 1);
+    expect(sendCount, 1);
+    expect(transfersCount, 1);
+  });
+
+  testWidgets('desktop focus hides unsupported action nodes',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-no-actions',
+          'displayName': 'Basic Peer',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['presence.basic'],
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-node-files')), findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-node-capabilities')),
+        findsOneWidget);
+  });
+
   testWidgets('desktop focus remains overflow free at target pane sizes',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));

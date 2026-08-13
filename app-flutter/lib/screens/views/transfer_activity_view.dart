@@ -15,6 +15,7 @@ class TransferActivityView extends StatefulWidget {
   final bool? exportCompletedTransfersOverride;
   final Future<void> Function(String path)? openFileOverride;
   final Future<void> Function(String path)? exportFileOverride;
+  final VoidCallback? onTargetScopeCleared;
 
   const TransferActivityView({
     super.key,
@@ -24,6 +25,7 @@ class TransferActivityView extends StatefulWidget {
     this.exportCompletedTransfersOverride,
     this.openFileOverride,
     this.exportFileOverride,
+    this.onTargetScopeCleared,
   });
 
   @override
@@ -84,8 +86,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   @override
   void didUpdateWidget(TransferActivityView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
-        oldWidget.preferredDeviceId != widget.preferredDeviceId) {
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion) {
       _applyPreferredDevice();
     }
   }
@@ -313,7 +314,9 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   }
 
   Widget _buildDeviceFilterMenu(ThemeData theme) {
-    final label = _activityDeviceFilter ?? 'All devices';
+    final label = _activityDeviceFilter == null
+        ? 'All devices'
+        : _peerLabel(_activityDeviceFilter);
 
     return MenuAnchor(
       style: MenuStyle(
@@ -414,7 +417,12 @@ class _TransferActivityViewState extends State<TransferActivityView> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         minimumSize: const Size(220, 40),
       ),
-      onPressed: () => setState(() => _activityDeviceFilter = value),
+      onPressed: () {
+        setState(() => _activityDeviceFilter = value);
+        if (value == null) {
+          widget.onTargetScopeCleared?.call();
+        }
+      },
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

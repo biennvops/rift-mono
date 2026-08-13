@@ -103,8 +103,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   @override
   void didUpdateWidget(ClipboardHistoryView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
-        oldWidget.preferredSourceDeviceId != widget.preferredSourceDeviceId) {
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion) {
       _applyPreferredSourceDevice();
     }
   }
@@ -1195,6 +1194,9 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
         _filteredSourceDeviceIds.add(deviceId);
       }
     });
+    if (_filteredSourceDeviceIds.isEmpty) {
+      widget.onTargetScopeCleared?.call();
+    }
   }
 
   void _toggleTypeFilter(String typeLabel) {

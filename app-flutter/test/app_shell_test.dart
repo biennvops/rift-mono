@@ -480,6 +480,27 @@ void main() {
     expect(routeNotifier.value, isNull);
   });
 
+  testWidgets('AppShell opens targeted Activity with visible device context',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildRiftApp(mockClient));
+    await tester.pumpAndSettle();
+
+    final shell = tester.state<AppShellState>(find.byType(AppShell));
+    shell.showActivityForDevice(
+      route: NotificationRoute.historySend,
+      deviceId: 'rift-peer-1',
+      displayName: 'Pixel 9',
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+    );
+    expect(find.text('Activity — Pixel 9'), findsOneWidget);
+    expect(find.text('Send File'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-target-chip')), findsOneWidget);
+  });
   test('MockClient getDeviceInfo test', () async {
     // Test the mock setup directly
     expect(mockClient.isConnected, isTrue);
