@@ -10,13 +10,11 @@ class DeviceFocusBackground extends StatelessWidget {
     required this.geometry,
     required this.entrance,
     required this.online,
-    required this.ambient,
   });
 
   final DeviceFocusGeometry geometry;
   final Animation<double> entrance;
   final Animation<double> online;
-  final Animation<double> ambient;
 
   @override
   Widget build(BuildContext context) {
@@ -27,7 +25,6 @@ class DeviceFocusBackground extends StatelessWidget {
           geometry: geometry,
           entrance: entrance,
           online: online,
-          ambient: ambient,
           primary: colors.primary,
           secondary: colors.secondary,
           outline: colors.outlineVariant,
@@ -43,16 +40,14 @@ class _DeviceFocusBackgroundPainter extends CustomPainter {
     required this.geometry,
     required this.entrance,
     required this.online,
-    required this.ambient,
     required this.primary,
     required this.secondary,
     required this.outline,
-  }) : super(repaint: Listenable.merge([entrance, online, ambient]));
+  }) : super(repaint: Listenable.merge([entrance, online]));
 
   final DeviceFocusGeometry geometry;
   final Animation<double> entrance;
   final Animation<double> online;
-  final Animation<double> ambient;
   final Color primary;
   final Color secondary;
   final Color outline;
@@ -64,14 +59,9 @@ class _DeviceFocusBackgroundPainter extends CustomPainter {
       ((entrance.value - 0.18) / 0.44).clamp(0.0, 1.0).toDouble(),
     );
     final onlineStrength = online.value;
-    final phase = ambient.value * math.pi * 2;
 
     final washRadius = math.max(size.width, size.height) * 0.48;
-    final washCenter = geometry.center +
-        Offset(
-          math.cos(phase) * size.width * 0.025,
-          math.sin(phase) * size.height * 0.018,
-        );
+    final washCenter = geometry.center;
     final washPaint = Paint()
       ..shader = RadialGradient(
         colors: [
@@ -89,7 +79,7 @@ class _DeviceFocusBackgroundPainter extends CustomPainter {
       ..color = secondary.withValues(alpha: sceneProgress * 0.07);
     canvas.save();
     canvas.translate(geometry.center.dx, geometry.center.dy);
-    canvas.rotate(math.sin(phase) * 0.035 - 0.14);
+    canvas.rotate(-0.14);
     canvas.drawOval(
       Rect.fromCenter(
         center: Offset.zero,
@@ -127,7 +117,7 @@ class _DeviceFocusBackgroundPainter extends CustomPainter {
         alpha: ringProgress * (0.08 + onlineStrength * 0.05),
       );
     for (var index = 0; index < 6; index++) {
-      final angle = phase * 0.05 + index * math.pi / 3;
+      final angle = index * math.pi / 3;
       final radius = coreRadius + 80;
       canvas.drawCircle(
         geometry.center + Offset(math.cos(angle), math.sin(angle)) * radius,

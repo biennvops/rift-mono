@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -52,13 +51,9 @@ class DeviceFocusView extends StatefulWidget {
 
 class _DeviceFocusViewState extends State<DeviceFocusView>
     with TickerProviderStateMixin {
-  static final _enableAmbientAnimation =
-      !Platform.environment.containsKey('FLUTTER_TEST');
-
   late final AnimationController _entranceController;
   late final AnimationController _onlineController;
   late final AnimationController _wakeController;
-  late final AnimationController _ambientController;
   DeviceFocusNodeKind? _activeNode;
   DeviceFocusNodeKind? _hoveredNode;
 
@@ -78,13 +73,6 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       vsync: this,
       duration: const Duration(milliseconds: 560),
     );
-    _ambientController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 90),
-    );
-    if (_enableAmbientAnimation) {
-      _ambientController.repeat();
-    }
   }
 
   @override
@@ -116,7 +104,6 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     _entranceController.dispose();
     _onlineController.dispose();
     _wakeController.dispose();
-    _ambientController.dispose();
     super.dispose();
   }
 
@@ -155,7 +142,6 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                               geometry: geometry,
                               entrance: _entranceController,
                               online: _onlineController,
-                              ambient: _ambientController,
                             ),
                           ),
                         ),
