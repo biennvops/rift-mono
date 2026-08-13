@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
@@ -372,6 +373,32 @@ void main() {
     expect(find.text('ABCD-EFGH-IJKL-MNOP'), findsOneWidget);
     expect(find.text('Android 16'), findsOneWidget);
     expect(find.text('0.1-draft'), findsOneWidget);
+  });
+
+  testWidgets('desktop focus nodes support keyboard activation',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-security')),
+      findsNothing,
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-security')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('desktop focus animates panel opening and closing',
