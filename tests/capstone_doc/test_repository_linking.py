@@ -316,6 +316,66 @@ def test_recorded_result_only_contradicts_an_explicit_documented_outcome() -> No
     assert EvidenceTestState.LATEST_RESULT_FAIL in no_claimed_outcome.test_states
 
 
+def test_latest_recorded_result_uses_newest_artifact() -> None:
+    test = _evidence(EvidenceKind.TEST, "tests/SyncTests.cs", "SyncsNotifications")
+
+    def recorded_result(path: str, outcome: str, modified_time_ns: int) -> RepositoryEvidence:
+        return _evidence(
+            EvidenceKind.TEST_RESULT,
+            path,
+            metadata={
+                "test_names": ["SyncsNotifications"],
+                "latest_result": outcome,
+                "modified_time_ns": modified_time_ns,
+            },
+        )
+
+    newer_pass = RepositoryEvidenceLinker(
+        _snapshot(
+            test,
+            recorded_result("results/run-100.xml", "FAIL", 100),
+            recorded_result("results/run-101.xml", "PASS", 101),
+        )
+    ).link(_claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications", metadata={"status": "Passed"}))
+    newer_fail = RepositoryEvidenceLinker(
+        _snapshot(
+            test,
+            recorded_result("results/run-100.xml", "PASS", 100),
+            recorded_result("results/run-101.xml", "FAIL", 101),
+        )
+    ).link(_claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications", metadata={"status": "Passed"}))
+
+    assert newer_pass.status == RepositoryEvidenceStatus.VERIFIED
+    assert EvidenceTestState.LATEST_RESULT_PASS in newer_pass.test_states
+    assert [item.path for item in newer_pass.evidence if item.kind == EvidenceKind.TEST_RESULT] == [
+        "results/run-101.xml"
+    ]
+    assert newer_fail.status == RepositoryEvidenceStatus.CONTRADICTED
+    assert EvidenceTestState.LATEST_RESULT_FAIL in newer_fail.test_states
+    assert newer_fail.metadata["test_result_conflict"] == {"documented": "PASS", "repository": "FAIL"}
+
+
+def test_multiple_unordered_results_have_unknown_latest_outcome() -> None:
+    test = _evidence(EvidenceKind.TEST, "tests/SyncTests.cs", "SyncsNotifications")
+    failed = _evidence(
+        EvidenceKind.TEST_RESULT,
+        "results/failed.xml",
+        metadata={"test_names": ["SyncsNotifications"], "latest_result": "FAIL"},
+    )
+    passed = _evidence(
+        EvidenceKind.TEST_RESULT,
+        "results/passed.xml",
+        metadata={"test_names": ["SyncsNotifications"], "latest_result": "PASS"},
+    )
+
+    match = RepositoryEvidenceLinker(_snapshot(test, failed, passed)).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "SyncsNotifications", metadata={"status": "Passed"})
+    )
+
+    assert match.status == RepositoryEvidenceStatus.VERIFIED
+    assert EvidenceTestState.LATEST_RESULT_UNKNOWN in match.test_states
+
+
 def test_trx_result_name_links_to_dotnet_test_claim(tmp_path: Path) -> None:
     repository = tmp_path / "repo"
     artifacts = tmp_path / "artifacts"

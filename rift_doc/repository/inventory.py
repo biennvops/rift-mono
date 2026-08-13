@@ -207,8 +207,12 @@ class RepositoryInventory:
             relative_path = _posix(absolute_path.relative_to(root))
             if _matches_configured_exclusion(relative_path, self.options.excluded_paths):
                 continue
-            size = absolute_path.stat().st_size
-            metadata: dict[str, Any] = {"artifact_root": str(root), "size_bytes": size}
+            file_stat = absolute_path.stat()
+            metadata: dict[str, Any] = {
+                "artifact_root": str(root),
+                "size_bytes": file_stat.st_size,
+                "modified_time_ns": file_stat.st_mtime_ns,
+            }
             if _is_test_result_path(relative_path):
                 snapshot.test_results.append(_test_result_evidence(absolute_path, relative_path, metadata))
                 continue

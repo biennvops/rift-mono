@@ -149,6 +149,7 @@ def test_artifact_directory_indexes_deliverables_and_test_results(tmp_path: Path
     assert result.metadata["suite_result"] == "PASS"
     assert result.metadata["test_names"] == ["syncs notifications"]
     assert result.metadata["test_outcomes"] == {"syncs notifications": "PASS"}
+    assert isinstance(result.metadata["modified_time_ns"], int)
     assert "latest_result" not in result.metadata
     assert snapshot.audit_metadata["artifact_root"] == str(artifacts.resolve())
 

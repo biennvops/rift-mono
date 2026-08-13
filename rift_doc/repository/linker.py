@@ -336,7 +336,7 @@ class RepositoryEvidenceLinker:
                     result.append(replace(evidence, metadata=metadata))
                 else:
                     result.append(evidence)
-        return result
+        return _latest_test_results(result)
 
     def _test_states(
         self,
@@ -468,6 +468,25 @@ def _aggregate_result_values(values: Iterable[str]) -> str:
     if outcomes == {"PASS"}:
         return "PASS"
     return "UNKNOWN"
+
+
+def _latest_test_results(results: list[RepositoryEvidence]) -> list[RepositoryEvidence]:
+    if len(results) <= 1:
+        return results
+    timestamps = [item.metadata.get("modified_time_ns") for item in results]
+    if not all(isinstance(value, int) for value in timestamps):
+        return [_unknown_test_result(item) for item in results]
+    latest_timestamp = max(timestamps)
+    latest = [item for item in results if item.metadata.get("modified_time_ns") == latest_timestamp]
+    if len(latest) != 1:
+        return [_unknown_test_result(item) for item in latest]
+    return latest
+
+
+def _unknown_test_result(evidence: RepositoryEvidence) -> RepositoryEvidence:
+    metadata = dict(evidence.metadata)
+    metadata["latest_result"] = "UNKNOWN"
+    return replace(evidence, metadata=metadata)
 
 
 def _verified_reason(
