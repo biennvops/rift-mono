@@ -293,21 +293,28 @@ class RepositoryEvidenceLinker:
         }
         relevant: list[RepositoryEvidence] = []
         for job in jobs:
-            commands = " ".join(str(value) for value in job.metadata.get("commands", []))
-            working_directories = [str(value) for value in job.metadata.get("working_directories", [])]
-            directories = " ".join(working_directories)
-            if any(root and (root in commands or root in directories) for root in test_roots):
-                relevant.append(job)
-            elif "" in test_roots and not working_directories:
-                command_languages = _ci_test_languages(commands)
-                targeted_tests = _targeted_root_tests(commands, self.snapshot.tests)
+            invocations = _ci_command_invocations(job)
+            for invocation in invocations:
+                command = invocation["command"]
+                if not _ci_invokes_tests(command):
+                    continue
+                directory = invocation["working_directory"]
+                if any(root and (root in command or root == directory or directory.startswith(root + "/")) for root in test_roots):
+                    relevant.append(job)
+                    break
+                if "" not in test_roots or directory:
+                    continue
+                command_languages = _ci_test_languages(command)
+                targeted_tests = _targeted_root_tests(command, self.snapshot.tests)
                 if targeted_tests:
                     if any(item.evidence_id in targeted_tests for item in tests):
                         relevant.append(job)
+                        break
                 elif command_languages.intersection(selected_languages) or (
                     not command_languages and len(root_test_languages) <= 1
                 ):
                     relevant.append(job)
+                    break
         return relevant
 
     def _result_evidence_for_claim(
@@ -521,6 +528,33 @@ def _ci_test_languages(command: str) -> set[str]:
         for language, pattern in patterns.items()
         if re.search(pattern, command, re.IGNORECASE)
     }
+
+
+def _ci_invokes_tests(command: str) -> bool:
+    return bool(
+        re.search(r"\b(?:test|pytest|ctest|xcodebuild\s+test)\b", command, re.IGNORECASE)
+        or re.search(r"(?:^|:)test[A-Z][A-Za-z0-9]*", command)
+    )
+
+
+def _ci_command_invocations(job: RepositoryEvidence) -> list[dict[str, str]]:
+    configured = job.metadata.get("command_invocations")
+    if isinstance(configured, list):
+        return [
+            {
+                "command": str(item.get("command", "")),
+                "working_directory": str(item.get("working_directory", "")),
+            }
+            for item in configured
+            if isinstance(item, dict)
+        ]
+    commands = [str(value) for value in job.metadata.get("commands", [])]
+    directories = [str(value) for value in job.metadata.get("working_directories", [])]
+    if len(directories) == 1:
+        return [{"command": command, "working_directory": directories[0]} for command in commands]
+    if not directories:
+        return [{"command": command, "working_directory": ""} for command in commands]
+    return []
 
 
 def _targeted_root_tests(

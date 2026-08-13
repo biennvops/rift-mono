@@ -451,6 +451,79 @@ jobs:
     ]
 
 
+def test_root_test_source_uses_explicit_repository_working_directory(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    (repository / "tests").mkdir(parents=True)
+    (repository / "tests" / "test_sync.py").write_text(
+        "def test_syncs_notifications():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(
+        """
+jobs:
+  test-python:
+    steps:
+      - run: pytest
+        working-directory: ./
+""",
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository)
+
+    match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+
+    assert EvidenceTestState.CI_CONFIGURED in match.test_states
+    job = next(item for item in snapshot.ci_configs if item.kind == EvidenceKind.CI_JOB)
+    assert job.metadata["command_invocations"] == [
+        {"command": "pytest", "working_directory": ""}
+    ]
+
+
+def test_workflow_working_directory_default_scopes_ci_to_package(tmp_path: Path) -> None:
+    repository = tmp_path / "repo"
+    (repository / "tests").mkdir(parents=True)
+    (repository / "tests" / "test_root.py").write_text(
+        "def test_root_sync():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / "package" / "tests").mkdir(parents=True)
+    (repository / "package" / "tests" / "test_package.py").write_text(
+        "def test_package_sync():\n    pass\n",
+        encoding="utf-8",
+    )
+    (repository / ".github" / "workflows").mkdir(parents=True)
+    (repository / ".github" / "workflows" / "ci.yml").write_text(
+        """
+defaults:
+  run:
+    working-directory: package
+jobs:
+  test-python:
+    steps:
+      - run: pytest
+""",
+        encoding="utf-8",
+    )
+    snapshot = RepositoryInventory().scan(repository)
+
+    root_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_root_sync")
+    )
+    package_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_package_sync")
+    )
+
+    assert root_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
+    assert EvidenceTestState.CI_CONFIGURED in package_match.test_states
+    job = next(item for item in snapshot.ci_configs if item.kind == EvidenceKind.CI_JOB)
+    assert job.metadata["command_invocations"] == [
+        {"command": "pytest", "working_directory": "package"}
+    ]
+
+
 def test_root_ci_job_does_not_cross_unrelated_test_ecosystems() -> None:
     python_test = _evidence(
         EvidenceKind.TEST,

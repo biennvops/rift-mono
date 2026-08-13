@@ -281,27 +281,38 @@ def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
     jobs = raw.get("jobs", {}) if isinstance(raw, dict) else {}
     if not isinstance(jobs, dict):
         return result
+    workflow_directory = _ci_default_working_directory(raw)
     for job_name, raw_job in jobs.items():
         job = raw_job if isinstance(raw_job, dict) else {}
         raw_steps = job.get("steps", [])
         steps = raw_steps if isinstance(raw_steps, list) else []
-        commands = [
-            str(step.get("run"))
-            for step in steps
-            if isinstance(step, dict) and step.get("run") is not None
-        ]
-        working_directories = [
-            str(value)
-            for step in steps
-            if isinstance(step, dict)
-            for value in [step.get("working-directory", step.get("working_directory"))]
-            if value not in (None, "")
-        ]
-        job_defaults = job.get("defaults", {})
-        if isinstance(job_defaults, dict):
-            run_defaults = job_defaults.get("run", {})
-            if isinstance(run_defaults, dict) and run_defaults.get("working-directory"):
-                working_directories.append(str(run_defaults["working-directory"]))
+        job_directory = _ci_default_working_directory(job)
+        command_invocations: list[dict[str, str]] = []
+        for step in steps:
+            if not isinstance(step, dict) or step.get("run") is None:
+                continue
+            step_directory = step.get("working-directory", step.get("working_directory"))
+            effective_directory = (
+                step_directory
+                if step_directory not in (None, "")
+                else job_directory
+                if job_directory is not None
+                else workflow_directory
+            )
+            command_invocations.append(
+                {
+                    "command": str(step["run"]),
+                    "working_directory": _normalize_ci_working_directory(effective_directory),
+                }
+            )
+        commands = [item["command"] for item in command_invocations]
+        working_directories = list(
+            dict.fromkeys(
+                item["working_directory"]
+                for item in command_invocations
+                if item["working_directory"]
+            )
+        )
         line = _yaml_key_line(text, str(job_name))
         signature = " ".join(command.replace("\n", " ") for command in commands)
         result.append(
@@ -316,13 +327,32 @@ def _parse_ci_config(path: str, text: str) -> list[RepositoryEvidence]:
                     "job_name": str(job_name),
                     "display_name": job.get("name"),
                     "commands": commands,
-                    "working_directories": list(dict.fromkeys(working_directories)),
+                    "working_directories": working_directories,
+                    "command_invocations": command_invocations,
                     "invokes_tests": _invokes_tests(signature),
                 },
                 excerpt_or_signature=signature or str(job_name),
             )
         )
     return result
+
+
+def _ci_default_working_directory(configuration: dict[str, Any]) -> Any:
+    defaults = configuration.get("defaults", {})
+    if not isinstance(defaults, dict):
+        return None
+    run_defaults = defaults.get("run", {})
+    if not isinstance(run_defaults, dict):
+        return None
+    return run_defaults.get("working-directory", run_defaults.get("working_directory"))
+
+
+def _normalize_ci_working_directory(value: Any) -> str:
+    path = str(value or "").replace("\\", "/").strip()
+    parts = [part for part in path.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        return path.strip("/")
+    return "/".join(parts)
 
 
 def _invokes_tests(command: str) -> bool:
