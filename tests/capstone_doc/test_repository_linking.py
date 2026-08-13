@@ -427,6 +427,42 @@ def test_root_ci_job_does_not_cross_unrelated_test_ecosystems() -> None:
     assert dotnet_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
 
 
+def test_targeted_root_ci_job_only_covers_matching_test_path() -> None:
+    sync_test = _evidence(
+        EvidenceKind.TEST,
+        "tests/test_sync.py",
+        "test_syncs_notifications",
+        metadata={"language": "python"},
+    )
+    transfer_test = _evidence(
+        EvidenceKind.TEST,
+        "tests/test_transfer.py",
+        "test_transfers_files",
+        metadata={"language": "python"},
+    )
+    ci = _evidence(
+        EvidenceKind.CI_JOB,
+        ".github/workflows/ci.yml",
+        "test-sync",
+        metadata={
+            "invokes_tests": True,
+            "commands": ["pytest tests/test_sync.py"],
+            "working_directories": [],
+        },
+    )
+    snapshot = _snapshot(sync_test, transfer_test, ci)
+
+    sync_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_syncs_notifications")
+    )
+    transfer_match = RepositoryEvidenceLinker(snapshot).link(
+        _claim(RepositoryClaimKind.TEST_CLAIM, "test_transfers_files")
+    )
+
+    assert EvidenceTestState.CI_CONFIGURED in sync_match.test_states
+    assert transfer_match.test_states == [EvidenceTestState.IMPLEMENTATION_PRESENT]
+
+
 def test_test_source_without_ci_or_result_does_not_imply_them() -> None:
     test = _evidence(EvidenceKind.TEST, "test/sync_test.dart", "syncs notifications")
     unrelated_ci = _evidence(

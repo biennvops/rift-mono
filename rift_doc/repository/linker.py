@@ -6,6 +6,7 @@ import fnmatch
 from dataclasses import replace
 from pathlib import PurePosixPath
 import re
+import shlex
 from typing import Any, Iterable
 
 from .mappings import RepositoryMappingConfig, RepositoryMappingEntry
@@ -299,7 +300,11 @@ class RepositoryEvidenceLinker:
                 relevant.append(job)
             elif "" in test_roots and not working_directories:
                 command_languages = _ci_test_languages(commands)
-                if command_languages.intersection(selected_languages) or (
+                targeted_tests = _targeted_root_tests(commands, self.snapshot.tests)
+                if targeted_tests:
+                    if any(item.evidence_id in targeted_tests for item in tests):
+                        relevant.append(job)
+                elif command_languages.intersection(selected_languages) or (
                     not command_languages and len(root_test_languages) <= 1
                 ):
                     relevant.append(job)
@@ -497,6 +502,32 @@ def _ci_test_languages(command: str) -> set[str]:
         for language, pattern in patterns.items()
         if re.search(pattern, command, re.IGNORECASE)
     }
+
+
+def _targeted_root_tests(
+    command: str,
+    tests: Iterable[RepositoryEvidence],
+) -> set[str]:
+    arguments = {
+        argument.split("::", 1)[0].replace("\\", "/").lstrip("./")
+        for argument in _shell_arguments(command)
+        if not argument.startswith("-")
+    }
+    result: set[str] = set()
+    for test in tests:
+        if _top_module(test.path):
+            continue
+        path = test.path.replace("\\", "/").strip("/")
+        if any(path == argument or path.startswith(argument.rstrip("/") + "/") for argument in arguments):
+            result.add(test.evidence_id)
+    return result
+
+
+def _shell_arguments(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
 
 
 def _unique(items: Iterable[RepositoryEvidence]) -> list[RepositoryEvidence]:
