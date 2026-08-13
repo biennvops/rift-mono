@@ -67,7 +67,7 @@ class DeviceCore extends StatelessWidget {
                     key: const ValueKey('device-focus-core'),
                     width: size,
                     height: size,
-                    padding: EdgeInsets.all(size < 145 ? 14 : 18),
+                    padding: EdgeInsets.all(size < 155 ? 12 : 18),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: Color.lerp(
@@ -91,10 +91,10 @@ class DeviceCore extends StatelessWidget {
                       children: [
                         Icon(
                           platformIcon,
-                          size: size < 145 ? 30 : 38,
+                          size: size < 155 ? 26 : 38,
                           color: accent,
                         ),
-                        SizedBox(height: size < 145 ? 6 : 10),
+                        SizedBox(height: size < 155 ? 4 : 10),
                         Text(
                           displayName,
                           textAlign: TextAlign.center,
@@ -104,14 +104,15 @@ class DeviceCore extends StatelessWidget {
                               Theme.of(context).textTheme.titleMedium?.copyWith(
                                     color: colors.onSurface,
                                     fontWeight: FontWeight.w700,
-                                    height: 1.15,
+                                    fontSize: size < 155 ? 14 : null,
+                                    height: 1.1,
                                   ),
                         ),
-                        SizedBox(height: size < 145 ? 5 : 8),
+                        SizedBox(height: size < 155 ? 4 : 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 9,
-                            vertical: 4,
+                          padding: EdgeInsets.symmetric(
+                            horizontal: size < 155 ? 6 : 9,
+                            vertical: size < 155 ? 2 : 4,
                           ),
                           decoration: BoxDecoration(
                             color: Color.lerp(
@@ -125,20 +126,22 @@ class DeviceCore extends StatelessWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Container(
-                                width: 7,
-                                height: 7,
+                                width: size < 155 ? 6 : 7,
+                                height: size < 155 ? 6 : 7,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   color: accent,
                                 ),
                               ),
-                              const SizedBox(width: 6),
+                              SizedBox(width: size < 155 ? 4 : 6),
                               Text(
                                 isOnline ? 'Online' : 'Offline',
                                 style: Theme.of(context)
                                     .textTheme
                                     .labelSmall
                                     ?.copyWith(
+                                      fontSize: size < 155 ? 10 : null,
+                                      height: 1.2,
                                       color: accent,
                                       fontWeight: FontWeight.w700,
                                     ),

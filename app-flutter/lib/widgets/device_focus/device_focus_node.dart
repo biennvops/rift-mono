@@ -106,8 +106,8 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
                 onFocusChange: (value) => _updateInteraction(focused: value),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 8,
+                    horizontal: 9,
+                    vertical: 6,
                   ),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,

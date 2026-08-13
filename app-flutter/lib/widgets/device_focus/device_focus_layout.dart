@@ -33,7 +33,7 @@ abstract final class DeviceFocusLayout {
     final activeKinds = kinds.toList(growable: false);
     final slots = _slotsFor(activeKinds);
     final nodeWidth = (size.width * 0.18).clamp(96.0, 120.0).toDouble();
-    final nodeHeight = (size.height * 0.1).clamp(72.0, 84.0).toDouble();
+    final nodeHeight = (size.height * 0.1).clamp(76.0, 84.0).toDouble();
     final nodeSize = Size(nodeWidth, nodeHeight);
 
     final maxHorizontalRadius = math
@@ -83,7 +83,7 @@ abstract final class DeviceFocusLayout {
 
     final coreSize = math
         .min(size.width * 0.31, size.height * 0.24)
-        .clamp(124.0, 180.0)
+        .clamp(140.0, 180.0)
         .toDouble();
 
     return DeviceFocusGeometry(
