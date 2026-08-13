@@ -156,7 +156,6 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   }
 }
 
-
 void main() {
   testWidgets('TrustedDevicesScreen shows title', (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();
@@ -863,8 +862,7 @@ void main() {
     expect(find.byIcon(Icons.devices), findsOneWidget);
   });
 
-  testWidgets(
-      'pairing action opens standard PairingRequest dialog on desktop',
+  testWidgets('pairing action opens standard PairingRequest dialog on desktop',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
@@ -1005,14 +1003,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Peer One'), findsWidgets);
+    expect(find.text('Select a device to view details or pair.'), findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-core')), findsOneWidget);
     expect(
-        find.text('Select a device to view details or pair.'), findsNothing);
+      find.byKey(const ValueKey('device-focus-node-security')),
+      findsOneWidget,
+    );
+    expect(find.text('Authorized Trusted Peer'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-node-identity')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-identity')),
+      findsOneWidget,
+    );
 
     // Tap Peer Two to switch focus
     await tester.tap(find.text('Peer Two'));
     await tester.pumpAndSettle();
 
     expect(find.text('Peer Two'), findsWidgets);
-    expect(find.text('Authorized Trusted Peer'), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-identity')),
+      findsNothing,
+    );
+    expect(find.text('Authorized Trusted Peer'), findsNothing);
   });
 }

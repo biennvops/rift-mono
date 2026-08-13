@@ -29,6 +29,8 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
       'capabilities': ['presence.basic'],
     },
   ];
+  bool revokeCalled = false;
+  String? revokedDeviceId;
 
   @override
   bool get isConnected => true;
@@ -76,6 +78,13 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
   @override
   Future<dynamic> listTrustedPeers() async => {'peers': trustedPeers};
 
+  @override
+  Future<dynamic> revokeTrust(String deviceId, String reason) async {
+    revokeCalled = true;
+    revokedDeviceId = deviceId;
+    return {'revoked': true};
+  }
+
   Future<void> emitTrustChanged(Map<String, dynamic> event) async {
     _trustChangedController.add(event);
   }
@@ -90,13 +99,19 @@ class FakeDeviceDetailClient extends JsonRpcRiftClient {
 }
 
 void main() {
-  Widget buildTestApp(FakeDeviceDetailClient client) {
+  Widget buildTestApp(
+    FakeDeviceDetailClient client, {
+    VoidCallback? onClose,
+    bool isSelf = false,
+  }) {
     return MaterialApp(
       home: Provider<JsonRpcRiftClient>.value(
         value: client,
         child: DeviceDetailScreen(
           peer: client.trustedPeers.first,
           isOnline: true,
+          isSelf: isSelf,
+          onClose: onClose,
         ),
       ),
     );
@@ -125,6 +140,7 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Online'), findsOneWidget);
     expect(find.text('Revoke Trust'), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
     expect(find.textContaining('Block Device'), findsNothing);
     expect(
       find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
@@ -281,6 +297,265 @@ void main() {
     expect(find.text('AC power'), findsOneWidget);
   });
 
+  testWidgets('embedded trusted peer uses the desktop focus presentation',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone-1234',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'osVersion': 'Android 16',
+          'protocolVersion': '0.1-draft',
+          'fingerprint': 'ABCD-EFGH-IJKL-MNOP',
+          'pairedAt': '2026-07-28T12:00:00Z',
+          'lastSeenAt': '2026-07-29T00:00:00Z',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'device.status',
+            'presence.basic',
+          ],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone-1234',
+            'batteryPercent': 64,
+            'chargingState': 'charging',
+            'powerSource': 'usb',
+            'lowPowerMode': false,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-core')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-node-power')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-security')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-identity')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-capabilities')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-info')),
+      findsOneWidget,
+    );
+    expect(find.text('Pixel 9'), findsOneWidget);
+    expect(find.text('Authorized Trusted Peer'), findsNothing);
+    expect(find.text('Actions'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-node-identity')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-identity')),
+      findsOneWidget,
+    );
+    expect(find.text('rift-phone-1234'), findsOneWidget);
+    expect(find.text('ABCD-EFGH-IJKL-MNOP'), findsOneWidget);
+    expect(find.text('Android 16'), findsOneWidget);
+    expect(find.text('0.1-draft'), findsOneWidget);
+  });
+
+  testWidgets('desktop focus power panel follows live status updates',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['device.status', 'presence.basic'],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPercent': 64,
+            'chargingState': 'charging',
+            'powerSource': 'usb',
+            'lowPowerMode': false,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-power')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-power')),
+      findsOneWidget,
+    );
+    expect(find.text('64%'), findsWidgets);
+    expect(find.text('Charging'), findsOneWidget);
+    expect(find.text('USB power'), findsOneWidget);
+
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-phone',
+      'batteryPercent': 59,
+      'chargingState': 'discharging',
+      'powerSource': 'battery',
+      'lowPowerMode': true,
+      'observedAt': '2026-07-29T00:05:00Z',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('64%'), findsNothing);
+    expect(find.text('59%'), findsWidgets);
+    expect(find.text('Discharging'), findsOneWidget);
+    expect(find.text('Battery'), findsWidgets);
+    expect(find.text('On'), findsOneWidget);
+  });
+
+  testWidgets('desktop focus stays mounted and marks status stale on peer loss',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-phone',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-phone',
+            'batteryPercent': 64,
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-power')));
+    await tester.pumpAndSettle();
+
+    await client.emitPeerLost({'deviceId': 'rift-phone'});
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(find.text('Offline'), findsWidgets);
+    expect(find.textContaining('Stale ·'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop focus preserves removed peer state',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-phone',
+      'previousState': 'trusted',
+      'newState': 'revoked',
+      'reason': 'removed.remote',
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
+    expect(find.text('Pixel 9 is no longer available'), findsOneWidget);
+    expect(find.text('Back to home'), findsOneWidget);
+  });
+
+  testWidgets('desktop focus revocation remains confirmation gated',
+      (WidgetTester tester) async {
+    var onCloseCalled = false;
+    final client = FakeDeviceDetailClient();
+
+    await tester.pumpWidget(
+      buildTestApp(
+        client,
+        onClose: () {
+          onCloseCalled = true;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-security')));
+    await tester.pumpAndSettle();
+    expect(client.revokeCalled, isFalse);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-revoke-trust')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Revoke Trust?'), findsOneWidget);
+    expect(client.revokeCalled, isFalse);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Revoke Trust'));
+    await tester.pumpAndSettle();
+
+    expect(client.revokeCalled, isTrue);
+    expect(client.revokedDeviceId, 'rift-phone');
+    expect(onCloseCalled, isTrue);
+  });
+
+  testWidgets('desktop focus remains overflow free at target pane sizes',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-abcdefghijklmnopqrstuvwxyz234567',
+          'displayName':
+              'A very long trusted desktop device name for layout coverage',
+          'platform': 'linux',
+          'fingerprint': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12-3456',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': [
+            'clipboard.offer_fetch',
+            'device.status',
+            'file.transfer',
+            'presence.basic',
+          ],
+          'deviceStatus': {
+            'sourceDeviceId': 'rift-abcdefghijklmnopqrstuvwxyz234567',
+            'batteryPercent': 42,
+            'chargingState': 'discharging',
+            'observedAt': '2026-07-29T00:00:00Z',
+          },
+        },
+      ];
+
+    for (final size in const [
+      Size(1024, 768),
+      Size(1440, 900),
+      Size(520, 620),
+    ]) {
+      await tester.binding.setSurfaceSize(size);
+      await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull, reason: 'viewport $size');
+      expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+      expect(find.byKey(const ValueKey('device-focus-core')), findsOneWidget);
+    }
+  });
+
   testWidgets(
       'DeviceDetailScreen renders self device details and copy actions when isSelf is true',
       (WidgetTester tester) async {
@@ -299,6 +574,7 @@ void main() {
             },
             isOnline: true,
             isSelf: true,
+            onClose: () {},
           ),
         ),
       ),
@@ -310,5 +586,6 @@ void main() {
     expect(find.text('Copy Device ID'), findsOneWidget);
     expect(find.text('Copy Fingerprint'), findsOneWidget);
     expect(find.text('Revoke Trust'), findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
   });
 }
