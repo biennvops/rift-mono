@@ -30,6 +30,7 @@ def _claim(
     *,
     claim_id: str = "claim-1",
     identifiers: list[str] | None = None,
+    expected_evidence_types: list[EvidenceKind] | None = None,
     metadata: dict | None = None,
 ) -> RepositoryClaim:
     return RepositoryClaim(
@@ -38,6 +39,7 @@ def _claim(
         canonical_name=name,
         identifiers=list(identifiers or []),
         documentation_evidence=[{"source_path": "report.docx", "location": "paragraph 4"}],
+        expected_evidence_types=list(expected_evidence_types or []),
         metadata=dict(metadata or {}),
     )
 
@@ -165,7 +167,67 @@ def test_explicit_identifier_reference_without_implementation_requires_review() 
     assert match.evidence == [reference]
 
 
-def test_function_feature_exact_and_conservative_normalized_matching() -> None:
+def test_projected_expected_evidence_types_restrict_candidates() -> None:
+    configuration = _evidence(
+        EvidenceKind.CONFIGURATION,
+        "core/SyncService.cs",
+        line=3,
+        metadata={"identifiers": ["ARC-03"], "configuration_type": "explicit_identifier_reference"},
+    )
+    match = RepositoryEvidenceLinker(_snapshot(configuration)).link(
+        _claim(
+            RepositoryClaimKind.ARCHITECTURE_COMPONENT,
+            "Core Daemon",
+            identifiers=["ARC-03"],
+            expected_evidence_types=[EvidenceKind.PACKAGE],
+        )
+    )
+
+    assert match.status == RepositoryEvidenceStatus.NOT_FOUND
+
+
+def test_manual_mapping_respects_projected_expected_evidence_types() -> None:
+    configuration = _evidence(EvidenceKind.CONFIGURATION, "core/SyncService.cs", "Core Daemon")
+    mappings = RepositoryMappingConfig.from_dict(
+        {"repository_mappings": {"components": {"Core Daemon": {"paths": ["core/SyncService.cs"]}}}}
+    )
+
+    match = RepositoryEvidenceLinker(_snapshot(configuration), mappings).link(
+        _claim(
+            RepositoryClaimKind.ARCHITECTURE_COMPONENT,
+            "Core Daemon",
+            expected_evidence_types=[EvidenceKind.PACKAGE],
+        )
+    )
+
+    assert match.status == RepositoryEvidenceStatus.NOT_FOUND
+
+
+def test_test_augmentation_respects_projected_expected_evidence_types() -> None:
+    test = _evidence(EvidenceKind.TEST, "tests/test_sync.py", "syncs notifications")
+    ci = _evidence(
+        EvidenceKind.CI_JOB,
+        ".github/workflows/ci.yml",
+        "test-python",
+        metadata={"invokes_tests": True, "commands": ["pytest"], "working_directories": []},
+    )
+    result = _evidence(
+        EvidenceKind.TEST_RESULT,
+        "results/junit.xml",
+        metadata={"test_names": ["syncs notifications"], "latest_result": "PASS"},
+    )
+
+    match = RepositoryEvidenceLinker(_snapshot(test, ci, result)).link(
+        _claim(
+            RepositoryClaimKind.TEST_CLAIM,
+            "syncs notifications",
+            expected_evidence_types=[EvidenceKind.TEST],
+        )
+    )
+
+    assert [item.kind for item in match.evidence] == [EvidenceKind.TEST]
+
+
     exact = _evidence(EvidenceKind.SYMBOL, "lib/direct.dart", "Notification Sync")
     exact_match = RepositoryEvidenceLinker(_snapshot(exact)).link(
         _claim(RepositoryClaimKind.FUNCTION_OR_FEATURE, "Notification Sync")

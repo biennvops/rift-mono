@@ -41,6 +41,21 @@ _GENERIC_IMPLEMENTATION_WORDS = frozenset(
 )
 
 
+def _expected_kinds(claim: RepositoryClaim) -> frozenset[EvidenceKind]:
+    if claim.expected_evidence_types:
+        return frozenset(claim.expected_evidence_types)
+    if claim.kind == RepositoryClaimKind.TEST_CLAIM:
+        return frozenset({EvidenceKind.TEST, EvidenceKind.CI_JOB, EvidenceKind.TEST_RESULT})
+    return _CANDIDATE_KINDS[claim.kind]
+
+
+def _candidate_kinds(claim: RepositoryClaim) -> frozenset[EvidenceKind]:
+    expected = _expected_kinds(claim)
+    if claim.kind == RepositoryClaimKind.TEST_CLAIM:
+        return frozenset({EvidenceKind.TEST}) if EvidenceKind.TEST in expected else frozenset()
+    return expected
+
+
 class RepositoryEvidenceIndex:
     """Runtime indexes built once per snapshot."""
 
@@ -63,8 +78,12 @@ class RepositoryEvidenceIndex:
                 if normalized:
                     self.by_normalized_name.setdefault(normalized, []).append(evidence)
 
-    def candidates_for_kind(self, claim_kind: RepositoryClaimKind) -> list[RepositoryEvidence]:
-        kinds = _CANDIDATE_KINDS[claim_kind]
+    def candidates_for_kind(
+        self,
+        claim_kind: RepositoryClaimKind,
+        allowed_kinds: frozenset[EvidenceKind] | None = None,
+    ) -> list[RepositoryEvidence]:
+        kinds = allowed_kinds if allowed_kinds is not None else _CANDIDATE_KINDS[claim_kind]
         return [item for item in self.by_id.values() if item.kind in kinds]
 
 
@@ -111,7 +130,7 @@ class RepositoryEvidenceLinker:
             candidates = self._exact_name_candidates(claim)
             method = RepositoryMatchMethod.EXACT_NAME
         if not candidates and mapping is not None:
-            candidates = self._mapping_candidates(mapping)
+            candidates = self._mapping_candidates(claim, mapping)
             method = RepositoryMatchMethod.MANUAL_MAPPING
             if not candidates:
                 return RepositoryEvidenceMatch(
@@ -199,14 +218,14 @@ class RepositoryEvidenceLinker:
         )
 
     def _identifier_candidates(self, claim: RepositoryClaim) -> list[RepositoryEvidence]:
-        allowed = _CANDIDATE_KINDS[claim.kind]
+        allowed = _candidate_kinds(claim)
         result: list[RepositoryEvidence] = []
         for identifier in claim.identifiers:
             result.extend(item for item in self.index.by_identifier.get(normalize_identifier(identifier), []) if item.kind in allowed)
         return _prefer_specific_kind(claim, result)
 
     def _exact_name_candidates(self, claim: RepositoryClaim) -> list[RepositoryEvidence]:
-        allowed = _CANDIDATE_KINDS[claim.kind]
+        allowed = _candidate_kinds(claim)
         key = _exact_name(claim.canonical_name)
         return _prefer_specific_kind(
             claim,
@@ -214,7 +233,7 @@ class RepositoryEvidenceLinker:
         )
 
     def _normalized_name_candidates(self, claim: RepositoryClaim) -> list[RepositoryEvidence]:
-        allowed = _CANDIDATE_KINDS[claim.kind]
+        allowed = _candidate_kinds(claim)
         names = {_repository_name(claim.canonical_name)}
         if claim.kind in {RepositoryClaimKind.FUNCTION_OR_FEATURE, RepositoryClaimKind.ARCHITECTURE_COMPONENT}:
             names.add(_without_generic_words(claim.canonical_name))
@@ -224,15 +243,22 @@ class RepositoryEvidenceLinker:
                 result.extend(item for item in self.index.by_normalized_name.get(name, []) if item.kind in allowed)
         if claim.kind in {RepositoryClaimKind.FUNCTION_OR_FEATURE, RepositoryClaimKind.ARCHITECTURE_COMPONENT}:
             claim_core = _without_generic_words(claim.canonical_name)
-            for item in self.index.candidates_for_kind(claim.kind):
+            for item in self.index.candidates_for_kind(claim.kind, allowed):
                 if claim_core and any(_without_generic_words(label) == claim_core for label in _evidence_labels(item)):
                     result.append(item)
         return _prefer_specific_kind(claim, result)
 
-    def _mapping_candidates(self, mapping: RepositoryMappingEntry) -> list[RepositoryEvidence]:
+    def _mapping_candidates(
+        self,
+        claim: RepositoryClaim,
+        mapping: RepositoryMappingEntry,
+    ) -> list[RepositoryEvidence]:
         result: list[RepositoryEvidence] = []
+        allowed = _candidate_kinds(claim)
         all_evidence = self.snapshot.all_evidence()
         for evidence in all_evidence:
+            if evidence.kind not in allowed:
+                continue
             labels = {_exact_name(value) for value in _evidence_labels(evidence)}
             normalized_path = evidence.path.replace("\\", "/").strip("/")
             if any(_path_matches(normalized_path, path) for path in mapping.paths):
@@ -272,8 +298,11 @@ class RepositoryEvidenceLinker:
         if claim.kind != RepositoryClaimKind.TEST_CLAIM:
             return selected
         result = list(selected)
-        result.extend(self._ci_evidence_for_tests(selected))
-        result.extend(self._result_evidence_for_claim(claim, selected))
+        expected = _expected_kinds(claim)
+        if EvidenceKind.CI_JOB in expected:
+            result.extend(self._ci_evidence_for_tests(selected))
+        if EvidenceKind.TEST_RESULT in expected:
+            result.extend(self._result_evidence_for_claim(claim, selected))
         return _unique(result)
 
     def _ci_evidence_for_tests(self, tests: list[RepositoryEvidence]) -> list[RepositoryEvidence]:
