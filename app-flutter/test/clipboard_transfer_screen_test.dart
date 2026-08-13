@@ -301,6 +301,7 @@ void main() {
     ValueNotifier<String?>? sharedClipboardTextNotifier,
     ValueNotifier<ActivityNavigationRequest?>? activityNavigationNotifier,
     bool preferDaemonOnlyOverride = true,
+    bool disableAnimations = false,
     bool? exportCompletedTransfersOverride,
     Future<void> Function(String path)? openFileOverride,
     Future<void> Function(String path)? exportFileOverride,
@@ -312,36 +313,39 @@ void main() {
     Future<void> Function(String text)? writeClipboardTextOverride,
   }) {
     return MaterialApp(
-      home: MultiProvider(
-        providers: [
-          Provider<JsonRpcRiftClient>.value(
-            value: client ?? FakeTransferJsonRpcClient(),
-          ),
-          ChangeNotifierProvider<SendQueueController>(
-            create: (context) => SendQueueController(
-              context.read<JsonRpcRiftClient>(),
-              preferDaemonOnlyOverride,
+      home: MediaQuery(
+        data: MediaQueryData(disableAnimations: disableAnimations),
+        child: MultiProvider(
+          providers: [
+            Provider<JsonRpcRiftClient>.value(
+              value: client ?? FakeTransferJsonRpcClient(),
             ),
+            ChangeNotifierProvider<SendQueueController>(
+              create: (context) => SendQueueController(
+                context.read<JsonRpcRiftClient>(),
+                preferDaemonOnlyOverride,
+              ),
+            ),
+            ChangeNotifierProvider<LocalEventsNotifier>(
+              create: (context) =>
+                  LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
+            ),
+          ],
+          child: ClipboardTransferScreen(
+            revealCompletedTransfersInFolderOverride: revealInFolder,
+            exportCompletedTransfersOverride: exportCompletedTransfersOverride,
+            openFileOverride: openFileOverride,
+            exportFileOverride: exportFileOverride,
+            iosClipboardActionsOverride: iosClipboardActionsOverride,
+            readClipboardContentOverride: readClipboardContentOverride,
+            readClipboardTextOverride: readClipboardTextOverride,
+            writeClipboardContentOverride: writeClipboardContentOverride,
+            writeClipboardTextOverride: writeClipboardTextOverride,
+            pickSendFilesOverride: pickSendFilesOverride,
+            routeNotifier: routeNotifier,
+            sharedClipboardTextNotifier: sharedClipboardTextNotifier,
+            activityNavigationNotifier: activityNavigationNotifier,
           ),
-          ChangeNotifierProvider<LocalEventsNotifier>(
-            create: (context) =>
-                LocalEventsNotifier(context.read<JsonRpcRiftClient>()),
-          ),
-        ],
-        child: ClipboardTransferScreen(
-          revealCompletedTransfersInFolderOverride: revealInFolder,
-          exportCompletedTransfersOverride: exportCompletedTransfersOverride,
-          openFileOverride: openFileOverride,
-          exportFileOverride: exportFileOverride,
-          iosClipboardActionsOverride: iosClipboardActionsOverride,
-          readClipboardContentOverride: readClipboardContentOverride,
-          readClipboardTextOverride: readClipboardTextOverride,
-          writeClipboardContentOverride: writeClipboardContentOverride,
-          writeClipboardTextOverride: writeClipboardTextOverride,
-          pickSendFilesOverride: pickSendFilesOverride,
-          routeNotifier: routeNotifier,
-          sharedClipboardTextNotifier: sharedClipboardTextNotifier,
-          activityNavigationNotifier: activityNavigationNotifier,
         ),
       ),
     );
@@ -360,6 +364,86 @@ void main() {
     expect(find.text('Notifications'), findsOneWidget);
   });
 
+  testWidgets('Activity swipe order follows the visible tab order',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+
+    final swipeArea = find.byKey(
+      const ValueKey('activity-section-swipe-area'),
+    );
+    const orderedSections = [
+      'clipboard',
+      'send',
+      'incomingOffers',
+      'transferActivity',
+      'notifications',
+    ];
+
+    for (var index = 0; index < orderedSections.length; index++) {
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index]}')),
+        findsOneWidget,
+      );
+      if (index == orderedSections.length - 1) continue;
+
+      await tester.drag(swipeArea, const Offset(-240, 0));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index + 1]}')),
+        findsOneWidget,
+      );
+    }
+
+    for (var index = orderedSections.length - 1; index > 0; index--) {
+      await tester.drag(swipeArea, const Offset(240, 0));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(ValueKey('activity-tab-${orderedSections[index - 1]}')),
+        findsOneWidget,
+      );
+    }
+  });
+
+  testWidgets('Activity reduced motion settles subsection changes immediately',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(buildScreen(disableAnimations: true));
+    await tester.pump();
+
+    await tester.tap(
+      find.byKey(const ValueKey('activity-tab-send')),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('history-section-content-send')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('history-section-content-clipboard')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Activity external route uses the same subsection transition',
+      (WidgetTester tester) async {
+    final routeNotifier = ValueNotifier<String?>(null);
+    await tester.pumpWidget(buildScreen(routeNotifier: routeNotifier));
+    await tester.pumpAndSettle();
+
+    routeNotifier.value = NotificationRoute.historyIncomingOffers;
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('history-section-content-incomingOffers')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-tab-incomingOffers')),
+      findsOneWidget,
+    );
+  });
   testWidgets('default Activity remains compact on a phone viewport',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(390, 600);
