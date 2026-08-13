@@ -449,9 +449,10 @@ class _FileSendViewState extends State<FileSendView> {
       );
     }
     final preferred = _preferredTargetDeviceId;
-    if (preferred != null &&
-        peers.any((peer) => peer['deviceId']?.toString() == preferred)) {
-      return <String>{preferred};
+    if (preferred != null && preferred.isNotEmpty) {
+      return peers.any((peer) => peer['deviceId']?.toString() == preferred)
+          ? <String>{preferred}
+          : <String>{};
     }
     return peers.isNotEmpty
         ? <String>{peers.first['deviceId']?.toString() ?? ''}
@@ -804,6 +805,10 @@ class _FileSendViewState extends State<FileSendView> {
         f.status == SendQueueStatus.failed);
 
     final effectiveSelectedIds = _effectiveSelectedIds(peers);
+    final preferredTargetUnavailable = _preferredTargetDeviceId?.isNotEmpty ==
+            true &&
+        !peers.any(
+            (peer) => peer['deviceId']?.toString() == _preferredTargetDeviceId);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -820,6 +825,7 @@ class _FileSendViewState extends State<FileSendView> {
           peers: peers,
           effectiveSelectedIds: effectiveSelectedIds,
           hasSendableFiles: hasSendableFiles,
+          preferredTargetUnavailable: preferredTargetUnavailable,
         ),
         const SizedBox(height: 10),
         _buildTransferHubQueueCard(theme, queueItems),
@@ -832,6 +838,7 @@ class _FileSendViewState extends State<FileSendView> {
     required List<Map<String, dynamic>> peers,
     required Set<String> effectiveSelectedIds,
     required bool hasSendableFiles,
+    required bool preferredTargetUnavailable,
   }) {
     final isMobile = MediaQuery.sizeOf(context).width < 600;
     return Container(
@@ -932,6 +939,17 @@ class _FileSendViewState extends State<FileSendView> {
                     }).toList(),
                   );
                 },
+              ),
+            if (preferredTargetUnavailable)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Target device is unavailable for file transfer.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
             if (_sendQueue.items.isNotEmpty) ...[
               const SizedBox(height: 12),

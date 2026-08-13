@@ -823,6 +823,90 @@ void main() {
     expect(
         (chip('rift-peer-2').decoration as BoxDecoration).color, Colors.white);
   });
+
+  testWidgets('targeted Send File disables sending when its peer disappears',
+      (WidgetTester tester) async {
+    final client = FakeTransferJsonRpcClient(
+      sendQueueSupported: true,
+      queueItems: [
+        {
+          'queueItemId': 'queue-targeted',
+          'status': 'queued',
+          'targetDeviceId': null,
+          'localPath': '/tmp/demo-targeted.txt',
+          'fileName': 'demo-targeted.txt',
+          'mediaType': 'text/plain',
+          'byteSize': 10,
+          'currentOperationId': null,
+          'lastTransferId': null,
+          'failureReason': null,
+          'failureMessage': null,
+          'createdAt': DateTime.now().toUtc().toIso8601String(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'origin': null,
+        },
+      ],
+    )..trustedPeers = [
+        {
+          'deviceId': 'rift-peer-1',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+        {
+          'deviceId': 'rift-peer-2',
+          'displayName': 'Pixel',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['file.transfer'],
+        },
+      ];
+    final navigation = ValueNotifier<ActivityNavigationRequest?>(
+      const ActivityNavigationRequest(
+        route: NotificationRoute.historySend,
+        deviceId: 'rift-peer-2',
+        displayName: 'Pixel',
+      ),
+    );
+
+    await tester.pumpWidget(
+      buildScreen(
+        client: client,
+        activityNavigationNotifier: navigation,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    client.trustedPeers = [
+      {
+        'deviceId': 'rift-peer-1',
+        'displayName': 'Pixel',
+        'trustState': 'trusted',
+        'presence': 'online',
+        'capabilities': ['file.transfer'],
+      },
+    ];
+    await client.emitTrustChanged(const <String, dynamic>{});
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Target device is unavailable for file transfer.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('send-device-chip-rift-peer-1')),
+      findsOneWidget,
+    );
+    final sendButton = tester.widget<FilledButton>(
+      find.ancestor(
+        of: find.text('Select a device'),
+        matching: find.byType(FilledButton),
+      ),
+    );
+    expect(sendButton.onPressed, isNull);
+  });
+
   testWidgets('clipboard draft editor stays hidden until shared text arrives',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildScreen(revealInFolder: true));
