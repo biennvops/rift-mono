@@ -7,6 +7,7 @@ import '../src/file_transfer/send_queue_panel.dart';
 import '../src/ipc/json_rpc_client.dart';
 import '../src/platform/ios_clipboard.dart';
 import '../src/platform/notification_route.dart';
+import '../src/ui/activity_navigation.dart';
 import '../src/ui/theme.dart';
 import 'views/clipboard_history_view.dart';
 import 'views/file_send_view.dart';
@@ -39,6 +40,7 @@ class ClipboardTransferScreen extends StatefulWidget {
   final Future<String?> Function(String fileName)?
       buildIncomingDestinationPathOverride;
   final ValueNotifier<String?>? routeNotifier;
+  final ValueNotifier<ActivityNavigationRequest?>? activityNavigationNotifier;
   final ValueNotifier<String?>? sharedClipboardTextNotifier;
   final ValueChanged<int>? onBoundarySwipe;
 
@@ -58,6 +60,7 @@ class ClipboardTransferScreen extends StatefulWidget {
     this.writeClipboardTextOverride,
     this.buildIncomingDestinationPathOverride,
     this.routeNotifier,
+    this.activityNavigationNotifier,
     this.sharedClipboardTextNotifier,
     this.onBoundarySwipe,
   });
@@ -71,6 +74,9 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   _HistorySection _activeSection = _HistorySection.clipboard;
   double _horizontalDragDistance = 0;
   int _activeOutgoingTransferCount = 0;
+  String? _targetDeviceId;
+  String? _targetDisplayName;
+  int _targetRequestVersion = 0;
   StreamSubscription? _progressSub;
   StreamSubscription? _completedSub;
   StreamSubscription? _failedSub;
@@ -79,8 +85,10 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   void initState() {
     super.initState();
     widget.routeNotifier?.addListener(_handleExternalRoute);
+    widget.activityNavigationNotifier?.addListener(_handleActivityNavigation);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _handleExternalRoute();
+      _handleActivityNavigation();
       _loadActiveTransfers();
       _bindTransferEvents();
     });
@@ -89,6 +97,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   @override
   void dispose() {
     widget.routeNotifier?.removeListener(_handleExternalRoute);
+    widget.activityNavigationNotifier
+        ?.removeListener(_handleActivityNavigation);
     _progressSub?.cancel();
     _completedSub?.cancel();
     _failedSub?.cancel();
@@ -148,6 +158,43 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     widget.routeNotifier?.value = null;
   }
 
+  void _handleActivityNavigation() {
+    final request = widget.activityNavigationNotifier?.value;
+    if (request == null || !mounted) return;
+
+    final nextSection = switch (request.route) {
+      NotificationRoute.historyClipboard => _HistorySection.clipboard,
+      NotificationRoute.historySend => _HistorySection.send,
+      NotificationRoute.historyTransferActivity =>
+        _HistorySection.transferActivity,
+      NotificationRoute.historyIncomingOffers => _HistorySection.incomingOffers,
+      NotificationRoute.historyNotifications => _HistorySection.notifications,
+      _ => null,
+    };
+    if (nextSection == null) return;
+
+    setState(() {
+      _activeSection = nextSection;
+      _targetDeviceId = request.deviceId;
+      _targetDisplayName = request.displayName;
+      _targetRequestVersion++;
+    });
+    widget.activityNavigationNotifier?.value = null;
+  }
+
+  void _clearTargetDevice() {
+    setState(() {
+      _targetDeviceId = null;
+      _targetDisplayName = null;
+      _targetRequestVersion++;
+    });
+  }
+
+  String get _activityTitle {
+    final target = _targetDisplayName;
+    return target == null || target.isEmpty ? 'Activity' : 'Activity — $target';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -155,9 +202,7 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
   }
 
   Widget _buildRiftActivityUi(ThemeData theme) {
-    final title = widget.displayName != null && widget.displayName!.isNotEmpty
-        ? 'Activity — ${widget.displayName}'
-        : 'Activity';
+    final title = _activityTitle;
 
     final isDesktop =
         MediaQuery.of(context).size.width >= RiftDesign.compactBreakpoint;
@@ -194,6 +239,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
               ),
             ),
             _buildRiftSectionTabBar(theme),
+            if (_targetDeviceId != null && _targetDeviceId!.isNotEmpty)
+              _buildTargetScopeChip(theme),
             Expanded(
               child: KeyedSubtree(
                 key: ValueKey(
@@ -206,6 +253,29 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildTargetScopeChip(ThemeData theme) {
+    final label = _targetDisplayName == null || _targetDisplayName!.isEmpty
+        ? _shortDeviceId(_targetDeviceId!)
+        : _targetDisplayName!;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InputChip(
+          key: const ValueKey('activity-target-chip'),
+          avatar: const Icon(Icons.devices, size: 16),
+          label: Text(label),
+          onDeleted: _clearTargetDevice,
+          deleteButtonTooltipMessage: 'Clear device scope',
+        ),
+      ),
+    );
+  }
+
+  String _shortDeviceId(String deviceId) {
+    return deviceId.length > 16 ? '${deviceId.substring(0, 16)}…' : deviceId;
   }
 
   Widget _buildRiftSectionTabBar(ThemeData theme) {
@@ -337,6 +407,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
     switch (_activeSection) {
       case _HistorySection.clipboard:
         return ClipboardHistoryView(
+          preferredSourceDeviceId: _targetDeviceId,
+          targetRequestVersion: _targetRequestVersion,
           iosClipboardActionsOverride: widget.iosClipboardActionsOverride,
           readClipboardContentOverride: widget.readClipboardContentOverride,
           readClipboardTextOverride: widget.readClipboardTextOverride,
@@ -345,6 +417,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         );
       case _HistorySection.send:
         return FileSendView(
+          preferredTargetDeviceId: _targetDeviceId,
+          targetRequestVersion: _targetRequestVersion,
           pickSendFilesOverride: widget.pickSendFilesOverride,
           onViewActivityRequested: () {
             setState(() => _activeSection = _HistorySection.transferActivity);
@@ -357,6 +431,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         );
       case _HistorySection.transferActivity:
         return TransferActivityView(
+          preferredDeviceId: _targetDeviceId,
+          targetRequestVersion: _targetRequestVersion,
           revealCompletedTransfersInFolderOverride:
               widget.revealCompletedTransfersInFolderOverride,
           exportCompletedTransfersOverride:

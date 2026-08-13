@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import '../../src/ipc/json_rpc_client.dart';
 
 class TransferActivityView extends StatefulWidget {
+  final String? preferredDeviceId;
+  final int? targetRequestVersion;
   final bool? revealCompletedTransfersInFolderOverride;
   final bool? exportCompletedTransfersOverride;
   final Future<void> Function(String path)? openFileOverride;
@@ -16,6 +18,8 @@ class TransferActivityView extends StatefulWidget {
 
   const TransferActivityView({
     super.key,
+    this.preferredDeviceId,
+    this.targetRequestVersion,
     this.revealCompletedTransfersInFolderOverride,
     this.exportCompletedTransfersOverride,
     this.openFileOverride,
@@ -44,6 +48,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
   @override
   void initState() {
     super.initState();
+    _applyPreferredDevice();
     final client = context.read<JsonRpcRiftClient>();
     _subscriptions
       ..add(client.onFileProgress.listen(_handleTransferEvent))
@@ -74,6 +79,19 @@ class _TransferActivityViewState extends State<TransferActivityView> {
     } else {
       _loadActivity();
     }
+  }
+
+  @override
+  void didUpdateWidget(TransferActivityView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
+        oldWidget.preferredDeviceId != widget.preferredDeviceId) {
+      _applyPreferredDevice();
+    }
+  }
+
+  void _applyPreferredDevice() {
+    _activityDeviceFilter = widget.preferredDeviceId;
   }
 
   @override

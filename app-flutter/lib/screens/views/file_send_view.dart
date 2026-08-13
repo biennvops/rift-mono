@@ -30,11 +30,15 @@ class _PickSendFilesResult {
 }
 
 class FileSendView extends StatefulWidget {
+  final String? preferredTargetDeviceId;
+  final int? targetRequestVersion;
   final Future<List<Map<String, String>>> Function()? pickSendFilesOverride;
   final VoidCallback? onViewActivityRequested;
 
   const FileSendView({
     super.key,
+    this.preferredTargetDeviceId,
+    this.targetRequestVersion,
     this.pickSendFilesOverride,
     this.onViewActivityRequested,
   });
@@ -52,6 +56,7 @@ class _FileSendViewState extends State<FileSendView> {
   final Set<String> _legacySendingFilePeerIds = <String>{};
 
   bool _hasUserModifiedSendDevices = false;
+  String? _preferredTargetDeviceId;
 
   StreamSubscription<Map<String, dynamic>>? _trustChangedSub;
   StreamSubscription<Map<String, dynamic>>? _fileProgressSub;
@@ -65,12 +70,31 @@ class _FileSendViewState extends State<FileSendView> {
   @override
   void initState() {
     super.initState();
+    _applyPreferredTarget();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_sendQueue.ensureRestored());
       _bindStreams();
       _refreshTrustedPeers();
       _refreshTransfers();
     });
+  }
+
+  @override
+  void didUpdateWidget(FileSendView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
+        oldWidget.preferredTargetDeviceId != widget.preferredTargetDeviceId) {
+      _applyPreferredTarget();
+    }
+  }
+
+  void _applyPreferredTarget() {
+    _preferredTargetDeviceId = widget.preferredTargetDeviceId;
+    if (_preferredTargetDeviceId != null &&
+        _preferredTargetDeviceId!.isNotEmpty) {
+      _hasUserModifiedSendDevices = false;
+      _selectedSendDeviceIds.clear();
+    }
   }
 
   @override
@@ -416,6 +440,22 @@ class _FileSendViewState extends State<FileSendView> {
     });
   }
 
+  Set<String> _effectiveSelectedIds(List<Map<String, dynamic>> peers) {
+    if (_selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices) {
+      return _selectedSendDeviceIds.intersection(
+        peers.map((p) => p['deviceId']?.toString() ?? '').toSet(),
+      );
+    }
+    final preferred = _preferredTargetDeviceId;
+    if (preferred != null &&
+        peers.any((peer) => peer['deviceId']?.toString() == preferred)) {
+      return <String>{preferred};
+    }
+    return peers.isNotEmpty
+        ? <String>{peers.first['deviceId']?.toString() ?? ''}
+        : <String>{};
+  }
+
   Future<void> _sendStagedFilesToSelectedPeers() async {
     final peers = _fileCapablePeers;
     if (peers.isEmpty) {
@@ -428,11 +468,7 @@ class _FileSendViewState extends State<FileSendView> {
       );
       return;
     }
-    final effectiveSelectedIds =
-        _selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices
-            ? _selectedSendDeviceIds.intersection(
-                peers.map((p) => p['deviceId']?.toString() ?? '').toSet())
-            : <String>{peers.first['deviceId']?.toString() ?? ''};
+    final effectiveSelectedIds = _effectiveSelectedIds(peers);
 
     if (effectiveSelectedIds.isEmpty) return;
 
@@ -765,12 +801,7 @@ class _FileSendViewState extends State<FileSendView> {
         f.status == SendQueueStatus.queued ||
         f.status == SendQueueStatus.failed);
 
-    final effectiveSelectedIds =
-        _selectedSendDeviceIds.isNotEmpty || _hasUserModifiedSendDevices
-            ? _selectedSendDeviceIds
-            : peers.isNotEmpty
-                ? <String>{peers.first['deviceId']?.toString() ?? ''}
-                : <String>{};
+    final effectiveSelectedIds = _effectiveSelectedIds(peers);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),

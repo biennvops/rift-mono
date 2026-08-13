@@ -6,6 +6,7 @@ import '../../screens/clipboard_transfer_screen.dart';
 import '../../screens/operations_screen.dart';
 import '../../screens/settings_screen.dart';
 import '../platform/notification_route.dart';
+import 'activity_navigation.dart';
 import '../ui/theme.dart';
 
 class AppShell extends StatefulWidget {
@@ -23,6 +24,8 @@ class AppShell extends StatefulWidget {
 }
 
 class AppShellState extends State<AppShell> {
+  final ValueNotifier<ActivityNavigationRequest?> _activityNavigation =
+      ValueNotifier<ActivityNavigationRequest?>(null);
   int _currentIndex = 0;
   bool _isSidebarCollapsed = false;
   double _sidebarWidth = RiftDesign.sidebarWidth;
@@ -40,6 +43,7 @@ class AppShellState extends State<AppShell> {
     const TrustedDevicesScreen(),
     ClipboardTransferScreen(
       routeNotifier: widget.historyRouteNotifier,
+      activityNavigationNotifier: _activityNavigation,
       sharedClipboardTextNotifier: widget.sharedClipboardTextNotifier,
       onBoundarySwipe: _handleActivityBoundarySwipe,
     ),
@@ -52,11 +56,27 @@ class AppShellState extends State<AppShell> {
     setState(() {
       _currentIndex = 1;
     });
+    _activityNavigation.value = ActivityNavigationRequest(route: route);
     widget.historyRouteNotifier?.value = route;
   }
 
   void showNotificationsRoute() {
     showHistoryRoute(NotificationRoute.historyNotifications);
+  }
+
+  void showActivityForDevice({
+    required String route,
+    required String deviceId,
+    required String displayName,
+  }) {
+    setState(() {
+      _currentIndex = 1;
+    });
+    _activityNavigation.value = ActivityNavigationRequest(
+      route: route,
+      deviceId: deviceId,
+      displayName: displayName,
+    );
   }
 
   void _handleActivityBoundarySwipe(int direction) {
@@ -387,6 +407,12 @@ class AppShellState extends State<AppShell> {
     }
 
     return content;
+  }
+
+  @override
+  void dispose() {
+    _activityNavigation.dispose();
+    super.dispose();
   }
 }
 

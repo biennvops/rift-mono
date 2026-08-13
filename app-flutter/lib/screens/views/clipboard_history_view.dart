@@ -13,6 +13,9 @@ import '../../src/platform/ios_clipboard.dart';
 import '../../widgets/rift_snackbar.dart';
 
 class ClipboardHistoryView extends StatefulWidget {
+  final String? preferredSourceDeviceId;
+  final int? targetRequestVersion;
+  final VoidCallback? onTargetScopeCleared;
   final bool? iosClipboardActionsOverride;
   final Future<IOSClipboardContent?> Function()? readClipboardContentOverride;
   final Future<String?> Function()? readClipboardTextOverride;
@@ -22,6 +25,9 @@ class ClipboardHistoryView extends StatefulWidget {
 
   const ClipboardHistoryView({
     super.key,
+    this.preferredSourceDeviceId,
+    this.targetRequestVersion,
+    this.onTargetScopeCleared,
     this.iosClipboardActionsOverride,
     this.readClipboardContentOverride,
     this.readClipboardTextOverride,
@@ -39,6 +45,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
       (Platform.isIOS || Platform.isAndroid);
   String? _localDeviceId;
   final Set<String> _filteredSourceDeviceIds = {};
+  String? _preferredSourceDeviceId;
   final Set<String> _filteredTypes = {};
   final List<Map<String, dynamic>> _daemonOffers = <Map<String, dynamic>>[];
   final Map<String, String> _trustedPeerNames = <String, String>{};
@@ -53,6 +60,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   @override
   void initState() {
     super.initState();
+    _applyPreferredSourceDevice();
     final client = context.read<JsonRpcRiftClient>();
     _offerSubscription = client.onClipboardOffer.listen((offer) {
       final offerId = offer['offerId']?.toString();
@@ -90,6 +98,28 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadClipboardHistory();
     });
+  }
+
+  @override
+  void didUpdateWidget(ClipboardHistoryView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.targetRequestVersion != widget.targetRequestVersion ||
+        oldWidget.preferredSourceDeviceId != widget.preferredSourceDeviceId) {
+      _applyPreferredSourceDevice();
+    }
+  }
+
+  void _applyPreferredSourceDevice() {
+    final deviceId = widget.preferredSourceDeviceId;
+    if (deviceId == null || deviceId.isEmpty) {
+      _preferredSourceDeviceId = null;
+      _filteredSourceDeviceIds.clear();
+      return;
+    }
+    _preferredSourceDeviceId = deviceId;
+    _filteredSourceDeviceIds
+      ..clear()
+      ..add(deviceId);
   }
 
   @override
@@ -207,6 +237,12 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
     return null;
   }
 
+  String _sourceDisplayLabel(String? deviceId) {
+    if (deviceId == null || deviceId.isEmpty) return 'Unknown device';
+    final name = _trustedPeerNames[deviceId];
+    return name == null || name.isEmpty ? deviceId : name;
+  }
+
   IconData _sourcePlatformIcon(String? sourceDeviceId) {
     final platform =
         _trustedPeerPlatforms[_resolvePeerId(sourceDeviceId)]?.toLowerCase();
@@ -270,8 +306,8 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
       List<Map<String, dynamic>> offers) {
     final counts = <String?, int>{};
     for (final o in offers) {
-      final src = _sourceLabel(o['sourceDeviceId']?.toString());
-      counts[src] = (counts[src] ?? 0) + 1;
+      final sourceDeviceId = o['sourceDeviceId']?.toString();
+      counts[sourceDeviceId] = (counts[sourceDeviceId] ?? 0) + 1;
     }
     return counts.entries.toList(growable: false);
   }
@@ -290,9 +326,13 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
 
   List<Map<String, dynamic>> _filterOffers(List<Map<String, dynamic>> offers) {
     return offers.where((o) {
-      final src = _sourceLabel(o['sourceDeviceId']?.toString());
+      final sourceDeviceId = o['sourceDeviceId']?.toString();
+      if (_preferredSourceDeviceId != null &&
+          sourceDeviceId != _preferredSourceDeviceId) {
+        return false;
+      }
       if (_filteredSourceDeviceIds.isNotEmpty &&
-          !_filteredSourceDeviceIds.contains(src)) {
+          !_filteredSourceDeviceIds.contains(sourceDeviceId)) {
         return false;
       }
       final mediaType =
@@ -596,7 +636,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '${deviceId ?? 'Unknown'} ($count)',
+                    '${_sourceDisplayLabel(deviceId)} ($count)',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurface,
                     ),
@@ -1148,6 +1188,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
   void _toggleDeviceFilter(String? deviceId) {
     if (deviceId == null) return;
     setState(() {
+      _preferredSourceDeviceId = null;
       if (_filteredSourceDeviceIds.contains(deviceId)) {
         _filteredSourceDeviceIds.remove(deviceId);
       } else {
