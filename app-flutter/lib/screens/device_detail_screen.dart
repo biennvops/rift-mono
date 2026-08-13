@@ -15,10 +15,16 @@ class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
   final bool isSelf;
+  final VoidCallback? onOpenClipboardActivity;
+  final VoidCallback? onSendFile;
+  final VoidCallback? onViewTransferActivity;
   final VoidCallback? onClose;
 
   const DeviceDetailScreen({
     this.onClose,
+    this.onOpenClipboardActivity,
+    this.onSendFile,
+    this.onViewTransferActivity,
     super.key,
     required this.peer,
     required this.isOnline,
@@ -635,6 +641,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             onClose: widget.onClose!,
             onRevokeTrust: _forgetPeer,
             onCopy: _copyToClipboard,
+            onOpenClipboardActivity: widget.onOpenClipboardActivity,
+            onSendFile: widget.onSendFile,
+            onViewTransferActivity: widget.onViewTransferActivity,
           );
         }
 

@@ -326,8 +326,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 final trustState =
                     foundPeer['trustState']?.toString() ?? 'trusted';
                 if (trustState == 'trusted') {
-                  _selectedPeerWidget = DeviceDetailScreen(
-                    key: ValueKey(_selectedDeviceId!),
+                  _selectedPeerWidget = _buildTrustedPeerDetail(
                     peer: foundPeer,
                     isOnline: foundPeer['presence'] == 'online',
                     onClose: () {
@@ -866,8 +865,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                             size: 14, color: theme.colorScheme.tertiary),
                         const SizedBox(width: 4),
                         Text('PENDING',
-                            style: theme.textTheme.labelSmall?.copyWith(
-                                color: theme.colorScheme.tertiary)),
+                            style: theme.textTheme.labelSmall
+                                ?.copyWith(color: theme.colorScheme.tertiary)),
                       ],
                     ),
                   ),
@@ -938,8 +937,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color:
-                  theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
+              color: theme.colorScheme.primaryContainer.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(_platformIcon(peerPlatform),
@@ -958,8 +956,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
                 Text('Local Network',
-                    style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant)),
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
               ],
             ),
           ),
@@ -1061,6 +1059,55 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  void _showActivityForPeer({
+    required String route,
+    required String deviceId,
+    required String displayName,
+  }) {
+    context.findAncestorStateOfType<AppShellState>()?.showActivityForDevice(
+          route: route,
+          deviceId: deviceId,
+          displayName: displayName,
+        );
+  }
+
+  DeviceDetailScreen _buildTrustedPeerDetail({
+    required Map<String, dynamic> peer,
+    required bool isOnline,
+    required VoidCallback? onClose,
+  }) {
+    final deviceId = peer['deviceId']?.toString() ?? '';
+    final displayName = peer['displayName']?.toString() ?? deviceId;
+    final canOpenActivity = onClose != null && deviceId.isNotEmpty;
+    return DeviceDetailScreen(
+      key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
+      peer: peer,
+      isOnline: isOnline,
+      onClose: onClose,
+      onOpenClipboardActivity: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historyClipboard,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+      onSendFile: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historySend,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+      onViewTransferActivity: canOpenActivity
+          ? () => _showActivityForPeer(
+                route: NotificationRoute.historyTransferActivity,
+                deviceId: deviceId,
+                displayName: displayName,
+              )
+          : null,
+    );
+  }
+
   Future<void> _handlePeerAction({
     required Map<String, dynamic> peer,
     required bool isTrusted,
@@ -1123,8 +1170,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           if (result == 'history') {
             final appShellState =
                 context.findAncestorStateOfType<AppShellState>();
-            appShellState
-                ?.showHistoryRoute(NotificationRoute.historyClipboard);
+            appShellState?.showHistoryRoute(NotificationRoute.historyClipboard);
           } else if (result == 'devices') {
             final appShellState =
                 context.findAncestorStateOfType<AppShellState>();
@@ -1159,6 +1205,27 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   });
                   _loadData();
                 }
+              : null,
+          onOpenClipboardActivity: isDesktop && deviceId != null
+              ? () => _showActivityForPeer(
+                    route: NotificationRoute.historyClipboard,
+                    deviceId: deviceId,
+                    displayName: titleText,
+                  )
+              : null,
+          onSendFile: isDesktop && deviceId != null
+              ? () => _showActivityForPeer(
+                    route: NotificationRoute.historySend,
+                    deviceId: deviceId,
+                    displayName: titleText,
+                  )
+              : null,
+          onViewTransferActivity: isDesktop && deviceId != null
+              ? () => _showActivityForPeer(
+                    route: NotificationRoute.historyTransferActivity,
+                    deviceId: deviceId,
+                    displayName: titleText,
+                  )
               : null,
         );
 

@@ -27,6 +27,9 @@ class DeviceFocusView extends StatefulWidget {
     required this.onClose,
     required this.onRevokeTrust,
     required this.onCopy,
+    this.onOpenClipboardActivity,
+    this.onSendFile,
+    this.onViewTransferActivity,
     this.deviceStatus,
   });
 
@@ -41,6 +44,9 @@ class DeviceFocusView extends StatefulWidget {
   final List<String> capabilities;
   final Map<String, dynamic>? deviceStatus;
   final bool isOnline;
+  final VoidCallback? onOpenClipboardActivity;
+  final VoidCallback? onSendFile;
+  final VoidCallback? onViewTransferActivity;
   final VoidCallback onClose;
   final VoidCallback onRevokeTrust;
   final DeviceFocusCopyCallback onCopy;
@@ -371,6 +377,20 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           value: _powerSummary(widget.deviceStatus!),
           label: 'Power',
         ),
+      if (_hasCapability('clipboard.offer_fetch'))
+        _DeviceFocusNodeData(
+          kind: DeviceFocusNodeKind.clipboard,
+          icon: _nodeIcon(DeviceFocusNodeKind.clipboard),
+          value: 'Available',
+          label: 'Clipboard',
+        ),
+      if (_hasCapability('file.transfer'))
+        _DeviceFocusNodeData(
+          kind: DeviceFocusNodeKind.files,
+          icon: _nodeIcon(DeviceFocusNodeKind.files),
+          value: 'Available',
+          label: 'Files',
+        ),
       _DeviceFocusNodeData(
         kind: DeviceFocusNodeKind.security,
         icon: _nodeIcon(DeviceFocusNodeKind.security),
@@ -398,8 +418,13 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     ];
   }
 
+  bool _hasCapability(String capability) =>
+      widget.capabilities.contains(capability);
+
   String _panelTitle(DeviceFocusNodeKind kind) => switch (kind) {
         DeviceFocusNodeKind.power => 'Power status',
+        DeviceFocusNodeKind.clipboard => 'Clipboard',
+        DeviceFocusNodeKind.files => 'Files',
         DeviceFocusNodeKind.security => 'Security',
         DeviceFocusNodeKind.identity => 'Identity',
         DeviceFocusNodeKind.capabilities => 'Capabilities',
@@ -408,6 +433,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
 
   IconData _nodeIcon(DeviceFocusNodeKind kind) => switch (kind) {
         DeviceFocusNodeKind.power => Icons.battery_charging_full,
+        DeviceFocusNodeKind.clipboard => Icons.content_paste_outlined,
+        DeviceFocusNodeKind.files => Icons.folder_outlined,
         DeviceFocusNodeKind.security => Icons.verified_user_outlined,
         DeviceFocusNodeKind.identity => Icons.badge_outlined,
         DeviceFocusNodeKind.capabilities => Icons.extension_outlined,
@@ -417,6 +444,18 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   List<DeviceFocusPanelRow> _panelRows(DeviceFocusNodeKind kind) {
     return switch (kind) {
       DeviceFocusNodeKind.power => _powerRows(widget.deviceStatus!),
+      DeviceFocusNodeKind.clipboard => const [
+          DeviceFocusPanelRow(
+            label: 'Capability',
+            value: 'Clipboard offers can be fetched securely.',
+          ),
+        ],
+      DeviceFocusNodeKind.files => const [
+          DeviceFocusPanelRow(
+            label: 'Capability',
+            value: 'Secure file transfer is available.',
+          ),
+        ],
       DeviceFocusNodeKind.security => [
           DeviceFocusPanelRow(
             label: 'Trust established',
@@ -548,8 +587,36 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   Widget? _panelFooter(DeviceFocusNodeKind kind) {
-    if (kind != DeviceFocusNodeKind.security) return null;
     final colors = Theme.of(context).colorScheme;
+    if (kind == DeviceFocusNodeKind.clipboard) {
+      return FilledButton.icon(
+        key: const ValueKey('device-focus-open-clipboard'),
+        onPressed: widget.onOpenClipboardActivity,
+        icon: const Icon(Icons.open_in_new, size: 18),
+        label: const Text('Open Clipboard Activity'),
+      );
+    }
+    if (kind == DeviceFocusNodeKind.files) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FilledButton.icon(
+            key: const ValueKey('device-focus-send-file'),
+            onPressed: widget.onSendFile,
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: const Text('Send File'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            key: const ValueKey('device-focus-view-transfers'),
+            onPressed: widget.onViewTransferActivity,
+            icon: const Icon(Icons.swap_horiz, size: 18),
+            label: const Text('View Transfers'),
+          ),
+        ],
+      );
+    }
+    if (kind != DeviceFocusNodeKind.security) return null;
     return OutlinedButton.icon(
       key: const ValueKey('device-focus-revoke-trust'),
       onPressed: widget.onRevokeTrust,

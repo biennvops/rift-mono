@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 enum DeviceFocusNodeKind {
   power,
+  clipboard,
+  files,
   security,
   identity,
   capabilities,
@@ -97,6 +99,37 @@ abstract final class DeviceFocusLayout {
   static Map<DeviceFocusNodeKind, Offset> _slotsFor(
     List<DeviceFocusNodeKind> kinds,
   ) {
+    if (kinds.length == 7) {
+      final normalizedSlots = const [
+        Offset(0, -1),
+        Offset(-0.55, -0.72),
+        Offset(0.55, -0.72),
+        Offset(-1, 0),
+        Offset(1, 0),
+        Offset(-0.65, 0.78),
+        Offset(0.65, 0.78),
+      ];
+      return {
+        for (var index = 0; index < kinds.length; index++)
+          kinds[index]: normalizedSlots[index],
+      };
+    }
+
+    if (kinds.length == 6) {
+      final normalizedSlots = const [
+        Offset(0, -1),
+        Offset(-0.78, -0.58),
+        Offset(0.78, -0.58),
+        Offset(-1, 0.22),
+        Offset(1, 0.22),
+        Offset(0, 0.86),
+      ];
+      return {
+        for (var index = 0; index < kinds.length; index++)
+          kinds[index]: normalizedSlots[index],
+      };
+    }
+
     if (kinds.length == 5) {
       return const {
         DeviceFocusNodeKind.power: Offset(0, -1),
