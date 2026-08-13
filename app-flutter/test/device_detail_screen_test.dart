@@ -698,6 +698,57 @@ void main() {
         findsOneWidget);
   });
 
+  testWidgets('desktop focus respects reduced motion accessibility settings',
+      (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-reduced-motion',
+          'displayName': 'Quiet Peer',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['clipboard.offer_fetch', 'presence.basic'],
+        },
+      ];
+    var clipboardCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: DeviceDetailScreen(
+              peer: client.trustedPeers.first,
+              isOnline: true,
+              onClose: () {},
+              onOpenClipboardActivity: () => clipboardCount++,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+        findsOneWidget);
+
+    await client.emitPeerLost({'deviceId': 'rift-reduced-motion'});
+    await tester.pumpAndSettle();
+    expect(find.text('Offline'), findsWidgets);
+
+    await tester.tap(
+      find.byKey(const ValueKey('device-focus-node-clipboard')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-focus-open-clipboard')));
+    expect(clipboardCount, 1);
+    expect(tester.takeException(), isNull);
+  });
   testWidgets('desktop focus remains overflow free at target pane sizes',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));

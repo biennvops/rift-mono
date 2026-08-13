@@ -419,9 +419,7 @@ class _TransferActivityViewState extends State<TransferActivityView> {
       ),
       onPressed: () {
         setState(() => _activityDeviceFilter = value);
-        if (value == null) {
-          widget.onTargetScopeCleared?.call();
-        }
+        widget.onTargetScopeCleared?.call();
       },
       child: Row(
         mainAxisSize: MainAxisSize.min,

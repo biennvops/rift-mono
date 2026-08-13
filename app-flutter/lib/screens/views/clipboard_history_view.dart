@@ -1194,9 +1194,7 @@ class _ClipboardHistoryViewState extends State<ClipboardHistoryView> {
         _filteredSourceDeviceIds.add(deviceId);
       }
     });
-    if (_filteredSourceDeviceIds.isEmpty) {
-      widget.onTargetScopeCleared?.call();
-    }
+    widget.onTargetScopeCleared?.call();
   }
 
   void _toggleTypeFilter(String typeLabel) {
