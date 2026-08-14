@@ -90,6 +90,15 @@ void main() {
       find.byKey(const ValueKey('counter-button-0')),
       warnIfMissed: false,
     );
+    await tester.pump();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('section-0')),
+        matching: find.text('Count 0'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('reduced motion switches without spatial transition',
