@@ -546,6 +546,50 @@ void main() {
     );
   });
 
+  testWidgets('desktop keeps mode selector stable as hub actions change',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    final client = FakeJsonRpcRiftClient();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1200, 800)),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final selector = find.byKey(const ValueKey('device-hub-mode-selector'));
+    final title = find.text('Devices Hub');
+    final trustedOffset = tester.getTopLeft(selector);
+    expect(
+      trustedOffset.dx,
+      greaterThan(tester.getTopRight(title).dx),
+    );
+    expect(find.byKey(const ValueKey('desktop-manual-connect')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const ValueKey('desktop-manual-connect')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('desktop-discovery-switch')), findsOneWidget);
+    expect(tester.getTopLeft(selector), trustedOffset);
+    expect(
+      find.byKey(const ValueKey('device-hub-primary-controls')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('device-hub-actions')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('explicitly disabled discovery stays off until restarted',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));

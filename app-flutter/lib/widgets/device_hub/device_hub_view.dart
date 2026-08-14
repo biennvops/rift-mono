@@ -47,20 +47,22 @@ class DeviceHubView extends StatelessWidget {
                 spacing: 16,
                 runSpacing: 12,
                 children: [
-                  Text(
-                    'Devices Hub',
-                    style: theme.textTheme.headlineMedium?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: -0.5,
-                    ),
-                  ),
                   Wrap(
+                    key: const ValueKey('device-hub-primary-controls'),
                     crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 16,
+                    runSpacing: 12,
                     children: [
+                      Text(
+                        'Devices Hub',
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
                       SegmentedButton<DeviceHubMode>(
+                        key: const ValueKey('device-hub-mode-selector'),
                         segments: const [
                           ButtonSegment(
                             value: DeviceHubMode.trusted,
@@ -89,9 +91,16 @@ class DeviceHubView extends StatelessWidget {
                               }
                             : null,
                       ),
-                      ...actions,
                     ],
                   ),
+                  if (actions.isNotEmpty)
+                    Wrap(
+                      key: const ValueKey('device-hub-actions'),
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: actions,
+                    ),
                 ],
               ),
               if (banner != null) ...[
