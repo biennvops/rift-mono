@@ -1978,6 +1978,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                       ? null
                       : () => _showLocalDeviceDetails(_localDeviceInfo!),
                   scanning: _isDiscovering,
+                  animatePeerChanges: true,
                   emptyMessage: _isDiscovering
                       ? 'Looking for nearby devices…'
                       : 'Discovery paused',

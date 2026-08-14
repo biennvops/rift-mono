@@ -175,4 +175,95 @@ void main() {
       isNot(firstA),
     );
   });
+
+  testWidgets('peer changes fade and scale in and out', (tester) async {
+    const peerA = OrbitPeerPresentation(
+      deviceId: 'peer-a',
+      displayName: 'Peer A',
+      platform: 'linux',
+      isOnline: true,
+    );
+    const peerB = OrbitPeerPresentation(
+      deviceId: 'peer-b',
+      displayName: 'Peer B',
+      platform: 'android',
+      isOnline: true,
+    );
+    var peers = <OrbitPeerPresentation>[peerA];
+    late StateSetter updatePeers;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: false),
+          child: SizedBox(
+            width: 900,
+            height: 620,
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                updatePeers = setState;
+                return DeviceOrbitScene(
+                  localDisplayName: 'Local',
+                  localPlatform: 'macos',
+                  peers: peers,
+                  phase: const AlwaysStoppedAnimation<double>(0),
+                  scanProgress: const AlwaysStoppedAnimation<double>(0),
+                  peerKeyPrefix: 'test-peer',
+                  peerSemanticRole: 'nearby device',
+                  onPeerSelected: (_) {},
+                  onPeerInteractionChanged: (_, __) {},
+                  onSceneFocusChanged: (_) {},
+                  animatePeerChanges: true,
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    updatePeers(() => peers = <OrbitPeerPresentation>[peerA, peerB]);
+    await tester.pump();
+    final enteringFade = find.byKey(
+      const ValueKey('test-peer-presence-peer-b'),
+    );
+    expect(enteringFade, findsOneWidget);
+    expect(tester.widget<Opacity>(enteringFade).opacity, 0);
+
+    await tester.pump(const Duration(milliseconds: 140));
+    final enteringOpacity = tester.widget<Opacity>(enteringFade).opacity;
+    final enteringScale = tester
+        .widget<Transform>(
+          find.byKey(
+            const ValueKey('test-peer-presence-scale-peer-b'),
+          ),
+        )
+        .transform
+        .getMaxScaleOnAxis();
+    expect(enteringOpacity, inOpenClosedRange(0, 1));
+    expect(enteringScale, inOpenClosedRange(0.86, 1));
+    await tester.pumpAndSettle();
+
+    updatePeers(() => peers = <OrbitPeerPresentation>[peerB]);
+    await tester.pump();
+    final exitingFade = find.byKey(
+      const ValueKey('test-peer-presence-peer-a'),
+    );
+    expect(
+      find.byKey(const ValueKey('test-peer-peer-a')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(milliseconds: 140));
+    expect(
+      tester.widget<Opacity>(exitingFade).opacity,
+      inOpenClosedRange(0, 1),
+    );
+
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('test-peer-peer-a')),
+      findsNothing,
+    );
+  });
 }

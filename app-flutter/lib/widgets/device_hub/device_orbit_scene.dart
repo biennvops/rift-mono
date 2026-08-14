@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../src/ui/motion.dart';
 import 'device_orbit_background.dart';
 import 'device_orbit_layout.dart';
 import 'device_orbit_peer.dart';
 import 'orbit_peer_presentation.dart';
 
-class DeviceOrbitScene extends StatelessWidget {
+class DeviceOrbitScene extends StatefulWidget {
   const DeviceOrbitScene({
     super.key,
     required this.localDisplayName,
@@ -20,6 +21,7 @@ class DeviceOrbitScene extends StatelessWidget {
     required this.onSceneFocusChanged,
     this.onLocalDeviceTap,
     this.scanning = false,
+    this.animatePeerChanges = false,
     this.emptyMessage,
     this.emptyAction,
     this.recentlyPairedDeviceId,
@@ -39,17 +41,63 @@ class DeviceOrbitScene extends StatelessWidget {
   final ValueChanged<bool> onSceneFocusChanged;
   final VoidCallback? onLocalDeviceTap;
   final bool scanning;
+  final bool animatePeerChanges;
   final String? emptyMessage;
   final Widget? emptyAction;
   final String? recentlyPairedDeviceId;
   final ValueChanged<String>? onRecentlyPairedAnimationCompleted;
 
   @override
-  Widget build(BuildContext context) {
-    final sortedPeers = peers.toList(growable: false)
+  State<DeviceOrbitScene> createState() => _DeviceOrbitSceneState();
+}
+
+class _DeviceOrbitSceneState extends State<DeviceOrbitScene> {
+  final Map<String, _OutgoingOrbitPeer> _outgoingPeers =
+      <String, _OutgoingOrbitPeer>{};
+
+  @override
+  void didUpdateWidget(DeviceOrbitScene oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.animatePeerChanges) {
+      _outgoingPeers.clear();
+      return;
+    }
+
+    final currentIds = widget.peers.map((peer) => peer.deviceId).toSet();
+    final previousPeers = _sortedPeers(oldWidget.peers);
+    for (var index = 0; index < previousPeers.length; index++) {
+      final peer = previousPeers[index];
+      if (!currentIds.contains(peer.deviceId)) {
+        _outgoingPeers[peer.deviceId] = _OutgoingOrbitPeer(
+          peer: peer,
+          index: index,
+          peerCount: previousPeers.length,
+        );
+      }
+    }
+    for (final peer in widget.peers) {
+      _outgoingPeers.remove(peer.deviceId);
+    }
+  }
+
+  List<OrbitPeerPresentation> _sortedPeers(
+    Iterable<OrbitPeerPresentation> peers,
+  ) {
+    return peers.toList(growable: false)
       ..sort((left, right) => left.deviceId.compareTo(right.deviceId));
+  }
+
+  void _removeOutgoingPeer(String deviceId) {
+    if (!mounted || !_outgoingPeers.containsKey(deviceId)) return;
+    setState(() => _outgoingPeers.remove(deviceId));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sortedPeers = _sortedPeers(widget.peers);
+    final presenceDuration = RiftMotion.durationOf(context, RiftMotion.normal);
     return Focus(
-      onFocusChange: onSceneFocusChanged,
+      onFocusChange: widget.onSceneFocusChanged,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final size = Size(constraints.maxWidth, constraints.maxHeight);
@@ -60,40 +108,75 @@ class DeviceOrbitScene extends StatelessWidget {
               children: [
                 DeviceOrbitBackground(
                   geometry: geometry,
-                  scanning: scanning,
-                  scanProgress: scanProgress,
+                  scanning: widget.scanning,
+                  scanProgress: widget.scanProgress,
                 ),
                 Positioned(
                   left: geometry.center.dx - geometry.localCoreSize / 2,
                   top: geometry.center.dy - geometry.localCoreSize / 2,
                   child: _LocalDeviceCore(
                     size: geometry.localCoreSize,
-                    displayName: localDisplayName,
-                    platform: localPlatform,
-                    onTap: onLocalDeviceTap,
+                    displayName: widget.localDisplayName,
+                    platform: widget.localPlatform,
+                    onTap: widget.onLocalDeviceTap,
                   ),
                 ),
+                for (final outgoing in _outgoingPeers.values)
+                  _OrbitPositionedPeer(
+                    key: ValueKey(
+                      '${widget.peerKeyPrefix}-slot-${outgoing.peer.deviceId}',
+                    ),
+                    phase: widget.phase,
+                    geometry: geometry,
+                    index: outgoing.index,
+                    peerCount: outgoing.peerCount,
+                    peer: outgoing.peer,
+                    peerKeyPrefix: widget.peerKeyPrefix,
+                    peerSemanticRole: widget.peerSemanticRole,
+                    onTap: () => widget.onPeerSelected(outgoing.peer),
+                    onInteractionChanged: (interacting) =>
+                        widget.onPeerInteractionChanged(
+                      outgoing.peer.deviceId,
+                      interacting,
+                    ),
+                    isNewlyPaired: false,
+                    onPairingAnimationCompleted: null,
+                    present: false,
+                    animatePresence: true,
+                    presenceDuration: presenceDuration,
+                    onPresenceDismissed: () =>
+                        _removeOutgoingPeer(outgoing.peer.deviceId),
+                  ),
                 for (var index = 0; index < sortedPeers.length; index++)
                   _OrbitPositionedPeer(
-                    phase: phase,
+                    key: ValueKey(
+                      '${widget.peerKeyPrefix}-slot-${sortedPeers[index].deviceId}',
+                    ),
+                    phase: widget.phase,
                     geometry: geometry,
                     index: index,
                     peerCount: sortedPeers.length,
                     peer: sortedPeers[index],
-                    peerKeyPrefix: peerKeyPrefix,
-                    peerSemanticRole: peerSemanticRole,
-                    onTap: () => onPeerSelected(sortedPeers[index]),
+                    peerKeyPrefix: widget.peerKeyPrefix,
+                    peerSemanticRole: widget.peerSemanticRole,
+                    onTap: () => widget.onPeerSelected(sortedPeers[index]),
                     onInteractionChanged: (interacting) =>
-                        onPeerInteractionChanged(
+                        widget.onPeerInteractionChanged(
                       sortedPeers[index].deviceId,
                       interacting,
                     ),
-                    isNewlyPaired:
-                        sortedPeers[index].deviceId == recentlyPairedDeviceId,
+                    isNewlyPaired: sortedPeers[index].deviceId ==
+                        widget.recentlyPairedDeviceId,
                     onPairingAnimationCompleted:
-                        onRecentlyPairedAnimationCompleted,
+                        widget.onRecentlyPairedAnimationCompleted,
+                    present: true,
+                    animatePresence: widget.animatePeerChanges,
+                    presenceDuration: presenceDuration,
+                    onPresenceDismissed: null,
                   ),
-                if (sortedPeers.isEmpty && emptyMessage != null)
+                if (sortedPeers.isEmpty &&
+                    _outgoingPeers.isEmpty &&
+                    widget.emptyMessage != null)
                   Positioned(
                     left: 24,
                     right: 24,
@@ -102,7 +185,7 @@ class DeviceOrbitScene extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          emptyMessage!,
+                          widget.emptyMessage!,
                           key: const ValueKey('device-orbit-empty-message'),
                           textAlign: TextAlign.center,
                           style:
@@ -112,9 +195,9 @@ class DeviceOrbitScene extends StatelessWidget {
                                         .onSurfaceVariant,
                                   ),
                         ),
-                        if (emptyAction != null) ...[
+                        if (widget.emptyAction != null) ...[
                           const SizedBox(height: 12),
-                          emptyAction!,
+                          widget.emptyAction!,
                         ],
                       ],
                     ),
@@ -128,8 +211,21 @@ class DeviceOrbitScene extends StatelessWidget {
   }
 }
 
+class _OutgoingOrbitPeer {
+  const _OutgoingOrbitPeer({
+    required this.peer,
+    required this.index,
+    required this.peerCount,
+  });
+
+  final OrbitPeerPresentation peer;
+  final int index;
+  final int peerCount;
+}
+
 class _OrbitPositionedPeer extends StatelessWidget {
   const _OrbitPositionedPeer({
+    super.key,
     required this.phase,
     required this.geometry,
     required this.index,
@@ -141,6 +237,10 @@ class _OrbitPositionedPeer extends StatelessWidget {
     required this.onInteractionChanged,
     required this.isNewlyPaired,
     required this.onPairingAnimationCompleted,
+    required this.present,
+    required this.animatePresence,
+    required this.presenceDuration,
+    required this.onPresenceDismissed,
   });
 
   final Animation<double> phase;
@@ -154,21 +254,58 @@ class _OrbitPositionedPeer extends StatelessWidget {
   final ValueChanged<bool> onInteractionChanged;
   final bool isNewlyPaired;
   final ValueChanged<String>? onPairingAnimationCompleted;
+  final bool present;
+  final bool animatePresence;
+  final Duration presenceDuration;
+  final VoidCallback? onPresenceDismissed;
 
   @override
   Widget build(BuildContext context) {
+    final peerContent = ExcludeSemantics(
+      excluding: !present,
+      child: ExcludeFocus(
+        excluding: !present,
+        child: IgnorePointer(
+          ignoring: !present,
+          child: DeviceOrbitPeer(
+            key: ValueKey('$peerKeyPrefix-${peer.deviceId}'),
+            peer: peer,
+            size: geometry.peerSize,
+            semanticRole: peerSemanticRole,
+            onTap: onTap,
+            onInteractionChanged: onInteractionChanged,
+            isNewlyPaired: isNewlyPaired,
+            onPairingAnimationCompleted: onPairingAnimationCompleted,
+          ),
+        ),
+      ),
+    );
     return Positioned.fill(
       child: AnimatedBuilder(
         animation: phase,
-        child: DeviceOrbitPeer(
-          key: ValueKey('$peerKeyPrefix-${peer.deviceId}'),
-          peer: peer,
-          size: geometry.peerSize,
-          semanticRole: peerSemanticRole,
-          onTap: onTap,
-          onInteractionChanged: onInteractionChanged,
-          isNewlyPaired: isNewlyPaired,
-          onPairingAnimationCompleted: onPairingAnimationCompleted,
+        child: TweenAnimationBuilder<double>(
+          key: ValueKey('$peerKeyPrefix-presence-animation-${peer.deviceId}'),
+          tween: Tween<double>(
+            begin: present ? 0 : 1,
+            end: present ? 1 : 0,
+          ),
+          duration: animatePresence ? presenceDuration : Duration.zero,
+          curve: present ? RiftMotion.enter : RiftMotion.exit,
+          onEnd: present ? null : onPresenceDismissed,
+          child: peerContent,
+          builder: (context, progress, child) {
+            return Opacity(
+              key: ValueKey('$peerKeyPrefix-presence-${peer.deviceId}'),
+              opacity: progress,
+              child: Transform.scale(
+                key: ValueKey(
+                  '$peerKeyPrefix-presence-scale-${peer.deviceId}',
+                ),
+                scale: 0.86 + progress * 0.14,
+                child: child,
+              ),
+            );
+          },
         ),
         builder: (context, child) {
           final center = DeviceOrbitLayout.peerCenter(
