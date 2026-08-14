@@ -261,6 +261,8 @@ void main() {
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onMediaPlaybackRemoved)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
+    when(() => mockClient.onDeviceStatusUpdated)
+        .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onMediaPlaybackActionResult)
         .thenAnswer((_) => const Stream<Map<String, dynamic>>.empty());
     when(() => mockClient.onFileOffer)
@@ -702,10 +704,10 @@ void main() {
       find.textContaining('Linux Laptop', findRichText: true),
       findsOneWidget,
     );
-    expect(find.text('Approve'), findsOneWidget);
+    expect(find.text('Trust & Pair'), findsOneWidget);
 
     final approveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Approve'),
+      find.widgetWithText(FilledButton, 'Trust & Pair'),
     );
     expect(approveButton.onPressed, isNotNull);
   });
@@ -731,7 +733,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    await tester.tap(find.text('Approve'));
+    await tester.tap(find.text('Trust & Pair'));
     await tester.pump();
 
     expect(client.approvedDeviceId, 'rift-linux-peer');
