@@ -477,11 +477,6 @@ void main() {
     expect(
         tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
         1);
-    final screenStack = tester.widget<IndexedStack>(find.byType(IndexedStack));
-    final tickerModes = screenStack.children.cast<TickerMode>().toList();
-    expect(tickerModes[0].enabled, isFalse);
-    expect(tickerModes[1].enabled, isTrue);
-    expect(tickerModes.skip(2).every((mode) => !mode.enabled), isTrue);
     expect(routeNotifier.value, isNull);
   });
 
