@@ -52,6 +52,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   int stopDiscoveryCallCount = 0;
   String? manualPairAddress;
   int? manualPairPort;
+  String? startedPairingDeviceId;
   int listTrustedPeersCallCount = 0;
   bool isDiscovering = true;
   List<Map<String, dynamic>> trustedPeers = [
@@ -172,6 +173,17 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   Future<dynamic> rejectPairing(String deviceId) async {
     rejectCalled = true;
     return {'rejected': true};
+  }
+
+  @override
+  Future<dynamic> startPairing(String deviceId) async {
+    startedPairingDeviceId = deviceId;
+    return {
+      'deviceId': deviceId,
+      'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'peerFingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'expiresInMs': 120000,
+    };
   }
 
   @override
@@ -607,6 +619,12 @@ void main() {
 
     expect(client.manualPairAddress, '192.168.1.60');
     expect(client.manualPairPort, 12001);
+    expect(
+      find.byKey(
+        const ValueKey('nearby-pairing-focus-192.168.1.60:12001'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Pairing Request'), findsOneWidget);
   });
 
@@ -1044,7 +1062,7 @@ void main() {
     expect(find.byIcon(Icons.devices), findsOneWidget);
   });
 
-  testWidgets('pairing action opens standard PairingRequest dialog on desktop',
+  testWidgets('desktop pairing stays inside the Nearby scene',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
@@ -1084,7 +1102,15 @@ void main() {
     expect(pairButton, findsOneWidget);
     await tester.tap(pairButton);
     await tester.pump();
+    await tester.pump();
 
+    expect(client.startedPairingDeviceId, 'rift-discovered-peer');
+    expect(
+      find.byKey(
+        const ValueKey('nearby-pairing-focus-rift-discovered-peer'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Pairing Request'), findsOneWidget);
 
     client.trustedPeers = [
@@ -1105,6 +1131,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('Pairing Request'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(client.rejectCalled, isTrue);
+    expect(find.text('Pairing Request'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('nearby-orbit-overview')),
+      findsOneWidget,
+    );
   });
 
   testWidgets(

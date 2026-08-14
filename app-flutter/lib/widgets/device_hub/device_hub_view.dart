@@ -16,6 +16,7 @@ class DeviceHubView extends StatelessWidget {
     required this.nearbyScene,
     this.actions = const [],
     this.banner,
+    this.modeSelectionEnabled = true,
   });
 
   final DeviceHubMode mode;
@@ -24,6 +25,7 @@ class DeviceHubView extends StatelessWidget {
   final Widget nearbyScene;
   final List<Widget> actions;
   final Widget? banner;
+  final bool modeSelectionEnabled;
 
   @override
   Widget build(BuildContext context) {
@@ -79,11 +81,13 @@ class DeviceHubView extends StatelessWidget {
                         ],
                         selected: {mode},
                         showSelectedIcon: false,
-                        onSelectionChanged: (selection) {
-                          if (selection.isNotEmpty) {
-                            onModeChanged(selection.first);
-                          }
-                        },
+                        onSelectionChanged: modeSelectionEnabled
+                            ? (selection) {
+                                if (selection.isNotEmpty) {
+                                  onModeChanged(selection.first);
+                                }
+                              }
+                            : null,
                       ),
                       ...actions,
                     ],

@@ -38,6 +38,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   String? _localDeviceId;
   String? _selectedDeviceId;
   String? _selectedNearbyDeviceId;
+  Map<String, dynamic>? _desktopPairingTarget;
   DeviceHubMode _hubMode = DeviceHubMode.trusted;
   final Set<String> _interactingOrbitPeers = <String>{};
   bool _orbitHasKeyboardFocus = false;
@@ -449,8 +450,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     if (!mounted) return;
     final motionState = DeviceOrbitMotionState(
       reducedMotion: _reducedMotion,
-      hasFocusedPeer:
-          _selectedDeviceId != null || _selectedNearbyDeviceId != null,
+      hasFocusedPeer: _selectedDeviceId != null ||
+          _selectedNearbyDeviceId != null ||
+          _desktopPairingTarget != null,
       hasKeyboardFocus: _orbitHasKeyboardFocus,
       interactingPeerCount: _interactingOrbitPeers.length,
     );
@@ -480,7 +482,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   void _setHubMode(DeviceHubMode mode) {
-    if (_hubMode == mode) return;
+    if (_hubMode == mode || _desktopPairingTarget != null) return;
     setState(() {
       _hubMode = mode;
       _selectedDeviceId = null;
@@ -495,6 +497,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     setState(() {
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
+      _desktopPairingTarget = null;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
     });
@@ -519,6 +522,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _localDeviceInfo = null;
           _selectedDeviceId = null;
           _selectedNearbyDeviceId = null;
+          _desktopPairingTarget = null;
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
@@ -562,7 +566,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   peer['trustState']?.toString() == 'trusted')) {
             _selectedDeviceId = null;
           }
-          if (_selectedNearbyDeviceId != null &&
+          if (_desktopPairingTarget == null &&
+              _selectedNearbyDeviceId != null &&
               !discoveredPeers.any((peer) =>
                   peer is Map &&
                   peer['deviceId']?.toString() == _selectedNearbyDeviceId)) {
@@ -1345,6 +1350,50 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  void _beginDesktopPairing(
+    Map<String, dynamic> peer,
+    String displayName,
+  ) {
+    final target = Map<String, dynamic>.from(peer);
+    target['displayName'] = displayName;
+    setState(() {
+      _hubMode = DeviceHubMode.nearby;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = target['deviceId']?.toString();
+      _desktopPairingTarget = target;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _returnFromDesktopPairing() {
+    final targetDeviceId = _desktopPairingTarget?['deviceId']?.toString();
+    final remainsNearby = targetDeviceId != null &&
+        _nearbyOrbitPeers.any(
+          (peer) => peer['deviceId']?.toString() == targetDeviceId,
+        );
+    setState(() {
+      _desktopPairingTarget = null;
+      _selectedNearbyDeviceId = remainsNearby ? targetDeviceId : null;
+    });
+    _syncOrbitAnimation();
+  }
+
+  Future<void> _completeDesktopPairing(String deviceId) async {
+    if (_desktopPairingTarget == null) return;
+    setState(() {
+      _desktopPairingTarget = null;
+      _hubMode = DeviceHubMode.trusted;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+    await _loadData();
+  }
+
   Future<void> _handlePeerAction({
     required Map<String, dynamic> peer,
     required bool isTrusted,
@@ -1377,6 +1426,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
       if (!isTrusted) {
         if (deviceId == null && (address == null || port == null)) {
+          return;
+        }
+        if (MediaQuery.sizeOf(context).width >= 1024) {
+          _beginDesktopPairing(peer, titleText);
           return;
         }
         final targetId = deviceId ?? address ?? titleText;
@@ -1803,81 +1856,117 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     );
   }
 
+  Widget _buildDesktopPairingScene(Map<String, dynamic> target) {
+    final deviceId = target['deviceId']?.toString();
+    final displayName = _displayNameFor(target);
+    final address = target['address']?.toString();
+    final port = (target['port'] as num?)?.toInt();
+    final targetKey = deviceId ?? '$address:$port';
+    final pairing = deviceId != null
+        ? PairingScreen.forDiscoveredPeer(
+            key: ValueKey('nearby-pairing-$targetKey'),
+            deviceId: deviceId,
+            displayName: displayName,
+            onClose: _returnFromDesktopPairing,
+            onCompleted: (pairedDeviceId) =>
+                unawaited(_completeDesktopPairing(pairedDeviceId)),
+          )
+        : PairingScreen.forEndpoint(
+            key: ValueKey('nearby-pairing-$targetKey'),
+            address: address!,
+            port: port!,
+            displayName: displayName,
+            onClose: _returnFromDesktopPairing,
+            onCompleted: (pairedDeviceId) =>
+                unawaited(_completeDesktopPairing(pairedDeviceId)),
+          );
+    return KeyedSubtree(
+      key: ValueKey('nearby-pairing-focus-$targetKey'),
+      child: pairing,
+    );
+  }
+
   Widget _buildNearbyDesktopScene() {
     final peers = _nearbyOrbitPeers;
     final selectedPeer = _peerWithId(peers, _selectedNearbyDeviceId);
+    final pairingTarget = _desktopPairingTarget;
     final duration = RiftMotion.durationOf(context, RiftMotion.normal);
     return AnimatedSwitcher(
       duration: duration,
       switchInCurve: RiftMotion.enter,
       switchOutCurve: RiftMotion.exit,
       transitionBuilder: _buildFocusTransition,
-      child: selectedPeer == null
-          ? DeviceOrbitScene(
-              key: const ValueKey('nearby-orbit-overview'),
-              localDisplayName:
-                  _localDeviceInfo?['displayName']?.toString() ?? 'This Device',
-              localPlatform:
-                  _localDeviceInfo?['platform']?.toString() ?? _localPlatform(),
-              peers: peers.map(_orbitPresentationFor).toList(growable: false),
-              phase: _orbitController,
-              scanProgress: _pulseController,
-              peerKeyPrefix: 'nearby-orbit-peer',
-              peerSemanticRole: 'nearby device',
-              onPeerSelected: (peer) {
-                setState(() {
-                  _selectedNearbyDeviceId = peer.deviceId;
-                  _selectedDeviceId = null;
-                  _interactingOrbitPeers.clear();
-                  _orbitHasKeyboardFocus = false;
-                });
-                _syncOrbitAnimation();
-              },
-              onPeerInteractionChanged: _handleOrbitPeerInteraction,
-              onSceneFocusChanged: _handleOrbitFocusChanged,
-              onLocalDeviceTap: _localDeviceInfo == null
-                  ? null
-                  : () => _showLocalDeviceDetails(_localDeviceInfo!),
-              scanning: _isDiscovering,
-              emptyMessage: _isDiscovering
-                  ? 'Looking for nearby devices…'
-                  : 'Discovery paused',
-              emptyAction: _isDiscovering
-                  ? null
-                  : FilledButton.icon(
-                      key: const ValueKey('nearby-start-discovery'),
-                      onPressed: () => _toggleDiscovery(true),
-                      icon: const Icon(Icons.radar),
-                      label: const Text('Start Discovery'),
-                    ),
-            )
-          : CallbackShortcuts(
-              key: ValueKey(
-                'nearby-peer-focus-shortcuts-${selectedPeer['deviceId']}',
-              ),
-              bindings: {
-                const SingleActivator(LogicalKeyboardKey.escape):
-                    _closePeerFocus,
-              },
-              child: Focus(
-                autofocus: true,
-                child: NearbyPeerFocus(
-                  deviceId: selectedPeer['deviceId']?.toString() ?? '',
-                  displayName: _displayNameFor(selectedPeer),
-                  platform: selectedPeer['platform']?.toString() ?? 'unknown',
-                  endpoint: _endpointFor(selectedPeer),
-                  onClose: _closePeerFocus,
-                  onPair: () => unawaited(
-                    _handlePeerAction(
-                      peer: selectedPeer,
-                      isTrusted: false,
-                      trustState: 'discovered',
-                      titleText: _displayNameFor(selectedPeer),
+      child: pairingTarget != null
+          ? _buildDesktopPairingScene(pairingTarget)
+          : selectedPeer == null
+              ? DeviceOrbitScene(
+                  key: const ValueKey('nearby-orbit-overview'),
+                  localDisplayName:
+                      _localDeviceInfo?['displayName']?.toString() ??
+                          'This Device',
+                  localPlatform: _localDeviceInfo?['platform']?.toString() ??
+                      _localPlatform(),
+                  peers:
+                      peers.map(_orbitPresentationFor).toList(growable: false),
+                  phase: _orbitController,
+                  scanProgress: _pulseController,
+                  peerKeyPrefix: 'nearby-orbit-peer',
+                  peerSemanticRole: 'nearby device',
+                  onPeerSelected: (peer) {
+                    setState(() {
+                      _selectedNearbyDeviceId = peer.deviceId;
+                      _selectedDeviceId = null;
+                      _interactingOrbitPeers.clear();
+                      _orbitHasKeyboardFocus = false;
+                    });
+                    _syncOrbitAnimation();
+                  },
+                  onPeerInteractionChanged: _handleOrbitPeerInteraction,
+                  onSceneFocusChanged: _handleOrbitFocusChanged,
+                  onLocalDeviceTap: _localDeviceInfo == null
+                      ? null
+                      : () => _showLocalDeviceDetails(_localDeviceInfo!),
+                  scanning: _isDiscovering,
+                  emptyMessage: _isDiscovering
+                      ? 'Looking for nearby devices…'
+                      : 'Discovery paused',
+                  emptyAction: _isDiscovering
+                      ? null
+                      : FilledButton.icon(
+                          key: const ValueKey('nearby-start-discovery'),
+                          onPressed: () => _toggleDiscovery(true),
+                          icon: const Icon(Icons.radar),
+                          label: const Text('Start Discovery'),
+                        ),
+                )
+              : CallbackShortcuts(
+                  key: ValueKey(
+                    'nearby-peer-focus-shortcuts-${selectedPeer['deviceId']}',
+                  ),
+                  bindings: {
+                    const SingleActivator(LogicalKeyboardKey.escape):
+                        _closePeerFocus,
+                  },
+                  child: Focus(
+                    autofocus: true,
+                    child: NearbyPeerFocus(
+                      deviceId: selectedPeer['deviceId']?.toString() ?? '',
+                      displayName: _displayNameFor(selectedPeer),
+                      platform:
+                          selectedPeer['platform']?.toString() ?? 'unknown',
+                      endpoint: _endpointFor(selectedPeer),
+                      onClose: _closePeerFocus,
+                      onPair: () => unawaited(
+                        _handlePeerAction(
+                          peer: selectedPeer,
+                          isTrusted: false,
+                          trustState: 'discovered',
+                          titleText: _displayNameFor(selectedPeer),
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ),
     );
   }
 
@@ -2103,6 +2192,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     return DeviceHubView(
       mode: _hubMode,
       onModeChanged: _setHubMode,
+      modeSelectionEnabled: _desktopPairingTarget == null,
       trustedScene: _buildTrustedDesktopScene(),
       nearbyScene: _buildNearbyDesktopScene(),
       actions: _buildDesktopHubActions(),
