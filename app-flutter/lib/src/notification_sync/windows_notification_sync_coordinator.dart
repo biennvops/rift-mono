@@ -32,6 +32,7 @@ class WindowsNotificationSyncCoordinator {
   Future<void> _operationQueue = Future<void>.value();
   StreamSubscription<Map<String, dynamic>>? _actionRequestSubscription;
   StreamSubscription<bool>? _connectionSubscription;
+  Timer? _executorRetryTimer;
   Timer? _pollTimer;
   WindowsNotificationListenerRuntimeStatus? _runtime;
   bool _running = false;
@@ -132,15 +133,19 @@ class WindowsNotificationSyncCoordinator {
         );
         _ownsActionExecutor = false;
         await _stopInternal();
+        _scheduleExecutorRetry();
         return;
       }
       _ownsActionExecutor = true;
+      _executorRetryTimer?.cancel();
+      _executorRetryTimer = null;
     } catch (error) {
       debugPrint(
         '[Notification Sync] Failed to acquire notification action executor: '
         '$error',
       );
       await _stopInternal();
+      _scheduleExecutorRetry();
       return;
     }
 
@@ -154,6 +159,8 @@ class WindowsNotificationSyncCoordinator {
   }
 
   Future<void> _stopInternal() async {
+    _executorRetryTimer?.cancel();
+    _executorRetryTimer = null;
     _pollTimer?.cancel();
     _pollTimer = null;
     _running = false;
@@ -170,6 +177,25 @@ class WindowsNotificationSyncCoordinator {
         // A disconnected IPC session has already released its executor lease.
       }
     }
+  }
+
+  void _scheduleExecutorRetry() {
+    if (_disposed || !_client.isConnected || _executorRetryTimer != null) {
+      return;
+    }
+    _executorRetryTimer = Timer(_pollInterval, () {
+      _executorRetryTimer = null;
+      unawaited(
+        _enqueue(_startOrStop).catchError(
+          (Object error, StackTrace stackTrace) {
+            debugPrint(
+              '[Notification Sync] Notification action executor retry failed: '
+              '$error',
+            );
+          },
+        ),
+      );
+    });
   }
 
   Future<bool> _hasAllowedAccess() async {

@@ -7,7 +7,7 @@ namespace Rift.Daemon.Tests.Core;
 public sealed class IpcNotificationHubTests
 {
     [Fact]
-    public async Task NotificationActionExecutor_DeliversToOnlyOneClientAndTransfersOnDisconnect()
+    public async Task NotificationActionExecutor_ReleasesOnDisconnectAndAllowsNextClaim()
     {
         var hub = new IpcNotificationHub();
         var first = CreateClient();

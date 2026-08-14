@@ -88,6 +88,46 @@ class _FakeClient extends JsonRpcRiftClient {
       };
 }
 
+class _FakeExecutorLease {
+  _LeasedFakeClient? _owner;
+
+  bool acquire(_LeasedFakeClient client) {
+    _owner ??= client;
+    return identical(_owner, client);
+  }
+
+  bool release(_LeasedFakeClient client) {
+    if (!identical(_owner, client)) {
+      return false;
+    }
+    _owner = null;
+    return true;
+  }
+}
+
+class _LeasedFakeClient extends _FakeClient {
+  _LeasedFakeClient(this.lease);
+
+  final _FakeExecutorLease lease;
+
+  @override
+  Future<dynamic> acquireNotificationActionExecutor() async {
+    acquireActionExecutorCount++;
+    return <String, dynamic>{'acquired': lease.acquire(this)};
+  }
+
+  @override
+  Future<dynamic> releaseNotificationActionExecutor() async {
+    releaseActionExecutorCount++;
+    return <String, dynamic>{'released': lease.release(this)};
+  }
+
+  void disconnectFromDaemon() {
+    lease.release(this);
+    emitConnectionChanged(false);
+  }
+}
+
 class _FakeWindowsListener implements WindowsNotificationListenerPlatform {
   _FakeWindowsListener({
     this.runtime = const WindowsNotificationListenerRuntimeStatus(
@@ -302,6 +342,55 @@ void main() {
     await coordinator.dispose();
     await listener.close();
     await client.close();
+  });
+
+  test('connected standby takes the lease after the owner disconnects',
+      () async {
+    final lease = _FakeExecutorLease();
+    final ownerClient = _LeasedFakeClient(lease);
+    final standbyClient = _LeasedFakeClient(lease);
+    final ownerListener = _FakeWindowsListener(
+      active: [_activeNotification(811)],
+    );
+    final standbyListener = _FakeWindowsListener(
+      active: [_activeNotification(812)],
+    );
+    final owner = await _createCoordinator(
+      listener: ownerListener,
+      client: ownerClient,
+      pollInterval: const Duration(milliseconds: 10),
+    );
+    final standby = await _createCoordinator(
+      listener: standbyListener,
+      client: standbyClient,
+      pollInterval: const Duration(milliseconds: 10),
+    );
+
+    await owner.start();
+    await standby.start();
+    expect(owner.isRunning, isTrue);
+    expect(standby.isRunning, isFalse);
+    expect(standbyClient.acquireActionExecutorCount, 1);
+
+    ownerClient.disconnectFromDaemon();
+    await _pumpAsync();
+    final deadline = DateTime.now().add(const Duration(seconds: 1));
+    while (!standby.isRunning && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    expect(standby.isRunning, isTrue);
+    expect(standbyClient.acquireActionExecutorCount, greaterThanOrEqualTo(2));
+    expect(standbyListener.listCount, greaterThanOrEqualTo(1));
+
+    await owner.dispose();
+    await standby.dispose();
+    expect(ownerClient.releaseActionExecutorCount, 0);
+    expect(standbyClient.releaseActionExecutorCount, 1);
+    await ownerListener.close();
+    await standbyListener.close();
+    await ownerClient.close();
+    await standbyClient.close();
   });
 
   test('snapshot failure does not stop polling or release the executor',
