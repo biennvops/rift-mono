@@ -58,22 +58,25 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene> {
   @override
   void didUpdateWidget(DeviceOrbitScene oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.animatePeerChanges) {
-      _outgoingPeers.clear();
-      return;
-    }
-
     final currentIds = widget.peers.map((peer) => peer.deviceId).toSet();
     final previousPeers = _sortedPeers(oldWidget.peers);
     for (var index = 0; index < previousPeers.length; index++) {
       final peer = previousPeers[index];
       if (!currentIds.contains(peer.deviceId)) {
-        _outgoingPeers[peer.deviceId] = _OutgoingOrbitPeer(
-          peer: peer,
-          index: index,
-          peerCount: previousPeers.length,
-        );
+        _releasePeerInteraction(peer.deviceId);
+        if (widget.animatePeerChanges) {
+          _outgoingPeers[peer.deviceId] = _OutgoingOrbitPeer(
+            peer: peer,
+            index: index,
+            peerCount: previousPeers.length,
+          );
+        }
       }
+    }
+
+    if (!widget.animatePeerChanges) {
+      _outgoingPeers.clear();
+      return;
     }
     for (final peer in widget.peers) {
       _outgoingPeers.remove(peer.deviceId);
@@ -85,6 +88,15 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene> {
   ) {
     return peers.toList(growable: false)
       ..sort((left, right) => left.deviceId.compareTo(right.deviceId));
+  }
+
+  void _releasePeerInteraction(String deviceId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.peers.any((peer) => peer.deviceId == deviceId)) {
+        return;
+      }
+      widget.onPeerInteractionChanged(deviceId, false);
+    });
   }
 
   void _removeOutgoingPeer(String deviceId) {

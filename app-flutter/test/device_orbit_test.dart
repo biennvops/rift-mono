@@ -176,7 +176,8 @@ void main() {
     );
   });
 
-  testWidgets('peer changes fade and scale in and out', (tester) async {
+  testWidgets('peer changes animate and release removed interaction',
+      (tester) async {
     const peerA = OrbitPeerPresentation(
       deviceId: 'peer-a',
       displayName: 'Peer A',
@@ -190,6 +191,7 @@ void main() {
       isOnline: true,
     );
     var peers = <OrbitPeerPresentation>[peerA];
+    final interactionChanges = <String>[];
     late StateSetter updatePeers;
 
     await tester.pumpWidget(
@@ -211,7 +213,9 @@ void main() {
                   peerKeyPrefix: 'test-peer',
                   peerSemanticRole: 'nearby device',
                   onPeerSelected: (_) {},
-                  onPeerInteractionChanged: (_, __) {},
+                  onPeerInteractionChanged: (deviceId, interacting) {
+                    interactionChanges.add('$deviceId:$interacting');
+                  },
                   onSceneFocusChanged: (_) {},
                   animatePeerChanges: true,
                 );
@@ -245,8 +249,18 @@ void main() {
     expect(enteringScale, inOpenClosedRange(0.86, 1));
     await tester.pumpAndSettle();
 
+    final peerAFinder = find.byKey(const ValueKey('test-peer-peer-a'));
+    tester
+        .widget<InkWell>(
+          find.descendant(of: peerAFinder, matching: find.byType(InkWell)),
+        )
+        .onHover!(true);
+    await tester.pump();
+    expect(interactionChanges.last, 'peer-a:true');
+
     updatePeers(() => peers = <OrbitPeerPresentation>[peerB]);
     await tester.pump();
+    expect(interactionChanges.last, 'peer-a:false');
     final exitingFade = find.byKey(
       const ValueKey('test-peer-presence-peer-a'),
     );
@@ -265,5 +279,6 @@ void main() {
       find.byKey(const ValueKey('test-peer-peer-a')),
       findsNothing,
     );
+    expect(interactionChanges.last, 'peer-a:false');
   });
 }
