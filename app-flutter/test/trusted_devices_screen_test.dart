@@ -1422,7 +1422,7 @@ void main() {
           'playbackId': 'shared-session',
           'appName': 'Player B',
           'title': 'Track B',
-          'playbackState': 'paused',
+          'playbackState': 'buffering',
           'updatedAt': '2026-08-01T10:01:00Z',
           'artwork': {
             'mediaType': 'image/png',
@@ -1450,7 +1450,16 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('orbit-peer-media-paused-peer-b')),
+      find.byKey(const ValueKey('orbit-peer-media-buffering-peer-b')),
+      findsOneWidget,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label ==
+                'Peer B, trusted device, online, buffering Track B',
+      ),
       findsOneWidget,
     );
     expect(
@@ -1539,7 +1548,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('orbit-peer-media-paused-peer-b')),
+      find.byKey(const ValueKey('orbit-peer-media-buffering-peer-b')),
       findsOneWidget,
     );
 

@@ -57,7 +57,15 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
       OrbitPeerActivity.mediaPlaying =>
         ', playing ${peer.mediaTitle ?? 'media'}${peer.mediaArtist == null ? '' : ' by ${peer.mediaArtist}'}',
       OrbitPeerActivity.mediaPaused => ', ${peer.mediaTitle ?? 'media'} paused',
+      OrbitPeerActivity.mediaBuffering =>
+        ', buffering ${peer.mediaTitle ?? 'media'}',
       OrbitPeerActivity.none => '',
+    };
+    final mediaStateKey = switch (peer.activity) {
+      OrbitPeerActivity.mediaPlaying => 'playing',
+      OrbitPeerActivity.mediaPaused => 'paused',
+      OrbitPeerActivity.mediaBuffering => 'buffering',
+      OrbitPeerActivity.none => null,
     };
 
     final peerContent = Semantics(
@@ -65,10 +73,10 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
       label:
           '${peer.displayName}, ${widget.semanticRole}, ${status.toLowerCase()}$mediaDescription',
       child: KeyedSubtree(
-        key: peer.activity == OrbitPeerActivity.none
+        key: mediaStateKey == null
             ? null
             : ValueKey(
-                'orbit-peer-media-${peer.activity == OrbitPeerActivity.mediaPlaying ? 'playing' : 'paused'}-${peer.deviceId}',
+                'orbit-peer-media-$mediaStateKey-${peer.deviceId}',
               ),
         child: AnimatedScale(
           duration: RiftMotion.durationOf(context, RiftMotion.fast),

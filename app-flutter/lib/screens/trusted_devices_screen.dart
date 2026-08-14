@@ -1809,11 +1809,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       platform: peer['platform']?.toString() ?? 'unknown',
       isOnline: peer['presence']?.toString() == 'online',
       accentColor: media?.accentColor,
-      activity: media == null
-          ? OrbitPeerActivity.none
-          : (media.isPlaying
-              ? OrbitPeerActivity.mediaPlaying
-              : OrbitPeerActivity.mediaPaused),
+      activity: switch (media?.playbackState) {
+        null => OrbitPeerActivity.none,
+        'playing' => OrbitPeerActivity.mediaPlaying,
+        'buffering' => OrbitPeerActivity.mediaBuffering,
+        _ => OrbitPeerActivity.mediaPaused,
+      },
       mediaTitle: media?.displayTitle,
       mediaArtist:
           media != null && media.artist.isNotEmpty ? media.artist : null,

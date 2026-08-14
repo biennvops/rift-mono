@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 enum OrbitPeerActivity {
   none,
   mediaPaused,
+  mediaBuffering,
   mediaPlaying,
 }
 
