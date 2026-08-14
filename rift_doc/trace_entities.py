@@ -191,6 +191,21 @@ class TraceEntityExtractor:
             kind_values = [kinds] if isinstance(kinds, str) else kinds
             for domain in domain_values if isinstance(domain_values, list) else ():
                 requests[_domain_alias(str(domain))].update(str(kind) for kind in kind_values)
+        for semantic_rule in self.spec.semantic_review_rules:
+            source_domain = semantic_rule.get("source_domain")
+            if source_domain:
+                source_kinds = semantic_rule.get("source_kinds", semantic_rule.get("source_kind", []))
+                source_values = [source_kinds] if isinstance(source_kinds, str) else source_kinds or []
+                requests[_domain_alias(str(source_domain))].update(
+                    str(kind) for kind in source_values if str(kind)
+                )
+            target_domain = semantic_rule.get("target_domain")
+            if target_domain:
+                target_kinds = semantic_rule.get("target_kinds", semantic_rule.get("target_kind", []))
+                target_values = [target_kinds] if isinstance(target_kinds, str) else target_kinds or []
+                requests[_domain_alias(str(target_domain))].update(
+                    str(kind) for kind in target_values if str(kind)
+                )
         # Report 7 freshness uses stable source concepts even if the contract
         # only names final_report_item as the target kind.
         if "report7" in requests:

@@ -16,6 +16,17 @@ from .model import (
     Workbook,
 )
 from .results import Finding, Status, ValidationResult
+from .semantic import (
+    EvidencePacket,
+    EvidencePacketBuilder,
+    SemanticConfidence,
+    SemanticEvidence,
+    SemanticPlan,
+    SemanticResult,
+    SemanticReviewPlanner,
+    SemanticReviewTask,
+    SemanticTaskType,
+)
 from .spec import CapstoneSpec, OrphanRule, SpecError, SpecValidationError, TraceRule, TraceTargetRule
 from .trace_entities import TraceEntityExtractor
 from .trace_model import MatchMethod, MatchResult, TraceEdge, TraceEntity, TraceGraph, TraceIndex, TraceLinkStatus, normalize_identifier, normalize_name
@@ -31,6 +42,8 @@ __all__ = [
     "DocumentSet",
     "DocumentSetLoader",
     "Document",
+    "EvidencePacket",
+    "EvidencePacketBuilder",
     "Finding",
     "MatchMethod",
     "MatchResult",
@@ -39,6 +52,13 @@ __all__ = [
     "Sheet",
     "SourceLocation",
     "OrphanRule",
+    "SemanticConfidence",
+    "SemanticEvidence",
+    "SemanticPlan",
+    "SemanticResult",
+    "SemanticReviewPlanner",
+    "SemanticReviewTask",
+    "SemanticTaskType",
     "Status",
     "Table",
     "TraceEdge",

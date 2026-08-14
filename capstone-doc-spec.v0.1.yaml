@@ -886,6 +886,176 @@ cross_document_orphan_checks:
     target_kind: [feature, function, deliverable]
     status: REVIEW_REQUIRED
     severity: warning
+semantic_review_extension:
+  source_precedence:
+    authoritative_sources: [report1, report2, report3, report4, report5, report6]
+    final_consumer: report7
+    policy: "The latest selected standalone Reports 1–6 are authoritative; Report 7 does not override them."
+  rules:
+    - id: SEM-R3-DETAILED-FUNCTIONS
+      task_type: CONTENT_SUFFICIENCY
+      generation: sections
+      source_domain: report3
+      section_rules: [feature_requirements]
+      requirement: MUST
+      prompt_version: content_sufficiency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [contract_requirement, exact_section]
+      question: >-
+        Does Report 3 function {source_name} meaningfully cover its trigger,
+        actors or roles, purpose, interface/data processing, validation or
+        business rules, normal behavior, and abnormal/error behavior where applicable?
+    - id: SEM-R4-ARCHITECTURE
+      task_type: CONTENT_SUFFICIENCY
+      generation: sections
+      source_domain: report4
+      section_rules: [system_architecture, package_diagram]
+      requirement: MUST
+      prompt_version: content_sufficiency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [contract_requirement, exact_section]
+      question: >-
+        Does {section} meaningfully explain the documented components or
+        subsystems, external systems, and their connections or relationships?
+    - id: SEM-R4-DETAILED-DESIGN
+      task_type: CONTENT_SUFFICIENCY
+      generation: sections
+      source_domain: report4
+      section_rules: [feature_design]
+      requirement: MUST
+      prompt_version: content_sufficiency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [contract_requirement, exact_section]
+      question: >-
+        Does design section {source_name} provide relevant class/specification
+        and interaction or sequence evidence, and explain any shared diagrams it references?
+    - id: SEM-R5-TEST-SUFFICIENCY
+      task_type: CONTENT_SUFFICIENCY
+      generation: sections
+      source_domain: report5
+      section_rules: [scope_of_testing, test_strategy, test_plan, test_reports]
+      requirement: MUST
+      prompt_version: content_sufficiency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [contract_requirement, exact_section]
+      question: >-
+        Is {section} meaningful test evidence, including applicable objectives,
+        techniques, completion criteria, scope/coverage, and analysis rather than only raw counts?
+    - id: SEM-R6-WORKFLOW-COVERAGE
+      task_type: USER_GUIDE_COVERAGE
+      generation: sections
+      source_domain: report6
+      section_rules: [workflow_1, workflow_2]
+      requirement: SHOULD
+      prompt_version: requirement_test_alignment.v1
+      allowed_statuses: [PASS, WARNING, REVIEW_REQUIRED]
+      required_context: [contract_requirement, exact_section]
+      question: >-
+        Does workflow {source_name} provide usable step-by-step guidance for the
+        user-facing function it represents, using only the supplied evidence?
+    - id: SEM-REQUIREMENT-TEST-ALIGNMENT
+      task_type: REQUIREMENT_TEST_ALIGNMENT
+      generation: relationships
+      source_domain: report3
+      source_kinds: [function, feature]
+      target_domain: report5
+      target_kinds: [test_case_or_test_group]
+      requirement: MUST
+      review_unmatched: true
+      max_candidates: 3
+      prompt_version: requirement_test_alignment.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [source_requirement, traced_tests]
+      question: >-
+        Do the preconditions, actions, and expected results in {target_names}
+        actually exercise requirement {source_name}, including applicable negative/error behavior?
+    - id: SEM-DESIGN-REQUIREMENT-ALIGNMENT
+      task_type: DESIGN_REQUIREMENT_ALIGNMENT
+      generation: relationships
+      source_domain: report3
+      source_kinds: [function, feature]
+      target_domain: report4
+      target_kinds: [function, feature]
+      requirement: MUST
+      review_unmatched: true
+      max_candidates: 3
+      prompt_version: requirement_test_alignment.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [source_requirement, traced_design]
+      question: >-
+        Does design evidence {target_names} address requirement {source_name},
+        including its constraints and applicable error paths, without introducing contradictory behavior?
+    - id: SEM-ERROR-ABNORMAL-COVERAGE
+      task_type: ERROR_ABNORMAL_CASE_COVERAGE
+      generation: relationships
+      source_domain: report3
+      source_kinds: [function, feature]
+      target_domain: report5
+      target_kinds: [test_case_or_test_group]
+      requirement: MUST
+      review_unmatched: true
+      max_candidates: 3
+      prompt_version: requirement_test_alignment.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [source_requirement, traced_tests]
+      question: >-
+        Where requirement {source_name} defines validation, failure, boundary,
+        or abnormal behavior, do {target_names} meaningfully cover those cases?
+    - id: SEM-QUALITY-OBJECTIVE-EVALUATION
+      task_type: QUALITY_OBJECTIVE_EVALUATION
+      generation: relationships
+      source_domain: report2
+      source_kinds: [quality_objective]
+      target_domain: report5
+      target_kinds: [test_case_or_test_group]
+      requirement: MUST
+      review_unmatched: true
+      max_candidates: 3
+      prompt_version: requirement_test_alignment.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [quality_objective, strategy_and_results]
+      question: >-
+        Is quality objective {source_name} measurable, and do {target_names}
+        meaningfully evaluate it without claiming achievement beyond the evidence?
+    - id: SEM-R7-FRESHNESS
+      task_type: FINAL_REPORT_FRESHNESS
+      generation: findings
+      finding_validators: [cross_document]
+      finding_statuses: [REVIEW_REQUIRED]
+      finding_rule_prefixes: [R7-FRESHNESS]
+      requirement: MUST
+      prompt_version: cross_document_consistency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [latest_source_report, report7_consumer]
+      question: >-
+        Is the supplied Report 7 statement semantically current relative to the
+        latest selected standalone report evidence for {source_name}?
+    - id: SEM-CROSS-DOCUMENT-CONSISTENCY
+      task_type: CROSS_DOCUMENT_CONSISTENCY
+      generation: findings
+      finding_validators: [cross_document]
+      finding_statuses: [REVIEW_REQUIRED]
+      finding_rule_prefixes: [XT-001, XT-002, XT-003, XT-004, XT-006, ORPHAN-, TRACE-ID-]
+      requirement: MUST
+      prompt_version: cross_document_consistency.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [source_claim, candidate_claims]
+      question: >-
+        Do the bounded source and candidate statements describe the same concept,
+        different concepts, a contradiction, or is the evidence insufficient for {source_name}?
+    - id: SEM-REPOSITORY-ALIGNMENT
+      task_type: CLAIM_REPOSITORY_ALIGNMENT
+      generation: repository_findings
+      finding_validators: [repository_evidence]
+      finding_statuses: [WARNING, REVIEW_REQUIRED]
+      finding_rule_prefixes: [REPO-]
+      requirement: MUST
+      prompt_version: repository_alignment.v1
+      allowed_statuses: [PASS, FAIL, REVIEW_REQUIRED]
+      required_context: [documentation_claim, targeted_repository_evidence]
+      question: >-
+        Does the targeted repository evidence support, contradict, or remain
+        insufficient for documentation claim {source_name} without inferring behavior from arbitrary code?
 repository_evidence_extension:
   finding_domain: repository_evidence
   claims:

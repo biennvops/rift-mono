@@ -45,6 +45,9 @@
     "repository_evidence_extension": {
       "$ref": "#/$defs/repository_evidence_extension"
     },
+    "semantic_review_extension": {
+      "$ref": "#/$defs/semantic_review_extension"
+    },
     "source_ambiguities": {
       "type": "array",
       "items": { "$ref": "#/$defs/ambiguity" }
@@ -278,6 +281,67 @@
           "minProperties": 1,
           "additionalProperties": { "$ref": "#/$defs/repository_claim_projection" }
         }
+      },
+      "additionalProperties": true
+    },
+    "semantic_review_extension": {
+      "type": "object",
+      "required": ["rules"],
+      "properties": {
+        "source_precedence": { "type": "object", "additionalProperties": true },
+        "rules": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/semantic_review_rule" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "semantic_review_rule": {
+      "type": "object",
+      "required": ["id", "task_type", "generation", "question"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "task_type": {
+          "enum": [
+            "CONTENT_SUFFICIENCY",
+            "CROSS_DOCUMENT_CONSISTENCY",
+            "REQUIREMENT_TEST_ALIGNMENT",
+            "DESIGN_REQUIREMENT_ALIGNMENT",
+            "CLAIM_REPOSITORY_ALIGNMENT",
+            "FINAL_REPORT_FRESHNESS",
+            "QUALITY_OBJECTIVE_EVALUATION",
+            "USER_GUIDE_COVERAGE",
+            "ERROR_ABNORMAL_CASE_COVERAGE"
+          ]
+        },
+        "generation": { "enum": ["sections", "relationships", "findings", "repository_findings"] },
+        "question": { "type": "string", "minLength": 1 },
+        "source_domain": { "type": "string" },
+        "source_kind": { "type": ["string", "array"] },
+        "source_kinds": { "type": "array", "items": { "type": "string" } },
+        "target_domain": { "type": "string" },
+        "target_kind": { "type": ["string", "array"] },
+        "target_kinds": { "type": "array", "items": { "type": "string" } },
+        "section_rule": { "type": ["string", "array"] },
+        "section_rules": { "type": "array", "items": { "type": "string" } },
+        "finding_validators": { "type": "array", "items": { "type": "string" } },
+        "finding_statuses": {
+          "type": "array",
+          "items": { "enum": ["PASS", "FAIL", "WARNING", "REVIEW_REQUIRED", "SKIPPED", "NOT_APPLICABLE"] }
+        },
+        "finding_rule_prefixes": { "type": "array", "items": { "type": "string" } },
+        "finding_reports": { "type": "array", "items": { "type": "string" } },
+        "required_context": { "type": "array", "items": { "type": "string" } },
+        "allowed_statuses": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["PASS", "FAIL", "WARNING", "REVIEW_REQUIRED"] }
+        },
+        "prompt_version": { "type": "string" },
+        "requirement": { "enum": ["MUST", "SHOULD", "MAY", "CONDITIONAL"] },
+        "review_unmatched": { "type": "boolean" },
+        "max_candidates": { "type": "integer", "minimum": 1 },
+        "requires_visual": { "type": "boolean" }
       },
       "additionalProperties": true
     },

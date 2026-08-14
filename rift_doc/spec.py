@@ -180,6 +180,16 @@ class CapstoneSpec:
         value = self.data.get("repository_evidence_extension", {})
         return value if isinstance(value, dict) else {}
 
+    @property
+    def semantic_review_extension(self) -> dict[str, Any]:
+        value = self.data.get("semantic_review_extension", {})
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def semantic_review_rules(self) -> list[dict[str, Any]]:
+        value = self.semantic_review_extension.get("rules", [])
+        return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
     def iter_trace_rules(self) -> Iterator[TraceRule]:
         for index, raw in enumerate(self.cross_document_traceability):
             rule_id = str(raw.get("id", raw.get("rule_id", f"XT-UNNAMED-{index + 1}")))
