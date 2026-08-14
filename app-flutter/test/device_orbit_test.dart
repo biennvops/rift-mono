@@ -72,6 +72,49 @@ void main() {
     }
   });
 
+  testWidgets('newly paired entry completes without motion when disabled',
+      (tester) async {
+    String? completedDeviceId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: SizedBox(
+            width: 900,
+            height: 620,
+            child: DeviceOrbitScene(
+              localDisplayName: 'Local',
+              localPlatform: 'macos',
+              peers: const [
+                OrbitPeerPresentation(
+                  deviceId: 'peer-new',
+                  displayName: 'New Peer',
+                  platform: 'android',
+                  isOnline: true,
+                ),
+              ],
+              phase: const AlwaysStoppedAnimation<double>(0),
+              scanProgress: const AlwaysStoppedAnimation<double>(0),
+              peerKeyPrefix: 'test-peer',
+              peerSemanticRole: 'trusted device',
+              onPeerSelected: (_) {},
+              onPeerInteractionChanged: (_, __) {},
+              onSceneFocusChanged: (_) {},
+              recentlyPairedDeviceId: 'peer-new',
+              onRecentlyPairedAnimationCompleted: (deviceId) {
+                completedDeviceId = deviceId;
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(completedDeviceId, 'peer-new');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('orbit slots stay stable when arrival order changes',
       (tester) async {
     const peerA = OrbitPeerPresentation(

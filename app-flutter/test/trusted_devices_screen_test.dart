@@ -1144,6 +1144,113 @@ void main() {
     );
   });
 
+  testWidgets('desktop pairing success migrates peer into Trusted orbit',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = const []
+      ..discoveredPeers = [
+        {
+          'deviceId': 'rift-newly-trusted',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'presence': 'online',
+          'trustState': 'discovered',
+        }
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-newly-trusted')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('nearby-pair-action')));
+    await tester.pump();
+    await tester.pump();
+
+    client
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-newly-trusted',
+          'displayName': 'Pixel 9',
+          'platform': 'android',
+          'presence': 'online',
+          'trustState': 'trusted',
+          'capabilities': ['presence.basic'],
+        }
+      ]
+      ..discoveredPeers = const [];
+    await client.emitPairingComplete({
+      'deviceId': 'rift-newly-trusted',
+      'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'persistedAt': '2026-08-14T00:00:00Z',
+    });
+    await tester.pump();
+
+    expect(
+      find.byKey(
+        const ValueKey('nearby-pairing-success-rift-newly-trusted'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Paired successfully'), findsOneWidget);
+    expect(find.text('Pairing Request'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 799));
+    expect(find.text('Paired successfully'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-newly-trusted')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('recently-paired-orbit-peer-rift-newly-trusted'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Paired successfully'), findsNothing);
+
+    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pump();
+    expect(
+      find.byKey(
+        const ValueKey('recently-paired-orbit-peer-rift-newly-trusted'),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-newly-trusted')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-newly-trusted')),
+      findsNothing,
+    );
+  });
+
   testWidgets(
       'DeviceDetailScreen removed state invokes onClose when embedded on desktop',
       (WidgetTester tester) async {

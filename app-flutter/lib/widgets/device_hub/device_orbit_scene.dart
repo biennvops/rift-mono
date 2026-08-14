@@ -22,6 +22,8 @@ class DeviceOrbitScene extends StatelessWidget {
     this.scanning = false,
     this.emptyMessage,
     this.emptyAction,
+    this.recentlyPairedDeviceId,
+    this.onRecentlyPairedAnimationCompleted,
   });
 
   final String localDisplayName;
@@ -39,6 +41,8 @@ class DeviceOrbitScene extends StatelessWidget {
   final bool scanning;
   final String? emptyMessage;
   final Widget? emptyAction;
+  final String? recentlyPairedDeviceId;
+  final ValueChanged<String>? onRecentlyPairedAnimationCompleted;
 
   @override
   Widget build(BuildContext context) {
@@ -84,6 +88,10 @@ class DeviceOrbitScene extends StatelessWidget {
                       sortedPeers[index].deviceId,
                       interacting,
                     ),
+                    isNewlyPaired:
+                        sortedPeers[index].deviceId == recentlyPairedDeviceId,
+                    onPairingAnimationCompleted:
+                        onRecentlyPairedAnimationCompleted,
                   ),
                 if (sortedPeers.isEmpty && emptyMessage != null)
                   Positioned(
@@ -131,6 +139,8 @@ class _OrbitPositionedPeer extends StatelessWidget {
     required this.peerSemanticRole,
     required this.onTap,
     required this.onInteractionChanged,
+    required this.isNewlyPaired,
+    required this.onPairingAnimationCompleted,
   });
 
   final Animation<double> phase;
@@ -142,6 +152,8 @@ class _OrbitPositionedPeer extends StatelessWidget {
   final String peerSemanticRole;
   final VoidCallback onTap;
   final ValueChanged<bool> onInteractionChanged;
+  final bool isNewlyPaired;
+  final ValueChanged<String>? onPairingAnimationCompleted;
 
   @override
   Widget build(BuildContext context) {
@@ -155,6 +167,8 @@ class _OrbitPositionedPeer extends StatelessWidget {
           semanticRole: peerSemanticRole,
           onTap: onTap,
           onInteractionChanged: onInteractionChanged,
+          isNewlyPaired: isNewlyPaired,
+          onPairingAnimationCompleted: onPairingAnimationCompleted,
         ),
         builder: (context, child) {
           final center = DeviceOrbitLayout.peerCenter(

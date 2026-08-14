@@ -16,6 +16,7 @@ import '../widgets/bubble_background.dart';
 import '../widgets/device_hub/device_hub_view.dart';
 import '../widgets/device_hub/device_orbit_motion_state.dart';
 import '../widgets/device_hub/device_orbit_scene.dart';
+import '../widgets/device_hub/nearby_pairing_success.dart';
 import '../widgets/device_hub/nearby_peer_focus.dart';
 import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../src/ui/theme.dart';
@@ -39,6 +40,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   String? _selectedDeviceId;
   String? _selectedNearbyDeviceId;
   Map<String, dynamic>? _desktopPairingTarget;
+  String? _desktopPairingSuccessDeviceId;
+  String? _recentlyPairedDeviceId;
   DeviceHubMode _hubMode = DeviceHubMode.trusted;
   final Set<String> _interactingOrbitPeers = <String>{};
   bool _orbitHasKeyboardFocus = false;
@@ -498,6 +501,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
       _desktopPairingTarget = null;
+      _desktopPairingSuccessDeviceId = null;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
     });
@@ -523,6 +527,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _selectedDeviceId = null;
           _selectedNearbyDeviceId = null;
           _desktopPairingTarget = null;
+          _desktopPairingSuccessDeviceId = null;
+          _recentlyPairedDeviceId = null;
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
@@ -1361,6 +1367,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = target['deviceId']?.toString();
       _desktopPairingTarget = target;
+      _desktopPairingSuccessDeviceId = null;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
     });
@@ -1375,15 +1382,35 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         );
     setState(() {
       _desktopPairingTarget = null;
+      _desktopPairingSuccessDeviceId = null;
       _selectedNearbyDeviceId = remainsNearby ? targetDeviceId : null;
     });
     _syncOrbitAnimation();
   }
 
   Future<void> _completeDesktopPairing(String deviceId) async {
-    if (_desktopPairingTarget == null) return;
+    if (_desktopPairingTarget == null ||
+        _desktopPairingSuccessDeviceId != null) {
+      return;
+    }
+    setState(() {
+      _desktopPairingSuccessDeviceId = deviceId;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+    });
+    _syncOrbitAnimation();
+
+    await Future<void>.delayed(
+      _reducedMotion ? RiftMotion.fast : RiftMotion.scene,
+    );
+    if (!mounted || _desktopPairingSuccessDeviceId != deviceId) return;
+
+    await _loadData();
+    if (!mounted || _desktopPairingSuccessDeviceId != deviceId) return;
     setState(() {
       _desktopPairingTarget = null;
+      _desktopPairingSuccessDeviceId = null;
+      _recentlyPairedDeviceId = deviceId;
       _hubMode = DeviceHubMode.trusted;
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
@@ -1391,7 +1418,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _orbitHasKeyboardFocus = false;
     });
     _syncOrbitAnimation();
-    await _loadData();
+  }
+
+  void _handleRecentlyPairedAnimationCompleted(String deviceId) {
+    if (!mounted || _recentlyPairedDeviceId != deviceId) return;
+    setState(() {
+      _recentlyPairedDeviceId = null;
+    });
   }
 
   Future<void> _handlePeerAction({
@@ -1832,6 +1865,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   ? null
                   : () => _showLocalDeviceDetails(_localDeviceInfo!),
               emptyMessage: 'No trusted devices yet.',
+              recentlyPairedDeviceId: _recentlyPairedDeviceId,
+              onRecentlyPairedAnimationCompleted:
+                  _handleRecentlyPairedAnimationCompleted,
             )
           : CallbackShortcuts(
               key: ValueKey(
@@ -1859,6 +1895,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Widget _buildDesktopPairingScene(Map<String, dynamic> target) {
     final deviceId = target['deviceId']?.toString();
     final displayName = _displayNameFor(target);
+    final successDeviceId = _desktopPairingSuccessDeviceId;
+    if (successDeviceId != null) {
+      return NearbyPairingSuccess(
+        key: ValueKey('nearby-pairing-success-focus-$successDeviceId'),
+        deviceId: successDeviceId,
+        displayName: displayName,
+        platform: target['platform']?.toString() ?? 'unknown',
+      );
+    }
     final address = target['address']?.toString();
     final port = (target['port'] as num?)?.toInt();
     final targetKey = deviceId ?? '$address:$port';
@@ -1989,6 +2034,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   List<Widget> _buildDesktopHubActions() {
     final actions = <Widget>[];
+    final pairingActive = _desktopPairingTarget != null;
     if (_hubMode == DeviceHubMode.nearby) {
       actions.add(
         Row(
@@ -2001,7 +2047,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             Switch(
               key: const ValueKey('desktop-discovery-switch'),
               value: _isDiscovering,
-              onChanged: _toggleDiscovery,
+              onChanged: pairingActive ? null : _toggleDiscovery,
             ),
           ],
         ),
@@ -2009,7 +2055,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       actions.add(
         OutlinedButton.icon(
           key: const ValueKey('desktop-manual-connect'),
-          onPressed: _showDesktopManualConnection,
+          onPressed: pairingActive ? null : _showDesktopManualConnection,
           icon: const Icon(Icons.add_link, size: 18),
           label: const Text('Manual'),
         ),
@@ -2023,7 +2069,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     actions.add(
       OutlinedButton.icon(
         key: const ValueKey('desktop-device-management'),
-        onPressed: _showDesktopDeviceManagement,
+        onPressed: pairingActive ? null : _showDesktopDeviceManagement,
         icon: const Icon(Icons.tune, size: 18),
         label: Text(managedCount == 0 ? 'Manage' : 'Manage ($managedCount)'),
       ),

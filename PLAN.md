@@ -2453,13 +2453,13 @@ The Review 3 implementation is complete when:
 
 Only if time permits:
 
-* [ ] Desktop pairing presentation remains inside Nearby orbit scene.
-* [ ] Pairing success receives a brief one-shot animation.
-* [ ] Successful peer leaves Nearby presentation.
-* [ ] Hub transitions automatically to Trusted.
-* [ ] Newly trusted peer visibly enters its trusted orbit slot.
-* [ ] No authentication/pairing logic was duplicated.
-* [ ] Failure/cancel paths return cleanly to Nearby.
+* [x] Desktop pairing presentation remains inside Nearby orbit scene.
+* [x] Pairing success receives a brief one-shot animation.
+* [x] Successful peer leaves Nearby presentation.
+* [x] Hub transitions automatically to Trusted.
+* [x] Newly trusted peer visibly enters its trusted orbit slot.
+* [x] No authentication/pairing logic was duplicated.
+* [x] Failure/cancel paths return cleanly to Nearby.
 
 ---
 

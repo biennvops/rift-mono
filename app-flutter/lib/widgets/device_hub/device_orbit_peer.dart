@@ -12,6 +12,8 @@ class DeviceOrbitPeer extends StatefulWidget {
     required this.semanticRole,
     required this.onTap,
     required this.onInteractionChanged,
+    this.isNewlyPaired = false,
+    this.onPairingAnimationCompleted,
   });
 
   final OrbitPeerPresentation peer;
@@ -19,6 +21,8 @@ class DeviceOrbitPeer extends StatefulWidget {
   final String semanticRole;
   final VoidCallback onTap;
   final ValueChanged<bool> onInteractionChanged;
+  final bool isNewlyPaired;
+  final ValueChanged<String>? onPairingAnimationCompleted;
 
   @override
   State<DeviceOrbitPeer> createState() => _DeviceOrbitPeerState();
@@ -56,7 +60,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
       OrbitPeerActivity.none => '',
     };
 
-    return Semantics(
+    final peerContent = Semantics(
       button: true,
       label:
           '${peer.displayName}, ${widget.semanticRole}, ${status.toLowerCase()}$mediaDescription',
@@ -195,6 +199,67 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
           ),
         ),
       ),
+    );
+
+    return TweenAnimationBuilder<double>(
+      key: ValueKey(
+        'device-orbit-peer-entry-${peer.deviceId}-${widget.isNewlyPaired}',
+      ),
+      tween: Tween<double>(
+        begin: widget.isNewlyPaired ? 0 : 1,
+        end: 1,
+      ),
+      duration: widget.isNewlyPaired
+          ? RiftMotion.durationOf(context, RiftMotion.scene)
+          : Duration.zero,
+      curve: RiftMotion.emphasis,
+      onEnd: widget.isNewlyPaired
+          ? () => widget.onPairingAnimationCompleted?.call(peer.deviceId)
+          : null,
+      child: peerContent,
+      builder: (context, progress, child) {
+        return KeyedSubtree(
+          key: widget.isNewlyPaired
+              ? ValueKey('recently-paired-orbit-peer-${peer.deviceId}')
+              : null,
+          child: SizedBox.square(
+            dimension: widget.size,
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                if (widget.isNewlyPaired)
+                  IgnorePointer(
+                    child: Opacity(
+                      opacity: (1 - progress).clamp(0.0, 1.0),
+                      child: Transform.scale(
+                        scale: 0.82 + progress * 0.78,
+                        child: Container(
+                          width: widget.size,
+                          height: widget.size,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: accent.withValues(alpha: 0.55),
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                Opacity(
+                  opacity: 0.35 + progress * 0.65,
+                  child: Transform.scale(
+                    scale: 0.8 + progress * 0.2,
+                    child: child,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
