@@ -340,8 +340,8 @@ class _ClipboardTransferScreenState extends State<ClipboardTransferScreen> {
         },
         transitionBuilder: (child, animation) {
           final isActive = child.key == activeKey;
-          final begin = isActive ? travel : Offset.zero;
-          final end = isActive ? Offset.zero : -travel;
+          final begin = isActive ? travel : -travel;
+          const end = Offset.zero;
           return FadeTransition(
             opacity: animation,
             child: SlideTransition(

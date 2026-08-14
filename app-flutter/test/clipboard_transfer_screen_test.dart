@@ -405,6 +405,57 @@ void main() {
     }
   });
 
+  testWidgets('Activity subsection slides follow navigation direction',
+      (WidgetTester tester) async {
+    double horizontalOffset(ValueKey<String> key) {
+      final transition = find.ancestor(
+        of: find.byKey(key),
+        matching: find.byType(SlideTransition),
+      );
+      expect(transition, findsWidgets);
+      return tester.widget<SlideTransition>(transition.first).position.value.dx;
+    }
+
+    const clipboardKey = ValueKey<String>(
+      'history-section-content-clipboard',
+    );
+    const sendKey = ValueKey<String>('history-section-content-send');
+
+    await tester.pumpWidget(buildScreen());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('activity-tab-send')));
+    await tester.pump();
+
+    final forwardOutgoingStart = horizontalOffset(clipboardKey);
+    final forwardIncomingStart = horizontalOffset(sendKey);
+    expect(forwardOutgoingStart, closeTo(0, 0.0001));
+    expect(forwardIncomingStart, greaterThan(0));
+
+    await tester.pump(const Duration(milliseconds: 90));
+
+    expect(horizontalOffset(clipboardKey), lessThan(forwardOutgoingStart));
+    expect(
+        horizontalOffset(sendKey), inExclusiveRange(0, forwardIncomingStart));
+
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-tab-clipboard')));
+    await tester.pump();
+
+    final backwardOutgoingStart = horizontalOffset(sendKey);
+    final backwardIncomingStart = horizontalOffset(clipboardKey);
+    expect(backwardOutgoingStart, closeTo(0, 0.0001));
+    expect(backwardIncomingStart, lessThan(0));
+
+    await tester.pump(const Duration(milliseconds: 90));
+
+    expect(horizontalOffset(sendKey), greaterThan(backwardOutgoingStart));
+    expect(
+      horizontalOffset(clipboardKey),
+      inExclusiveRange(backwardIncomingStart, 0),
+    );
+  });
+
   testWidgets('Activity reduced motion settles subsection changes immediately',
       (WidgetTester tester) async {
     await tester.pumpWidget(buildScreen(disableAnimations: true));
