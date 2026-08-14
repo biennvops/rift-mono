@@ -10,11 +10,13 @@ class DeviceFocusBackground extends StatelessWidget {
     required this.geometry,
     required this.entrance,
     required this.online,
+    this.accentColor,
   });
 
   final DeviceFocusGeometry geometry;
   final Animation<double> entrance;
   final Animation<double> online;
+  final Color? accentColor;
 
   @override
   Widget build(BuildContext context) {
@@ -25,7 +27,7 @@ class DeviceFocusBackground extends StatelessWidget {
           geometry: geometry,
           entrance: entrance,
           online: online,
-          primary: colors.primary,
+          primary: accentColor ?? colors.primary,
           secondary: colors.secondary,
           outline: colors.outlineVariant,
         ),

@@ -17,6 +17,7 @@ class DeviceFocusNode extends StatefulWidget {
     required this.entranceOffset,
     required this.onTap,
     required this.onInteractionChanged,
+    this.accentColor,
   });
 
   final DeviceFocusNodeKind kind;
@@ -30,6 +31,7 @@ class DeviceFocusNode extends StatefulWidget {
   final Offset entranceOffset;
   final VoidCallback onTap;
   final ValueChanged<bool> onInteractionChanged;
+  final Color? accentColor;
 
   @override
   State<DeviceFocusNode> createState() => _DeviceFocusNodeState();
@@ -56,8 +58,12 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final accent = widget.accentColor ?? colors.primary;
     final highlighted = _isEngaged || widget.isSelected;
-    final motionDuration = RiftMotion.durationOf(context, RiftMotion.fast);
+    final motionDuration = RiftMotion.durationOf(
+      context,
+      widget.accentColor == null ? RiftMotion.fast : RiftMotion.slow,
+    );
     final begin = 0.34 + widget.entranceIndex * 0.065;
     final end = (begin + 0.3).clamp(0.0, 0.92).toDouble();
 
@@ -74,20 +80,20 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
           curve: Curves.easeOutCubic,
           decoration: BoxDecoration(
             color: Color.alphaBlend(
-              colors.primary.withValues(
+              accent.withValues(
                 alpha: widget.isSelected ? 0.11 : 0.035,
               ),
               colors.surface,
             ),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: highlighted ? colors.primary : colors.outlineVariant,
+              color: highlighted ? accent : colors.outlineVariant,
               width: highlighted ? 1.5 : 1,
             ),
             boxShadow: highlighted
                 ? [
                     BoxShadow(
-                      color: colors.primary.withValues(alpha: 0.1),
+                      color: accent.withValues(alpha: 0.1),
                       blurRadius: 16,
                       offset: const Offset(0, 4),
                     ),
@@ -117,9 +123,7 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
                       Icon(
                         widget.icon,
                         size: 20,
-                        color: highlighted
-                            ? colors.primary
-                            : colors.onSurfaceVariant,
+                        color: highlighted ? accent : colors.onSurfaceVariant,
                       ),
                       const SizedBox(height: 4),
                       Text(

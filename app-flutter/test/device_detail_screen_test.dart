@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/media_playback/playback_presentation.dart';
+import 'package:rift/widgets/media_playback_activity_ring.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -720,18 +722,25 @@ void main() {
           'capabilities': ['media.playback', 'presence.basic'],
         },
       ];
-    final playing = MediaPlaybackPresentation.fromRecord({
-      'playbackId': 'session-1',
-      'sourceDeviceId': 'rift-media',
-      'appName': 'Rift Music',
-      'title': 'Northern Lights',
-      'artist': 'Signal Bloom',
-      'album': 'Continuity',
-      'playbackState': 'playing',
-      'positionMs': 31000,
-      'durationMs': 181000,
-      'updatedAt': '2026-08-01T10:00:00Z',
-    });
+    final playing = MediaPlaybackPresentation.fromRecord(
+      {
+        'playbackId': 'session-1',
+        'sourceDeviceId': 'rift-media',
+        'appName': 'Rift Music',
+        'title': 'Northern Lights',
+        'artist': 'Signal Bloom',
+        'album': 'Continuity',
+        'playbackState': 'playing',
+        'positionMs': 31000,
+        'durationMs': 181000,
+        'updatedAt': '2026-08-01T10:00:00Z',
+      },
+      artworkBytes: base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      ),
+      artworkIdentity: 'artwork-one',
+      accentColor: const Color(0xFFD62828),
+    );
 
     await tester.pumpWidget(
       buildTestApp(client, onClose: () {}, mediaPlayback: playing),
@@ -747,6 +756,11 @@ void main() {
       find.byKey(const ValueKey('device-focus-media-playing')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('device-focus-media-accented')),
+      findsOneWidget,
+    );
+    expect(find.byType(MediaPlaybackActivityRing), findsOneWidget);
     expect(find.text('Northern Lights'), findsOneWidget);
     expect(find.text('Playing'), findsOneWidget);
 
@@ -760,15 +774,24 @@ void main() {
     expect(find.text('Continuity'), findsOneWidget);
     expect(find.text('Rift Music'), findsOneWidget);
     expect(find.text('0:31 / 3:01'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-media-artwork-artwork-one')),
+      findsOneWidget,
+    );
 
-    final paused = MediaPlaybackPresentation.fromRecord({
-      'playbackId': 'session-1',
-      'sourceDeviceId': 'rift-media',
-      'appName': 'Rift Music',
-      'title': 'Northern Lights',
-      'playbackState': 'paused',
-      'updatedAt': '2026-08-01T10:01:00Z',
-    });
+    final paused = MediaPlaybackPresentation.fromRecord(
+      {
+        'playbackId': 'session-1',
+        'sourceDeviceId': 'rift-media',
+        'appName': 'Rift Music',
+        'title': 'Northern Lights',
+        'playbackState': 'paused',
+        'updatedAt': '2026-08-01T10:01:00Z',
+      },
+      artworkBytes: playing.artworkBytes,
+      artworkIdentity: playing.artworkIdentity,
+      accentColor: playing.accentColor,
+    );
     await tester.pumpWidget(
       buildTestApp(client, onClose: () {}, mediaPlayback: paused),
     );
@@ -777,11 +800,24 @@ void main() {
       find.byKey(const ValueKey('device-focus-media-paused')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('device-focus-media-accented')),
+      findsOneWidget,
+    );
+    expect(find.byType(MediaPlaybackActivityRing), findsNothing);
     expect(find.text('Paused'), findsWidgets);
 
     await tester.pumpWidget(buildTestApp(client, onClose: () {}));
     await tester.pumpAndSettle();
     expect(find.text('Nothing playing'), findsWidgets);
+    expect(
+      find.byKey(const ValueKey('device-focus-media-accented')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-media-artwork-artwork-one')),
+      findsNothing,
+    );
     expect(
         find.byKey(const ValueKey('device-focus-node-media')), findsOneWidget);
   });

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../src/ui/motion.dart';
+import '../media_playback_activity_ring.dart';
 import 'orbit_peer_presentation.dart';
 
 class DeviceOrbitPeer extends StatefulWidget {
@@ -97,71 +98,99 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                 ),
               ],
             ),
-            child: Material(
-              color: Colors.transparent,
-              shape: const CircleBorder(),
-              clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: widget.onTap,
-                onHover: (value) => _updateInteraction(hovered: value),
-                onFocusChange: (value) => _updateInteraction(focused: value),
-                child: Padding(
-                  padding: const EdgeInsets.all(11),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        _platformIcon(peer.platform),
-                        size: widget.size < 112 ? 24 : 28,
-                        color: peer.isOnline
-                            ? accent
-                            : colors.onSurfaceVariant.withValues(alpha: 0.7),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        peer.displayName,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colors.onSurface,
-                          fontWeight: FontWeight.w700,
-                          height: 1.1,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 6,
-                              height: 6,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: peer.isOnline ? accent : colors.outline,
-                              ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Material(
+                  color: Colors.transparent,
+                  shape: const CircleBorder(),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: widget.onTap,
+                    onHover: (value) => _updateInteraction(hovered: value),
+                    onFocusChange: (value) =>
+                        _updateInteraction(focused: value),
+                    child: Padding(
+                      padding: const EdgeInsets.all(11),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            _platformIcon(peer.platform),
+                            size: widget.size < 112 ? 24 : 28,
+                            color: peer.isOnline
+                                ? accent
+                                : colors.onSurfaceVariant
+                                    .withValues(alpha: 0.7),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            peer.displayName,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colors.onSurface,
+                              fontWeight: FontWeight.w700,
+                              height: 1.1,
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              status,
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: peer.isOnline
-                                    ? accent
-                                    : colors.onSurfaceVariant,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 10,
-                              ),
+                          ),
+                          const SizedBox(height: 5),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color:
+                                        peer.isOnline ? accent : colors.outline,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  status,
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: peer.isOnline
+                                        ? accent
+                                        : colors.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
+                if (peer.accentColor != null)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: SizedBox(
+                        key: ValueKey(
+                          'orbit-peer-media-accented-${peer.deviceId}',
+                        ),
+                      ),
+                    ),
+                  ),
+                if (peer.activity == OrbitPeerActivity.mediaPlaying)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: MediaPlaybackActivityRing(
+                        size: widget.size,
+                        color: accent,
+                        isPlaying: true,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),

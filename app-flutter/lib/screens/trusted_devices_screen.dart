@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/media_playback/artwork_palette.dart';
 import '../src/media_playback/playback_presentation.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
@@ -47,6 +48,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   List<dynamic> _discoveredPeers = [];
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  final Map<String, MediaArtwork> _artworkByPlaybackKey =
+      <String, MediaArtwork>{};
+  final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
+      <String, Color>{};
+  final ArtworkAccentCache _artworkAccentCache = ArtworkAccentCache();
   final List<({bool removed, Map<String, dynamic> playback})>
       _playbackMutationsDuringLoad = [];
   bool _isLoadingPlayback = false;
@@ -150,8 +156,13 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       if (isConnected) {
         _loadData();
         _loadPlaybackState();
-      } else if (_playbacksByKey.isNotEmpty) {
-        setState(_playbacksByKey.clear);
+      } else if (_playbacksByKey.isNotEmpty ||
+          _artworkByPlaybackKey.isNotEmpty) {
+        setState(() {
+          _playbacksByKey.clear();
+          _artworkByPlaybackKey.clear();
+          _pendingAccentFallbackByPlaybackKey.clear();
+        });
       }
     });
   }
@@ -283,11 +294,23 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           loaded[key] = mutation.playback;
         }
       }
+      final loadedArtwork = <String, MediaArtwork>{};
+      for (final entry in loaded.entries) {
+        final artwork = MediaArtwork.tryParse(entry.value['artwork']);
+        if (artwork != null) loadedArtwork[entry.key] = artwork;
+      }
       setState(() {
         _playbacksByKey
           ..clear()
           ..addAll(loaded);
+        _artworkByPlaybackKey
+          ..clear()
+          ..addAll(loadedArtwork);
+        _pendingAccentFallbackByPlaybackKey.clear();
       });
+      for (final artwork in loadedArtwork.values) {
+        unawaited(_resolveArtworkAccent(artwork));
+      }
     } catch (_) {
       // Device presentation remains usable when media state is unavailable.
     } finally {
@@ -303,7 +326,28 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((removed: false, playback: playback));
     }
-    setState(() => _playbacksByKey[key] = playback);
+    final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
+    final previousDeviceAccent =
+        _mediaPlaybackForDevice(sourceDeviceId)?.accentColor;
+    final artwork = MediaArtwork.tryParse(playback['artwork']);
+    final resolvedAccent = artwork == null
+        ? null
+        : _artworkAccentCache.accentFor(artwork.identity);
+    setState(() {
+      _playbacksByKey[key] = playback;
+      if (artwork == null) {
+        _artworkByPlaybackKey.remove(key);
+        _pendingAccentFallbackByPlaybackKey.remove(key);
+      } else {
+        _artworkByPlaybackKey[key] = artwork;
+        if (resolvedAccent == null && previousDeviceAccent != null) {
+          _pendingAccentFallbackByPlaybackKey[key] = previousDeviceAccent;
+        } else {
+          _pendingAccentFallbackByPlaybackKey.remove(key);
+        }
+      }
+    });
+    if (artwork != null) unawaited(_resolveArtworkAccent(artwork));
   }
 
   void _removePlayback(Map<String, dynamic> event) {
@@ -313,8 +357,35 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((removed: true, playback: playback));
     }
-    if (_playbacksByKey.containsKey(key)) {
-      setState(() => _playbacksByKey.remove(key));
+    if (_playbacksByKey.containsKey(key) ||
+        _artworkByPlaybackKey.containsKey(key) ||
+        _pendingAccentFallbackByPlaybackKey.containsKey(key)) {
+      setState(() {
+        _playbacksByKey.remove(key);
+        _artworkByPlaybackKey.remove(key);
+        _pendingAccentFallbackByPlaybackKey.remove(key);
+      });
+    }
+  }
+
+  Future<void> _resolveArtworkAccent(MediaArtwork artwork) async {
+    final previousAccent = _artworkAccentCache.accentFor(artwork.identity);
+    final accent = await _artworkAccentCache.resolve(artwork);
+    if (!mounted) return;
+    final visibleKeys = _artworkByPlaybackKey.entries
+        .where((entry) => entry.value.identity == artwork.identity)
+        .map((entry) => entry.key)
+        .toList(growable: false);
+    if (visibleKeys.isEmpty) return;
+    final hadFallback = visibleKeys.any(
+      _pendingAccentFallbackByPlaybackKey.containsKey,
+    );
+    if (hadFallback || accent != previousAccent) {
+      setState(() {
+        for (final key in visibleKeys) {
+          _pendingAccentFallbackByPlaybackKey.remove(key);
+        }
+      });
     }
   }
 
@@ -323,9 +394,18 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _playbacksByKey.values,
       deviceId,
     );
-    return playback == null
-        ? null
-        : MediaPlaybackPresentation.fromRecord(playback);
+    if (playback == null) return null;
+    final key = mediaPlaybackKey(playback);
+    final artwork = key == null ? null : _artworkByPlaybackKey[key];
+    return MediaPlaybackPresentation.fromRecord(
+      playback,
+      artworkBytes: artwork?.bytes,
+      artworkIdentity: artwork?.identity,
+      accentColor: artwork == null
+          ? null
+          : (_artworkAccentCache.accentFor(artwork.identity) ??
+              (key == null ? null : _pendingAccentFallbackByPlaybackKey[key])),
+    );
   }
 
   void _syncPresenceRefreshLoop() {
@@ -1637,13 +1717,15 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       displayName: _displayNameFor(peer),
       platform: peer['platform']?.toString() ?? 'unknown',
       isOnline: peer['presence']?.toString() == 'online',
+      accentColor: media?.accentColor,
       activity: media == null
           ? OrbitPeerActivity.none
           : (media.isPlaying
               ? OrbitPeerActivity.mediaPlaying
               : OrbitPeerActivity.mediaPaused),
       mediaTitle: media?.displayTitle,
-      mediaArtist: media?.artist.isEmpty == false ? media?.artist : null,
+      mediaArtist:
+          media != null && media.artist.isNotEmpty ? media.artist : null,
     );
   }
 

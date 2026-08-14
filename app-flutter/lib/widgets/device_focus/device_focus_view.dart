@@ -182,6 +182,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                               geometry: geometry,
                               entrance: _entranceController,
                               online: _onlineController,
+                              accentColor: widget.mediaPlayback?.accentColor,
                             ),
                           ),
                         ),
@@ -193,7 +194,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                                   geometry: geometry,
                                   entrance: _entranceController,
                                   online: _onlineController,
-                                  color: theme.colorScheme.primary,
+                                  color: widget.mediaPlayback?.accentColor ??
+                                      theme.colorScheme.primary,
                                   activeNode: _activeNode,
                                   hoveredNode: _hoveredNode,
                                 ),
@@ -282,18 +284,27 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   Positioned _positionCore(DeviceFocusGeometry geometry) {
+    Widget core = DeviceCore(
+      size: geometry.coreSize,
+      displayName: widget.displayName,
+      platformIcon: _platformIcon(widget.platform),
+      isOnline: widget.isOnline,
+      entrance: _entranceController,
+      online: _onlineController,
+      wake: _wakeController,
+      accentColor: widget.mediaPlayback?.accentColor,
+      isMediaPlaying: widget.mediaPlayback?.isPlaying ?? false,
+    );
+    if (widget.mediaPlayback?.accentColor != null) {
+      core = KeyedSubtree(
+        key: const ValueKey('device-focus-media-accented'),
+        child: core,
+      );
+    }
     return Positioned(
       left: geometry.center.dx - geometry.coreSize / 2,
       top: geometry.center.dy - geometry.coreSize / 2,
-      child: DeviceCore(
-        size: geometry.coreSize,
-        displayName: widget.displayName,
-        platformIcon: _platformIcon(widget.platform),
-        isOnline: widget.isOnline,
-        entrance: _entranceController,
-        online: _onlineController,
-        wake: _wakeController,
-      ),
+      child: core,
     );
   }
 
@@ -331,6 +342,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           }
         });
       },
+      accentColor: data.accentColor,
     );
     if (data.kind == DeviceFocusNodeKind.media &&
         widget.mediaPlayback != null) {
@@ -461,6 +473,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           icon: _nodeIcon(DeviceFocusNodeKind.media),
           value: widget.mediaPlayback?.displayTitle ?? 'Nothing playing',
           label: widget.mediaPlayback?.stateLabel ?? 'Media',
+          accentColor: widget.mediaPlayback?.accentColor,
         ),
     ];
   }
@@ -654,8 +667,39 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         .toList(growable: false);
   }
 
+  Widget? _buildMediaArtwork() {
+    final media = widget.mediaPlayback;
+    final bytes = media?.artworkBytes;
+    final identity = media?.artworkIdentity;
+    if (bytes == null || identity == null) return null;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: AnimatedSwitcher(
+        duration: RiftMotion.durationOf(context, RiftMotion.slow),
+        switchInCurve: RiftMotion.enter,
+        switchOutCurve: RiftMotion.exit,
+        child: ClipRRect(
+          key: ValueKey('device-focus-media-artwork-$identity'),
+          borderRadius: BorderRadius.circular(10),
+          child: Image.memory(
+            bytes,
+            width: 104,
+            height: 104,
+            fit: BoxFit.cover,
+            filterQuality: FilterQuality.medium,
+            errorBuilder: (context, error, stackTrace) =>
+                const SizedBox.shrink(),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget? _panelFooter(DeviceFocusNodeKind kind) {
     final colors = Theme.of(context).colorScheme;
+    if (kind == DeviceFocusNodeKind.media) {
+      return _buildMediaArtwork();
+    }
     if (kind == DeviceFocusNodeKind.clipboard) {
       return FilledButton.icon(
         key: const ValueKey('device-focus-open-clipboard'),
@@ -762,10 +806,12 @@ class _DeviceFocusNodeData {
     required this.icon,
     required this.value,
     required this.label,
+    this.accentColor,
   });
 
   final DeviceFocusNodeKind kind;
   final IconData icon;
   final String value;
   final String label;
+  final Color? accentColor;
 }

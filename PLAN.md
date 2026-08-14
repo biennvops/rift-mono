@@ -2432,14 +2432,14 @@ The Review 3 implementation is complete when:
 * [x] Generic `Info` node is removed/replaced.
 * [x] Media node uses mirrored playback state.
 * [x] Multiple playback sessions use newest non-stopped selection.
-* [ ] Playing media applies album-derived peer-local accent.
-* [ ] Playing state has subtle continuous playback motion.
-* [ ] Paused state retains accent/glow but removes playback motion.
-* [ ] No playback returns to ordinary Rift accent.
-* [ ] Track changes animate rather than snap.
-* [ ] Invalid/missing artwork safely falls back.
-* [ ] Palette results are cached.
-* [ ] Global Rift theme is never recolored from album art.
+* [x] Playing media applies album-derived peer-local accent.
+* [x] Playing state has subtle continuous playback motion.
+* [x] Paused state retains accent/glow but removes playback motion.
+* [x] No playback returns to ordinary Rift accent.
+* [x] Track changes animate rather than snap.
+* [x] Invalid/missing artwork safely falls back.
+* [x] Palette results are cached.
+* [x] Global Rift theme is never recolored from album art.
 * [x] Existing mobile Devices behavior remains usable.
 * [x] Existing Activity/File/Clipboard actions remain functional.
 * [x] No protocol/daemon changes are required.

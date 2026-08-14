@@ -2,6 +2,9 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../src/ui/motion.dart';
+import '../media_playback_activity_ring.dart';
+
 class DeviceCore extends StatelessWidget {
   const DeviceCore({
     super.key,
@@ -12,6 +15,8 @@ class DeviceCore extends StatelessWidget {
     required this.entrance,
     required this.online,
     required this.wake,
+    this.accentColor,
+    this.isMediaPlaying = false,
   });
 
   final double size;
@@ -21,6 +26,8 @@ class DeviceCore extends StatelessWidget {
   final Animation<double> entrance;
   final Animation<double> online;
   final Animation<double> wake;
+  final Color? accentColor;
+  final bool isMediaPlaying;
 
   @override
   Widget build(BuildContext context) {
@@ -33,8 +40,9 @@ class DeviceCore extends StatelessWidget {
           final entranceProgress = Curves.easeOutCubic.transform(
             (entrance.value / 0.38).clamp(0.0, 1.0).toDouble(),
           );
-          final accent =
+          final defaultAccent =
               Color.lerp(colors.outline, colors.primary, online.value)!;
+          final accent = accentColor ?? defaultAccent;
           final pulseOpacity =
               math.sin(wake.value * math.pi) * 0.22 * online.value;
 
@@ -55,7 +63,7 @@ class DeviceCore extends StatelessWidget {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: colors.primary.withValues(
+                            color: accent.withValues(
                               alpha: pulseOpacity,
                             ),
                             width: 2,
@@ -63,22 +71,25 @@ class DeviceCore extends StatelessWidget {
                         ),
                       ),
                     ),
-                  Container(
+                  AnimatedContainer(
                     key: const ValueKey('device-focus-core'),
+                    duration: RiftMotion.durationOf(context, RiftMotion.slow),
+                    curve: RiftMotion.move,
                     width: size,
                     height: size,
                     padding: EdgeInsets.all(size < 155 ? 12 : 18),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Color.lerp(
+                      color: Color.alphaBlend(
+                        accent.withValues(
+                          alpha: 0.025 + online.value * 0.055,
+                        ),
                         colors.surface,
-                        colors.primaryContainer.withValues(alpha: 0.08),
-                        online.value,
                       ),
                       border: Border.all(color: accent, width: 2),
                       boxShadow: [
                         BoxShadow(
-                          color: colors.primary.withValues(
+                          color: accent.withValues(
                             alpha: 0.04 + online.value * 0.1,
                           ),
                           blurRadius: 20 + online.value * 12,
@@ -115,10 +126,11 @@ class DeviceCore extends StatelessWidget {
                             vertical: size < 155 ? 2 : 4,
                           ),
                           decoration: BoxDecoration(
-                            color: Color.lerp(
+                            color: Color.alphaBlend(
+                              accent.withValues(
+                                alpha: 0.04 + online.value * 0.08,
+                              ),
                               colors.surfaceContainerHighest,
-                              colors.primaryContainer.withValues(alpha: 0.14),
-                              online.value,
                             ),
                             borderRadius: BorderRadius.circular(999),
                           ),
@@ -152,6 +164,14 @@ class DeviceCore extends StatelessWidget {
                       ],
                     ),
                   ),
+                  if (isMediaPlaying)
+                    IgnorePointer(
+                      child: MediaPlaybackActivityRing(
+                        size: size,
+                        color: accent,
+                        isPlaying: true,
+                      ),
+                    ),
                 ],
               ),
             ),

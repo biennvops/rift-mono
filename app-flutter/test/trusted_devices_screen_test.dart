@@ -1,11 +1,32 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:ui' as ui;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/screens/trusted_devices_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/widgets/device_hub/device_orbit_peer.dart';
+import 'package:rift/widgets/media_playback_activity_ring.dart';
 import 'test_utils/fake_transport.dart';
+
+Future<Map<String, Object?>> _solidArtwork(Color color) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawColor(color, BlendMode.src);
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(8, 8);
+  final data = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+  picture.dispose();
+  final bytes = data!.buffer.asUint8List();
+  return {
+    'mediaType': 'image/png',
+    'dataBase64': base64Encode(bytes),
+    'byteSize': bytes.length,
+  };
+}
 
 class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   FakeJsonRpcRiftClient() : super(FakeTransport());
@@ -548,6 +569,89 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.startDiscoveryCallCount, 1);
+  });
+
+  testWidgets('desktop manual connection keeps the existing pairing flow',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final client = FakeJsonRpcRiftClient()..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('desktop-manual-connect')));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('desktop-manual-device-address')),
+      '192.168.1.60:12001',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('desktop-manual-connect-button')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(client.manualPairAddress, '192.168.1.60');
+    expect(client.manualPairPort, 12001);
+    expect(find.text('Pairing Request'), findsOneWidget);
+  });
+
+  testWidgets('desktop management keeps blocked peer controls available',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-blocked',
+          'displayName': 'Blocked Peer',
+          'platform': 'linux',
+          'trustState': 'blocked',
+          'presence': 'offline',
+        },
+      ]
+      ..discoveredPeers = const [];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('desktop-device-management')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Blocked Peer'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Unblock'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unblock device?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Unblock'));
+    await tester.pumpAndSettle();
+
+    expect(client.unblockCalled, isTrue);
   });
 
   testWidgets('manual connection expands inline and starts secure pairing',
@@ -1134,6 +1238,12 @@ void main() {
       tester.view.resetPhysicalSize();
       tester.view.resetDevicePixelRatio();
     });
+    final redArtwork = await tester.runAsync(
+      () => _solidArtwork(const Color(0xFFD62828)),
+    );
+    final blueArtwork = await tester.runAsync(
+      () => _solidArtwork(const Color(0xFF2457D6)),
+    );
     final client = FakeJsonRpcRiftClient()
       ..trustedPeers = [
         {
@@ -1161,6 +1271,7 @@ void main() {
           'title': 'Track A',
           'playbackState': 'playing',
           'updatedAt': '2026-08-01T10:00:00Z',
+          'artwork': redArtwork,
         },
         {
           'sourceDeviceId': 'peer-b',
@@ -1169,6 +1280,10 @@ void main() {
           'title': 'Track B',
           'playbackState': 'paused',
           'updatedAt': '2026-08-01T10:01:00Z',
+          'artwork': {
+            'mediaType': 'image/png',
+            'dataBase64': base64Encode(const [1, 2, 3]),
+          },
         },
       ];
 
@@ -1181,6 +1296,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
 
     expect(
       find.byKey(const ValueKey('orbit-peer-media-playing-peer-a')),
@@ -1190,6 +1309,15 @@ void main() {
       find.byKey(const ValueKey('orbit-peer-media-paused-peer-b')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-accented-peer-a')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-accented-peer-b')),
+      findsNothing,
+    );
+    expect(find.byType(MediaPlaybackActivityRing), findsOneWidget);
 
     await client.emitMediaUpdated({
       'sourceDeviceId': 'peer-a',
@@ -1198,6 +1326,7 @@ void main() {
       'title': 'Track A',
       'playbackState': 'paused',
       'updatedAt': '2026-08-01T10:02:00Z',
+      'artwork': redArtwork,
     });
     await tester.pumpAndSettle();
     expect(
@@ -1208,6 +1337,49 @@ void main() {
       find.byKey(const ValueKey('orbit-peer-media-paused-peer-a')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-accented-peer-a')),
+      findsOneWidget,
+    );
+    expect(find.byType(MediaPlaybackActivityRing), findsNothing);
+    final peerFinder = find.byKey(const ValueKey('trusted-orbit-peer-peer-a'));
+    final redAccent =
+        tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
+    expect(redAccent, isNotNull);
+    expect(
+      HSLColor.fromColor(redAccent!).hue,
+      anyOf(lessThan(20), greaterThan(340)),
+    );
+    expect(
+      tester
+          .widget<AnimatedContainer>(
+            find.descendant(
+              of: peerFinder,
+              matching: find.byType(AnimatedContainer),
+            ),
+          )
+          .duration,
+      const Duration(milliseconds: 500),
+    );
+
+    await client.emitMediaUpdated({
+      'sourceDeviceId': 'peer-a',
+      'playbackId': 'shared-session',
+      'appName': 'Player A',
+      'title': 'Track A Two',
+      'playbackState': 'paused',
+      'updatedAt': '2026-08-01T10:03:00Z',
+      'artwork': blueArtwork,
+    });
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+    final blueAccent =
+        tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
+    expect(blueAccent, isNotNull);
+    expect(HSLColor.fromColor(blueAccent!).hue, inInclusiveRange(200, 250));
 
     await client.emitMediaRemoved({
       'sourceDeviceId': 'peer-a',
@@ -1216,6 +1388,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('orbit-peer-media-paused-peer-a')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-accented-peer-a')),
       findsNothing,
     );
     expect(
