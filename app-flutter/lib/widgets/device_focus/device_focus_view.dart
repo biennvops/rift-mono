@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../src/media_playback/playback_presentation.dart';
 import 'device_core.dart';
 import 'device_focus_background.dart';
 import 'device_focus_connector_painter.dart';
@@ -32,6 +33,7 @@ class DeviceFocusView extends StatefulWidget {
     this.onSendFile,
     this.onViewTransferActivity,
     this.deviceStatus,
+    this.mediaPlayback,
   });
 
   final String deviceId;
@@ -44,6 +46,7 @@ class DeviceFocusView extends StatefulWidget {
   final String lastSeenAt;
   final List<String> capabilities;
   final Map<String, dynamic>? deviceStatus;
+  final MediaPlaybackPresentation? mediaPlayback;
   final bool isOnline;
   final VoidCallback? onOpenClipboardActivity;
   final VoidCallback? onSendFile;
@@ -113,8 +116,10 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       } else {
         _entranceController.forward(from: 0);
       }
-    } else if (widget.deviceStatus == null &&
-        _activeNode == DeviceFocusNodeKind.power) {
+    } else if ((widget.deviceStatus == null &&
+            _activeNode == DeviceFocusNodeKind.power) ||
+        (!widget.capabilities.contains('media.playback') &&
+            _activeNode == DeviceFocusNodeKind.media)) {
       _activeNode = null;
     }
     if (oldWidget.isOnline != widget.isOnline) {
@@ -301,35 +306,45 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     final vector = geometry.center - center;
     final entranceOffset =
         vector.distance == 0 ? Offset.zero : vector / vector.distance * 18;
+    Widget child = DeviceFocusNode(
+      key: ValueKey('device-focus-node-${data.kind.name}'),
+      kind: data.kind,
+      icon: data.icon,
+      value: data.value,
+      label: data.label,
+      size: geometry.nodeSize,
+      isSelected: _activeNode == data.kind,
+      entrance: _entranceController,
+      entranceIndex: index,
+      entranceOffset: entranceOffset,
+      onTap: () {
+        setState(() {
+          _activeNode = _activeNode == data.kind ? null : data.kind;
+        });
+      },
+      onInteractionChanged: (isInteracting) {
+        setState(() {
+          if (isInteracting) {
+            _hoveredNode = data.kind;
+          } else if (_hoveredNode == data.kind) {
+            _hoveredNode = null;
+          }
+        });
+      },
+    );
+    if (data.kind == DeviceFocusNodeKind.media &&
+        widget.mediaPlayback != null) {
+      child = KeyedSubtree(
+        key: ValueKey(
+          'device-focus-media-${widget.mediaPlayback!.isPlaying ? 'playing' : 'paused'}',
+        ),
+        child: child,
+      );
+    }
     return Positioned(
       left: center.dx - geometry.nodeSize.width / 2,
       top: center.dy - geometry.nodeSize.height / 2,
-      child: DeviceFocusNode(
-        key: ValueKey('device-focus-node-${data.kind.name}'),
-        kind: data.kind,
-        icon: data.icon,
-        value: data.value,
-        label: data.label,
-        size: geometry.nodeSize,
-        isSelected: _activeNode == data.kind,
-        entrance: _entranceController,
-        entranceIndex: index,
-        entranceOffset: entranceOffset,
-        onTap: () {
-          setState(() {
-            _activeNode = _activeNode == data.kind ? null : data.kind;
-          });
-        },
-        onInteractionChanged: (isInteracting) {
-          setState(() {
-            if (isInteracting) {
-              _hoveredNode = data.kind;
-            } else if (_hoveredNode == data.kind) {
-              _hoveredNode = null;
-            }
-          });
-        },
-      ),
+      child: child,
     );
   }
 
@@ -440,12 +455,13 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         value: '$capabilities available',
         label: 'Capabilities',
       ),
-      _DeviceFocusNodeData(
-        kind: DeviceFocusNodeKind.info,
-        icon: _nodeIcon(DeviceFocusNodeKind.info),
-        value: widget.isOnline ? 'Online' : 'Offline',
-        label: 'Info',
-      ),
+      if (_hasCapability('media.playback'))
+        _DeviceFocusNodeData(
+          kind: DeviceFocusNodeKind.media,
+          icon: _nodeIcon(DeviceFocusNodeKind.media),
+          value: widget.mediaPlayback?.displayTitle ?? 'Nothing playing',
+          label: widget.mediaPlayback?.stateLabel ?? 'Media',
+        ),
     ];
   }
 
@@ -459,7 +475,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         DeviceFocusNodeKind.security => 'Security',
         DeviceFocusNodeKind.identity => 'Identity',
         DeviceFocusNodeKind.capabilities => 'Capabilities',
-        DeviceFocusNodeKind.info => 'Device information',
+        DeviceFocusNodeKind.media => 'Media playback',
       };
 
   IconData _nodeIcon(DeviceFocusNodeKind kind) => switch (kind) {
@@ -469,7 +485,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         DeviceFocusNodeKind.security => Icons.verified_user_outlined,
         DeviceFocusNodeKind.identity => Icons.badge_outlined,
         DeviceFocusNodeKind.capabilities => Icons.extension_outlined,
-        DeviceFocusNodeKind.info => Icons.info_outline,
+        DeviceFocusNodeKind.media => Icons.graphic_eq,
       };
 
   List<DeviceFocusPanelRow> _panelRows(DeviceFocusNodeKind kind) {
@@ -527,24 +543,45 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
             label: 'Rift client version',
             value: widget.protocolVersion,
           ),
+          DeviceFocusPanelRow(label: 'Last seen', value: widget.lastSeenAt),
         ],
       DeviceFocusNodeKind.capabilities => _capabilityRows(),
-      DeviceFocusNodeKind.info => [
-          DeviceFocusPanelRow(
-            label: 'Connection',
-            value: widget.isOnline ? 'Online' : 'Offline',
-          ),
-          DeviceFocusPanelRow(label: 'Last seen', value: widget.lastSeenAt),
-          DeviceFocusPanelRow(
-            label: 'Status freshness',
-            value: widget.deviceStatus == null
-                ? 'Unavailable'
-                : (widget.deviceStatus!['isStale'] == true
-                    ? 'Stale'
-                    : 'Current'),
-          ),
-        ],
+      DeviceFocusNodeKind.media => _mediaRows(),
     };
+  }
+
+  List<DeviceFocusPanelRow> _mediaRows() {
+    final media = widget.mediaPlayback;
+    if (media == null) {
+      return const [
+        DeviceFocusPanelRow(label: 'Status', value: 'Nothing playing'),
+      ];
+    }
+
+    return [
+      if (media.title.isNotEmpty)
+        DeviceFocusPanelRow(label: 'Title', value: media.title),
+      if (media.artist.isNotEmpty)
+        DeviceFocusPanelRow(label: 'Artist', value: media.artist),
+      if (media.album.isNotEmpty)
+        DeviceFocusPanelRow(label: 'Album', value: media.album),
+      if (media.application.isNotEmpty)
+        DeviceFocusPanelRow(label: 'Application', value: media.application),
+      DeviceFocusPanelRow(label: 'Status', value: media.stateLabel),
+      if (media.positionMs != null && media.durationMs != null)
+        DeviceFocusPanelRow(
+          label: 'Position',
+          value:
+              '${_formatPlaybackTime(media.positionMs!)} / ${_formatPlaybackTime(media.durationMs!)}',
+        ),
+    ];
+  }
+
+  String _formatPlaybackTime(int milliseconds) {
+    final totalSeconds = milliseconds.clamp(0, 1 << 31) ~/ 1000;
+    final minutes = totalSeconds ~/ 60;
+    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   List<DeviceFocusPanelRow> _powerRows(Map<String, dynamic> status) {

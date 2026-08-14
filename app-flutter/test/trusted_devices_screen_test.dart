@@ -17,6 +17,12 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       StreamController<Map<String, dynamic>>.broadcast();
   final _trustChangedController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final _mediaPostedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _mediaUpdatedController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final _mediaRemovedController =
+      StreamController<Map<String, dynamic>>.broadcast();
   bool unblockCalled = false;
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
@@ -45,6 +51,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       'trustState': 'discovered',
     }
   ];
+  List<Map<String, dynamic>> mediaPlaybacks = [];
   Map<String, dynamic> deviceInfo = {
     'deviceId': 'rift-local-device',
     'displayName': 'Local Device',
@@ -64,6 +71,15 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onPairingComplete =>
       _pairingCompleteController.stream;
+  @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackPosted =>
+      _mediaPostedController.stream;
+  @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackUpdated =>
+      _mediaUpdatedController.stream;
+  @override
+  Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
+      _mediaRemovedController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
@@ -91,6 +107,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
         'peers': discoveredPeers,
         'isDiscovering': isDiscovering,
       };
+  @override
+  Future<dynamic> listMediaPlayback() async => {'playbacks': mediaPlaybacks};
   @override
   Future<dynamic> listTrustedPeers() async {
     listTrustedPeersCallCount += 1;
@@ -153,6 +171,18 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 
   Future<void> emitPairingComplete(Map<String, dynamic> event) async {
     _pairingCompleteController.add(event);
+  }
+
+  Future<void> emitMediaPosted(Map<String, dynamic> event) async {
+    _mediaPostedController.add(event);
+  }
+
+  Future<void> emitMediaUpdated(Map<String, dynamic> event) async {
+    _mediaUpdatedController.add(event);
+  }
+
+  Future<void> emitMediaRemoved(Map<String, dynamic> event) async {
+    _mediaRemovedController.add(event);
   }
 }
 
@@ -1033,7 +1063,11 @@ void main() {
             'platform': 'android',
             'trustState': 'trusted',
             'presence': 'online',
-            'capabilities': ['device.status', 'presence.basic'],
+            'capabilities': [
+              'device.status',
+              'media.playback',
+              'presence.basic',
+            ],
             'deviceStatus': {
               'sourceDeviceId': 'rift-peer-focus',
               'batteryPercent': 64,
@@ -1080,16 +1114,122 @@ void main() {
       );
 
       await tester.tap(
-        find.byKey(const ValueKey('device-focus-node-info')),
+        find.byKey(const ValueKey('device-focus-node-media')),
       );
       await tester.pumpAndSettle();
 
       expect(
-        find.byKey(const ValueKey('device-focus-panel-info')),
+        find.byKey(const ValueKey('device-focus-panel-media')),
         findsOneWidget,
         reason: 'viewport $windowSize',
       );
     }
+  });
+
+  testWidgets('desktop hub isolates and updates playback state by peer',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'peer-a',
+          'displayName': 'Peer A',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['media.playback'],
+        },
+        {
+          'deviceId': 'peer-b',
+          'displayName': 'Peer B',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['media.playback'],
+        },
+      ]
+      ..mediaPlaybacks = [
+        {
+          'sourceDeviceId': 'peer-a',
+          'playbackId': 'shared-session',
+          'appName': 'Player A',
+          'title': 'Track A',
+          'playbackState': 'playing',
+          'updatedAt': '2026-08-01T10:00:00Z',
+        },
+        {
+          'sourceDeviceId': 'peer-b',
+          'playbackId': 'shared-session',
+          'appName': 'Player B',
+          'title': 'Track B',
+          'playbackState': 'paused',
+          'updatedAt': '2026-08-01T10:01:00Z',
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-playing-peer-a')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-paused-peer-b')),
+      findsOneWidget,
+    );
+
+    await client.emitMediaUpdated({
+      'sourceDeviceId': 'peer-a',
+      'playbackId': 'shared-session',
+      'appName': 'Player A',
+      'title': 'Track A',
+      'playbackState': 'paused',
+      'updatedAt': '2026-08-01T10:02:00Z',
+    });
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-playing-peer-a')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-paused-peer-a')),
+      findsOneWidget,
+    );
+
+    await client.emitMediaRemoved({
+      'sourceDeviceId': 'peer-a',
+      'playbackId': 'shared-session',
+    });
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-paused-peer-a')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('orbit-peer-media-paused-peer-b')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('trusted-orbit-peer-peer-a')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const ValueKey('device-focus-node-media')), findsOneWidget);
+    expect(find.text('Nothing playing'), findsOneWidget);
   });
 
   testWidgets('desktop hub focuses trusted peers in place',

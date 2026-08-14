@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../src/ipc/json_rpc_client.dart';
+import '../src/media_playback/playback_presentation.dart';
 import 'pairing_screen.dart';
 import 'device_detail_screen.dart';
 import '../widgets/rift_snackbar.dart';
@@ -44,6 +45,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   bool _isDiscovering = false;
   List<dynamic> _trustedPeers = [];
   List<dynamic> _discoveredPeers = [];
+  final Map<String, Map<String, dynamic>> _playbacksByKey =
+      <String, Map<String, dynamic>>{};
+  final List<({bool removed, Map<String, dynamic> playback})>
+      _playbackMutationsDuringLoad = [];
+  bool _isLoadingPlayback = false;
   String? _error;
   bool _isLoadingData = false;
   bool _reloadQueued = false;
@@ -63,6 +69,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   StreamSubscription? _peerLostSub;
   StreamSubscription? _trustSub;
   StreamSubscription? _pairingCompleteSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaPostedSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaUpdatedSub;
+  StreamSubscription<Map<String, dynamic>>? _mediaRemovedSub;
   StreamSubscription<bool>? _connectionSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
@@ -96,6 +105,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _setupListeners();
       _loadData();
+      _loadPlaybackState();
       _syncOrbitAnimation();
     });
   }
@@ -118,6 +128,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _peerLostSub?.cancel();
     _trustSub?.cancel();
     _pairingCompleteSub?.cancel();
+    _mediaPostedSub?.cancel();
+    _mediaUpdatedSub?.cancel();
+    _mediaRemovedSub?.cancel();
     _connectionSub?.cancel();
     super.dispose();
   }
@@ -129,9 +142,16 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _trustSub = client.onTrustChanged.listen(_handleTrustChanged);
     _pairingCompleteSub =
         client.onPairingComplete.listen(_handlePairingComplete);
+    _mediaPostedSub = client.onMediaPlaybackPosted.listen(_upsertPlayback);
+    _mediaUpdatedSub = client.onMediaPlaybackUpdated.listen(_upsertPlayback);
+    _mediaRemovedSub = client.onMediaPlaybackRemoved.listen(_removePlayback);
     _connectionSub = client.onConnectionChanged.listen((isConnected) {
-      if (isConnected && mounted) {
+      if (!mounted) return;
+      if (isConnected) {
         _loadData();
+        _loadPlaybackState();
+      } else if (_playbacksByKey.isNotEmpty) {
+        setState(_playbacksByKey.clear);
       }
     });
   }
@@ -233,6 +253,79 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   void _handlePairingComplete(Map<String, dynamic> event) {
     _scheduleFullReloadThrottled();
+  }
+
+  Future<void> _loadPlaybackState() async {
+    if (!mounted || _isLoadingPlayback) return;
+    final client = context.read<JsonRpcRiftClient>();
+    if (!client.isConnected) return;
+
+    _isLoadingPlayback = true;
+    _playbackMutationsDuringLoad.clear();
+    try {
+      final result = await client.listMediaPlayback();
+      if (!mounted || !client.isConnected || result is! Map) return;
+      final loaded = <String, Map<String, dynamic>>{};
+      for (final item in List<dynamic>.from(
+        result['playbacks'] ?? const <dynamic>[],
+      )) {
+        if (item is! Map) continue;
+        final playback = Map<String, dynamic>.from(item);
+        final key = mediaPlaybackKey(playback);
+        if (key != null) loaded[key] = playback;
+      }
+      for (final mutation in _playbackMutationsDuringLoad) {
+        final key = mediaPlaybackKey(mutation.playback);
+        if (key == null) continue;
+        if (mutation.removed) {
+          loaded.remove(key);
+        } else {
+          loaded[key] = mutation.playback;
+        }
+      }
+      setState(() {
+        _playbacksByKey
+          ..clear()
+          ..addAll(loaded);
+      });
+    } catch (_) {
+      // Device presentation remains usable when media state is unavailable.
+    } finally {
+      _isLoadingPlayback = false;
+      _playbackMutationsDuringLoad.clear();
+    }
+  }
+
+  void _upsertPlayback(Map<String, dynamic> event) {
+    final playback = Map<String, dynamic>.from(event);
+    final key = mediaPlaybackKey(playback);
+    if (key == null || !mounted) return;
+    if (_isLoadingPlayback) {
+      _playbackMutationsDuringLoad.add((removed: false, playback: playback));
+    }
+    setState(() => _playbacksByKey[key] = playback);
+  }
+
+  void _removePlayback(Map<String, dynamic> event) {
+    final playback = Map<String, dynamic>.from(event);
+    final key = mediaPlaybackKey(playback);
+    if (key == null || !mounted) return;
+    if (_isLoadingPlayback) {
+      _playbackMutationsDuringLoad.add((removed: true, playback: playback));
+    }
+    if (_playbacksByKey.containsKey(key)) {
+      setState(() => _playbacksByKey.remove(key));
+    }
+  }
+
+  MediaPlaybackPresentation? _mediaPlaybackForDevice(String deviceId) {
+    final playback = selectCurrentPlaybackForDevice(
+      _playbacksByKey.values,
+      deviceId,
+    );
+    return playback == null
+        ? null
+        : MediaPlaybackPresentation.fromRecord(playback);
   }
 
   void _syncPresenceRefreshLoop() {
@@ -1146,6 +1239,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       key: ValueKey(deviceId.isNotEmpty ? deviceId : displayName),
       peer: peer,
       isOnline: isOnline,
+      mediaPlayback: _mediaPlaybackForDevice(deviceId),
       onClose: onClose,
       onOpenClipboardActivity: canOpenActivity
           ? () => _showActivityForPeer(
@@ -1532,12 +1626,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     return deviceId.length > 18 ? '${deviceId.substring(0, 18)}…' : deviceId;
   }
 
-  OrbitPeerPresentation _orbitPresentationFor(Map<String, dynamic> peer) {
+  OrbitPeerPresentation _orbitPresentationFor(
+    Map<String, dynamic> peer, {
+    bool includeMedia = false,
+  }) {
+    final deviceId = peer['deviceId']?.toString() ?? '';
+    final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
     return OrbitPeerPresentation(
-      deviceId: peer['deviceId']?.toString() ?? '',
+      deviceId: deviceId,
       displayName: _displayNameFor(peer),
       platform: peer['platform']?.toString() ?? 'unknown',
       isOnline: peer['presence']?.toString() == 'online',
+      activity: media == null
+          ? OrbitPeerActivity.none
+          : (media.isPlaying
+              ? OrbitPeerActivity.mediaPlaying
+              : OrbitPeerActivity.mediaPaused),
+      mediaTitle: media?.displayTitle,
+      mediaArtist: media?.artist.isEmpty == false ? media?.artist : null,
     );
   }
 
@@ -1568,7 +1674,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   _localDeviceInfo?['displayName']?.toString() ?? 'This Device',
               localPlatform:
                   _localDeviceInfo?['platform']?.toString() ?? _localPlatform(),
-              peers: peers.map(_orbitPresentationFor).toList(growable: false),
+              peers: peers
+                  .map(
+                      (peer) => _orbitPresentationFor(peer, includeMedia: true))
+                  .toList(growable: false),
               phase: _orbitController,
               scanProgress: _pulseController,
               peerKeyPrefix: 'trusted-orbit-peer',

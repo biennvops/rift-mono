@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../src/ipc/json_rpc_client.dart';
+import '../src/media_playback/playback_presentation.dart';
 import '../widgets/device_focus/device_focus_view.dart';
 import '../widgets/rift_snackbar.dart';
 
@@ -15,6 +16,7 @@ class DeviceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> peer;
   final bool isOnline;
   final bool isSelf;
+  final MediaPlaybackPresentation? mediaPlayback;
   final VoidCallback? onOpenClipboardActivity;
   final VoidCallback? onSendFile;
   final VoidCallback? onViewTransferActivity;
@@ -29,6 +31,7 @@ class DeviceDetailScreen extends StatefulWidget {
     required this.peer,
     required this.isOnline,
     this.isSelf = false,
+    this.mediaPlayback,
   });
 
   @override
@@ -637,6 +640,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             lastSeenAt: lastSeenAt,
             capabilities: capabilities,
             deviceStatus: deviceStatus,
+            mediaPlayback: widget.mediaPlayback,
             isOnline: isOnline,
             onClose: widget.onClose!,
             onRevokeTrust: _forgetPeer,

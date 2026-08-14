@@ -9,7 +9,7 @@ enum DeviceFocusNodeKind {
   security,
   identity,
   capabilities,
-  info,
+  media,
 }
 
 @immutable

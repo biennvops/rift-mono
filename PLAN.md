@@ -2429,9 +2429,9 @@ The Review 3 implementation is complete when:
 * [x] Closing peer focus returns to Trusted overview.
 * [x] Selecting a nearby peer presents pairing action in-place.
 * [x] Existing pairing semantics still work.
-* [ ] Generic `Info` node is removed/replaced.
-* [ ] Media node uses mirrored playback state.
-* [ ] Multiple playback sessions use newest non-stopped selection.
+* [x] Generic `Info` node is removed/replaced.
+* [x] Media node uses mirrored playback state.
+* [x] Multiple playback sessions use newest non-stopped selection.
 * [ ] Playing media applies album-derived peer-local accent.
 * [ ] Playing state has subtle continuous playback motion.
 * [ ] Paused state retains accent/glow but removes playback motion.

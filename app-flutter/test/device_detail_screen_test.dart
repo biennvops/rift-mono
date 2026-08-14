@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/src/media_playback/playback_presentation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -104,6 +105,7 @@ void main() {
     FakeDeviceDetailClient client, {
     VoidCallback? onClose,
     bool isSelf = false,
+    MediaPlaybackPresentation? mediaPlayback,
   }) {
     return MaterialApp(
       home: Provider<JsonRpcRiftClient>.value(
@@ -112,6 +114,7 @@ void main() {
           peer: client.trustedPeers.first,
           isOnline: true,
           isSelf: isSelf,
+          mediaPlayback: mediaPlayback,
           onClose: onClose,
         ),
       ),
@@ -354,7 +357,11 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('device-focus-node-info')),
-      findsOneWidget,
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-media')),
+      findsNothing,
     );
     expect(find.text('Pixel 9'), findsOneWidget);
     expect(find.text('Authorized Trusted Peer'), findsNothing);
@@ -696,6 +703,87 @@ void main() {
     expect(find.byKey(const ValueKey('device-focus-node-files')), findsNothing);
     expect(find.byKey(const ValueKey('device-focus-node-capabilities')),
         findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-node-media')), findsNothing);
+  });
+
+  testWidgets('desktop focus exposes stable Media states when supported',
+      (WidgetTester tester) async {
+    final client = FakeDeviceDetailClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-media',
+          'displayName': 'Media Peer',
+          'platform': 'linux',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'lastSeenAt': '2026-08-01T09:00:00Z',
+          'capabilities': ['media.playback', 'presence.basic'],
+        },
+      ];
+    final playing = MediaPlaybackPresentation.fromRecord({
+      'playbackId': 'session-1',
+      'sourceDeviceId': 'rift-media',
+      'appName': 'Rift Music',
+      'title': 'Northern Lights',
+      'artist': 'Signal Bloom',
+      'album': 'Continuity',
+      'playbackState': 'playing',
+      'positionMs': 31000,
+      'durationMs': 181000,
+      'updatedAt': '2026-08-01T10:00:00Z',
+    });
+
+    await tester.pumpWidget(
+      buildTestApp(client, onClose: () {}, mediaPlayback: playing),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-node-info')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('device-focus-node-media')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-media-playing')),
+      findsOneWidget,
+    );
+    expect(find.text('Northern Lights'), findsOneWidget);
+    expect(find.text('Playing'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-node-media')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-media')),
+      findsOneWidget,
+    );
+    expect(find.text('Signal Bloom'), findsOneWidget);
+    expect(find.text('Continuity'), findsOneWidget);
+    expect(find.text('Rift Music'), findsOneWidget);
+    expect(find.text('0:31 / 3:01'), findsOneWidget);
+
+    final paused = MediaPlaybackPresentation.fromRecord({
+      'playbackId': 'session-1',
+      'sourceDeviceId': 'rift-media',
+      'appName': 'Rift Music',
+      'title': 'Northern Lights',
+      'playbackState': 'paused',
+      'updatedAt': '2026-08-01T10:01:00Z',
+    });
+    await tester.pumpWidget(
+      buildTestApp(client, onClose: () {}, mediaPlayback: paused),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-media-paused')),
+      findsOneWidget,
+    );
+    expect(find.text('Paused'), findsWidgets);
+
+    await tester.pumpWidget(buildTestApp(client, onClose: () {}));
+    await tester.pumpAndSettle();
+    expect(find.text('Nothing playing'), findsWidgets);
+    expect(
+        find.byKey(const ValueKey('device-focus-node-media')), findsOneWidget);
   });
 
   testWidgets('desktop focus respects reduced motion accessibility settings',
@@ -743,6 +831,10 @@ void main() {
 
     await tester.tap(
       find.byKey(const ValueKey('device-focus-node-clipboard')),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-open-clipboard')),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('device-focus-open-clipboard')));
