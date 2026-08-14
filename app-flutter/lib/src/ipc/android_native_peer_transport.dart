@@ -8,7 +8,11 @@ import '../platform/android_native_tls.dart';
 import 'native_tls_api.dart';
 
 class AndroidNativePeerTransport
-    implements Transport, BoundTransport, PendingCandidateTransport {
+    implements
+        Transport,
+        BoundTransport,
+        PendingCandidateTransport,
+        ConnectionScopedTransport {
   AndroidNativePeerTransport(
     this._identityManager, {
     required int port,
@@ -26,6 +30,8 @@ class AndroidNativePeerTransport
       StreamController<TransportMessage>.broadcast();
   final StreamController<String> _disconnects =
       StreamController<String>.broadcast(sync: true);
+  final StreamController<TransportDisconnect> _connectionDisconnects =
+      StreamController<TransportDisconnect>.broadcast(sync: true);
   bool _stopping = false;
   int _boundPort = 0;
 
@@ -37,6 +43,10 @@ class AndroidNativePeerTransport
 
   @override
   Stream<String> get onPeerDisconnected => _disconnects.stream;
+
+  @override
+  Stream<TransportDisconnect> get onConnectionDisconnected =>
+      _connectionDisconnects.stream;
 
   @override
   Future<void> startServer() async {
@@ -197,15 +207,16 @@ class AndroidNativePeerTransport
     required Uint8List certDer,
     required Uint8List peerEd25519Key,
     required bool isServer,
-  }) => _NativePeerConnection(
-    connectionId: connection.connectionId,
-    peerDeviceId: peerDeviceId,
-    peerCertificateDer: certDer,
-    peerEd25519Key: peerEd25519Key,
-    remoteAddress: connection.remoteAddress,
-    remotePort: connection.remotePort,
-    isServer: isServer,
-  );
+  }) =>
+      _NativePeerConnection(
+        connectionId: connection.connectionId,
+        peerDeviceId: peerDeviceId,
+        peerCertificateDer: certDer,
+        peerEd25519Key: peerEd25519Key,
+        remoteAddress: connection.remoteAddress,
+        remotePort: connection.remotePort,
+        isServer: isServer,
+      );
 
   void _startAuthenticationTimeout(_NativePeerConnection peer) {
     peer.authenticationTimeout = Timer(const Duration(seconds: 10), () {
@@ -216,7 +227,7 @@ class AndroidNativePeerTransport
         }
       } else if (identical(_peers[peer.peerDeviceId], peer) &&
           !peer.authenticated) {
-        disconnect(peer.peerDeviceId);
+        disconnectConnection(peer.peerDeviceId, peer);
       }
     });
   }
@@ -247,14 +258,15 @@ class AndroidNativePeerTransport
   TransportMessage _transportMessage(
     _NativePeerConnection peer,
     Map<String, dynamic> frame,
-  ) => TransportMessage(
-    peerDeviceId: peer.peerDeviceId,
-    payload: Uint8List.fromList(utf8.encode(json.encode(frame))),
-    peerEd25519Key: peer.peerEd25519Key,
-    peerCertDer: peer.peerCertificateDer,
-    connectionToken: peer,
-    pendingCandidate: peer.pendingCandidate,
-  );
+  ) =>
+      TransportMessage(
+        peerDeviceId: peer.peerDeviceId,
+        payload: Uint8List.fromList(utf8.encode(json.encode(frame))),
+        peerEd25519Key: peer.peerEd25519Key,
+        peerCertDer: peer.peerCertificateDer,
+        connectionToken: peer,
+        pendingCandidate: peer.pendingCandidate,
+      );
 
   @visibleForTesting
   void injectConnectionForTesting({
@@ -468,8 +480,18 @@ class AndroidNativePeerTransport
     try {
       await _tls.close(peer.connectionId);
     } catch (_) {}
-    if (notify && !_disconnects.isClosed) {
-      _disconnects.add(peer.peerDeviceId);
+    if (notify) {
+      if (!_connectionDisconnects.isClosed) {
+        _connectionDisconnects.add(
+          TransportDisconnect(
+            peerDeviceId: peer.peerDeviceId,
+            connectionToken: peer,
+          ),
+        );
+      }
+      if (!_disconnects.isClosed) {
+        _disconnects.add(peer.peerDeviceId);
+      }
     }
     final streamTeardown = _tearDownConnectionStreams(
       peer,
@@ -524,6 +546,37 @@ class AndroidNativePeerTransport
   }
 
   @override
+  Object? currentConnectionToken(String peerDeviceId) => _peers[peerDeviceId];
+
+  @override
+  bool isCurrentConnection(
+    String peerDeviceId,
+    Object? connectionToken,
+  ) =>
+      connectionToken != null &&
+      identical(_peers[peerDeviceId], connectionToken);
+
+  @override
+  void disconnectConnection(
+    String peerDeviceId,
+    Object? connectionToken,
+  ) {
+    if (connectionToken is! _NativePeerConnection ||
+        connectionToken.peerDeviceId != peerDeviceId) {
+      return;
+    }
+    if (identical(_peers[peerDeviceId], connectionToken)) {
+      _peers.remove(peerDeviceId);
+      unawaited(_closeConnection(connectionToken, notify: true));
+      return;
+    }
+    if (identical(_pendingCandidates[peerDeviceId], connectionToken)) {
+      _pendingCandidates.remove(peerDeviceId);
+    }
+    unawaited(_closeConnection(connectionToken, notify: false));
+  }
+
+  @override
   void disconnect(String peerDeviceId) {
     final peer = _peers.remove(peerDeviceId);
     final candidate = _pendingCandidates.remove(peerDeviceId);
@@ -575,6 +628,7 @@ class AndroidNativePeerTransport
     _peerWriteTails.clear();
     await _messages.close();
     await _disconnects.close();
+    await _connectionDisconnects.close();
   }
 
   String _derivePeerDeviceId(String certificateBase64) {
