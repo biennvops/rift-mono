@@ -30,6 +30,16 @@ class TransportMessage {
   });
 }
 
+class TransportDisconnect {
+  final String peerDeviceId;
+  final Object connectionToken;
+
+  const TransportDisconnect({
+    required this.peerDeviceId,
+    required this.connectionToken,
+  });
+}
+
 abstract class Transport {
   Future<void> startServer();
   Future<void> stopServer();
@@ -48,6 +58,16 @@ abstract class Transport {
   Future<void> sendMessage(String deviceId, Uint8List message);
   Uint8List? getPeerCert(String peerDeviceId);
   PeerSocketEndpoint? getPeerSocketEndpoint(String peerDeviceId);
+}
+
+abstract interface class ConnectionScopedTransport {
+  Object? currentConnectionToken(String peerDeviceId);
+
+  bool isCurrentConnection(String peerDeviceId, Object? connectionToken);
+
+  void disconnectConnection(String peerDeviceId, Object? connectionToken);
+
+  Stream<TransportDisconnect> get onConnectionDisconnected;
 }
 
 abstract interface class PendingCandidateTransport {

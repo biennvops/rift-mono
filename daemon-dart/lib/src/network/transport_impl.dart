@@ -14,7 +14,8 @@ import '../crypto/base32_utils.dart';
 import 'frame_codec.dart';
 import 'peer_write_gate.dart';
 
-class TransportImpl implements Transport, BoundTransport {
+class TransportImpl
+    implements Transport, BoundTransport, ConnectionScopedTransport {
   @visibleForTesting
   static bool retainExistingSessionOnDuplicate({
     required bool isAuthenticated,
@@ -22,6 +23,8 @@ class TransportImpl implements Transport, BoundTransport {
 
   final IdentityManager _identityManager;
   final int port;
+  final Future<void> Function(SecureSocket socket, Uint8List frame)
+  _frameWriter;
 
   SecureServerSocket? _serverSocket;
   final Map<String, SecureSocket> _peers = {};
@@ -32,8 +35,19 @@ class TransportImpl implements Transport, BoundTransport {
   final Map<String, Timer> _unauthenticatedTimeouts = {};
   final _messageController = StreamController<TransportMessage>.broadcast();
   final _disconnectController = StreamController<String>.broadcast();
+  final _connectionDisconnectController =
+      StreamController<TransportDisconnect>.broadcast();
 
-  TransportImpl(this._identityManager, {required this.port});
+  TransportImpl(
+    this._identityManager, {
+    required this.port,
+    Future<void> Function(SecureSocket socket, Uint8List frame)? frameWriter,
+  }) : _frameWriter = frameWriter ?? _writeFrame;
+
+  static Future<void> _writeFrame(SecureSocket socket, Uint8List frame) async {
+    socket.add(frame);
+    await socket.flush();
+  }
 
   @override
   int get boundPort => _serverSocket?.port ?? port;
@@ -105,6 +119,7 @@ class TransportImpl implements Transport, BoundTransport {
     _peerWriteGates.clear();
     await _messageController.close();
     await _disconnectController.close();
+    await _connectionDisconnectController.close();
   }
 
   @override
@@ -270,6 +285,7 @@ class TransportImpl implements Transport, BoundTransport {
                   ),
                   peerEd25519Key: peerEd25519Key,
                   peerCertDer: peerCert.der,
+                  connectionToken: socket,
                 ),
               );
             },
@@ -292,7 +308,7 @@ class TransportImpl implements Transport, BoundTransport {
             RiftLog.warn(
               '[TLS] Closing unauthenticated peer after timeout peerDeviceId=$peerDeviceId role=${isServer ? "inbound" : "outbound"}',
             );
-            disconnect(peerDeviceId);
+            disconnectConnection(peerDeviceId, socket);
           }
         },
       );
@@ -307,31 +323,63 @@ class TransportImpl implements Transport, BoundTransport {
 
   @override
   void disconnect(String peerDeviceId) {
-    RiftLog.debug(
-      '[TLS] disconnect(peerDeviceId=$peerDeviceId) authenticated=${_authenticatedPeers.contains(peerDeviceId)} '
-      'role=${_peerSocketIsServer[peerDeviceId] == true
-          ? "inbound"
-          : _peerSocketIsServer.containsKey(peerDeviceId)
-          ? "outbound"
-          : "unknown"}',
-    );
-    _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
-    _peers[peerDeviceId]?.destroy();
-    _peers.remove(peerDeviceId);
-    _peerSocketIsServer.remove(peerDeviceId);
-    _peerCerts.remove(peerDeviceId);
-    _peerWriteGates.remove(peerDeviceId);
-    _authenticatedPeers.remove(peerDeviceId);
+    final socket = _peers[peerDeviceId];
+    if (socket != null) {
+      _disconnectIfCurrent(peerDeviceId, socket);
+      return;
+    }
+
+    _clearPeerState(peerDeviceId);
     if (!_disconnectController.isClosed) {
       _disconnectController.add(peerDeviceId);
     }
   }
 
+  @visibleForTesting
+  void injectConnectionForTesting(
+    String peerDeviceId,
+    SecureSocket socket, {
+    bool isServer = false,
+  }) {
+    final previous = _peers[peerDeviceId];
+    _peers[peerDeviceId] = socket;
+    _peerSocketIsServer[peerDeviceId] = isServer;
+    _peerWriteGates.putIfAbsent(peerDeviceId, PeerWriteGate.new);
+    if (previous != null && !identical(previous, socket)) {
+      previous.destroy();
+    }
+  }
+
+  @override
+  Object? currentConnectionToken(String peerDeviceId) => _peers[peerDeviceId];
+
+  @override
+  bool isCurrentConnection(String peerDeviceId, Object? connectionToken) =>
+      connectionToken != null &&
+      identical(_peers[peerDeviceId], connectionToken);
+
+  @override
+  void disconnectConnection(String peerDeviceId, Object? connectionToken) {
+    if (connectionToken is! SecureSocket) {
+      RiftLog.debug(
+        '[TLS] Ignoring connection teardown without a valid token '
+        'for peerDeviceId=$peerDeviceId',
+      );
+      return;
+    }
+    _disconnectIfCurrent(peerDeviceId, connectionToken);
+  }
+
+  @override
+  Stream<TransportDisconnect> get onConnectionDisconnected =>
+      _connectionDisconnectController.stream;
+
   void _disconnectIfCurrent(String peerDeviceId, SecureSocket socket) {
     if (!identical(_peers[peerDeviceId], socket)) {
       RiftLog.debug(
-        '[TLS] Ignoring disconnect from stale socket for peerDeviceId=$peerDeviceId '
-        'socket=${socket.remoteAddress.address}:${socket.remotePort}',
+        '[TLS] Ignoring stale connection teardown for '
+        'peerDeviceId=$peerDeviceId connection=${identityHashCode(socket)}; '
+        'replacement connection is current',
       );
       try {
         socket.destroy();
@@ -341,7 +389,38 @@ class TransportImpl implements Transport, BoundTransport {
       return;
     }
 
-    disconnect(peerDeviceId);
+    RiftLog.debug(
+      '[TLS] Disconnecting current connection for peerDeviceId=$peerDeviceId '
+      'connection=${identityHashCode(socket)} '
+      'authenticated=${_authenticatedPeers.contains(peerDeviceId)} '
+      'role=${_peerSocketIsServer[peerDeviceId] == true
+          ? "inbound"
+          : _peerSocketIsServer.containsKey(peerDeviceId)
+          ? "outbound"
+          : "unknown"}',
+    );
+    _clearPeerState(peerDeviceId);
+    socket.destroy();
+    if (!_connectionDisconnectController.isClosed) {
+      _connectionDisconnectController.add(
+        TransportDisconnect(
+          peerDeviceId: peerDeviceId,
+          connectionToken: socket,
+        ),
+      );
+    }
+    if (!_disconnectController.isClosed) {
+      _disconnectController.add(peerDeviceId);
+    }
+  }
+
+  void _clearPeerState(String peerDeviceId) {
+    _unauthenticatedTimeouts.remove(peerDeviceId)?.cancel();
+    _peers.remove(peerDeviceId);
+    _peerSocketIsServer.remove(peerDeviceId);
+    _peerCerts.remove(peerDeviceId);
+    _peerWriteGates.remove(peerDeviceId);
+    _authenticatedPeers.remove(peerDeviceId);
   }
 
   @override
@@ -378,7 +457,7 @@ class TransportImpl implements Transport, BoundTransport {
         throw const FormatException('Outbound payload must be a JSON object');
       }
     } on FormatException {
-      disconnect(deviceId);
+      disconnectConnection(deviceId, socket);
       rethrow;
     }
 
@@ -395,17 +474,16 @@ class TransportImpl implements Transport, BoundTransport {
           );
         }
 
-        currentSocket.add(frame);
-        await currentSocket.flush();
+        await _frameWriter(currentSocket, frame);
         RiftLog.info(
           '[TLS] transport.sendMessage flushed peerDeviceId=$deviceId',
         );
       });
     } on SocketException {
-      disconnect(deviceId);
+      disconnectConnection(deviceId, socket);
       rethrow;
     } on StateError {
-      disconnect(deviceId);
+      disconnectConnection(deviceId, socket);
       rethrow;
     }
   }
