@@ -26,6 +26,29 @@ jobs:
         run: flutter test --coverage
         working-directory: app-flutter
 
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Install Flutter dependencies
+        run: flutter pub get
+        working-directory: app-flutter
+      - name: Build Flutter Windows app
+        run: flutter build windows --debug
+        working-directory: app-flutter
+      - name: Build Windows daemon
+        run: dotnet build Rift.Daemon.Windows/Rift.Daemon.Windows.csproj -c Release
+        working-directory: daemon-cs
+
   daemon-dart-test:
     runs-on: ubuntu-latest
     steps:
