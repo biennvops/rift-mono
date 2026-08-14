@@ -18,7 +18,7 @@ The development identity workflow is documented in [`app-flutter/windows/identit
 
 ## Source metadata
 
-The source identifier is `windows:<UserNotification.Id>`. It is not derived from notification text, timestamps, or application names. Windows `Added` notifications are posted for new identifiers and updated for identifiers already tracked by the coordinator. `Removed` notifications retain the same identifier.
+The source identifier is `windows:<UserNotification.Id>`. It is not derived from notification text, timestamps, or application names. Active notifications absent from the preceding successful snapshot are posted, changed notifications retain the same identifier and are updated, and identifiers absent from a successful snapshot are removed.
 
 The observer forwards only normalized preview metadata:
 
@@ -29,24 +29,26 @@ The observer forwards only normalized preview metadata:
 - `UserNotification.CreationTime` as the UTC `postedAt` value; and
 - an optional registered application logo normalized to canonical PNG metadata through the shared notification-icon helper.
 
-Raw toast XML, action arguments, input values, hidden payloads, arbitrary images, and launch parameters are not forwarded. While the packaged listener is running with allowed access, exact active Windows-origin records advertise `isDismissible: true` and `isOpenable: false`. These flags describe what the source process can currently execute for that specific record; they are not general platform capability flags. Rift-owned notifications are filtered by application identity, never by display name.
+Raw toast XML, action arguments, input values, hidden payloads, arbitrary images, and launch parameters are not forwarded. While the packaged observer is running with allowed access, exact active Windows-origin records advertise `isDismissible: true` and `isOpenable: false`. These flags describe what the source process can currently execute for that specific record; they are not general platform capability flags. Rift-owned notifications are filtered by application identity, never by display name.
 
 ## Source actions
 
-The C# daemon delivers an incoming peer Dismiss only to the connected user-session process that owns the connection-scoped notification-action executor lease. The coordinator claims that lease after package identity, listener access, and local policy checks pass; if another Rift process already owns it, the later process does not start notification observation or advertise Dismiss. The daemon releases ownership automatically when the IPC connection closes. The Dart coordinator accepts only `dismiss` for the local device and an exact `windows:<decimal uint32>` identity, then re-checks the tracked/active listener snapshot before calling the public `UserNotificationListener.RemoveNotification(id)` API. Invalid, overflowing, stale, or unavailable targets fail closed; Open, reply, and arbitrary actions remain unsupported.
+The C# daemon delivers an incoming peer Dismiss only to the connected user-session process that owns the connection-scoped notification-action executor lease. The coordinator claims that lease after package identity, listener access, and local policy checks pass; if another Rift process already owns it, the later process does not start notification observation or advertise Dismiss. The daemon releases ownership automatically when the IPC connection closes. The Dart coordinator accepts only `dismiss` for the local device and an exact `windows:<decimal uint32>` identity, then re-checks the tracked/active snapshot before calling the public `UserNotificationListener.RemoveNotification(id)` API. Invalid, overflowing, stale, or unavailable targets fail closed; Open, reply, and arbitrary actions remain unsupported.
 
-The coordinator reports completion through `rift.reportLocalNotificationActionHandled`. It does not synthesize source removal: the normal `NotificationChanged(Removed)` event flows through `rift.notifyLocalNotificationEvent(removed)` and remains authoritative. Native errors are mapped to Rift's stable failure vocabulary; HRESULTs are not sent to peers.
+After a successful native removal, the coordinator reports completion through `rift.reportLocalNotificationActionHandled` and immediately obtains another active snapshot. It publishes a source removal only when that snapshot confirms the identifier is absent; it does not assume that native success alone removed the record. Native errors are mapped to Rift's stable failure vocabulary; HRESULTs are not sent to peers.
 
 ## Lifecycle and recovery
 
-The Dart coordinator subscribes to the native event channel, serializes source events FIFO, and maintains an in-memory identifier map. On startup and reconnect it calls `GetNotificationsAsync(NotificationKinds::Toast)` and compares the active snapshot with daemon records whose `sourceDeviceId` is the local device and whose `sourcePlatform` is `windows`.
+The Dart coordinator serializes snapshot polls and source actions FIFO and maintains an in-memory identifier map. It calls `GetNotificationsAsync(NotificationKinds::Toast)` at startup, on reconnect, immediately after a successful remote Dismiss, and every two seconds while running. It deliberately does not subscribe to `UserNotificationListener.NotificationChanged`: that subscription crashes the per-user Windows Push Notifications service on affected Windows 11 builds, while enumeration remains healthy.
 
-This source-side reconciliation emits:
+Startup and reconnect compare the active snapshot with daemon records whose `sourceDeviceId` is the local device and whose `sourcePlatform` is `windows`. Later polls diff against the preceding successful snapshot. This source-side reconciliation emits:
 
-- `posted` for active notifications absent from daemon state;
-- `updated` for active notifications already represented locally; and
-- `removed` for local Windows source records absent from the active snapshot.
+- `posted` for newly active notifications;
+- `updated` only when normalized metadata for an active identifier changes; and
+- `removed` for locally tracked Windows source records absent from a successful active snapshot.
 
-Remote-origin records are never compared with Windows' local active set. Receiver-side mirror cleanup remains the existing mirrored-notification reconciliation path.
+A failed snapshot is non-authoritative and leaves tracked state unchanged. If Windows enumerates a notification but its metadata cannot be extracted, Rift retains its identity without publishing incomplete data, treating it as removed, or accepting a remote action for it until a complete snapshot is available. Remote-origin records are never compared with Windows' local active set. Receiver-side mirror cleanup remains the existing mirrored-notification reconciliation path.
+
+Polling makes ordinary Windows notification posts, updates, and user-initiated removals visible with up to approximately two seconds of source-side latency. A successful remote Dismiss does not wait for the next scheduled poll because it triggers immediate reconciliation.
 
 If the Rift user-session process exits, observation and source-action execution stop. Incoming Windows actions then fail with `CapabilityUnavailable`; they are not queued waiting for the UI process to restart. No Windows background task or second Windows-only daemon protocol is used. All events continue through `rift.notifyLocalNotificationEvent` and the existing `notification.sync@1` contract.

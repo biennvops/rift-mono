@@ -81,6 +81,7 @@ class WindowsNotificationListener {
       std::shared_ptr<State> state,
       uint64_t generation,
       winrt::Windows::UI::Notifications::UserNotification notification,
+      bool include_filtered,
       NotificationCallback callback);
 
   flutter::BinaryMessenger* messenger_;

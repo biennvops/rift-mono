@@ -95,6 +95,50 @@ void main() {
         ]));
   });
 
+  test('propagates native snapshot failures', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'listActive') {
+        throw PlatformException(
+          code: 'notification_snapshot_failed',
+          message: 'snapshot failed',
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      platform.listActiveNotifications(),
+      throwsA(
+        isA<PlatformException>().having(
+          (error) => error.code,
+          'code',
+          'notification_snapshot_failed',
+        ),
+      ),
+    );
+  });
+
+  test('rejects malformed native snapshot responses', () async {
+    const platform = MethodChannelWindowsNotificationListener();
+    for (final response in <Object>[
+      true,
+      <Object>[true]
+    ]) {
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'listActive') {
+          return response;
+        }
+        return null;
+      });
+
+      await expectLater(
+        platform.listActiveNotifications(),
+        throwsA(isA<FormatException>()),
+      );
+    }
+  });
+
   test('removes a valid notification through the native channel', () async {
     const platform = MethodChannelWindowsNotificationListener();
 

@@ -543,7 +543,10 @@ winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
     }
     if (listener.GetAccessStatus() !=
         UserNotificationListenerAccessStatus::Allowed) {
-      result->Success(EncodableValue(flutter::EncodableList()));
+      result->Error(
+          "notification_snapshot_unavailable",
+          "Windows notification-listener access is not allowed.",
+          EncodableValue());
       co_return;
     }
 
@@ -569,8 +572,19 @@ winrt::fire_and_forget WindowsNotificationListener::ListActiveAsync(
           state, generation, items, index, entries, result, strong_next);
     };
     (*next)(0);
+  } catch (const winrt::hresult_error& error) {
+    EncodableMap details;
+    details[EncodableValue("hresult")] =
+        EncodableValue(error.code().value);
+    auto message = Utf8(HStringValue(error.message()));
+    if (message.empty()) {
+      message = "Windows notification snapshot failed.";
+    }
+    result->Error("notification_snapshot_failed", message,
+                  EncodableValue(details));
   } catch (...) {
-    result->Success(EncodableValue(flutter::EncodableList()));
+    result->Error("notification_snapshot_failed",
+                  "Windows notification snapshot failed.", EncodableValue());
   }
 }
 
@@ -589,11 +603,20 @@ void WindowsNotificationListener::ContinueListActive(
 
   const auto notification = (*notifications)[index];
   BuildNotificationAsync(
-      state, generation, notification,
-      [state, entries, result, next, index](
+      state, generation, notification, true,
+      [state, entries, result, next, index, notification](
           std::optional<EncodableMap> item) {
         if (item.has_value()) {
           entries->push_back(EncodableValue(std::move(item.value())));
+        } else {
+          EncodableMap incomplete;
+          incomplete[EncodableValue("snapshotIncomplete")] =
+              EncodableValue(true);
+          incomplete[EncodableValue("userNotificationId")] =
+              EncodableValue(static_cast<int64_t>(notification.Id()));
+          incomplete[EncodableValue("notificationId")] = EncodableValue(
+              "windows:" + std::to_string(notification.Id()));
+          entries->push_back(EncodableValue(std::move(incomplete)));
         }
         (*next)(index + 1);
       });
@@ -663,10 +686,20 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
     state_->runtime = runtime;
   }
   if (!runtime.supported || !runtime.has_package_identity) {
-    result->Success(EncodableValue(false));
+    EncodableMap details;
+    details[EncodableValue("stage")] = EncodableValue("runtime");
+    details[EncodableValue("supported")] =
+        EncodableValue(runtime.supported);
+    details[EncodableValue("hasPackageIdentity")] =
+        EncodableValue(runtime.has_package_identity);
+    result->Error(
+        "notification_listener_unavailable",
+        "Windows notification listening requires a supported packaged runtime.",
+        EncodableValue(details));
     return;
   }
 
+  std::string stage = "current";
   try {
     UserNotificationListener listener{nullptr};
     {
@@ -678,9 +711,18 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
       std::lock_guard<std::mutex> lock(state_->gate);
       state_->listener = listener;
     }
-    if (listener.GetAccessStatus() !=
-        UserNotificationListenerAccessStatus::Allowed) {
-      result->Success(EncodableValue(false));
+
+    stage = "access";
+    const auto access_status = listener.GetAccessStatus();
+    if (access_status != UserNotificationListenerAccessStatus::Allowed) {
+      EncodableMap details;
+      details[EncodableValue("stage")] = EncodableValue(stage);
+      details[EncodableValue("accessStatus")] =
+          EncodableValue(AccessStatusToString(access_status));
+      result->Error(
+          "notification_listener_access_unavailable",
+          "Windows notification-listener access is not allowed.",
+          EncodableValue(details));
       return;
     }
 
@@ -698,6 +740,7 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
       state_->ignored_notification_ids.clear();
     }
 
+    stage = "subscribe";
     const auto token = listener.NotificationChanged(
         [state = state_, generation](
             UserNotificationListener const&,
@@ -720,12 +763,32 @@ void WindowsNotificationListener::Start(std::unique_ptr<MethodResult> result) {
         listener.NotificationChanged(token);
       } catch (...) {
       }
-      result->Success(EncodableValue(false));
+      EncodableMap details;
+      details[EncodableValue("stage")] = EncodableValue("install");
+      result->Error(
+          "notification_listener_start_failed",
+          "Windows notification-listener state changed during startup.",
+          EncodableValue(details));
       return;
     }
     result->Success(EncodableValue(true));
+  } catch (const winrt::hresult_error& error) {
+    EncodableMap details;
+    details[EncodableValue("stage")] = EncodableValue(stage);
+    details[EncodableValue("hresult")] =
+        EncodableValue(error.code().value);
+    auto message = Utf8(HStringValue(error.message()));
+    if (message.empty()) {
+      message = "Windows notification listener failed to start.";
+    }
+    result->Error("notification_listener_start_failed", message,
+                  EncodableValue(details));
   } catch (...) {
-    result->Success(EncodableValue(false));
+    EncodableMap details;
+    details[EncodableValue("stage")] = EncodableValue(stage);
+    result->Error("notification_listener_start_failed",
+                  "Windows notification listener failed to start.",
+                  EncodableValue(details));
   }
 }
 
@@ -844,7 +907,7 @@ void WindowsNotificationListener::DrainNotificationChanges(
     }
 
     BuildNotificationAsync(
-        state, generation, notification,
+        state, generation, notification, false,
         [state, generation](std::optional<EncodableMap> event) {
           if (event.has_value()) {
             PostEvent(state, generation, std::move(event.value()));
@@ -860,6 +923,7 @@ winrt::fire_and_forget WindowsNotificationListener::BuildNotificationAsync(
     std::shared_ptr<State> state,
     uint64_t generation,
     UserNotification notification,
+    bool include_filtered,
     NotificationCallback callback) {
   std::optional<EncodableMap> event;
   try {
@@ -882,6 +946,17 @@ winrt::fire_and_forget WindowsNotificationListener::BuildNotificationAsync(
       runtime = state->runtime;
     }
     if (IsRiftApp(runtime, app_user_model_id, package_family_name)) {
+      if (include_filtered) {
+        EncodableMap filtered;
+        filtered[EncodableValue("isRiftNotification")] = EncodableValue(true);
+        filtered[EncodableValue("userNotificationId")] =
+            EncodableValue(static_cast<int64_t>(notification.Id()));
+        filtered[EncodableValue("notificationId")] = EncodableValue(
+            "windows:" + std::to_string(notification.Id()));
+        event = std::move(filtered);
+        callback(std::move(event));
+        co_return;
+      }
       {
         std::lock_guard<std::mutex> lock(state->gate);
         if (state->listener_generation == generation) {

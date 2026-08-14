@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../ipc/json_rpc_client.dart';
 import '../notification_icon.dart';
@@ -12,25 +13,31 @@ class WindowsNotificationSyncCoordinator {
     Future<void> Function(Map<String, dynamic> event)? publishEvent,
     WindowsNotificationListenerPlatform? listener,
     Future<String?> Function()? getLocalDeviceId,
+    Duration pollInterval = const Duration(seconds: 2),
   })  : _client = client,
         _listener = listener ?? WindowsNotificationListener.platform,
         _publishEvent = publishEvent,
-        _getLocalDeviceId = getLocalDeviceId;
+        _getLocalDeviceId = getLocalDeviceId,
+        _pollInterval = pollInterval;
 
   final JsonRpcRiftClient _client;
   final WindowsNotificationListenerPlatform _listener;
   final Future<void> Function(Map<String, dynamic> event)? _publishEvent;
   final Future<String?> Function()? _getLocalDeviceId;
+  final Duration _pollInterval;
   final Map<String, Map<String, dynamic>> _tracked =
       <String, Map<String, dynamic>>{};
+  final Set<String> _incompleteSnapshotIds = <String>{};
 
   Future<void> _operationQueue = Future<void>.value();
-  StreamSubscription<Map<String, dynamic>>? _eventSubscription;
   StreamSubscription<Map<String, dynamic>>? _actionRequestSubscription;
   StreamSubscription<bool>? _connectionSubscription;
+  Timer? _pollTimer;
   WindowsNotificationListenerRuntimeStatus? _runtime;
   bool _running = false;
   bool _ownsActionExecutor = false;
+  bool _hasSuccessfulSnapshot = false;
+  bool _pollQueued = false;
   bool _disposed = false;
 
   bool get isRunning => _running;
@@ -96,10 +103,17 @@ class WindowsNotificationSyncCoordinator {
     final runtime = await _listener.getRuntimeStatus();
     _runtime = runtime;
     final policy = await loadNotificationSyncPolicyPreferences();
+    final accessStatus = await _listener.getAccessStatus();
     if (!runtime.supported ||
         !runtime.hasPackageIdentity ||
         !policy.enabled ||
-        await _listener.getAccessStatus() != 'allowed') {
+        accessStatus != 'allowed') {
+      debugPrint(
+        '[Notification Sync] Windows notification listener prerequisites '
+        'unavailable: supported=${runtime.supported}, '
+        'packaged=${runtime.hasPackageIdentity}, '
+        'policyEnabled=${policy.enabled}, access=$accessStatus.',
+      );
       await _stopInternal();
       return;
     }
@@ -107,49 +121,39 @@ class WindowsNotificationSyncCoordinator {
     try {
       final result = await _client.acquireNotificationActionExecutor();
       if (result is! Map || result['acquired'] != true) {
+        debugPrint(
+          '[Notification Sync] Notification action executor is owned by '
+          'another IPC client.',
+        );
         _ownsActionExecutor = false;
         await _stopInternal();
         return;
       }
       _ownsActionExecutor = true;
-    } catch (_) {
+    } catch (error) {
+      debugPrint(
+        '[Notification Sync] Failed to acquire notification action executor: '
+        '$error',
+      );
       await _stopInternal();
       return;
     }
 
     if (!_running) {
-      _eventSubscription ??= _listener.events.listen((event) {
-        unawaited(_enqueue(() => _handleNativeEvent(event)));
-      });
-      try {
-        final started = await _listener.start();
-        if (!started) {
-          await _stopInternal();
-          return;
-        }
-        _running = true;
-      } catch (_) {
-        await _stopInternal();
-        return;
-      }
+      _running = true;
+      _pollTimer = Timer.periodic(_pollInterval, (_) => _queuePoll());
     }
 
-    await _reconcileIfRunning();
+    await _reconcileIfRunning(reconcileDaemonState: true);
   }
 
   Future<void> _stopInternal() async {
-    final subscription = _eventSubscription;
-    _eventSubscription = null;
-    await subscription?.cancel();
-    if (_running) {
-      try {
-        await _listener.stop();
-      } catch (_) {
-        // Listener cleanup is best effort when the native bridge is going away.
-      }
-    }
+    _pollTimer?.cancel();
+    _pollTimer = null;
     _running = false;
+    _hasSuccessfulSnapshot = false;
     _tracked.clear();
+    _incompleteSnapshotIds.clear();
     if (_ownsActionExecutor) {
       _ownsActionExecutor = false;
       try {
@@ -160,13 +164,28 @@ class WindowsNotificationSyncCoordinator {
     }
   }
 
-  Future<void> _reconcileIfRunning() async {
-    if (_disposed || !_running) {
+  void _queuePoll() {
+    if (_disposed || !_running || _pollQueued) {
       return;
     }
+    _pollQueued = true;
+    unawaited(
+      _enqueue(_reconcileIfRunning).then<void>(
+        (_) => _pollQueued = false,
+        onError: (Object error, StackTrace stackTrace) {
+          _pollQueued = false;
+          debugPrint(
+            '[Notification Sync] Windows notification poll failed: $error',
+          );
+        },
+      ),
+    );
+  }
 
-    final localDeviceId = await _localDeviceId();
-    if (localDeviceId == null || localDeviceId.isEmpty) {
+  Future<void> _reconcileIfRunning({
+    bool reconcileDaemonState = false,
+  }) async {
+    if (_disposed || !_running) {
       return;
     }
 
@@ -176,88 +195,87 @@ class WindowsNotificationSyncCoordinator {
     } catch (_) {
       return;
     }
-    final daemonRecords = await _loadLocalWindowsRecords(localDeviceId);
+
+    final reconcileWithDaemon = reconcileDaemonState || !_hasSuccessfulSnapshot;
+    var daemonRecords = <String, dynamic>{};
+    if (reconcileWithDaemon) {
+      final localDeviceId = await _localDeviceId();
+      if (localDeviceId == null || localDeviceId.isEmpty) {
+        return;
+      }
+      daemonRecords = await _loadLocalWindowsRecords(localDeviceId);
+    }
+
+    final previous = Map<String, Map<String, dynamic>>.from(_tracked);
+    final next = <String, Map<String, dynamic>>{};
+    final nextIncompleteIds = <String>{};
     final activeIds = <String>{};
 
     for (final raw in active) {
-      final normalized = _normalizeAdded(raw);
-      if (normalized == null) {
+      final notificationId = _notificationId(raw);
+      if (notificationId == null || raw['isRiftNotification'] == true) {
         continue;
       }
-      final notificationId = normalized['notificationId']!.toString();
       if (!activeIds.add(notificationId)) {
         continue;
       }
-
-      final event = Map<String, dynamic>.from(normalized);
-      event['eventType'] = _tracked.containsKey(notificationId) ||
-              daemonRecords.containsKey(notificationId)
-          ? 'updated'
-          : 'posted';
-      _tracked[notificationId] = Map<String, dynamic>.from(event);
-      await _publish(event);
-    }
-
-    for (final entry in daemonRecords.entries) {
-      if (activeIds.contains(entry.key)) {
+      if (raw['snapshotIncomplete'] == true) {
+        nextIncompleteIds.add(notificationId);
+        final previousEvent = previous[notificationId];
+        if (previousEvent != null) {
+          next[notificationId] = previousEvent;
+        } else if (daemonRecords.containsKey(notificationId)) {
+          next[notificationId] = <String, dynamic>{
+            'notificationId': notificationId,
+            'snapshotIncomplete': true,
+          };
+        }
         continue;
       }
-      _tracked.remove(entry.key);
+
+      final normalized = _normalizeAdded(raw);
+      if (normalized == null) {
+        activeIds.remove(notificationId);
+        continue;
+      }
+
+      final previousEvent = previous[notificationId];
+      final event = Map<String, dynamic>.from(normalized);
+      event['eventType'] =
+          previousEvent != null || daemonRecords.containsKey(notificationId)
+              ? 'updated'
+              : 'posted';
+      next[notificationId] = Map<String, dynamic>.from(normalized);
+      if (reconcileWithDaemon ||
+          previousEvent == null ||
+          !_sameNotification(previousEvent, normalized)) {
+        await _publish(event);
+      }
+    }
+
+    final staleIds = <String>{
+      ...previous.keys,
+      if (reconcileWithDaemon) ...daemonRecords.keys,
+    };
+    for (final notificationId in staleIds) {
+      if (activeIds.contains(notificationId)) {
+        continue;
+      }
       await _publish(<String, dynamic>{
         'eventType': 'removed',
-        'notificationId': entry.key,
+        'notificationId': notificationId,
         'sourcePlatform': 'windows',
         'removedAt': _nowUtc(),
       });
     }
-  }
 
-  Future<void> _handleNativeEvent(Map<String, dynamic> raw) async {
-    if (_disposed || !_running) {
-      return;
-    }
-
-    final eventType = raw['eventType']?.toString().trim().toLowerCase();
-    if (eventType == 'removed') {
-      await _handleRemoved(raw);
-      return;
-    }
-    if (eventType == 'added' ||
-        eventType == 'posted' ||
-        eventType == 'updated') {
-      final normalized = _normalizeAdded(raw);
-      if (normalized == null) {
-        return;
-      }
-      final notificationId = normalized['notificationId']!.toString();
-      final event = Map<String, dynamic>.from(normalized);
-      event['eventType'] =
-          _tracked.containsKey(notificationId) || eventType == 'updated'
-              ? 'updated'
-              : 'posted';
-      _tracked[notificationId] = Map<String, dynamic>.from(event);
-      await _publish(event);
-    }
-  }
-
-  Future<void> _handleRemoved(Map<String, dynamic> raw) async {
-    final notificationId = _notificationId(raw);
-    if (notificationId == null) {
-      return;
-    }
-
-    final known = (_tracked.remove(notificationId) != null) ||
-        await _daemonHasLocalWindowsRecord(notificationId);
-    if (!known) {
-      return;
-    }
-
-    await _publish(<String, dynamic>{
-      'eventType': 'removed',
-      'notificationId': notificationId,
-      'sourcePlatform': 'windows',
-      'removedAt': _nonEmptyString(raw['removedAt']) ?? _nowUtc(),
-    });
+    _tracked
+      ..clear()
+      ..addAll(next);
+    _incompleteSnapshotIds
+      ..clear()
+      ..addAll(nextIncompleteIds);
+    _hasSuccessfulSnapshot = true;
   }
 
   Future<void> _handleActionRequest(Map<String, dynamic> request) async {
@@ -267,6 +285,7 @@ class WindowsNotificationSyncCoordinator {
     }
 
     var success = false;
+    var shouldReconcile = false;
     String? failureReason;
     String? message;
     final sourceDeviceId = _nonEmptyString(request['sourceDeviceId']);
@@ -275,7 +294,7 @@ class WindowsNotificationSyncCoordinator {
 
     if (_disposed || !_running) {
       failureReason = 'CapabilityUnavailable';
-      message = 'The Windows notification listener is not running.';
+      message = 'The Windows notification observer is not running.';
     } else {
       final localDeviceId = await _localDeviceId();
       if (localDeviceId == null || sourceDeviceId != localDeviceId) {
@@ -288,7 +307,7 @@ class WindowsNotificationSyncCoordinator {
           _runtime?.hasPackageIdentity != true ||
           await _listener.getAccessStatus() != 'allowed') {
         failureReason = 'CapabilityUnavailable';
-        message = 'The Windows notification listener is unavailable.';
+        message = 'The Windows notification observer is unavailable.';
       } else {
         final userNotificationId = _parseWindowsNotificationId(notificationId);
         if (userNotificationId == null) {
@@ -302,6 +321,7 @@ class WindowsNotificationSyncCoordinator {
             final result =
                 await _listener.removeNotification(userNotificationId);
             success = result.success;
+            shouldReconcile = success;
             if (!success) {
               switch (result.status) {
                 case WindowsNotificationRemovalStatus.notFound:
@@ -334,6 +354,13 @@ class WindowsNotificationSyncCoordinator {
     } catch (_) {
       // The daemon may already have timed out or disconnected the requester.
     }
+    if (shouldReconcile) {
+      try {
+        await _reconcileIfRunning();
+      } catch (_) {
+        // A later poll will retry source-state publication.
+      }
+    }
   }
 
   int? _parseWindowsNotificationId(String? notificationId) {
@@ -349,13 +376,15 @@ class WindowsNotificationSyncCoordinator {
   }
 
   Future<bool> _hasExactTarget(String notificationId) async {
-    if (_tracked.containsKey(notificationId)) {
+    final tracked = _tracked[notificationId];
+    if (tracked != null && !_incompleteSnapshotIds.contains(notificationId)) {
       return true;
     }
     try {
       final active = await _listener.listActiveNotifications();
       for (final raw in active) {
-        if (_notificationId(raw) == notificationId) {
+        final normalized = _normalizeAdded(raw);
+        if (normalized?['notificationId'] == notificationId) {
           return true;
         }
       }
@@ -366,7 +395,8 @@ class WindowsNotificationSyncCoordinator {
   }
 
   Map<String, dynamic>? _normalizeAdded(Map<String, dynamic> raw) {
-    if (raw['isRiftNotification'] == true) {
+    if (raw['isRiftNotification'] == true ||
+        raw['snapshotIncomplete'] == true) {
       return null;
     }
 
@@ -395,7 +425,9 @@ class WindowsNotificationSyncCoordinator {
       'appName': appName,
       'isDismissible': _running,
       'isOpenable': false,
-      'postedAt': _nonEmptyString(raw['postedAt']) ?? _nowUtc(),
+      'postedAt': _nonEmptyString(raw['postedAt']) ??
+          _nonEmptyString(_tracked[notificationId]?['postedAt']) ??
+          _nowUtc(),
     };
 
     final title = _nonEmptyString(raw['title']);
@@ -474,15 +506,6 @@ class WindowsNotificationSyncCoordinator {
     }
   }
 
-  Future<bool> _daemonHasLocalWindowsRecord(String notificationId) async {
-    final localDeviceId = await _localDeviceId();
-    if (localDeviceId == null || localDeviceId.isEmpty) {
-      return false;
-    }
-    final records = await _loadLocalWindowsRecords(localDeviceId);
-    return records.containsKey(notificationId);
-  }
-
   Future<String?> _localDeviceId() async {
     final getLocalDeviceId = _getLocalDeviceId;
     if (getLocalDeviceId != null) {
@@ -514,6 +537,38 @@ class WindowsNotificationSyncCoordinator {
       payload: Map<String, Object?>.from(event),
     );
   }
+}
+
+bool _sameNotification(
+  Map<String, dynamic> previous,
+  Map<String, dynamic> next,
+) {
+  if (previous.length != next.length) {
+    return false;
+  }
+  for (final entry in previous.entries) {
+    if (!next.containsKey(entry.key) ||
+        !_sameNotificationValue(entry.value, next[entry.key])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _sameNotificationValue(Object? previous, Object? next) {
+  if (previous is Map && next is Map) {
+    if (previous.length != next.length) {
+      return false;
+    }
+    for (final entry in previous.entries) {
+      if (!next.containsKey(entry.key) ||
+          !_sameNotificationValue(entry.value, next[entry.key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return previous == next;
 }
 
 String _nowUtc() => DateTime.now().toUtc().toIso8601String();

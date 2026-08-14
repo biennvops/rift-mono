@@ -237,18 +237,13 @@ class MethodChannelWindowsNotificationListener
     if (!isSupported) {
       return const <Map<String, dynamic>>[];
     }
-    try {
-      final result = await methodChannel.invokeMethod<Object>('listActive');
-      if (result is! List) {
-        return const <Map<String, dynamic>>[];
-      }
-      return result
-          .whereType<Map>()
-          .map((item) => _dynamicMap(item))
-          .toList(growable: false);
-    } catch (_) {
-      return const <Map<String, dynamic>>[];
+    final result = await methodChannel.invokeMethod<Object>('listActive');
+    if (result is! List || result.any((item) => item is! Map)) {
+      throw const FormatException(
+        'Invalid Windows notification snapshot response.',
+      );
     }
+    return result.cast<Map>().map(_dynamicMap).toList(growable: false);
   }
 
   @override
