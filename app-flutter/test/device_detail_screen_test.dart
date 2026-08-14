@@ -353,15 +353,23 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('device-focus-node-identity')),
+      find.byKey(const ValueKey('device-focus-node-features')),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-identity')),
+      findsNothing,
     );
     expect(
       find.byKey(const ValueKey('device-focus-node-capabilities')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('device-focus-node-info')),
+      find.byKey(const ValueKey('device-focus-node-clipboard')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-files')),
       findsNothing,
     );
     expect(
@@ -369,22 +377,21 @@ void main() {
       findsNothing,
     );
     expect(find.text('Pixel 9'), findsWidgets);
+    expect(find.textContaining('Android 16'), findsOneWidget);
+    expect(find.textContaining('Rift 0.1-draft'), findsOneWidget);
     expect(find.text('Authorized Trusted Peer'), findsNothing);
     expect(find.text('Actions'), findsNothing);
 
     await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-identity')),
+      find.byKey(const ValueKey('device-focus-node-security')),
     );
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('device-focus-panel-identity')),
+      find.byKey(const ValueKey('device-focus-panel-security')),
       findsOneWidget,
     );
-    expect(find.text('rift-phone-1234'), findsWidgets);
     expect(find.text('ABCD-EFGH-IJKL-MNOP'), findsOneWidget);
-    expect(find.text('Android 16'), findsOneWidget);
-    expect(find.text('0.1-draft'), findsOneWidget);
   });
 
   testWidgets('desktop focus nodes support keyboard activation',
@@ -394,9 +401,12 @@ void main() {
     await tester.pumpWidget(buildTestApp(client, onClose: () {}));
     await tester.pumpAndSettle();
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    final securityNode =
+        find.byKey(const ValueKey('device-focus-node-security'));
+    final securityInkWell = tester.widget<InkWell>(
+      find.descendant(of: securityNode, matching: find.byType(InkWell)),
+    );
+    securityInkWell.focusNode!.requestFocus();
     await tester.pump();
 
     expect(
@@ -411,68 +421,66 @@ void main() {
       find.byKey(const ValueKey('device-focus-panel-security')),
       findsOneWidget,
     );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-security')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
   });
 
-  testWidgets('desktop focus animates panel opening and closing',
+  testWidgets('desktop focus transforms a node into a centered panel',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient();
 
     await tester.pumpWidget(buildTestApp(client, onClose: () {}));
     await tester.pumpAndSettle();
 
-    final identityNode =
-        find.byKey(const ValueKey('device-focus-node-identity'));
-    final identityPanel =
-        find.byKey(const ValueKey('device-focus-panel-identity'));
+    final securityNode =
+        find.byKey(const ValueKey('device-focus-node-security'));
+    final securityPanel =
+        find.byKey(const ValueKey('device-focus-panel-security'));
+    final sourceRect = tester.getRect(securityNode);
 
-    await tester.tap(identityNode);
+    await tester.tap(securityNode);
     await tester.pump();
 
-    expect(identityPanel, findsOneWidget);
-    var panelFades = tester.widgetList<FadeTransition>(
-      find.ancestor(
-        of: identityPanel,
-        matching: find.byType(FadeTransition),
-      ),
-    );
-    expect(
-      panelFades.map((fade) => fade.opacity.value),
-      contains(lessThan(1)),
-    );
+    expect(securityPanel, findsOneWidget);
+    final openingRect = tester.getRect(securityPanel);
+    expect((openingRect.center - sourceRect.center).distance, lessThan(0.1));
+    expect((openingRect.width - sourceRect.width).abs(), lessThan(0.1));
+    expect((openingRect.height - sourceRect.height).abs(), lessThan(0.1));
 
     await tester.pump(const Duration(milliseconds: 120));
-    panelFades = tester.widgetList<FadeTransition>(
-      find.ancestor(
-        of: identityPanel,
-        matching: find.byType(FadeTransition),
-      ),
-    );
-    expect(
-      panelFades.map((fade) => fade.opacity.value),
-      contains(inExclusiveRange(0, 1)),
-    );
+    final midpointRect = tester.getRect(securityPanel);
+    expect(midpointRect.center, isNot(openingRect.center));
+    expect(midpointRect.width, greaterThan(openingRect.width));
+
     await tester.pumpAndSettle();
+    final settledRect = tester.getRect(securityPanel);
+    final sceneRect = tester.getRect(
+      find.byKey(const ValueKey('device-focus-panel-scrim')),
+    );
+    expect((settledRect.center - sceneRect.center).distance, lessThan(0.1));
+    expect(settledRect.width, inInclusiveRange(440, 540));
+    expect(settledRect.bottom, lessThan(sceneRect.bottom));
 
     await tester.tap(
       find.byKey(const ValueKey('device-focus-panel-close')),
     );
     await tester.pump();
-
-    expect(identityPanel, findsOneWidget);
+    expect(securityPanel, findsOneWidget);
     await tester.pump(const Duration(milliseconds: 120));
-    panelFades = tester.widgetList<FadeTransition>(
-      find.ancestor(
-        of: identityPanel,
-        matching: find.byType(FadeTransition),
-      ),
-    );
-    expect(
-      panelFades.map((fade) => fade.opacity.value),
-      contains(inExclusiveRange(0, 1)),
-    );
+    expect(tester.getRect(securityPanel).width, lessThan(settledRect.width));
 
     await tester.pumpAndSettle();
-    expect(identityPanel, findsNothing);
+    expect(securityPanel, findsNothing);
+    final securityInkWell = tester.widget<InkWell>(
+      find.descendant(of: securityNode, matching: find.byType(InkWell)),
+    );
+    expect(securityInkWell.focusNode!.hasFocus, isTrue);
   });
 
   testWidgets('desktop focus power panel follows live status updates',
@@ -658,20 +666,35 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+    expect(find.byKey(const ValueKey('device-focus-node-features')),
         findsOneWidget);
-    expect(
-        find.byKey(const ValueKey('device-focus-node-files')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-node-files')), findsNothing);
 
     await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-clipboard')),
+      find.byKey(const ValueKey('device-focus-node-features')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('device-focus-open-clipboard')));
-    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('device-focus-panel-features')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('device-focus-feature-clipboard.offer_fetch'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-feature-file.transfer')),
+      findsOneWidget,
+    );
 
-    await tester.tap(find.byKey(const ValueKey('device-focus-node-files')));
-    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('device-focus-open-clipboard')),
+    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-open-clipboard')));
     await tester.ensureVisible(
       find.byKey(const ValueKey('device-focus-send-file')),
     );
@@ -707,6 +730,8 @@ void main() {
         findsNothing);
     expect(find.byKey(const ValueKey('device-focus-node-files')), findsNothing);
     expect(find.byKey(const ValueKey('device-focus-node-capabilities')),
+        findsNothing);
+    expect(find.byKey(const ValueKey('device-focus-node-features')),
         findsOneWidget);
     expect(find.byKey(const ValueKey('device-focus-node-media')), findsNothing);
   });
@@ -861,7 +886,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
-    expect(find.byKey(const ValueKey('device-focus-node-clipboard')),
+    expect(find.byKey(const ValueKey('device-focus-node-features')),
         findsOneWidget);
 
     await client.emitPeerLost({'deviceId': 'rift-reduced-motion'});
@@ -869,9 +894,20 @@ void main() {
     expect(find.text('Offline'), findsWidgets);
 
     await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-clipboard')),
+      find.byKey(const ValueKey('device-focus-node-features')),
     );
     await tester.pumpAndSettle();
+    final reducedPanel =
+        find.byKey(const ValueKey('device-focus-panel-features'));
+    expect(reducedPanel, findsOneWidget);
+    expect(
+      (tester.getCenter(reducedPanel) -
+              tester.getCenter(
+                find.byKey(const ValueKey('device-focus-panel-scrim')),
+              ))
+          .distance,
+      lessThan(0.1),
+    );
     await tester.ensureVisible(
       find.byKey(const ValueKey('device-focus-open-clipboard')),
     );
@@ -923,8 +959,7 @@ void main() {
     }
   });
 
-  testWidgets(
-      'DeviceDetailScreen renders self device details and copy actions when isSelf is true',
+  testWidgets('embedded self device uses local focus nodes',
       (WidgetTester tester) async {
     final client = FakeDeviceDetailClient();
 
@@ -949,10 +984,21 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('My Laptop'), findsWidgets);
-    expect(find.text('This Device'), findsWidgets);
-    expect(find.text('Copy Device ID'), findsOneWidget);
-    expect(find.text('Copy Fingerprint'), findsOneWidget);
+    expect(find.text('This Device'), findsOneWidget);
+    expect(find.text('rift-local-device-12345678'), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-node-media')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-features')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-security')),
+      findsNothing,
+    );
     expect(find.text('Revoke Trust'), findsNothing);
-    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
   });
 }

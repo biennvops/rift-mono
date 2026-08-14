@@ -4,12 +4,9 @@ import 'package:flutter/material.dart';
 
 enum DeviceFocusNodeKind {
   power,
-  clipboard,
-  files,
-  security,
-  identity,
-  capabilities,
   media,
+  features,
+  security,
 }
 
 @immutable

@@ -15,6 +15,7 @@ class DeviceCore extends StatelessWidget {
     required this.entrance,
     required this.online,
     required this.wake,
+    this.statusLabel,
     this.accentColor,
     this.isMediaPlaying = false,
   });
@@ -26,14 +27,16 @@ class DeviceCore extends StatelessWidget {
   final Animation<double> entrance;
   final Animation<double> online;
   final Animation<double> wake;
+  final String? statusLabel;
   final Color? accentColor;
   final bool isMediaPlaying;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final resolvedStatus = statusLabel ?? (isOnline ? 'Online' : 'Offline');
     return Semantics(
-      label: '$displayName, ${isOnline ? 'Online' : 'Offline'}',
+      label: '$displayName, $resolvedStatus',
       child: AnimatedBuilder(
         animation: Listenable.merge([entrance, online, wake]),
         builder: (context, child) {
@@ -134,31 +137,34 @@ class DeviceCore extends StatelessWidget {
                             ),
                             borderRadius: BorderRadius.circular(999),
                           ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: size < 155 ? 6 : 7,
-                                height: size < 155 ? 6 : 7,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: accent,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: size < 155 ? 6 : 7,
+                                  height: size < 155 ? 6 : 7,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: accent,
+                                  ),
                                 ),
-                              ),
-                              SizedBox(width: size < 155 ? 4 : 6),
-                              Text(
-                                isOnline ? 'Online' : 'Offline',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .labelSmall
-                                    ?.copyWith(
-                                      fontSize: size < 155 ? 10 : null,
-                                      height: 1.2,
-                                      color: accent,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                              ),
-                            ],
+                                SizedBox(width: size < 155 ? 4 : 6),
+                                Text(
+                                  resolvedStatus,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall
+                                      ?.copyWith(
+                                        fontSize: size < 155 ? 10 : null,
+                                        height: 1.2,
+                                        color: accent,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],

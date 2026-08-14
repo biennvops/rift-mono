@@ -17,6 +17,7 @@ class DeviceFocusNode extends StatefulWidget {
     required this.entranceOffset,
     required this.onTap,
     required this.onInteractionChanged,
+    this.focusNode,
     this.accentColor,
   });
 
@@ -31,6 +32,7 @@ class DeviceFocusNode extends StatefulWidget {
   final Offset entranceOffset;
   final VoidCallback onTap;
   final ValueChanged<bool> onInteractionChanged;
+  final FocusNode? focusNode;
   final Color? accentColor;
 
   @override
@@ -109,6 +111,7 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
               selected: widget.isSelected,
               label: '${widget.label}, ${widget.value}. Show details',
               child: InkWell(
+                focusNode: widget.focusNode,
                 onTap: widget.onTap,
                 onHover: (value) => _updateInteraction(hovered: value),
                 onFocusChange: (value) => _updateInteraction(focused: value),

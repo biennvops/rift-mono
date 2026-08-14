@@ -648,6 +648,67 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('desktop This Device opens and closes in-scene focus',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final client = FakeJsonRpcRiftClient()
+      ..deviceInfo = {
+        'deviceId': 'rift-local-abcdefghijklmnopqrstuvwxyz',
+        'displayName': 'Local Workstation',
+        'platform': 'linux',
+        'osVersion': 'Linux 7',
+        'protocolVersion': '0.1-draft',
+        'capabilities': ['clipboard.offer_fetch', 'media.playback'],
+      };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-local-core')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('desktop-device-hub')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('trusted-local-device-focus')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
+    expect(find.text('rift-local-abcdefghijklmnopqrstuvwxyz'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-node-media')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-features')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-focus-node-security')),
+      findsNothing,
+    );
+    expect(find.byType(Dialog), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
+    expect(
+        find.byKey(const ValueKey('trusted-orbit-overview')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-hub-local-core')), findsOneWidget);
+  });
+
   testWidgets('explicitly disabled discovery stays off until restarted',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1392,7 +1453,7 @@ void main() {
     expect(onCloseCalled, isTrue);
   });
 
-  testWidgets('desktop focus keeps nodes reachable while a panel is open',
+  testWidgets('desktop focus panels stay centered at target window sizes',
       (WidgetTester tester) async {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(() {
@@ -1441,38 +1502,33 @@ void main() {
         find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-focus')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const ValueKey('device-focus-node-identity')),
-      );
-      await tester.pumpAndSettle();
+      for (final kind in const ['power', 'media', 'features', 'security']) {
+        await tester.tap(
+          find.byKey(ValueKey('device-focus-node-$kind')),
+        );
+        await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const ValueKey('device-focus-panel-identity')),
-        findsOneWidget,
-        reason: 'viewport $windowSize',
-      );
+        final panel = find.byKey(ValueKey('device-focus-panel-$kind'));
+        final scrim = find.byKey(const ValueKey('device-focus-panel-scrim'));
+        expect(panel, findsOneWidget, reason: 'viewport $windowSize, $kind');
+        expect(
+          (tester.getCenter(panel) - tester.getCenter(scrim)).distance,
+          lessThan(0.1),
+          reason: 'viewport $windowSize, $kind',
+        );
+        expect(
+          tester.getRect(panel).height,
+          lessThan(tester.getRect(scrim).height),
+          reason: 'viewport $windowSize, $kind',
+        );
+        expect(tester.takeException(), isNull);
 
-      await tester.tap(
-        find.byKey(const ValueKey('device-focus-node-capabilities')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.byKey(const ValueKey('device-focus-panel-capabilities')),
-        findsOneWidget,
-        reason: 'viewport $windowSize',
-      );
-
-      await tester.tap(
-        find.byKey(const ValueKey('device-focus-node-media')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.byKey(const ValueKey('device-focus-panel-media')),
-        findsOneWidget,
-        reason: 'viewport $windowSize',
-      );
+        await tester.tap(
+          find.byKey(const ValueKey('device-focus-panel-close')),
+        );
+        await tester.pumpAndSettle();
+        expect(panel, findsNothing);
+      }
     }
   });
 

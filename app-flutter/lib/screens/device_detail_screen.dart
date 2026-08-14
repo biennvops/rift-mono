@@ -621,10 +621,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           );
         }
 
-        final useDesktopRemoteFocusView = widget.onClose != null &&
-            !widget.isSelf &&
-            peer['trustState']?.toString() == 'trusted';
-        if (useDesktopRemoteFocusView) {
+        final useDesktopFocusView = widget.onClose != null &&
+            (widget.isSelf || peer['trustState']?.toString() == 'trusted');
+        if (useDesktopFocusView) {
           final capabilities = (peer['capabilities'] as List?)
                   ?.map((capability) => capability.toString())
                   .toList(growable: false) ??
@@ -642,8 +641,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             deviceStatus: deviceStatus,
             mediaPlayback: widget.mediaPlayback,
             isOnline: isOnline,
+            isSelf: widget.isSelf,
             onClose: widget.onClose!,
-            onRevokeTrust: _forgetPeer,
+            onRevokeTrust: widget.isSelf ? null : _forgetPeer,
             onCopy: _copyToClipboard,
             onOpenClipboardActivity: widget.onOpenClipboardActivity,
             onSendFile: widget.onSendFile,

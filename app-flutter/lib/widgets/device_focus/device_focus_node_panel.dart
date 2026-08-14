@@ -20,10 +20,15 @@ class DeviceFocusNodePanel extends StatelessWidget {
     required this.kind,
     required this.title,
     required this.icon,
-    required this.rows,
     required this.maxHeight,
     required this.onClose,
+    this.rows = const [],
+    this.body,
     this.footer,
+    this.accentColor,
+    this.elevation = 10,
+    this.borderRadius = 14,
+    this.contentOpacity = 1,
   });
 
   final DeviceFocusNodeKind kind;
@@ -32,81 +37,99 @@ class DeviceFocusNodePanel extends StatelessWidget {
   final List<DeviceFocusPanelRow> rows;
   final double maxHeight;
   final VoidCallback onClose;
+  final Widget? body;
   final Widget? footer;
+  final Color? accentColor;
+  final double elevation;
+  final double borderRadius;
+  final double contentOpacity;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final accent = accentColor ?? colors.primary;
     return SizedBox(
       height: maxHeight,
       child: Material(
-        elevation: 10,
-        shadowColor: colors.primary.withValues(alpha: 0.18),
+        elevation: elevation,
+        shadowColor: accent.withValues(alpha: 0.18),
         color: colors.surface,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(borderRadius),
           side: BorderSide(color: colors.outlineVariant),
         ),
         clipBehavior: Clip.antiAlias,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 10, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: colors.primaryContainer.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
+        child: Opacity(
+          opacity: contentOpacity,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 10, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(icon, size: 20, color: accent),
                     ),
-                    child: Icon(icon, size: 20, color: colors.primary),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: colors.onSurface,
-                        fontWeight: FontWeight.w700,
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: colors.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      key: const ValueKey('device-focus-panel-close'),
+                      tooltip: 'Close details',
+                      onPressed: onClose,
+                      icon: const Icon(Icons.close, size: 20),
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (body != null)
+                            body!
+                          else ...[
+                            for (var index = 0;
+                                index < rows.length;
+                                index++) ...[
+                              _PanelRow(row: rows[index]),
+                              if (index != rows.length - 1)
+                                Divider(
+                                  color: colors.outlineVariant,
+                                  height: 17,
+                                ),
+                            ],
+                            if (footer != null) ...[
+                              const SizedBox(height: 16),
+                              footer!,
+                            ],
+                          ],
+                        ],
                       ),
                     ),
                   ),
-                  IconButton(
-                    key: const ValueKey('device-focus-panel-close'),
-                    tooltip: 'Close details',
-                    onPressed: onClose,
-                    icon: const Icon(Icons.close, size: 20),
-                    color: colors.onSurfaceVariant,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (var index = 0; index < rows.length; index++) ...[
-                          _PanelRow(row: rows[index]),
-                          if (index != rows.length - 1)
-                            Divider(color: colors.outlineVariant, height: 17),
-                        ],
-                        if (footer != null) ...[
-                          const SizedBox(height: 16),
-                          footer!,
-                        ],
-                      ],
-                    ),
-                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

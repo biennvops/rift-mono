@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../src/media_playback/playback_presentation.dart';
 import 'device_core.dart';
@@ -27,8 +28,9 @@ class DeviceFocusView extends StatefulWidget {
     required this.capabilities,
     required this.isOnline,
     required this.onClose,
-    required this.onRevokeTrust,
     required this.onCopy,
+    this.isSelf = false,
+    this.onRevokeTrust,
     this.onOpenClipboardActivity,
     this.onSendFile,
     this.onViewTransferActivity,
@@ -48,11 +50,12 @@ class DeviceFocusView extends StatefulWidget {
   final Map<String, dynamic>? deviceStatus;
   final MediaPlaybackPresentation? mediaPlayback;
   final bool isOnline;
+  final bool isSelf;
   final VoidCallback? onOpenClipboardActivity;
   final VoidCallback? onSendFile;
   final VoidCallback? onViewTransferActivity;
   final VoidCallback onClose;
-  final VoidCallback onRevokeTrust;
+  final VoidCallback? onRevokeTrust;
   final DeviceFocusCopyCallback onCopy;
 
   @override
@@ -64,8 +67,11 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   late final AnimationController _entranceController;
   late final AnimationController _onlineController;
   late final AnimationController _wakeController;
+  late final AnimationController _panelController;
+  late final Map<DeviceFocusNodeKind, FocusNode> _nodeFocusNodes;
   bool _reducedMotion = false;
   DeviceFocusNodeKind? _activeNode;
+  DeviceFocusNodeKind? _closingNode;
   DeviceFocusNodeKind? _hoveredNode;
 
   @override
@@ -84,6 +90,14 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       vsync: this,
       duration: const Duration(milliseconds: 560),
     );
+    _panelController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 380),
+      reverseDuration: const Duration(milliseconds: 300),
+    )..addStatusListener(_handlePanelStatus);
+    _nodeFocusNodes = {
+      for (final kind in DeviceFocusNodeKind.values) kind: FocusNode(),
+    };
   }
 
   @override
@@ -110,7 +124,9 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.deviceId != widget.deviceId) {
       _activeNode = null;
+      _closingNode = null;
       _hoveredNode = null;
+      _panelController.value = 0;
       if (_reducedMotion) {
         _entranceController.value = 1;
       } else {
@@ -118,9 +134,12 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       }
     } else if ((widget.deviceStatus == null &&
             _activeNode == DeviceFocusNodeKind.power) ||
-        (!widget.capabilities.contains('media.playback') &&
+        (!widget.isSelf &&
+            !widget.capabilities.contains('media.playback') &&
             _activeNode == DeviceFocusNodeKind.media)) {
       _activeNode = null;
+      _closingNode = null;
+      _panelController.value = 0;
     }
     if (oldWidget.isOnline != widget.isOnline) {
       if (_reducedMotion) {
@@ -144,80 +163,140 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     _entranceController.dispose();
     _onlineController.dispose();
     _wakeController.dispose();
+    _panelController.dispose();
+    for (final focusNode in _nodeFocusNodes.values) {
+      focusNode.dispose();
+    }
     super.dispose();
+  }
+
+  void _handlePanelStatus(AnimationStatus status) {
+    if (status != AnimationStatus.dismissed ||
+        _activeNode == null ||
+        !mounted) {
+      return;
+    }
+    final focusKind = _closingNode ?? _activeNode;
+    setState(() {
+      _activeNode = null;
+      _closingNode = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && focusKind != null) {
+        _nodeFocusNodes[focusKind]?.requestFocus();
+      }
+    });
+  }
+
+  void _openNode(DeviceFocusNodeKind kind) {
+    if (_activeNode == kind) {
+      _closePanel();
+      return;
+    }
+    setState(() {
+      _activeNode = kind;
+      _closingNode = null;
+    });
+    _panelController.duration =
+        _reducedMotion ? RiftMotion.fast : const Duration(milliseconds: 380);
+    _panelController.reverseDuration =
+        _reducedMotion ? RiftMotion.fast : const Duration(milliseconds: 300);
+    _panelController.forward(from: 0);
+  }
+
+  void _closePanel() {
+    if (_activeNode == null) return;
+    _closingNode = _activeNode;
+    _panelController.reverse();
+  }
+
+  void _handleEscape() {
+    if (_activeNode != null) {
+      _closePanel();
+    } else {
+      widget.onClose();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final nodes = _buildNodes();
-    return Scaffold(
-      key: const ValueKey('device-focus-view'),
-      backgroundColor: theme.colorScheme.surface,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildHeader(theme),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final sceneSize = Size(
-                    constraints.maxWidth,
-                    constraints.maxHeight,
-                  );
-                  final geometry = DeviceFocusLayout.calculate(
-                    sceneSize,
-                    nodes.map((node) => node.kind),
-                  );
-                  return ClipRect(
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: _activeNode == null
-                                ? null
-                                : () => setState(() => _activeNode = null),
-                            child: DeviceFocusBackground(
-                              geometry: geometry,
-                              entrance: _entranceController,
-                              online: _onlineController,
-                              accentColor: widget.mediaPlayback?.accentColor,
-                            ),
-                          ),
-                        ),
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: RepaintBoundary(
-                              child: CustomPaint(
-                                painter: DeviceFocusConnectorPainter(
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): _handleEscape,
+      },
+      child: Focus(
+        autofocus: true,
+        child: Scaffold(
+          key: const ValueKey('device-focus-view'),
+          backgroundColor: theme.colorScheme.surface,
+          body: SafeArea(
+            child: Column(
+              children: [
+                _buildHeader(theme),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final sceneSize = Size(
+                        constraints.maxWidth,
+                        constraints.maxHeight,
+                      );
+                      final geometry = DeviceFocusLayout.calculate(
+                        sceneSize,
+                        nodes.map((node) => node.kind),
+                      );
+                      return ClipRect(
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _activeNode == null ? null : _closePanel,
+                                child: DeviceFocusBackground(
                                   geometry: geometry,
                                   entrance: _entranceController,
                                   online: _onlineController,
-                                  color: widget.mediaPlayback?.accentColor ??
-                                      theme.colorScheme.primary,
-                                  activeNode: _activeNode,
-                                  hoveredNode: _hoveredNode,
+                                  accentColor:
+                                      widget.mediaPlayback?.accentColor,
                                 ),
                               ),
                             ),
-                          ),
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: RepaintBoundary(
+                                  child: CustomPaint(
+                                    painter: DeviceFocusConnectorPainter(
+                                      geometry: geometry,
+                                      entrance: _entranceController,
+                                      online: _onlineController,
+                                      color:
+                                          widget.mediaPlayback?.accentColor ??
+                                              theme.colorScheme.primary,
+                                      activeNode: _activeNode,
+                                      hoveredNode: _hoveredNode,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            _positionCore(geometry),
+                            for (var index = 0; index < nodes.length; index++)
+                              _positionNode(
+                                geometry: geometry,
+                                data: nodes[index],
+                                index: index,
+                              ),
+                            _positionPanel(sceneSize, geometry),
+                          ],
                         ),
-                        _positionCore(geometry),
-                        for (var index = 0; index < nodes.length; index++)
-                          _positionNode(
-                            geometry: geometry,
-                            data: nodes[index],
-                            index: index,
-                          ),
-                        _positionPanel(sceneSize, geometry),
-                      ],
-                    ),
-                  );
-                },
-              ),
+                      );
+                    },
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -234,6 +313,17 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     }.contains(normalizedPlatform)
         ? normalizedPlatform.toUpperCase()
         : null;
+    final identityDetails = <String>[
+      'Device Focus',
+      if (platformLabel != null) platformLabel,
+      if (widget.osVersion.isNotEmpty && widget.osVersion != 'Unavailable')
+        widget.osVersion,
+      if (widget.protocolVersion.isNotEmpty) 'Rift ${widget.protocolVersion}',
+      if (!widget.isSelf &&
+          widget.lastSeenAt.isNotEmpty &&
+          widget.lastSeenAt != 'Unavailable')
+        'Last seen ${widget.lastSeenAt}',
+    ];
     return Container(
       constraints: const BoxConstraints(minHeight: 72),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
@@ -273,9 +363,9 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                   ),
                 ),
                 Text(
-                  platformLabel == null
-                      ? 'Device Focus'
-                      : 'Device Focus · $platformLabel',
+                  identityDetails.join(' · '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -313,6 +403,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       entrance: _entranceController,
       online: _onlineController,
       wake: _wakeController,
+      statusLabel: widget.isSelf ? 'This Device' : null,
       accentColor: widget.mediaPlayback?.accentColor,
       isMediaPlaying: widget.mediaPlayback?.isPlaying ?? false,
     );
@@ -349,11 +440,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       entrance: _entranceController,
       entranceIndex: index,
       entranceOffset: entranceOffset,
-      onTap: () {
-        setState(() {
-          _activeNode = _activeNode == data.kind ? null : data.kind;
-        });
-      },
+      focusNode: _nodeFocusNodes[data.kind],
+      onTap: () => _openNode(data.kind),
       onInteractionChanged: (isInteracting) {
         setState(() {
           if (isInteracting) {
@@ -385,69 +473,93 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     Size sceneSize,
     DeviceFocusGeometry geometry,
   ) {
-    const panelBottom = 16.0;
-    const nodeGap = 12.0;
-    final panelWidth = math.min(400.0, sceneSize.width - 32).toDouble();
-    final lowestNodeBottom = geometry.nodeCenters.values.fold<double>(
-      0,
-      (lowest, center) => math.max(
-        lowest,
-        center.dy + geometry.nodeSize.height / 2,
-      ),
-    );
-    final availablePanelHeight =
-        sceneSize.height - panelBottom - nodeGap - lowestNodeBottom;
-    final preferredPanelHeight =
-        math.min(340.0, math.max(220.0, sceneSize.height * 0.48)).toDouble();
-    final panelHeight = math
-        .min(
-          preferredPanelHeight,
-          math.max(96.0, availablePanelHeight),
-        )
-        .toDouble();
     final activeNode = _activeNode;
-    return Positioned(
-      left: (sceneSize.width - panelWidth) / 2,
-      bottom: panelBottom,
-      width: panelWidth,
-      child: AnimatedSwitcher(
-        duration: RiftMotion.durationOf(context, RiftMotion.fast),
-        switchInCurve: Curves.easeOutCubic,
-        switchOutCurve: Curves.easeInCubic,
-        transitionBuilder: (child, animation) {
-          return FadeTransition(
-            opacity: animation,
-            child: _reducedMotion
-                ? child
-                : ScaleTransition(
-                    scale: Tween(begin: 0.97, end: 1.0).animate(animation),
-                    alignment: Alignment.bottomCenter,
-                    child: child,
+    if (activeNode == null) {
+      return const Positioned.fill(
+        child: SizedBox.shrink(
+          key: ValueKey('device-focus-panel-empty'),
+        ),
+      );
+    }
+
+    final sourceCenter = geometry.nodeCenters[activeNode] ?? geometry.center;
+    final sourceRect = Rect.fromCenter(
+      center: sourceCenter,
+      width: geometry.nodeSize.width,
+      height: geometry.nodeSize.height,
+    );
+    final targetWidth = math.min(520.0, sceneSize.width - 32).toDouble();
+    final preferredHeight =
+        (sceneSize.height * 0.72).clamp(260.0, 500.0).toDouble();
+    final targetHeight =
+        math.min(preferredHeight, sceneSize.height - 32).toDouble();
+    final targetRect = Rect.fromCenter(
+      center: Offset(sceneSize.width / 2, sceneSize.height / 2),
+      width: targetWidth,
+      height: targetHeight,
+    );
+    final accent = widget.mediaPlayback?.accentColor ??
+        Theme.of(context).colorScheme.primary;
+
+    return Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _panelController,
+        builder: (context, child) {
+          final value = _panelController.value;
+          final transformProgress = _reducedMotion
+              ? 1.0
+              : const Interval(0, 0.65, curve: RiftMotion.move)
+                  .transform(value);
+          final contentOpacity =
+              const Interval(0.35, 1, curve: RiftMotion.enter).transform(value);
+          final panelRect =
+              Rect.lerp(sourceRect, targetRect, transformProgress)!;
+          final borderRadius = 12 + transformProgress * 4;
+          final elevation = transformProgress * 10;
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: value == 0,
+                  child: GestureDetector(
+                    key: const ValueKey('device-focus-panel-scrim'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _closePanel,
+                    child: ColoredBox(
+                      color: Colors.black.withValues(alpha: value * 0.14),
+                    ),
                   ),
-          );
-        },
-        child: activeNode == null
-            ? const SizedBox.shrink(
-                key: ValueKey('device-focus-panel-empty'),
-              )
-            : SizedBox(
-                key: ValueKey('device-focus-panel-${activeNode.name}'),
-                child: DeviceFocusNodePanel(
-                  kind: activeNode,
-                  title: _panelTitle(activeNode),
-                  icon: _nodeIcon(activeNode),
-                  rows: _panelRows(activeNode),
-                  maxHeight: panelHeight,
-                  onClose: () => setState(() => _activeNode = null),
-                  footer: _panelFooter(activeNode),
                 ),
               ),
+              Positioned.fromRect(
+                rect: panelRect,
+                child: SizedBox(
+                  key: ValueKey('device-focus-panel-${activeNode.name}'),
+                  child: DeviceFocusNodePanel(
+                    kind: activeNode,
+                    title: _panelTitle(activeNode),
+                    icon: _nodeIcon(activeNode),
+                    rows: _panelRows(activeNode),
+                    body: _panelBody(activeNode),
+                    maxHeight: panelRect.height,
+                    onClose: _closePanel,
+                    footer: _panelFooter(activeNode),
+                    accentColor: accent,
+                    elevation: elevation,
+                    borderRadius: borderRadius,
+                    contentOpacity: contentOpacity,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 
   List<_DeviceFocusNodeData> _buildNodes() {
-    final capabilities = widget.capabilities.length;
+    final featureCount = widget.capabilities.length;
     return [
       if (widget.deviceStatus != null)
         _DeviceFocusNodeData(
@@ -456,45 +568,26 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           value: _powerSummary(widget.deviceStatus!),
           label: 'Power',
         ),
-      if (_hasCapability('clipboard.offer_fetch'))
-        _DeviceFocusNodeData(
-          kind: DeviceFocusNodeKind.clipboard,
-          icon: _nodeIcon(DeviceFocusNodeKind.clipboard),
-          value: 'Available',
-          label: 'Clipboard',
-        ),
-      if (_hasCapability('file.transfer'))
-        _DeviceFocusNodeData(
-          kind: DeviceFocusNodeKind.files,
-          icon: _nodeIcon(DeviceFocusNodeKind.files),
-          value: 'Available',
-          label: 'Files',
-        ),
-      _DeviceFocusNodeData(
-        kind: DeviceFocusNodeKind.security,
-        icon: _nodeIcon(DeviceFocusNodeKind.security),
-        value: 'Trusted',
-        label: 'Security',
-      ),
-      _DeviceFocusNodeData(
-        kind: DeviceFocusNodeKind.identity,
-        icon: _nodeIcon(DeviceFocusNodeKind.identity),
-        value: widget.platform.toUpperCase(),
-        label: 'Identity',
-      ),
-      _DeviceFocusNodeData(
-        kind: DeviceFocusNodeKind.capabilities,
-        icon: _nodeIcon(DeviceFocusNodeKind.capabilities),
-        value: '$capabilities available',
-        label: 'Capabilities',
-      ),
-      if (_hasCapability('media.playback'))
+      if (widget.isSelf || _hasCapability('media.playback'))
         _DeviceFocusNodeData(
           kind: DeviceFocusNodeKind.media,
           icon: _nodeIcon(DeviceFocusNodeKind.media),
           value: widget.mediaPlayback?.displayTitle ?? 'Nothing playing',
           label: widget.mediaPlayback?.stateLabel ?? 'Media',
           accentColor: widget.mediaPlayback?.accentColor,
+        ),
+      _DeviceFocusNodeData(
+        kind: DeviceFocusNodeKind.features,
+        icon: _nodeIcon(DeviceFocusNodeKind.features),
+        value: '$featureCount available',
+        label: 'Features',
+      ),
+      if (!widget.isSelf)
+        _DeviceFocusNodeData(
+          kind: DeviceFocusNodeKind.security,
+          icon: _nodeIcon(DeviceFocusNodeKind.security),
+          value: 'Trusted',
+          label: 'Security',
         ),
     ];
   }
@@ -504,39 +597,23 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
 
   String _panelTitle(DeviceFocusNodeKind kind) => switch (kind) {
         DeviceFocusNodeKind.power => 'Power status',
-        DeviceFocusNodeKind.clipboard => 'Clipboard',
-        DeviceFocusNodeKind.files => 'Files',
-        DeviceFocusNodeKind.security => 'Security',
-        DeviceFocusNodeKind.identity => 'Identity',
-        DeviceFocusNodeKind.capabilities => 'Capabilities',
         DeviceFocusNodeKind.media => 'Media playback',
+        DeviceFocusNodeKind.features => 'Features',
+        DeviceFocusNodeKind.security => 'Security',
       };
 
   IconData _nodeIcon(DeviceFocusNodeKind kind) => switch (kind) {
         DeviceFocusNodeKind.power => Icons.battery_charging_full,
-        DeviceFocusNodeKind.clipboard => Icons.content_paste_outlined,
-        DeviceFocusNodeKind.files => Icons.folder_outlined,
-        DeviceFocusNodeKind.security => Icons.verified_user_outlined,
-        DeviceFocusNodeKind.identity => Icons.badge_outlined,
-        DeviceFocusNodeKind.capabilities => Icons.extension_outlined,
         DeviceFocusNodeKind.media => Icons.graphic_eq,
+        DeviceFocusNodeKind.features => Icons.extension_outlined,
+        DeviceFocusNodeKind.security => Icons.verified_user_outlined,
       };
 
   List<DeviceFocusPanelRow> _panelRows(DeviceFocusNodeKind kind) {
     return switch (kind) {
       DeviceFocusNodeKind.power => _powerRows(widget.deviceStatus!),
-      DeviceFocusNodeKind.clipboard => const [
-          DeviceFocusPanelRow(
-            label: 'Capability',
-            value: 'Clipboard offers can be fetched securely.',
-          ),
-        ],
-      DeviceFocusNodeKind.files => const [
-          DeviceFocusPanelRow(
-            label: 'Capability',
-            value: 'Secure file transfer is available.',
-          ),
-        ],
+      DeviceFocusNodeKind.media => _mediaRows(),
+      DeviceFocusNodeKind.features => const [],
       DeviceFocusNodeKind.security => [
           DeviceFocusPanelRow(
             label: 'Trust established',
@@ -551,37 +628,12 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
             ),
           ),
         ],
-      DeviceFocusNodeKind.identity => [
-          DeviceFocusPanelRow(
-            label: 'Device ID',
-            value: widget.deviceId,
-            onCopy: () => widget.onCopy(
-              widget.deviceId,
-              'Device ID copied to clipboard',
-            ),
-          ),
-          DeviceFocusPanelRow(
-            label: 'Fingerprint',
-            value: widget.fingerprint,
-            onCopy: () => widget.onCopy(
-              widget.fingerprint,
-              'Fingerprint copied to clipboard',
-            ),
-          ),
-          DeviceFocusPanelRow(
-            label: 'Platform',
-            value: widget.platform.toUpperCase(),
-          ),
-          DeviceFocusPanelRow(label: 'OS version', value: widget.osVersion),
-          DeviceFocusPanelRow(
-            label: 'Rift client version',
-            value: widget.protocolVersion,
-          ),
-          DeviceFocusPanelRow(label: 'Last seen', value: widget.lastSeenAt),
-        ],
-      DeviceFocusNodeKind.capabilities => _capabilityRows(),
-      DeviceFocusNodeKind.media => _mediaRows(),
     };
+  }
+
+  Widget? _panelBody(DeviceFocusNodeKind kind) {
+    if (kind != DeviceFocusNodeKind.features) return null;
+    return _buildFeaturesPanel();
   }
 
   List<DeviceFocusPanelRow> _mediaRows() {
@@ -669,24 +721,110 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     return rows;
   }
 
-  List<DeviceFocusPanelRow> _capabilityRows() {
-    if (widget.capabilities.isEmpty) {
-      return const [
-        DeviceFocusPanelRow(
-          label: 'Negotiated capabilities',
-          value: 'None reported',
-        ),
-      ];
+  Widget _buildFeaturesPanel() {
+    final capabilities = widget.capabilities;
+    if (capabilities.isEmpty) {
+      return Text(
+        'No negotiated features reported.',
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+      );
     }
-    return widget.capabilities
-        .map(
-          (capability) => DeviceFocusPanelRow(
-            label: _formatCapability(capability),
-            value: 'Available',
-          ),
-        )
-        .toList(growable: false);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var index = 0; index < capabilities.length; index++) ...[
+          _buildFeatureRow(capabilities[index]),
+          if (index != capabilities.length - 1)
+            Divider(
+              height: 20,
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+        ],
+      ],
+    );
   }
+
+  Widget _buildFeatureRow(String capability) {
+    final theme = Theme.of(context);
+    final actions = _featureActions(capability);
+    return Container(
+      key: ValueKey('device-focus-feature-$capability'),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(
+                _featureIcon(capability),
+                size: 20,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _formatCapability(capability),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                'Available',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          if (actions.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(spacing: 8, runSpacing: 8, children: actions),
+          ],
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _featureActions(String capability) => switch (capability) {
+        'clipboard.offer_fetch' => [
+            FilledButton.icon(
+              key: const ValueKey('device-focus-open-clipboard'),
+              onPressed: widget.onOpenClipboardActivity,
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('Open Clipboard'),
+            ),
+          ],
+        'file.transfer' => [
+            FilledButton.icon(
+              key: const ValueKey('device-focus-send-file'),
+              onPressed: widget.onSendFile,
+              icon: const Icon(Icons.upload_file, size: 18),
+              label: const Text('Send File'),
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('device-focus-view-transfers'),
+              onPressed: widget.onViewTransferActivity,
+              icon: const Icon(Icons.swap_horiz, size: 18),
+              label: const Text('Transfers'),
+            ),
+          ],
+        _ => const [],
+      };
+
+  IconData _featureIcon(String capability) => switch (capability) {
+        'clipboard.offer_fetch' => Icons.content_paste_outlined,
+        'device.status' => Icons.monitor_heart_outlined,
+        'file.transfer' => Icons.folder_outlined,
+        'media.playback' => Icons.graphic_eq,
+        'notification.sync' => Icons.notifications_outlined,
+        _ => Icons.extension_outlined,
+      };
 
   Widget? _buildMediaArtwork() {
     final media = widget.mediaPlayback;
@@ -721,38 +859,13 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     if (kind == DeviceFocusNodeKind.media) {
       return _buildMediaArtwork();
     }
-    if (kind == DeviceFocusNodeKind.clipboard) {
-      return FilledButton.icon(
-        key: const ValueKey('device-focus-open-clipboard'),
-        onPressed: widget.onOpenClipboardActivity,
-        icon: const Icon(Icons.open_in_new, size: 18),
-        label: const Text('Open Clipboard Activity'),
-      );
+    final onRevokeTrust = widget.onRevokeTrust;
+    if (kind != DeviceFocusNodeKind.security || onRevokeTrust == null) {
+      return null;
     }
-    if (kind == DeviceFocusNodeKind.files) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          FilledButton.icon(
-            key: const ValueKey('device-focus-send-file'),
-            onPressed: widget.onSendFile,
-            icon: const Icon(Icons.upload_file, size: 18),
-            label: const Text('Send File'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            key: const ValueKey('device-focus-view-transfers'),
-            onPressed: widget.onViewTransferActivity,
-            icon: const Icon(Icons.swap_horiz, size: 18),
-            label: const Text('View Transfers'),
-          ),
-        ],
-      );
-    }
-    if (kind != DeviceFocusNodeKind.security) return null;
     return OutlinedButton.icon(
       key: const ValueKey('device-focus-revoke-trust'),
-      onPressed: widget.onRevokeTrust,
+      onPressed: onRevokeTrust,
       style: OutlinedButton.styleFrom(
         foregroundColor: colors.error,
         side: BorderSide(color: colors.error),
