@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/src/media_playback/playback_presentation.dart';
-import 'package:rift/widgets/media_playback_activity_ring.dart';
+import 'package:rift/widgets/media_playback_activity_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -788,7 +788,7 @@ void main() {
       find.byKey(const ValueKey('device-focus-media-accented')),
       findsOneWidget,
     );
-    expect(find.byType(MediaPlaybackActivityRing), findsOneWidget);
+    expect(find.byType(MediaPlaybackActivityIndicator), findsOneWidget);
     expect(find.text('Northern Lights'), findsOneWidget);
     expect(find.text('Playing'), findsOneWidget);
 
@@ -832,8 +832,36 @@ void main() {
       find.byKey(const ValueKey('device-focus-media-accented')),
       findsOneWidget,
     );
-    expect(find.byType(MediaPlaybackActivityRing), findsNothing);
+    expect(find.byType(MediaPlaybackActivityIndicator), findsNothing);
     expect(find.text('Paused'), findsWidgets);
+
+    final buffering = MediaPlaybackPresentation.fromRecord(
+      {
+        'playbackId': 'session-1',
+        'sourceDeviceId': 'rift-media',
+        'appName': 'Rift Music',
+        'title': 'Northern Lights',
+        'playbackState': 'buffering',
+        'updatedAt': '2026-08-01T10:02:00Z',
+      },
+      artworkBytes: playing.artworkBytes,
+      artworkIdentity: playing.artworkIdentity,
+      accentColor: playing.accentColor,
+    );
+    await tester.pumpWidget(
+      buildTestApp(client, onClose: () {}, mediaPlayback: buffering),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('device-focus-media-buffering')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('media-activity-buffering')),
+      findsOneWidget,
+    );
+    expect(find.byType(MediaPlaybackActivityIndicator), findsOneWidget);
+    expect(find.text('Buffering'), findsWidgets);
 
     await tester.pumpWidget(buildTestApp(client, onClose: () {}));
     await tester.pumpAndSettle();

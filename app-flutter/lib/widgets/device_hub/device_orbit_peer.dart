@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../src/ui/motion.dart';
-import '../media_playback_activity_ring.dart';
+import '../animated_accent.dart';
+import '../media_playback_activity_indicator.dart';
 import 'orbit_peer_presentation.dart';
 
 class DeviceOrbitPeer extends StatefulWidget {
@@ -47,10 +48,18 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
 
   @override
   Widget build(BuildContext context) {
+    final targetAccent =
+        widget.peer.accentColor ?? Theme.of(context).colorScheme.primary;
+    return AnimatedAccent(
+      color: targetAccent,
+      builder: _buildPeer,
+    );
+  }
+
+  Widget _buildPeer(BuildContext context, Color accent) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final peer = widget.peer;
-    final accent = peer.accentColor ?? colors.primary;
     final highlighted = _interacting;
     final status = peer.statusLabel;
     final availabilityDescription = status?.toLowerCase() ?? 'ready to pair';
@@ -83,9 +92,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
           duration: RiftMotion.durationOf(context, RiftMotion.fast),
           curve: RiftMotion.emphasis,
           scale: highlighted ? 1.02 : 1,
-          child: AnimatedContainer(
-            duration: RiftMotion.durationOf(context, RiftMotion.slow),
-            curve: RiftMotion.move,
+          child: Container(
             width: widget.size,
             height: widget.size,
             decoration: BoxDecoration(
@@ -196,13 +203,16 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                       ),
                     ),
                   ),
-                if (peer.activity == OrbitPeerActivity.mediaPlaying)
+                if (peer.activity == OrbitPeerActivity.mediaPlaying ||
+                    peer.activity == OrbitPeerActivity.mediaBuffering)
                   Positioned.fill(
                     child: IgnorePointer(
-                      child: MediaPlaybackActivityRing(
+                      child: MediaPlaybackActivityIndicator(
                         size: widget.size,
                         color: accent,
-                        isPlaying: true,
+                        kind: peer.activity == OrbitPeerActivity.mediaPlaying
+                            ? MediaPlaybackActivityKind.playing
+                            : MediaPlaybackActivityKind.buffering,
                       ),
                     ),
                   ),

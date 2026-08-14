@@ -2,8 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../src/ui/motion.dart';
-import '../media_playback_activity_ring.dart';
+import '../media_playback_activity_indicator.dart';
 
 class DeviceCore extends StatelessWidget {
   const DeviceCore({
@@ -18,6 +17,7 @@ class DeviceCore extends StatelessWidget {
     this.statusLabel,
     this.accentColor,
     this.isMediaPlaying = false,
+    this.isMediaBuffering = false,
   });
 
   final double size;
@@ -30,6 +30,7 @@ class DeviceCore extends StatelessWidget {
   final String? statusLabel;
   final Color? accentColor;
   final bool isMediaPlaying;
+  final bool isMediaBuffering;
 
   @override
   Widget build(BuildContext context) {
@@ -74,10 +75,8 @@ class DeviceCore extends StatelessWidget {
                         ),
                       ),
                     ),
-                  AnimatedContainer(
+                  Container(
                     key: const ValueKey('device-focus-core'),
-                    duration: RiftMotion.durationOf(context, RiftMotion.slow),
-                    curve: RiftMotion.move,
                     width: size,
                     height: size,
                     padding: EdgeInsets.all(size < 155 ? 12 : 18),
@@ -170,12 +169,14 @@ class DeviceCore extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (isMediaPlaying)
+                  if (isMediaPlaying || isMediaBuffering)
                     IgnorePointer(
-                      child: MediaPlaybackActivityRing(
+                      child: MediaPlaybackActivityIndicator(
                         size: size,
                         color: accent,
-                        isPlaying: true,
+                        kind: isMediaPlaying
+                            ? MediaPlaybackActivityKind.playing
+                            : MediaPlaybackActivityKind.buffering,
                       ),
                     ),
                 ],

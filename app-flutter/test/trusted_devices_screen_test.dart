@@ -7,8 +7,9 @@ import 'package:provider/provider.dart';
 import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/screens/trusted_devices_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:rift/widgets/animated_accent.dart';
 import 'package:rift/widgets/device_hub/device_orbit_peer.dart';
-import 'package:rift/widgets/media_playback_activity_ring.dart';
+import 'package:rift/widgets/media_playback_activity_indicator.dart';
 import 'test_utils/fake_transport.dart';
 
 Future<Map<String, Object?>> _solidArtwork(Color color) async {
@@ -1628,7 +1629,15 @@ void main() {
       find.byKey(const ValueKey('orbit-peer-media-accented-peer-b')),
       findsNothing,
     );
-    expect(find.byType(MediaPlaybackActivityRing), findsOneWidget);
+    expect(find.byType(MediaPlaybackActivityIndicator), findsNWidgets(2));
+    expect(
+      find.byKey(const ValueKey('media-activity-playing')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('media-activity-buffering')),
+      findsOneWidget,
+    );
 
     await client.emitMediaUpdated({
       'sourceDeviceId': 'peer-a',
@@ -1652,7 +1661,15 @@ void main() {
       find.byKey(const ValueKey('orbit-peer-media-accented-peer-a')),
       findsOneWidget,
     );
-    expect(find.byType(MediaPlaybackActivityRing), findsNothing);
+    expect(find.byType(MediaPlaybackActivityIndicator), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('media-activity-playing')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('media-activity-buffering')),
+      findsOneWidget,
+    );
     final peerFinder = find.byKey(const ValueKey('trusted-orbit-peer-peer-a'));
     final redAccent =
         tester.widget<DeviceOrbitPeer>(peerFinder).peer.accentColor;
@@ -1662,15 +1679,11 @@ void main() {
       anyOf(lessThan(20), greaterThan(340)),
     );
     expect(
-      tester
-          .widget<AnimatedContainer>(
-            find.descendant(
-              of: peerFinder,
-              matching: find.byType(AnimatedContainer),
-            ),
-          )
-          .duration,
-      const Duration(milliseconds: 500),
+      find.descendant(
+        of: peerFinder,
+        matching: find.byType(AnimatedAccent),
+      ),
+      findsOneWidget,
     );
 
     await client.emitMediaUpdated({

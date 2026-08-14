@@ -77,9 +77,7 @@ class _DeviceFocusNodeState extends State<DeviceFocusNode> {
         duration: motionDuration,
         curve: Curves.easeOutCubic,
         scale: highlighted ? 1.035 : 1,
-        child: AnimatedContainer(
-          duration: motionDuration,
-          curve: Curves.easeOutCubic,
+        child: Container(
           decoration: BoxDecoration(
             color: Color.alphaBlend(
               accent.withValues(

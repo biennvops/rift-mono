@@ -54,7 +54,10 @@ class DeviceFocusNodePanel extends StatelessWidget {
       child: Material(
         elevation: elevation,
         shadowColor: accent.withValues(alpha: 0.18),
-        color: colors.surface,
+        color: Color.alphaBlend(
+          accent.withValues(alpha: 0.025),
+          colors.surface,
+        ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(borderRadius),
           side: BorderSide(color: colors.outlineVariant),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../src/media_playback/playback_presentation.dart';
+import '../animated_accent.dart';
 import 'device_core.dart';
 import 'device_focus_background.dart';
 import 'device_focus_connector_painter.dart';
@@ -220,8 +221,17 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
 
   @override
   Widget build(BuildContext context) {
+    final targetAccent = widget.mediaPlayback?.accentColor ??
+        Theme.of(context).colorScheme.primary;
+    return AnimatedAccent(
+      color: targetAccent,
+      builder: _buildView,
+    );
+  }
+
+  Widget _buildView(BuildContext context, Color accent) {
     final theme = Theme.of(context);
-    final nodes = _buildNodes();
+    final nodes = _buildNodes(accent);
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.escape): _handleEscape,
@@ -257,8 +267,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                                   geometry: geometry,
                                   entrance: _entranceController,
                                   online: _onlineController,
-                                  accentColor:
-                                      widget.mediaPlayback?.accentColor,
+                                  accentColor: accent,
                                 ),
                               ),
                             ),
@@ -270,9 +279,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                                       geometry: geometry,
                                       entrance: _entranceController,
                                       online: _onlineController,
-                                      color:
-                                          widget.mediaPlayback?.accentColor ??
-                                              theme.colorScheme.primary,
+                                      color: accent,
                                       activeNode: _activeNode,
                                       hoveredNode: _hoveredNode,
                                     ),
@@ -280,14 +287,14 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
                                 ),
                               ),
                             ),
-                            _positionCore(geometry),
+                            _positionCore(geometry, accent),
                             for (var index = 0; index < nodes.length; index++)
                               _positionNode(
                                 geometry: geometry,
                                 data: nodes[index],
                                 index: index,
                               ),
-                            _positionPanel(sceneSize, geometry),
+                            _positionPanel(sceneSize, geometry, accent),
                           ],
                         ),
                       );
@@ -394,7 +401,10 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
-  Positioned _positionCore(DeviceFocusGeometry geometry) {
+  Positioned _positionCore(
+    DeviceFocusGeometry geometry,
+    Color accent,
+  ) {
     Widget core = DeviceCore(
       size: geometry.coreSize,
       displayName: widget.displayName,
@@ -404,8 +414,9 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       online: _onlineController,
       wake: _wakeController,
       statusLabel: widget.isSelf ? 'This Device' : null,
-      accentColor: widget.mediaPlayback?.accentColor,
+      accentColor: accent,
       isMediaPlaying: widget.mediaPlayback?.isPlaying ?? false,
+      isMediaBuffering: widget.mediaPlayback?.playbackState == 'buffering',
     );
     if (widget.mediaPlayback?.accentColor != null) {
       core = KeyedSubtree(
@@ -457,7 +468,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         widget.mediaPlayback != null) {
       child = KeyedSubtree(
         key: ValueKey(
-          'device-focus-media-${widget.mediaPlayback!.isPlaying ? 'playing' : 'paused'}',
+          'device-focus-media-${widget.mediaPlayback!.playbackState}',
         ),
         child: child,
       );
@@ -472,6 +483,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   Positioned _positionPanel(
     Size sceneSize,
     DeviceFocusGeometry geometry,
+    Color accent,
   ) {
     final activeNode = _activeNode;
     if (activeNode == null) {
@@ -498,8 +510,6 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
       width: targetWidth,
       height: targetHeight,
     );
-    final accent = widget.mediaPlayback?.accentColor ??
-        Theme.of(context).colorScheme.primary;
 
     return Positioned.fill(
       child: AnimatedBuilder(
@@ -558,7 +568,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     );
   }
 
-  List<_DeviceFocusNodeData> _buildNodes() {
+  List<_DeviceFocusNodeData> _buildNodes(Color accent) {
     final featureCount = widget.capabilities.length;
     return [
       if (widget.deviceStatus != null)
@@ -574,7 +584,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           icon: _nodeIcon(DeviceFocusNodeKind.media),
           value: widget.mediaPlayback?.displayTitle ?? 'Nothing playing',
           label: widget.mediaPlayback?.stateLabel ?? 'Media',
-          accentColor: widget.mediaPlayback?.accentColor,
+          accentColor: accent,
         ),
       _DeviceFocusNodeData(
         kind: DeviceFocusNodeKind.features,
