@@ -62,7 +62,16 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final peer = widget.peer;
     final highlighted = _interacting;
     final status = peer.statusLabel;
-    final availabilityDescription = status?.toLowerCase() ?? 'ready to pair';
+    final powerStatus = peer.statusKind == OrbitPeerStatusKind.trustedOnline
+        ? peer.powerStatus
+        : null;
+    final availabilityDescription = switch (peer.statusKind) {
+      OrbitPeerStatusKind.nearby => 'ready to pair',
+      OrbitPeerStatusKind.trustedOffline => 'offline',
+      OrbitPeerStatusKind.trustedOnline when powerStatus != null =>
+        'online, battery ${powerStatus.batteryPercent} percent${powerStatus.isCharging ? ', charging' : ''}',
+      OrbitPeerStatusKind.trustedOnline => 'online',
+    };
     final mediaDescription = switch (peer.activity) {
       OrbitPeerActivity.mediaPlaying =>
         ', playing ${peer.mediaTitle ?? 'media'}${peer.mediaArtist == null ? '' : ' by ${peer.mediaArtist}'}',
@@ -163,27 +172,61 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Container(
-                                    width: 6,
-                                    height: 6,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: peer.isOnline
-                                          ? accent
-                                          : colors.outline,
+                                  if (powerStatus != null) ...[
+                                    Icon(
+                                      powerStatus.isCharging
+                                          ? Icons.battery_charging_full
+                                          : Icons.battery_std,
+                                      key: ValueKey(
+                                        'orbit-peer-battery-${peer.deviceId}',
+                                      ),
+                                      size: 13,
+                                      color: accent,
                                     ),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    status,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: peer.isOnline
-                                          ? accent
-                                          : colors.onSurfaceVariant,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 10,
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      '${powerStatus.batteryPercent}%',
+                                      style:
+                                          theme.textTheme.labelSmall?.copyWith(
+                                        color: accent,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 10,
+                                      ),
                                     ),
-                                  ),
+                                  ] else ...[
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: peer.isOnline
+                                            ? accent
+                                            : colors.outline,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      status,
+                                      style:
+                                          theme.textTheme.labelSmall?.copyWith(
+                                        color: peer.isOnline
+                                            ? accent
+                                            : colors.onSurfaceVariant,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                  ],
+                                  if (peer.isOnline &&
+                                      peer.activity !=
+                                          OrbitPeerActivity.none) ...[
+                                    const SizedBox(width: 6),
+                                    _PlaybackStatusGlyph(
+                                      deviceId: peer.deviceId,
+                                      activity: peer.activity,
+                                      color: accent,
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -292,4 +335,65 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
         'linux' => Icons.computer,
         _ => Icons.devices,
       };
+}
+
+class _PlaybackStatusGlyph extends StatelessWidget {
+  const _PlaybackStatusGlyph({
+    required this.deviceId,
+    required this.activity,
+    required this.color,
+  });
+
+  final String deviceId;
+  final OrbitPeerActivity activity;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      key: ValueKey('orbit-peer-status-${activity.name}-$deviceId'),
+      dimension: 13,
+      child: switch (activity) {
+        OrbitPeerActivity.mediaPlaying => Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _StatusBar(height: 6, color: color),
+              _StatusBar(height: 11, color: color),
+              _StatusBar(height: 8, color: color),
+            ],
+          ),
+        OrbitPeerActivity.mediaPaused => Icon(
+            Icons.pause,
+            size: 13,
+            color: color,
+          ),
+        OrbitPeerActivity.mediaBuffering => Icon(
+            Icons.sync,
+            size: 12,
+            color: color,
+          ),
+        OrbitPeerActivity.none => const SizedBox.shrink(),
+      },
+    );
+  }
+}
+
+class _StatusBar extends StatelessWidget {
+  const _StatusBar({required this.height, required this.color});
+
+  final double height;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 2,
+      height: height,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(1),
+      ),
+    );
+  }
 }

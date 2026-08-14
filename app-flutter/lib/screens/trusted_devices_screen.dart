@@ -54,6 +54,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   List<dynamic> _discoveredPeers = [];
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  final Map<String, Map<String, dynamic>> _peerDeviceStatuses =
+      <String, Map<String, dynamic>>{};
+  final Set<String> _loadingPeerDeviceStatuses = <String>{};
   final PlaybackArtworkCache _playbackArtworkCache = PlaybackArtworkCache();
   final Map<String, MediaArtwork> _artworkByPlaybackKey =
       <String, MediaArtwork>{};
@@ -85,6 +88,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   StreamSubscription<Map<String, dynamic>>? _mediaPostedSub;
   StreamSubscription<Map<String, dynamic>>? _mediaUpdatedSub;
   StreamSubscription<Map<String, dynamic>>? _mediaRemovedSub;
+  StreamSubscription<Map<String, dynamic>>? _deviceStatusSub;
   StreamSubscription<bool>? _connectionSub;
   Timer? _reloadDebounce;
   Timer? _fullReloadThrottle;
@@ -144,6 +148,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _mediaPostedSub?.cancel();
     _mediaUpdatedSub?.cancel();
     _mediaRemovedSub?.cancel();
+    _deviceStatusSub?.cancel();
     _connectionSub?.cancel();
     super.dispose();
   }
@@ -158,18 +163,23 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _mediaPostedSub = client.onMediaPlaybackPosted.listen(_upsertPlayback);
     _mediaUpdatedSub = client.onMediaPlaybackUpdated.listen(_upsertPlayback);
     _mediaRemovedSub = client.onMediaPlaybackRemoved.listen(_removePlayback);
+    _deviceStatusSub =
+        client.onDeviceStatusUpdated.listen(_handleDeviceStatusUpdated);
     _connectionSub = client.onConnectionChanged.listen((isConnected) {
       if (!mounted) return;
       if (isConnected) {
         _loadData();
         _loadPlaybackState();
       } else if (_playbacksByKey.isNotEmpty ||
-          _artworkByPlaybackKey.isNotEmpty) {
+          _artworkByPlaybackKey.isNotEmpty ||
+          _peerDeviceStatuses.isNotEmpty) {
         setState(() {
           _playbacksByKey.clear();
           _playbackArtworkCache.clear();
           _artworkByPlaybackKey.clear();
           _pendingAccentFallbackByPlaybackKey.clear();
+          _peerDeviceStatuses.clear();
+          _loadingPeerDeviceStatuses.clear();
         });
       }
     });
@@ -265,6 +275,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             .where((p) => !(p is Map && p['deviceId']?.toString() == deviceId))
             .toList(growable: false);
       }
+      if (newState != 'trusted') {
+        _peerDeviceStatuses.remove(deviceId);
+        _loadingPeerDeviceStatuses.remove(deviceId);
+      }
     });
 
     _scheduleFullReloadThrottled();
@@ -272,6 +286,54 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   void _handlePairingComplete(Map<String, dynamic> event) {
     _scheduleFullReloadThrottled();
+  }
+
+  void _handleDeviceStatusUpdated(Map<String, dynamic> event) {
+    final deviceId = event['sourceDeviceId']?.toString();
+    if (deviceId == null || deviceId.isEmpty || !mounted) return;
+    final isTrusted = _trustedPeers.any(
+      (peer) =>
+          peer is Map &&
+          peer['deviceId']?.toString() == deviceId &&
+          peer['trustState']?.toString() == 'trusted',
+    );
+    if (!isTrusted) return;
+    setState(() {
+      _peerDeviceStatuses[deviceId] = Map<String, dynamic>.from(event);
+    });
+  }
+
+  void _loadPeerDeviceStatuses(Iterable<Map<String, dynamic>> peers) {
+    for (final peer in peers) {
+      final deviceId = peer['deviceId']?.toString();
+      final capabilities = (peer['capabilities'] as List?)
+              ?.map((capability) => capability.toString())
+              .toSet() ??
+          const <String>{};
+      if (deviceId == null ||
+          deviceId.isEmpty ||
+          !capabilities.contains('device.status') ||
+          _peerDeviceStatuses.containsKey(deviceId) ||
+          !_loadingPeerDeviceStatuses.add(deviceId)) {
+        continue;
+      }
+      unawaited(_loadPeerDeviceStatus(deviceId));
+    }
+  }
+
+  Future<void> _loadPeerDeviceStatus(String deviceId) async {
+    try {
+      final client = context.read<JsonRpcRiftClient>();
+      final result = await client.getPeerDeviceStatus(deviceId);
+      if (!mounted || result is! Map) return;
+      setState(() {
+        _peerDeviceStatuses[deviceId] = Map<String, dynamic>.from(result);
+      });
+    } catch (_) {
+      // Presence remains useful when optional power telemetry is unavailable.
+    } finally {
+      _loadingPeerDeviceStatuses.remove(deviceId);
+    }
   }
 
   Future<void> _loadPlaybackState() async {
@@ -559,6 +621,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _desktopPairingTarget = null;
           _desktopPairingSuccessDeviceId = null;
           _recentlyPairedDeviceId = null;
+          _peerDeviceStatuses.clear();
+          _loadingPeerDeviceStatuses.clear();
           _isDiscovering = false;
           _error = 'Daemon not connected';
         });
@@ -585,6 +649,21 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         discoveredPeers: rawDiscoveredPeers,
       );
       final isDiscovering = discoveredResult['isDiscovering'] == true;
+      final trustedPeerMaps = trustedPeers
+          .whereType<Map>()
+          .where((peer) => peer['trustState']?.toString() == 'trusted')
+          .map(Map<String, dynamic>.from)
+          .toList(growable: false);
+      final trustedDeviceIds = trustedPeerMaps
+          .map((peer) => peer['deviceId']?.toString())
+          .whereType<String>()
+          .toSet();
+      final embeddedStatuses = <String, Map<String, dynamic>>{
+        for (final peer in trustedPeerMaps)
+          if (peer['deviceId'] is String && peer['deviceStatus'] is Map)
+            peer['deviceId'] as String:
+                Map<String, dynamic>.from(peer['deviceStatus'] as Map),
+      };
 
       if (mounted) {
         setState(() {
@@ -592,6 +671,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _localDeviceInfo = Map<String, dynamic>.from(deviceInfo);
           _trustedPeers = trustedPeers;
           _discoveredPeers = discoveredPeers;
+          _peerDeviceStatuses
+            ..removeWhere((deviceId, _) => !trustedDeviceIds.contains(deviceId))
+            ..addAll(embeddedStatuses);
+          _loadingPeerDeviceStatuses
+              .removeWhere((deviceId) => !trustedDeviceIds.contains(deviceId));
           _isDiscovering = isDiscovering;
           _error = null;
 
@@ -612,6 +696,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         });
         _syncPulseAnimation();
         _syncOrbitAnimation();
+        _loadPeerDeviceStatuses(trustedPeerMaps);
       }
       if (!isDiscovering) {
         unawaited(_ensureTrustedPeerDiscovery(client));
@@ -1845,15 +1930,32 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }) {
     final deviceId = peer['deviceId']?.toString() ?? '';
     final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
+    final resolvedStatusKind = statusKind ??
+        (peer['presence']?.toString() == 'online'
+            ? OrbitPeerStatusKind.trustedOnline
+            : OrbitPeerStatusKind.trustedOffline);
+    final status = _peerDeviceStatuses[deviceId] ??
+        (peer['deviceStatus'] is Map
+            ? Map<String, dynamic>.from(peer['deviceStatus'] as Map)
+            : null);
+    final batteryPercent = status?['batteryPercent'];
+    final powerStatus =
+        resolvedStatusKind == OrbitPeerStatusKind.trustedOnline &&
+                status?['isStale'] != true &&
+                status?['batteryPresent'] != false &&
+                batteryPercent is num
+            ? OrbitPeerPowerStatus(
+                batteryPercent: batteryPercent.toInt().clamp(0, 100).toInt(),
+                isCharging: status?['chargingState']?.toString() == 'charging',
+              )
+            : null;
     return OrbitPeerPresentation(
       deviceId: deviceId,
       displayName: _displayNameFor(peer),
       platform: peer['platform']?.toString() ?? 'unknown',
-      statusKind: statusKind ??
-          (peer['presence']?.toString() == 'online'
-              ? OrbitPeerStatusKind.trustedOnline
-              : OrbitPeerStatusKind.trustedOffline),
+      statusKind: resolvedStatusKind,
       accentColor: media?.accentColor,
+      powerStatus: powerStatus,
       activity: switch (media?.playbackState) {
         null => OrbitPeerActivity.none,
         'playing' => OrbitPeerActivity.mediaPlaying,

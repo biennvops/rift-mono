@@ -14,6 +14,17 @@ enum OrbitPeerStatusKind {
 }
 
 @immutable
+class OrbitPeerPowerStatus {
+  const OrbitPeerPowerStatus({
+    required this.batteryPercent,
+    required this.isCharging,
+  });
+
+  final int batteryPercent;
+  final bool isCharging;
+}
+
+@immutable
 class OrbitPeerPresentation {
   const OrbitPeerPresentation({
     required this.deviceId,
@@ -22,6 +33,7 @@ class OrbitPeerPresentation {
     bool? isOnline,
     OrbitPeerStatusKind? statusKind,
     this.accentColor,
+    this.powerStatus,
     this.activity = OrbitPeerActivity.none,
     this.mediaTitle,
     this.mediaArtist,
@@ -36,6 +48,7 @@ class OrbitPeerPresentation {
   final String platform;
   final OrbitPeerStatusKind statusKind;
   final Color? accentColor;
+  final OrbitPeerPowerStatus? powerStatus;
   final OrbitPeerActivity activity;
   final String? mediaTitle;
   final String? mediaArtist;

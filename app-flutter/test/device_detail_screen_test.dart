@@ -801,7 +801,12 @@ void main() {
     expect(find.text('Signal Bloom'), findsOneWidget);
     expect(find.text('Continuity'), findsOneWidget);
     expect(find.text('Rift Music'), findsOneWidget);
-    expect(find.text('0:31 / 3:01'), findsOneWidget);
+    expect(find.text('0:31'), findsOneWidget);
+    expect(find.text('3:01'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('device-focus-media-progress')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('device-focus-media-artwork-artwork-one')),
       findsOneWidget,
@@ -872,6 +877,14 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('device-focus-media-artwork-artwork-one')),
+      findsNothing,
+    );
+    final placeholder =
+        find.byKey(const ValueKey('device-focus-media-artwork-placeholder'));
+    expect(placeholder, findsOneWidget);
+    expect(tester.getSize(placeholder), const Size.square(104));
+    expect(
+      find.byKey(const ValueKey('device-focus-media-progress')),
       findsNothing,
     );
     expect(

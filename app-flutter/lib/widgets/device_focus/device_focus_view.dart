@@ -622,7 +622,7 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   List<DeviceFocusPanelRow> _panelRows(DeviceFocusNodeKind kind) {
     return switch (kind) {
       DeviceFocusNodeKind.power => _powerRows(widget.deviceStatus!),
-      DeviceFocusNodeKind.media => _mediaRows(),
+      DeviceFocusNodeKind.media => const [],
       DeviceFocusNodeKind.features => const [],
       DeviceFocusNodeKind.security => [
           DeviceFocusPanelRow(
@@ -641,36 +641,186 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
     };
   }
 
-  Widget? _panelBody(DeviceFocusNodeKind kind) {
-    if (kind != DeviceFocusNodeKind.features) return null;
-    return _buildFeaturesPanel();
+  Widget? _panelBody(DeviceFocusNodeKind kind) => switch (kind) {
+        DeviceFocusNodeKind.media => _buildMediaPanel(),
+        DeviceFocusNodeKind.features => _buildFeaturesPanel(),
+        _ => null,
+      };
+
+  Widget _buildMediaPanel() {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final media = widget.mediaPlayback;
+    final hasPosition = media?.positionMs != null &&
+        media?.durationMs != null &&
+        media!.durationMs! > 0;
+    final progress = hasPosition
+        ? (media.positionMs! / media.durationMs!).clamp(0.0, 1.0)
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildMediaArtworkSlot(),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    media?.displayTitle ?? 'Nothing playing',
+                    key: const ValueKey('device-focus-media-title'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: colors.onSurface,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  if (media != null && media.artist.isNotEmpty) ...[
+                    const SizedBox(height: 5),
+                    Text(
+                      media.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ],
+                  if (media != null && media.album.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      media.album,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Text(
+                    media?.stateLabel ?? 'Nothing playing',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: colors.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (hasPosition) ...[
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _formatPlaybackTime(media.positionMs!),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              Text(
+                _formatPlaybackTime(media.durationMs!),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: colors.onSurfaceVariant,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          LinearProgressIndicator(
+            key: const ValueKey('device-focus-media-progress'),
+            value: progress,
+            minHeight: 4,
+            borderRadius: BorderRadius.circular(999),
+          ),
+        ],
+        if (media != null && media.application.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Icon(
+                Icons.apps_outlined,
+                size: 16,
+                color: colors.onSurfaceVariant,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  media.application,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 
-  List<DeviceFocusPanelRow> _mediaRows() {
+  Widget _buildMediaArtworkSlot() {
+    final theme = Theme.of(context);
     final media = widget.mediaPlayback;
-    if (media == null) {
-      return const [
-        DeviceFocusPanelRow(label: 'Status', value: 'Nothing playing'),
-      ];
-    }
-
-    return [
-      if (media.title.isNotEmpty)
-        DeviceFocusPanelRow(label: 'Title', value: media.title),
-      if (media.artist.isNotEmpty)
-        DeviceFocusPanelRow(label: 'Artist', value: media.artist),
-      if (media.album.isNotEmpty)
-        DeviceFocusPanelRow(label: 'Album', value: media.album),
-      if (media.application.isNotEmpty)
-        DeviceFocusPanelRow(label: 'Application', value: media.application),
-      DeviceFocusPanelRow(label: 'Status', value: media.stateLabel),
-      if (media.positionMs != null && media.durationMs != null)
-        DeviceFocusPanelRow(
-          label: 'Position',
-          value:
-              '${_formatPlaybackTime(media.positionMs!)} / ${_formatPlaybackTime(media.durationMs!)}',
-        ),
-    ];
+    final bytes = media?.artworkBytes;
+    final identity = media?.artworkIdentity;
+    final artwork = bytes == null || identity == null
+        ? Container(
+            key: const ValueKey('device-focus-media-artwork-placeholder'),
+            width: 104,
+            height: 104,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Icon(
+              Icons.graphic_eq,
+              size: 38,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        : ClipRRect(
+            key: ValueKey('device-focus-media-artwork-$identity'),
+            borderRadius: BorderRadius.circular(12),
+            child: Image.memory(
+              bytes,
+              width: 104,
+              height: 104,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.medium,
+              errorBuilder: (context, error, stackTrace) => Container(
+                width: 104,
+                height: 104,
+                color: theme.colorScheme.surfaceContainerHighest,
+                child: Icon(
+                  Icons.graphic_eq,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          );
+    return SizedBox.square(
+      dimension: 104,
+      child: AnimatedSwitcher(
+        duration: RiftMotion.durationOf(context, RiftMotion.normal),
+        switchInCurve: RiftMotion.enter,
+        switchOutCurve: RiftMotion.exit,
+        child: artwork,
+      ),
+    );
   }
 
   String _formatPlaybackTime(int milliseconds) {
@@ -836,39 +986,8 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
         _ => Icons.extension_outlined,
       };
 
-  Widget? _buildMediaArtwork() {
-    final media = widget.mediaPlayback;
-    final bytes = media?.artworkBytes;
-    final identity = media?.artworkIdentity;
-    if (bytes == null || identity == null) return null;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: AnimatedSwitcher(
-        duration: RiftMotion.durationOf(context, RiftMotion.slow),
-        switchInCurve: RiftMotion.enter,
-        switchOutCurve: RiftMotion.exit,
-        child: ClipRRect(
-          key: ValueKey('device-focus-media-artwork-$identity'),
-          borderRadius: BorderRadius.circular(10),
-          child: Image.memory(
-            bytes,
-            width: 104,
-            height: 104,
-            fit: BoxFit.cover,
-            filterQuality: FilterQuality.medium,
-            errorBuilder: (context, error, stackTrace) =>
-                const SizedBox.shrink(),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget? _panelFooter(DeviceFocusNodeKind kind) {
     final colors = Theme.of(context).colorScheme;
-    if (kind == DeviceFocusNodeKind.media) {
-      return _buildMediaArtwork();
-    }
     final onRevokeTrust = widget.onRevokeTrust;
     if (kind != DeviceFocusNodeKind.security || onRevokeTrust == null) {
       return null;

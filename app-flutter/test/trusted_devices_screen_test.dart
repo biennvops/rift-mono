@@ -45,6 +45,8 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       StreamController<Map<String, dynamic>>.broadcast();
   final _mediaRemovedController =
       StreamController<Map<String, dynamic>>.broadcast();
+  final _deviceStatusController =
+      StreamController<Map<String, dynamic>>.broadcast();
   bool unblockCalled = false;
   bool revokeCalled = false;
   bool resetRevokedCalled = false;
@@ -75,6 +77,7 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
     }
   ];
   List<Map<String, dynamic>> mediaPlaybacks = [];
+  final Map<String, Map<String, dynamic>> peerDeviceStatuses = {};
   Map<String, dynamic> deviceInfo = {
     'deviceId': 'rift-local-device',
     'displayName': 'Local Device',
@@ -103,6 +106,9 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   @override
   Stream<Map<String, dynamic>> get onMediaPlaybackRemoved =>
       _mediaRemovedController.stream;
+  @override
+  Stream<Map<String, dynamic>> get onDeviceStatusUpdated =>
+      _deviceStatusController.stream;
 
   @override
   Stream<Map<String, dynamic>> get onFileOffer => const Stream.empty();
@@ -132,6 +138,13 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
       };
   @override
   Future<dynamic> listMediaPlayback() async => {'playbacks': mediaPlaybacks};
+  @override
+  Future<dynamic> getPeerDeviceStatus(String deviceId) async {
+    final status = peerDeviceStatuses[deviceId];
+    if (status == null) throw StateError('No status for $deviceId');
+    return status;
+  }
+
   @override
   Future<dynamic> listTrustedPeers() async {
     listTrustedPeersCallCount += 1;
@@ -217,6 +230,10 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
 
   Future<void> emitMediaRemoved(Map<String, dynamic> event) async {
     _mediaRemovedController.add(event);
+  }
+
+  Future<void> emitDeviceStatus(Map<String, dynamic> event) async {
+    _deviceStatusController.add(event);
   }
 }
 
@@ -708,6 +725,110 @@ void main() {
     expect(
         find.byKey(const ValueKey('trusted-orbit-overview')), findsOneWidget);
     expect(find.byKey(const ValueKey('device-hub-local-core')), findsOneWidget);
+  });
+
+  testWidgets('desktop trusted orbit summarizes battery and playback state',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = [
+        {
+          'deviceId': 'rift-battery-peer',
+          'displayName': 'Charging Phone',
+          'platform': 'android',
+          'trustState': 'trusted',
+          'presence': 'online',
+          'capabilities': ['device.status', 'media.playback'],
+        },
+      ]
+      ..discoveredPeers = const []
+      ..mediaPlaybacks = [
+        {
+          'sourceDeviceId': 'rift-battery-peer',
+          'playbackId': 'battery-session',
+          'appName': 'Player',
+          'title': 'Quiet Track',
+          'playbackState': 'paused',
+          'updatedAt': '2026-08-01T10:00:00Z',
+        },
+      ];
+    client.peerDeviceStatuses['rift-battery-peer'] = {
+      'sourceDeviceId': 'rift-battery-peer',
+      'batteryPresent': true,
+      'batteryPercent': 72,
+      'chargingState': 'charging',
+      'powerSource': 'usb',
+      'isStale': false,
+    };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const TrustedDevicesScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('72%'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('orbit-peer-battery-rift-battery-peer')),
+      findsOneWidget,
+    );
+    expect(find.byIcon(Icons.battery_charging_full), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey(
+          'orbit-peer-status-mediaPaused-rift-battery-peer',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label ==
+                'Charging Phone, trusted device, online, battery 72 percent, charging, Quiet Track paused',
+      ),
+      findsOneWidget,
+    );
+
+    await client.emitDeviceStatus({
+      'sourceDeviceId': 'rift-battery-peer',
+      'batteryPresent': true,
+      'batteryPercent': 68,
+      'chargingState': 'discharging',
+      'powerSource': 'battery',
+      'isStale': false,
+    });
+    await tester.pump();
+
+    expect(find.text('72%'), findsNothing);
+    expect(find.text('68%'), findsOneWidget);
+    expect(find.byIcon(Icons.battery_std), findsOneWidget);
+
+    client.trustedPeers = [
+      {
+        ...client.trustedPeers.first,
+        'presence': 'offline',
+      },
+    ];
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Offline'), findsOneWidget);
+    expect(find.text('68%'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('orbit-peer-battery-rift-battery-peer')),
+      findsNothing,
+    );
   });
 
   testWidgets('explicitly disabled discovery stays off until restarted',
