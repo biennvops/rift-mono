@@ -7,25 +7,44 @@ enum OrbitPeerActivity {
   mediaPlaying,
 }
 
+enum OrbitPeerStatusKind {
+  trustedOnline,
+  trustedOffline,
+  nearby,
+}
+
 @immutable
 class OrbitPeerPresentation {
   const OrbitPeerPresentation({
     required this.deviceId,
     required this.displayName,
     required this.platform,
-    required this.isOnline,
+    bool? isOnline,
+    OrbitPeerStatusKind? statusKind,
     this.accentColor,
     this.activity = OrbitPeerActivity.none,
     this.mediaTitle,
     this.mediaArtist,
-  });
+  })  : assert(isOnline != null || statusKind != null),
+        statusKind = statusKind ??
+            (isOnline == true
+                ? OrbitPeerStatusKind.trustedOnline
+                : OrbitPeerStatusKind.trustedOffline);
 
   final String deviceId;
   final String displayName;
   final String platform;
-  final bool isOnline;
+  final OrbitPeerStatusKind statusKind;
   final Color? accentColor;
   final OrbitPeerActivity activity;
   final String? mediaTitle;
   final String? mediaArtist;
+
+  bool get isOnline => statusKind != OrbitPeerStatusKind.trustedOffline;
+
+  String? get statusLabel => switch (statusKind) {
+        OrbitPeerStatusKind.trustedOnline => 'Online',
+        OrbitPeerStatusKind.trustedOffline => 'Offline',
+        OrbitPeerStatusKind.nearby => null,
+      };
 }

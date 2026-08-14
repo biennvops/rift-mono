@@ -22,6 +22,14 @@ class NearbyPeerFocus extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
+    final normalizedPlatform = platform.trim().toLowerCase();
+    final showPlatform = const {
+      'android',
+      'ios',
+      'windows',
+      'macos',
+      'linux',
+    }.contains(normalizedPlatform);
     return Semantics(
       label: '$displayName, nearby device, ready to pair',
       child: Stack(
@@ -88,11 +96,31 @@ class NearbyPeerFocus extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    if (showPlatform) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        normalizedPlatform.toUpperCase(),
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
                     Text(
-                      platform.toUpperCase(),
-                      style: theme.textTheme.labelMedium?.copyWith(
+                      'Device ID',
+                      style: theme.textTheme.labelSmall?.copyWith(
                         color: colors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      deviceId,
+                      key: const ValueKey('nearby-focus-device-id'),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colors.onSurface,
+                        fontFamily: 'JetBrains Mono',
                       ),
                     ),
                     if (endpoint != null) ...[

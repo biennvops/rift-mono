@@ -224,9 +224,19 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
   }
 
   Widget _buildHeader(ThemeData theme) {
+    final normalizedPlatform = widget.platform.trim().toLowerCase();
+    final platformLabel = const {
+      'android',
+      'ios',
+      'windows',
+      'macos',
+      'linux',
+    }.contains(normalizedPlatform)
+        ? normalizedPlatform.toUpperCase()
+        : null;
     return Container(
-      height: 64,
-      padding: const EdgeInsets.symmetric(horizontal: 18),
+      constraints: const BoxConstraints(minHeight: 72),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
       decoration: BoxDecoration(
         border: Border(
           bottom: BorderSide(
@@ -252,20 +262,31 @@ class _DeviceFocusViewState extends State<DeviceFocusView>
           const SizedBox(width: 10),
           Expanded(
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Device Focus',
+                  widget.displayName,
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: theme.colorScheme.onSurface,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 Text(
-                  'Trusted peer overview',
+                  platformLabel == null
+                      ? 'Device Focus'
+                      : 'Device Focus · $platformLabel',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                SelectableText(
+                  widget.deviceId,
+                  key: const ValueKey('device-focus-device-id'),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontFamily: 'JetBrains Mono',
                   ),
                 ),
               ],

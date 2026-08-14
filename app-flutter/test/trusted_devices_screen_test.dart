@@ -590,6 +590,64 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('desktop Nearby omits trusted status and unknown platform',
+      (WidgetTester tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.binding.setSurfaceSize(const Size(1200, 800));
+    const nearbyDeviceId = 'rift-abcdefghijklmnopqrstuvwxyz234567';
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = const []
+      ..discoveredPeers = [
+        {
+          'deviceId': nearbyDeviceId,
+          'displayName': 'Nearby Mystery',
+          'platform': 'unknown',
+          'address': '192.168.1.80',
+          'port': 11112,
+          'trustState': 'discovered',
+        },
+      ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(1200, 800)),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Online'), findsNothing);
+    expect(find.text('Offline'), findsNothing);
+    expect(find.text('UNKNOWN'), findsNothing);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Semantics &&
+            widget.properties.label ==
+                'Nearby Mystery, nearby device, ready to pair',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('nearby-orbit-peer-$nearbyDeviceId')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const ValueKey('nearby-focus-device-id')), findsOneWidget);
+    expect(find.text(nearbyDeviceId), findsOneWidget);
+    expect(find.text('UNKNOWN'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('explicitly disabled discovery stays off until restarted',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1678,7 +1736,7 @@ void main() {
       find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-2')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Peer Two'), findsOneWidget);
+    expect(find.text('Peer Two'), findsWidgets);
     expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
   });
 }

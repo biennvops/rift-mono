@@ -1808,6 +1808,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   OrbitPeerPresentation _orbitPresentationFor(
     Map<String, dynamic> peer, {
     bool includeMedia = false,
+    OrbitPeerStatusKind? statusKind,
   }) {
     final deviceId = peer['deviceId']?.toString() ?? '';
     final media = includeMedia ? _mediaPlaybackForDevice(deviceId) : null;
@@ -1815,7 +1816,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       deviceId: deviceId,
       displayName: _displayNameFor(peer),
       platform: peer['platform']?.toString() ?? 'unknown',
-      isOnline: peer['presence']?.toString() == 'online',
+      statusKind: statusKind ??
+          (peer['presence']?.toString() == 'online'
+              ? OrbitPeerStatusKind.trustedOnline
+              : OrbitPeerStatusKind.trustedOffline),
       accentColor: media?.accentColor,
       activity: switch (media?.playbackState) {
         null => OrbitPeerActivity.none,
@@ -1968,8 +1972,14 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                           'This Device',
                   localPlatform: _localDeviceInfo?['platform']?.toString() ??
                       _localPlatform(),
-                  peers:
-                      peers.map(_orbitPresentationFor).toList(growable: false),
+                  peers: peers
+                      .map(
+                        (peer) => _orbitPresentationFor(
+                          peer,
+                          statusKind: OrbitPeerStatusKind.nearby,
+                        ),
+                      )
+                      .toList(growable: false),
                   phase: _orbitController,
                   scanProgress: _pulseController,
                   peerKeyPrefix: 'nearby-orbit-peer',

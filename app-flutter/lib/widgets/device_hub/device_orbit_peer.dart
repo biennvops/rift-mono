@@ -52,7 +52,8 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final peer = widget.peer;
     final accent = peer.accentColor ?? colors.primary;
     final highlighted = _interacting;
-    final status = peer.isOnline ? 'Online' : 'Offline';
+    final status = peer.statusLabel;
+    final availabilityDescription = status?.toLowerCase() ?? 'ready to pair';
     final mediaDescription = switch (peer.activity) {
       OrbitPeerActivity.mediaPlaying =>
         ', playing ${peer.mediaTitle ?? 'media'}${peer.mediaArtist == null ? '' : ' by ${peer.mediaArtist}'}',
@@ -71,7 +72,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     final peerContent = Semantics(
       button: true,
       label:
-          '${peer.displayName}, ${widget.semanticRole}, ${status.toLowerCase()}$mediaDescription',
+          '${peer.displayName}, ${widget.semanticRole}, $availabilityDescription$mediaDescription',
       child: KeyedSubtree(
         key: mediaStateKey == null
             ? null
@@ -148,35 +149,38 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                               height: 1.1,
                             ),
                           ),
-                          const SizedBox(height: 5),
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color:
-                                        peer.isOnline ? accent : colors.outline,
+                          if (status != null) ...[
+                            const SizedBox(height: 5),
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 6,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: peer.isOnline
+                                          ? accent
+                                          : colors.outline,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  status,
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                    color: peer.isOnline
-                                        ? accent
-                                        : colors.onSurfaceVariant,
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 10,
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    status,
+                                    style: theme.textTheme.labelSmall?.copyWith(
+                                      color: peer.isOnline
+                                          ? accent
+                                          : colors.onSurfaceVariant,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 10,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
+                          ],
                         ],
                       ),
                     ),

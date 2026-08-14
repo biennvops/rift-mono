@@ -342,6 +342,9 @@ void main() {
     expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
     expect(find.byKey(const ValueKey('device-focus-core')), findsOneWidget);
     expect(
+        find.byKey(const ValueKey('device-focus-device-id')), findsOneWidget);
+    expect(find.text('rift-phone-1234'), findsOneWidget);
+    expect(
       find.byKey(const ValueKey('device-focus-node-power')),
       findsOneWidget,
     );
@@ -365,7 +368,7 @@ void main() {
       find.byKey(const ValueKey('device-focus-node-media')),
       findsNothing,
     );
-    expect(find.text('Pixel 9'), findsOneWidget);
+    expect(find.text('Pixel 9'), findsWidgets);
     expect(find.text('Authorized Trusted Peer'), findsNothing);
     expect(find.text('Actions'), findsNothing);
 
@@ -378,7 +381,7 @@ void main() {
       find.byKey(const ValueKey('device-focus-panel-identity')),
       findsOneWidget,
     );
-    expect(find.text('rift-phone-1234'), findsOneWidget);
+    expect(find.text('rift-phone-1234'), findsWidgets);
     expect(find.text('ABCD-EFGH-IJKL-MNOP'), findsOneWidget);
     expect(find.text('Android 16'), findsOneWidget);
     expect(find.text('0.1-draft'), findsOneWidget);
