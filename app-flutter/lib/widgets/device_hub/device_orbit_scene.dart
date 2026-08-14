@@ -7,6 +7,34 @@ import 'device_orbit_peer.dart';
 import 'orbit_peer_layout_state.dart';
 import 'orbit_peer_presentation.dart';
 
+@immutable
+class OrbitPeerEntryOrigin {
+  const OrbitPeerEntryOrigin({
+    required this.index,
+    required this.peerCount,
+    required this.phase,
+  });
+
+  final int index;
+  final int peerCount;
+  final double phase;
+}
+
+@immutable
+class PairingOrbitHandoff {
+  const PairingOrbitHandoff({
+    required this.deviceId,
+    required this.previousPeers,
+    required this.duration,
+    this.sourceOrigin,
+  });
+
+  final String deviceId;
+  final List<OrbitPeerPresentation> previousPeers;
+  final Duration duration;
+  final OrbitPeerEntryOrigin? sourceOrigin;
+}
+
 class DeviceOrbitScene extends StatefulWidget {
   const DeviceOrbitScene({
     super.key,
@@ -22,6 +50,7 @@ class DeviceOrbitScene extends StatefulWidget {
     required this.onSceneFocusChanged,
     this.onLocalDeviceTap,
     this.onMembershipTransitionChanged,
+    this.pairingHandoff,
     this.scanning = false,
     this.animatePeerChanges = false,
     this.emptyMessage,
@@ -43,6 +72,7 @@ class DeviceOrbitScene extends StatefulWidget {
   final ValueChanged<bool> onSceneFocusChanged;
   final VoidCallback? onLocalDeviceTap;
   final ValueChanged<bool>? onMembershipTransitionChanged;
+  final PairingOrbitHandoff? pairingHandoff;
   final bool scanning;
   final bool animatePeerChanges;
   final String? emptyMessage;
@@ -64,6 +94,8 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
   DeviceOrbitGeometry? _lastGeometry;
   double? _frozenPhase;
   bool _isReflowing = false;
+  String? _preparedPairingHandoffDeviceId;
+  bool _pairingHandoffStartScheduled = false;
 
   @override
   void initState() {
@@ -82,6 +114,20 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
 
     for (final removedId in oldIds.difference(newIds)) {
       _releasePeerInteraction(removedId);
+    }
+
+    final pairingHandoff = widget.pairingHandoff;
+    if (pairingHandoff != null &&
+        _preparedPairingHandoffDeviceId != pairingHandoff.deviceId) {
+      final geometry = _lastGeometry;
+      if (!widget.animatePeerChanges ||
+          RiftMotion.reducedMotionOf(context) ||
+          geometry == null) {
+        _clearReflow();
+      } else {
+        _preparePairingHandoff(pairingHandoff, geometry);
+      }
+      return;
     }
 
     if (oldIds.length == newIds.length && oldIds.containsAll(newIds)) {
@@ -122,6 +168,103 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
   ) {
     return peers.toList(growable: false)
       ..sort((left, right) => left.deviceId.compareTo(right.deviceId));
+  }
+
+  void _preparePairingHandoff(
+    PairingOrbitHandoff handoff,
+    DeviceOrbitGeometry geometry,
+  ) {
+    final previous = _sortedPeers(handoff.previousPeers);
+    final next = _sortedPeers(widget.peers);
+    final phase = handoff.sourceOrigin?.phase ?? widget.phase.value;
+    final previousCenters = <String, Offset>{};
+    for (var index = 0; index < previous.length; index++) {
+      previousCenters[previous[index].deviceId] = DeviceOrbitLayout.peerCenter(
+        geometry: geometry,
+        index: index,
+        peerCount: previous.length,
+        phase: phase,
+      );
+    }
+
+    final nextPeersById = {
+      for (final peer in next) peer.deviceId: peer,
+    };
+    final states = <String, OrbitPeerLayoutState>{};
+    for (var index = 0; index < next.length; index++) {
+      final peer = next[index];
+      final target = DeviceOrbitLayout.peerCenter(
+        geometry: geometry,
+        index: index,
+        peerCount: next.length,
+        phase: phase,
+      );
+      final current = previousCenters[peer.deviceId];
+      final isPairedPeer = peer.deviceId == handoff.deviceId;
+      final sourceOrigin = isPairedPeer ? handoff.sourceOrigin : null;
+      final source = sourceOrigin == null
+          ? geometry.center + (target - geometry.center) * 0.72
+          : DeviceOrbitLayout.peerCenter(
+              geometry: geometry,
+              index: sourceOrigin.index,
+              peerCount: sourceOrigin.peerCount,
+              phase: sourceOrigin.phase,
+            );
+      states[peer.deviceId] = OrbitPeerLayoutState(
+        deviceId: peer.deviceId,
+        from: current ?? source,
+        to: target,
+        entering: current == null,
+        leaving: false,
+        preservePresence: isPairedPeer,
+      );
+    }
+
+    for (final peer in previous) {
+      if (nextPeersById.containsKey(peer.deviceId)) continue;
+      final current = previousCenters[peer.deviceId];
+      if (current == null) continue;
+      final radialVector = current - geometry.center;
+      final drift = radialVector.distance == 0
+          ? Offset.zero
+          : radialVector / radialVector.distance * 10;
+      states[peer.deviceId] = OrbitPeerLayoutState(
+        deviceId: peer.deviceId,
+        from: current,
+        to: current + drift,
+        entering: false,
+        leaving: true,
+      );
+    }
+
+    final wasReflowing = _isReflowing;
+    _reflowController
+      ..stop()
+      ..duration = handoff.duration
+      ..value = 0;
+    _preparedPairingHandoffDeviceId = handoff.deviceId;
+    _frozenPhase = phase;
+    _layoutStates = states;
+    _transitionPeers = {
+      for (final peer in previous) peer.deviceId: peer,
+      ...nextPeersById,
+    };
+    _isReflowing = true;
+
+    if (_pairingHandoffStartScheduled) return;
+    _pairingHandoffStartScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pairingHandoffStartScheduled = false;
+      if (!mounted ||
+          !_isReflowing ||
+          _preparedPairingHandoffDeviceId != handoff.deviceId) {
+        return;
+      }
+      if (!wasReflowing) {
+        widget.onMembershipTransitionChanged?.call(true);
+      }
+      _reflowController.forward(from: 0);
+    });
   }
 
   void _startReflow(
@@ -210,6 +353,7 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
       _isReflowing = true;
       widget.onMembershipTransitionChanged?.call(true);
     }
+    _reflowController.duration = _reflowDuration;
     _reflowController.forward(from: 0);
   }
 
@@ -258,6 +402,13 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
           final size = Size(constraints.maxWidth, constraints.maxHeight);
           final geometry = DeviceOrbitLayout.calculate(size);
           _lastGeometry = geometry;
+          final pairingHandoff = widget.pairingHandoff;
+          if (pairingHandoff != null &&
+              _preparedPairingHandoffDeviceId != pairingHandoff.deviceId &&
+              widget.animatePeerChanges &&
+              !RiftMotion.reducedMotionOf(context)) {
+            _preparePairingHandoff(pairingHandoff, geometry);
+          }
           final renderedPeers = _isReflowing
               ? _sortedPeers(_transitionPeers.values)
               : sortedPeers;
@@ -293,6 +444,7 @@ class _DeviceOrbitSceneState extends State<DeviceOrbitScene>
                         ? _frozenPhase ?? widget.phase.value
                         : null,
                     layoutState: _layoutStates[renderedPeers[index].deviceId],
+                    transitioning: _isReflowing,
                     peer: renderedPeers[index],
                     peerKeyPrefix: widget.peerKeyPrefix,
                     peerSemanticRole: widget.peerSemanticRole,
@@ -351,6 +503,7 @@ class _OrbitPositionedPeer extends StatelessWidget {
     required this.peerCount,
     required this.phase,
     required this.layoutState,
+    required this.transitioning,
     required this.peer,
     required this.peerKeyPrefix,
     required this.peerSemanticRole,
@@ -366,6 +519,7 @@ class _OrbitPositionedPeer extends StatelessWidget {
   final int peerCount;
   final double? phase;
   final OrbitPeerLayoutState? layoutState;
+  final bool transitioning;
   final OrbitPeerPresentation peer;
   final String peerKeyPrefix;
   final String peerSemanticRole;
@@ -378,12 +532,16 @@ class _OrbitPositionedPeer extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = layoutState;
     final present = state?.leaving != true;
+    final interactive = present && !(transitioning && state?.entering == true);
     final peerContent = ExcludeSemantics(
-      excluding: !present,
+      excluding: !interactive,
       child: ExcludeFocus(
-        excluding: !present,
+        excluding: !interactive,
         child: IgnorePointer(
-          ignoring: !present,
+          key: ValueKey(
+            '$peerKeyPrefix-transition-interaction-${peer.deviceId}',
+          ),
+          ignoring: !interactive,
           child: DeviceOrbitPeer(
             key: ValueKey('$peerKeyPrefix-${peer.deviceId}'),
             peer: peer,
@@ -412,12 +570,16 @@ class _OrbitPositionedPeer extends StatelessWidget {
                 peerCount: peerCount,
                 phase: phase ?? animation.value,
               );
-          final opacity = state?.leaving == true
-              ? 1 - progress
-              : (state?.entering == true ? progress : 1.0);
-          final scale = state?.leaving == true
-              ? 1 - progress * 0.22
-              : (state?.entering == true ? _entryScale(progress) : 1.0);
+          final opacity = state?.preservePresence == true
+              ? 1.0
+              : state?.leaving == true
+                  ? 1 - progress
+                  : (state?.entering == true ? progress : 1.0);
+          final scale = state?.preservePresence == true
+              ? 1.0
+              : state?.leaving == true
+                  ? 1 - progress * 0.22
+                  : (state?.entering == true ? _entryScale(progress) : 1.0);
           return Stack(
             children: [
               Positioned(

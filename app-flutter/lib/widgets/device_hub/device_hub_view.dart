@@ -17,6 +17,9 @@ class DeviceHubView extends StatelessWidget {
     this.actions = const [],
     this.banner,
     this.modeSelectionEnabled = true,
+    this.sceneOverride,
+    this.sceneKey,
+    this.animateSceneChanges = true,
   });
 
   final DeviceHubMode mode;
@@ -26,12 +29,24 @@ class DeviceHubView extends StatelessWidget {
   final List<Widget> actions;
   final Widget? banner;
   final bool modeSelectionEnabled;
+  final Widget? sceneOverride;
+  final Key? sceneKey;
+  final bool animateSceneChanges;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final duration = RiftMotion.durationOf(context, RiftMotion.normal);
-    final scene = mode == DeviceHubMode.trusted ? trustedScene : nearbyScene;
+    final duration = animateSceneChanges
+        ? RiftMotion.durationOf(context, RiftMotion.normal)
+        : Duration.zero;
+    final scene = sceneOverride ??
+        (mode == DeviceHubMode.trusted ? trustedScene : nearbyScene);
+    final resolvedSceneKey =
+        sceneKey ?? ValueKey('device-hub-scene-${mode.name}');
+    final sceneContent = KeyedSubtree(
+      key: resolvedSceneKey,
+      child: scene,
+    );
     return Scaffold(
       key: const ValueKey('desktop-device-hub'),
       backgroundColor: theme.colorScheme.surface,
@@ -119,29 +134,29 @@ class DeviceHubView extends StatelessWidget {
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(18),
-                    child: AnimatedSwitcher(
-                      duration: duration,
-                      switchInCurve: RiftMotion.enter,
-                      switchOutCurve: RiftMotion.exit,
-                      transitionBuilder: (child, animation) {
-                        return FadeTransition(
-                          opacity: animation,
-                          child: ScaleTransition(
-                            scale: Tween<double>(begin: 0.99, end: 1).animate(
-                              CurvedAnimation(
-                                parent: animation,
-                                curve: RiftMotion.enter,
-                              ),
-                            ),
-                            child: child,
+                    child: duration == Duration.zero
+                        ? sceneContent
+                        : AnimatedSwitcher(
+                            duration: duration,
+                            switchInCurve: RiftMotion.enter,
+                            switchOutCurve: RiftMotion.exit,
+                            transitionBuilder: (child, animation) {
+                              return FadeTransition(
+                                opacity: animation,
+                                child: ScaleTransition(
+                                  scale: Tween<double>(begin: 0.99, end: 1)
+                                      .animate(
+                                    CurvedAnimation(
+                                      parent: animation,
+                                      curve: RiftMotion.enter,
+                                    ),
+                                  ),
+                                  child: child,
+                                ),
+                              );
+                            },
+                            child: sceneContent,
                           ),
-                        );
-                      },
-                      child: KeyedSubtree(
-                        key: ValueKey('device-hub-scene-${mode.name}'),
-                        child: scene,
-                      ),
-                    ),
                   ),
                 ),
               ),

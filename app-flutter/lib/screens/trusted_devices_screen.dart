@@ -16,10 +16,25 @@ import '../widgets/bubble_background.dart';
 import '../widgets/device_hub/device_hub_view.dart';
 import '../widgets/device_hub/device_orbit_motion_state.dart';
 import '../widgets/device_hub/device_orbit_scene.dart';
-import '../widgets/device_hub/nearby_pairing_success.dart';
 import '../widgets/device_hub/nearby_peer_focus.dart';
 import '../widgets/device_hub/orbit_peer_presentation.dart';
 import '../src/ui/theme.dart';
+
+class _PairingHandoffState {
+  _PairingHandoffState({
+    required this.deviceId,
+    required this.sourcePeer,
+    required this.previousTrustedPeers,
+    required this.sourceOrigin,
+  });
+
+  final String deviceId;
+  final Map<String, dynamic> sourcePeer;
+  final List<Map<String, dynamic>> previousTrustedPeers;
+  final OrbitPeerEntryOrigin? sourceOrigin;
+  bool sourceSettled = false;
+  bool animating = false;
+}
 
 class TrustedDevicesScreen extends StatefulWidget {
   const TrustedDevicesScreen({super.key});
@@ -31,6 +46,9 @@ class TrustedDevicesScreen extends StatefulWidget {
 class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     with TickerProviderStateMixin {
   static const Duration _presenceRefreshInterval = Duration(seconds: 5);
+  static const Duration _pairingHandoffDuration = Duration(milliseconds: 850);
+  static const Duration _pairingHandoffModeDelay = Duration(milliseconds: 650);
+  static const Duration _pairingHandoffTimeout = Duration(seconds: 3);
   static final bool _enableContinuousDiscoveryAnimation =
       !Platform.environment.containsKey('FLUTTER_TEST');
   static final bool _enableContinuousOrbitAnimation =
@@ -41,7 +59,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   String? _selectedNearbyDeviceId;
   bool _isLocalDeviceFocused = false;
   Map<String, dynamic>? _desktopPairingTarget;
-  String? _desktopPairingSuccessDeviceId;
+  OrbitPeerEntryOrigin? _desktopPairingSourceOrigin;
+  _PairingHandoffState? _pairingHandoff;
+  bool _suppressHubSceneTransition = false;
   String? _recentlyPairedDeviceId;
   DeviceHubMode _hubMode = DeviceHubMode.trusted;
   final Set<String> _interactingOrbitPeers = <String>{};
@@ -94,6 +114,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Timer? _fullReloadThrottle;
   Timer? _presenceRefreshTimer;
   Timer? _nearbyHighlightTimer;
+  Timer? _pairingHandoffSourceTimer;
+  Timer? _pairingHandoffModeTimer;
+  Timer? _pairingHandoffFallbackTimer;
   late final AnimationController _pulseController;
   late final AnimationController _bubbleController;
   late final AnimationController _spinController;
@@ -137,6 +160,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _fullReloadThrottle?.cancel();
     _presenceRefreshTimer?.cancel();
     _nearbyHighlightTimer?.cancel();
+    _pairingHandoffSourceTimer?.cancel();
+    _pairingHandoffModeTimer?.cancel();
+    _pairingHandoffFallbackTimer?.cancel();
     _nearbySectionFocusNode.dispose();
     _manualInputFocusNode.dispose();
     _manualInputController.dispose();
@@ -281,7 +307,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       }
     });
 
-    _scheduleFullReloadThrottled();
+    if (_pairingHandoff?.deviceId == deviceId && newState == 'trusted') {
+      _scheduleReload();
+    } else {
+      _scheduleFullReloadThrottled();
+    }
   }
 
   void _handlePairingComplete(Map<String, dynamic> event) {
@@ -525,7 +555,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       hasFocusedPeer: _isLocalDeviceFocused ||
           _selectedDeviceId != null ||
           _selectedNearbyDeviceId != null ||
-          _desktopPairingTarget != null,
+          _desktopPairingTarget != null ||
+          _pairingHandoff != null,
       hasKeyboardFocus: _orbitHasKeyboardFocus,
       interactingPeerCount: _interactingOrbitPeers.length,
       membershipTransitioning: _orbitMembershipTransitioning,
@@ -558,12 +589,24 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   void _handleOrbitMembershipTransitionChanged(bool transitioning) {
     _orbitMembershipTransitioning = transitioning;
     _syncOrbitAnimation();
+    final handoff = _pairingHandoff;
+    if (!transitioning && handoff?.animating == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _pairingHandoff != handoff) return;
+        _finishPairingHandoff(handoff!);
+      });
+    }
   }
 
   void _setHubMode(DeviceHubMode mode) {
-    if (_hubMode == mode || _desktopPairingTarget != null) return;
+    if (_hubMode == mode ||
+        _desktopPairingTarget != null ||
+        _pairingHandoff != null) {
+      return;
+    }
     setState(() {
       _hubMode = mode;
+      _suppressHubSceneTransition = false;
       _isLocalDeviceFocused = false;
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
@@ -592,7 +635,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
       _desktopPairingTarget = null;
-      _desktopPairingSuccessDeviceId = null;
+      _desktopPairingSourceOrigin = null;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
     });
@@ -611,6 +654,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _isLoadingData = true;
 
       if (!client.isConnected) {
+        _cancelPairingHandoffTimers();
         setState(() {
           _trustedPeers = [];
           _discoveredPeers = [];
@@ -619,7 +663,9 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _selectedDeviceId = null;
           _selectedNearbyDeviceId = null;
           _desktopPairingTarget = null;
-          _desktopPairingSuccessDeviceId = null;
+          _desktopPairingSourceOrigin = null;
+          _pairingHandoff = null;
+          _suppressHubSceneTransition = false;
           _recentlyPairedDeviceId = null;
           _peerDeviceStatuses.clear();
           _loadingPeerDeviceStatuses.clear();
@@ -697,6 +743,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         _syncPulseAnimation();
         _syncOrbitAnimation();
         _loadPeerDeviceStatuses(trustedPeerMaps);
+        _maybeStartPairingHandoff();
       }
       if (!isDiscovering) {
         unawaited(_ensureTrustedPeerDiscovery(client));
@@ -1490,13 +1537,21 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   ) {
     final target = Map<String, dynamic>.from(peer);
     target['displayName'] = displayName;
+    final targetDeviceId = target['deviceId']?.toString();
+    final sourceOrigin = _orbitEntryOriginFor(
+      targetDeviceId,
+      _nearbyOrbitPeers,
+    );
+    _cancelPairingHandoffTimers();
     setState(() {
       _hubMode = DeviceHubMode.nearby;
       _isLocalDeviceFocused = false;
       _selectedDeviceId = null;
-      _selectedNearbyDeviceId = target['deviceId']?.toString();
+      _selectedNearbyDeviceId = targetDeviceId;
       _desktopPairingTarget = target;
-      _desktopPairingSuccessDeviceId = null;
+      _desktopPairingSourceOrigin = sourceOrigin;
+      _pairingHandoff = null;
+      _suppressHubSceneTransition = false;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
     });
@@ -1511,36 +1566,44 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
         );
     setState(() {
       _desktopPairingTarget = null;
-      _desktopPairingSuccessDeviceId = null;
+      _desktopPairingSourceOrigin = null;
       _selectedNearbyDeviceId = remainsNearby ? targetDeviceId : null;
     });
     _syncOrbitAnimation();
   }
 
   Future<void> _completeDesktopPairing(String deviceId) async {
-    if (_desktopPairingTarget == null ||
-        _desktopPairingSuccessDeviceId != null) {
-      return;
+    final target = _desktopPairingTarget;
+    if (target == null || _pairingHandoff != null) return;
+
+    final sourcePeer = Map<String, dynamic>.from(target)
+      ..['deviceId'] = deviceId;
+    final previousTrustedPeers = _trustedOrbitPeers
+        .where((peer) => peer['deviceId']?.toString() != deviceId)
+        .map(Map<String, dynamic>.from)
+        .toList(growable: false);
+    var sourceOrigin = _desktopPairingSourceOrigin;
+    if (sourceOrigin == null) {
+      final nearbyPeers = _nearbyOrbitPeers
+          .where((peer) => peer['deviceId']?.toString() != deviceId)
+          .map(Map<String, dynamic>.from)
+          .toList()
+        ..add(sourcePeer);
+      sourceOrigin = _orbitEntryOriginFor(deviceId, nearbyPeers);
     }
-    setState(() {
-      _desktopPairingSuccessDeviceId = deviceId;
-      _interactingOrbitPeers.clear();
-      _orbitHasKeyboardFocus = false;
-    });
-    _syncOrbitAnimation();
-
-    await Future<void>.delayed(
-      _reducedMotion ? RiftMotion.fast : RiftMotion.scene,
+    final handoff = _PairingHandoffState(
+      deviceId: deviceId,
+      sourcePeer: sourcePeer,
+      previousTrustedPeers: previousTrustedPeers,
+      sourceOrigin: sourceOrigin,
     );
-    if (!mounted || _desktopPairingSuccessDeviceId != deviceId) return;
 
-    await _loadData();
-    if (!mounted || _desktopPairingSuccessDeviceId != deviceId) return;
+    _cancelPairingHandoffTimers();
     setState(() {
       _desktopPairingTarget = null;
-      _desktopPairingSuccessDeviceId = null;
+      _desktopPairingSourceOrigin = null;
+      _pairingHandoff = handoff;
       _recentlyPairedDeviceId = deviceId;
-      _hubMode = DeviceHubMode.trusted;
       _isLocalDeviceFocused = false;
       _selectedDeviceId = null;
       _selectedNearbyDeviceId = null;
@@ -1548,6 +1611,112 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _orbitHasKeyboardFocus = false;
     });
     _syncOrbitAnimation();
+
+    _pairingHandoffSourceTimer = Timer(RiftMotion.fast, () {
+      final current = _pairingHandoff;
+      if (!mounted ||
+          current == null ||
+          current != handoff ||
+          current.animating) {
+        return;
+      }
+      setState(() {
+        current.sourceSettled = true;
+      });
+      _maybeStartPairingHandoff();
+    });
+    _pairingHandoffFallbackTimer = Timer(_pairingHandoffTimeout, () {
+      _finishPairingHandoffWithoutModel(handoff);
+    });
+    await _loadData();
+  }
+
+  OrbitPeerEntryOrigin? _orbitEntryOriginFor(
+    String? deviceId,
+    Iterable<Map<String, dynamic>> peers,
+  ) {
+    if (deviceId == null || deviceId.isEmpty) return null;
+    final deviceIds = peers
+        .map((peer) => peer['deviceId']?.toString() ?? '')
+        .toList(growable: false)
+      ..sort();
+    final index = deviceIds.indexOf(deviceId);
+    if (index < 0) return null;
+    return OrbitPeerEntryOrigin(
+      index: index,
+      peerCount: deviceIds.length,
+      phase: _orbitController.value,
+    );
+  }
+
+  void _maybeStartPairingHandoff() {
+    final handoff = _pairingHandoff;
+    if (handoff == null || handoff.animating || !handoff.sourceSettled) return;
+    final hasTrustedModel = _trustedOrbitPeers.any(
+      (peer) => peer['deviceId']?.toString() == handoff.deviceId,
+    );
+    if (!hasTrustedModel) return;
+
+    if (_reducedMotion) {
+      _finishPairingHandoff(handoff);
+      return;
+    }
+
+    setState(() {
+      handoff.animating = true;
+      _suppressHubSceneTransition = false;
+    });
+    _pairingHandoffFallbackTimer?.cancel();
+    _pairingHandoffFallbackTimer = Timer(
+      _pairingHandoffDuration + RiftMotion.slow,
+      () => _finishPairingHandoff(handoff),
+    );
+    _pairingHandoffModeTimer = Timer(_pairingHandoffModeDelay, () {
+      if (!mounted || _pairingHandoff != handoff || !handoff.animating) return;
+      setState(() {
+        _hubMode = DeviceHubMode.trusted;
+      });
+    });
+    _syncOrbitAnimation();
+  }
+
+  void _finishPairingHandoff(_PairingHandoffState handoff) {
+    if (!mounted || _pairingHandoff != handoff) return;
+    _cancelPairingHandoffTimers();
+    setState(() {
+      _pairingHandoff = null;
+      _hubMode = DeviceHubMode.trusted;
+      _isLocalDeviceFocused = false;
+      _selectedDeviceId = null;
+      _selectedNearbyDeviceId = null;
+      _interactingOrbitPeers.clear();
+      _orbitHasKeyboardFocus = false;
+      _orbitMembershipTransitioning = false;
+      _suppressHubSceneTransition = true;
+    });
+    _syncOrbitAnimation();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_suppressHubSceneTransition) return;
+      setState(() {
+        _suppressHubSceneTransition = false;
+      });
+    });
+  }
+
+  void _finishPairingHandoffWithoutModel(_PairingHandoffState handoff) {
+    if (!mounted || _pairingHandoff != handoff || handoff.animating) return;
+    _recentlyPairedDeviceId = null;
+    _finishPairingHandoff(handoff);
+    unawaited(_loadData());
+  }
+
+  void _cancelPairingHandoffTimers() {
+    _pairingHandoffSourceTimer?.cancel();
+    _pairingHandoffSourceTimer = null;
+    _pairingHandoffModeTimer?.cancel();
+    _pairingHandoffModeTimer = null;
+    _pairingHandoffFallbackTimer?.cancel();
+    _pairingHandoffFallbackTimer = null;
   }
 
   void _handleRecentlyPairedAnimationCompleted(String deviceId) {
@@ -1911,10 +2080,21 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       .map(Map<String, dynamic>.from)
       .toList(growable: false);
 
-  List<Map<String, dynamic>> get _nearbyOrbitPeers => _discoveredPeers
-      .whereType<Map>()
-      .map(Map<String, dynamic>.from)
-      .toList(growable: false);
+  List<Map<String, dynamic>> get _nearbyOrbitPeers {
+    final peers = _discoveredPeers
+        .whereType<Map>()
+        .map(Map<String, dynamic>.from)
+        .toList(growable: true);
+    final handoff = _pairingHandoff;
+    if (handoff != null &&
+        !handoff.animating &&
+        !peers.any(
+          (peer) => peer['deviceId']?.toString() == handoff.deviceId,
+        )) {
+      peers.add(Map<String, dynamic>.from(handoff.sourcePeer));
+    }
+    return peers;
+  }
 
   String _displayNameFor(Map<String, dynamic> peer) {
     final displayName = peer['displayName']?.toString().trim() ?? '';
@@ -1983,7 +2163,25 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Widget _buildTrustedDesktopScene() {
     final peers = _trustedOrbitPeers;
     final selectedPeer = _peerWithId(peers, _selectedDeviceId);
-    final duration = RiftMotion.durationOf(context, RiftMotion.normal);
+    final handoff = _pairingHandoff;
+    final pairingOrbitHandoff = handoff?.animating == true
+        ? PairingOrbitHandoff(
+            deviceId: handoff!.deviceId,
+            previousPeers: handoff.previousTrustedPeers
+                .map(
+                  (peer) => _orbitPresentationFor(
+                    peer,
+                    includeMedia: true,
+                  ),
+                )
+                .toList(growable: false),
+            sourceOrigin: handoff.sourceOrigin,
+            duration: _pairingHandoffDuration,
+          )
+        : null;
+    final duration = pairingOrbitHandoff == null
+        ? RiftMotion.durationOf(context, RiftMotion.normal)
+        : Duration.zero;
     return AnimatedSwitcher(
       duration: duration,
       switchInCurve: RiftMotion.enter,
@@ -1996,7 +2194,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             )
           : selectedPeer == null
               ? DeviceOrbitScene(
-                  key: const ValueKey('trusted-orbit-overview'),
+                  key: ValueKey(
+                    pairingOrbitHandoff == null
+                        ? 'trusted-orbit-overview'
+                        : 'pairing-handoff-orbit',
+                  ),
                   localDisplayName:
                       _localDeviceInfo?['displayName']?.toString() ??
                           'This Device',
@@ -2024,6 +2226,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   onSceneFocusChanged: _handleOrbitFocusChanged,
                   onMembershipTransitionChanged:
                       _handleOrbitMembershipTransitionChanged,
+                  pairingHandoff: pairingOrbitHandoff,
                   onLocalDeviceTap:
                       _localDeviceInfo == null ? null : _focusLocalDevice,
                   animatePeerChanges: true,
@@ -2059,15 +2262,6 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   Widget _buildDesktopPairingScene(Map<String, dynamic> target) {
     final deviceId = target['deviceId']?.toString();
     final displayName = _displayNameFor(target);
-    final successDeviceId = _desktopPairingSuccessDeviceId;
-    if (successDeviceId != null) {
-      return NearbyPairingSuccess(
-        key: ValueKey('nearby-pairing-success-focus-$successDeviceId'),
-        deviceId: successDeviceId,
-        displayName: displayName,
-        platform: target['platform']?.toString() ?? 'unknown',
-      );
-    }
     final address = target['address']?.toString();
     final port = (target['port'] as num?)?.toInt();
     final targetKey = deviceId ?? '$address:$port';
@@ -2100,6 +2294,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final peers = _nearbyOrbitPeers;
     final selectedPeer = _peerWithId(peers, _selectedNearbyDeviceId);
     final pairingTarget = _desktopPairingTarget;
+    final waitingForHandoff =
+        _pairingHandoff != null && !_pairingHandoff!.animating;
     final duration = RiftMotion.durationOf(context, RiftMotion.normal);
     return AnimatedSwitcher(
       duration: duration,
@@ -2115,7 +2311,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 )
               : selectedPeer == null
                   ? DeviceOrbitScene(
-                      key: const ValueKey('nearby-orbit-overview'),
+                      key: ValueKey(
+                        waitingForHandoff
+                            ? 'pairing-handoff-orbit'
+                            : 'nearby-orbit-overview',
+                      ),
                       localDisplayName:
                           _localDeviceInfo?['displayName']?.toString() ??
                               'This Device',
@@ -2152,6 +2352,10 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                           _localDeviceInfo == null ? null : _focusLocalDevice,
                       scanning: _isDiscovering,
                       animatePeerChanges: true,
+                      recentlyPairedDeviceId:
+                          waitingForHandoff ? _recentlyPairedDeviceId : null,
+                      onRecentlyPairedAnimationCompleted:
+                          _handleRecentlyPairedAnimationCompleted,
                       emptyMessage: _isDiscovering
                           ? 'Looking for nearby devices…'
                           : 'Discovery paused',
@@ -2214,7 +2418,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
 
   List<Widget> _buildDesktopHubActions() {
     final actions = <Widget>[];
-    final pairingActive = _desktopPairingTarget != null;
+    final pairingActive =
+        _desktopPairingTarget != null || _pairingHandoff != null;
     if (_hubMode == DeviceHubMode.nearby) {
       actions.add(
         Row(
@@ -2415,12 +2620,19 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   }
 
   Widget _buildDesktopHub() {
+    final handoffActive = _pairingHandoff?.animating == true;
+    final trustedScene = _buildTrustedDesktopScene();
     return DeviceHubView(
       mode: _hubMode,
       onModeChanged: _setHubMode,
-      modeSelectionEnabled: _desktopPairingTarget == null,
-      trustedScene: _buildTrustedDesktopScene(),
+      modeSelectionEnabled:
+          _desktopPairingTarget == null && _pairingHandoff == null,
+      trustedScene: trustedScene,
       nearbyScene: _buildNearbyDesktopScene(),
+      sceneOverride: handoffActive ? trustedScene : null,
+      sceneKey:
+          handoffActive ? const ValueKey('device-hub-scene-nearby') : null,
+      animateSceneChanges: !_suppressHubSceneTransition,
       actions: _buildDesktopHubActions(),
       banner: _buildDesktopErrorBanner(),
     );

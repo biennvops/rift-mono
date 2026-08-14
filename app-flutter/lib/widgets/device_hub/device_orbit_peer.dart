@@ -46,6 +46,13 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
     }
   }
 
+  void _handlePairingAnimationCompleted() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !widget.isNewlyPaired) return;
+      widget.onPairingAnimationCompleted?.call(widget.peer.deviceId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final targetAccent =
@@ -278,9 +285,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
           ? RiftMotion.durationOf(context, RiftMotion.scene)
           : Duration.zero,
       curve: RiftMotion.emphasis,
-      onEnd: widget.isNewlyPaired
-          ? () => widget.onPairingAnimationCompleted?.call(peer.deviceId)
-          : null,
+      onEnd: widget.isNewlyPaired ? _handlePairingAnimationCompleted : null,
       child: peerContent,
       builder: (context, progress, child) {
         return KeyedSubtree(
@@ -313,13 +318,7 @@ class _DeviceOrbitPeerState extends State<DeviceOrbitPeer> {
                       ),
                     ),
                   ),
-                Opacity(
-                  opacity: 0.35 + progress * 0.65,
-                  child: Transform.scale(
-                    scale: 0.8 + progress * 0.2,
-                    child: child,
-                  ),
-                ),
+                child!,
               ],
             ),
           ),

@@ -8,6 +8,7 @@ import 'package:rift/screens/device_detail_screen.dart';
 import 'package:rift/screens/trusted_devices_screen.dart';
 import 'package:rift/src/ipc/json_rpc_client.dart';
 import 'package:rift/widgets/animated_accent.dart';
+import 'package:rift/widgets/device_hub/device_hub_view.dart';
 import 'package:rift/widgets/device_hub/device_orbit_peer.dart';
 import 'package:rift/widgets/media_playback_activity_indicator.dart';
 import 'test_utils/fake_transport.dart';
@@ -1429,24 +1430,41 @@ void main() {
     );
   });
 
-  testWidgets('desktop pairing success migrates peer into Trusted orbit',
+  testWidgets('desktop pairing hands one peer directly into the Trusted reflow',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
+    final existingPeers = [
+      {
+        'deviceId': 'rift-peer-a',
+        'displayName': 'Desktop A',
+        'platform': 'windows',
+        'presence': 'online',
+        'trustState': 'trusted',
+        'capabilities': ['presence.basic'],
+      },
+      {
+        'deviceId': 'rift-peer-z',
+        'displayName': 'Desktop Z',
+        'platform': 'linux',
+        'presence': 'online',
+        'trustState': 'trusted',
+        'capabilities': ['presence.basic'],
+      },
+    ];
+    final discoveredPeer = {
+      'deviceId': 'rift-peer-m',
+      'displayName': 'Pixel 9',
+      'platform': 'android',
+      'presence': 'online',
+      'trustState': 'discovered',
+    };
     final client = FakeJsonRpcRiftClient()
-      ..trustedPeers = const []
-      ..discoveredPeers = [
-        {
-          'deviceId': 'rift-newly-trusted',
-          'displayName': 'Pixel 9',
-          'platform': 'android',
-          'presence': 'online',
-          'trustState': 'discovered',
-        }
-      ];
+      ..trustedPeers = existingPeers
+      ..discoveredPeers = [discoveredPeer];
 
     await tester.pumpWidget(
       MaterialApp(
@@ -1459,12 +1477,203 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
+    final existingStart = tester.getCenter(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-z')),
+    );
     await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(const ValueKey('nearby-orbit-peer-rift-newly-trusted')),
-    );
+    final sourceFinder =
+        find.byKey(const ValueKey('nearby-orbit-peer-rift-peer-m'));
+    final sourceCenter = tester.getCenter(sourceFinder);
+    await tester.tap(sourceFinder);
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('nearby-pair-action')));
+    await tester.pump();
+    await tester.pump();
+
+    await client.emitPairingComplete({
+      'deviceId': 'rift-peer-m',
+      'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
+      'persistedAt': '2026-08-14T00:00:00Z',
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.text('Paired successfully'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('nearby-pairing-success-rift-peer-m')),
+      findsNothing,
+    );
+    expect(find.text('Pair devices'), findsNothing);
+    expect(sourceFinder, findsOneWidget);
+    expect(
+      tester.getCenter(sourceFinder).dx,
+      closeTo(sourceCenter.dx, 0.01),
+    );
+    expect(
+      tester.getCenter(sourceFinder).dy,
+      closeTo(sourceCenter.dy, 0.01),
+    );
+    expect(
+      tester
+          .widget<SegmentedButton<DeviceHubMode>>(
+            find.byKey(const ValueKey('device-hub-mode-selector')),
+          )
+          .selected,
+      {DeviceHubMode.nearby},
+    );
+
+    client
+      ..trustedPeers = [
+        ...existingPeers,
+        {
+          ...discoveredPeer,
+          'trustState': 'trusted',
+          'capabilities': ['presence.basic'],
+        },
+      ]
+      ..discoveredPeers = const [];
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer-m',
+      'newState': 'trusted',
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump();
+    await tester.pump();
+
+    final trustedNewFinder =
+        find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-m'));
+    final existingFinder =
+        find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-z'));
+    final handoffInteractionFinder = find.byKey(
+      const ValueKey(
+        'trusted-orbit-peer-transition-interaction-rift-peer-m',
+      ),
+    );
+    expect(sourceFinder, findsNothing);
+    expect(trustedNewFinder, findsOneWidget);
+    expect(
+      tester.widget<IgnorePointer>(handoffInteractionFinder).ignoring,
+      isTrue,
+    );
+    expect(find.byType(DeviceOrbitPeer), findsNWidgets(3));
+    expect(
+      tester.getCenter(trustedNewFinder).dx,
+      closeTo(sourceCenter.dx, 0.01),
+    );
+    expect(
+      tester.getCenter(trustedNewFinder).dy,
+      closeTo(sourceCenter.dy, 0.01),
+    );
+    expect(
+      tester.getCenter(existingFinder).dx,
+      closeTo(existingStart.dx, 0.5),
+    );
+    expect(
+      tester.getCenter(existingFinder).dy,
+      closeTo(existingStart.dy, 0.5),
+    );
+
+    await tester.pump(const Duration(milliseconds: 300));
+    final pairedMidpoint = tester.getCenter(trustedNewFinder);
+    final existingMidpoint = tester.getCenter(existingFinder);
+    expect((pairedMidpoint - sourceCenter).distance, greaterThan(1));
+    expect((existingMidpoint - existingStart).distance, greaterThan(1));
+    expect(find.byType(DeviceOrbitPeer), findsNWidgets(3));
+    expect(
+      tester
+          .widget<SegmentedButton<DeviceHubMode>>(
+            find.byKey(const ValueKey('device-hub-mode-selector')),
+          )
+          .selected,
+      {DeviceHubMode.nearby},
+    );
+
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(
+      tester
+          .widget<SegmentedButton<DeviceHubMode>>(
+            find.byKey(const ValueKey('device-hub-mode-selector')),
+          )
+          .selected,
+      {DeviceHubMode.trusted},
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-handoff-orbit')),
+      findsOneWidget,
+    );
+    expect(trustedNewFinder, findsOneWidget);
+
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pump();
+
+    final pairedFinal = tester.getCenter(trustedNewFinder);
+    final existingFinal = tester.getCenter(existingFinder);
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-overview')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-handoff-orbit')),
+      findsNothing,
+    );
+    expect(trustedNewFinder, findsOneWidget);
+    expect(sourceFinder, findsNothing);
+    expect(find.byType(DeviceOrbitPeer), findsNWidgets(3));
+    expect(
+      tester.widget<IgnorePointer>(handoffInteractionFinder).ignoring,
+      isFalse,
+    );
+    expect((pairedFinal - sourceCenter).distance, greaterThan(1));
+    expect((existingFinal - existingStart).distance, greaterThan(1));
+    expect((existingFinal - existingMidpoint).distance, greaterThan(0.1));
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(sourceFinder, findsNothing);
+  });
+
+  testWidgets('desktop pairing handoff skips travel with reduced motion',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final discoveredPeer = {
+      'deviceId': 'rift-reduced-peer',
+      'displayName': 'Reduced Motion Phone',
+      'platform': 'android',
+      'presence': 'online',
+      'trustState': 'discovered',
+    };
+    final client = FakeJsonRpcRiftClient()
+      ..trustedPeers = const []
+      ..discoveredPeers = [discoveredPeer];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(1280, 800),
+            disableAnimations: true,
+          ),
+          child: Provider<JsonRpcRiftClient>.value(
+            value: client,
+            child: const TrustedDevicesScreen(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-reduced-peer')),
+    );
+    await tester.pump();
     await tester.tap(find.byKey(const ValueKey('nearby-pair-action')));
     await tester.pump();
     await tester.pump();
@@ -1472,67 +1681,52 @@ void main() {
     client
       ..trustedPeers = [
         {
-          'deviceId': 'rift-newly-trusted',
-          'displayName': 'Pixel 9',
-          'platform': 'android',
-          'presence': 'online',
+          ...discoveredPeer,
           'trustState': 'trusted',
           'capabilities': ['presence.basic'],
-        }
+        },
       ]
       ..discoveredPeers = const [];
     await client.emitPairingComplete({
-      'deviceId': 'rift-newly-trusted',
+      'deviceId': 'rift-reduced-peer',
       'fingerprint': 'PEER-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
       'persistedAt': '2026-08-14T00:00:00Z',
     });
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 179));
 
     expect(
-      find.byKey(
-        const ValueKey('nearby-pairing-success-rift-newly-trusted'),
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('Paired successfully'), findsOneWidget);
-    expect(find.text('Pair devices'), findsNothing);
-
-    await tester.pump(const Duration(milliseconds: 799));
-    expect(find.text('Paired successfully'), findsOneWidget);
-    await tester.pump(const Duration(milliseconds: 1));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(
-      find.byKey(const ValueKey('trusted-orbit-peer-rift-newly-trusted')),
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-reduced-peer')),
       findsOneWidget,
     );
     expect(
-      find.byKey(
-        const ValueKey('recently-paired-orbit-peer-rift-newly-trusted'),
-      ),
+      find.byKey(const ValueKey('pairing-handoff-orbit')),
       findsOneWidget,
     );
     expect(find.text('Paired successfully'), findsNothing);
 
-    await tester.pump(const Duration(milliseconds: 800));
+    await tester.pump(const Duration(milliseconds: 1));
     await tester.pump();
+
     expect(
-      find.byKey(
-        const ValueKey('recently-paired-orbit-peer-rift-newly-trusted'),
-      ),
+      find.byKey(const ValueKey('pairing-handoff-orbit')),
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('trusted-orbit-peer-rift-newly-trusted')),
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-reduced-peer')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-reduced-peer')),
       findsOneWidget,
     );
-
-    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
-    await tester.pump(const Duration(milliseconds: 300));
     expect(
-      find.byKey(const ValueKey('nearby-orbit-peer-rift-newly-trusted')),
-      findsNothing,
+      tester
+          .widget<SegmentedButton<DeviceHubMode>>(
+            find.byKey(const ValueKey('device-hub-mode-selector')),
+          )
+          .selected,
+      {DeviceHubMode.trusted},
     );
   });
 
