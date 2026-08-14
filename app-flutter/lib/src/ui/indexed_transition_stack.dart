@@ -154,19 +154,22 @@ class _RiftIndexedTransitionStackState extends State<RiftIndexedTransitionStack>
         ? Offset.lerp(Offset.zero, outgoingOffset, outgoingProgress)!
         : Offset.lerp(incomingOffset, Offset.zero, progress)!;
 
-    return IgnorePointer(
-      ignoring: !isActive,
-      child: ExcludeFocus(
-        excluding: !isActive,
-        child: ExcludeSemantics(
+    return TickerMode(
+      enabled: isVisible,
+      child: IgnorePointer(
+        ignoring: !isActive,
+        child: ExcludeFocus(
           excluding: !isActive,
-          child: Offstage(
-            offstage: !isVisible,
-            child: Opacity(
-              opacity: opacity,
-              child: Transform.translate(
-                offset: offset,
-                child: widget.children[index],
+          child: ExcludeSemantics(
+            excluding: !isActive,
+            child: Offstage(
+              offstage: !isVisible,
+              child: Opacity(
+                opacity: opacity,
+                child: Transform.translate(
+                  offset: offset,
+                  child: widget.children[index],
+                ),
               ),
             ),
           ),

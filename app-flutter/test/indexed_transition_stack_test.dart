@@ -152,6 +152,39 @@ void main() {
     expect(keyEvents, 1);
   });
 
+  testWidgets('fully inactive child mutes its tickers',
+      (WidgetTester tester) async {
+    var index = 0;
+    var ticks = 0;
+
+    Widget buildHarness() {
+      return MaterialApp(
+        home: Scaffold(
+          body: RiftIndexedTransitionStack(
+            index: index,
+            children: [
+              _RepeatingTicker(onTick: () => ticks++),
+              const SizedBox(key: ValueKey('ticker-section-1')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildHarness());
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(ticks, greaterThan(0));
+
+    index = 1;
+    await tester.pumpWidget(buildHarness());
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    final ticksAfterTransition = ticks;
+
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(ticks, ticksAfterTransition);
+  });
+
   testWidgets('reduced motion switches without spatial transition',
       (WidgetTester tester) async {
     var index = 0;
@@ -207,6 +240,40 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
   });
+}
+
+class _RepeatingTicker extends StatefulWidget {
+  const _RepeatingTicker({required this.onTick});
+
+  final VoidCallback onTick;
+
+  @override
+  State<_RepeatingTicker> createState() => _RepeatingTickerState();
+}
+
+class _RepeatingTickerState extends State<_RepeatingTicker>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 100),
+    )
+      ..addListener(widget.onTick)
+      ..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.expand();
 }
 
 class _Harness extends StatelessWidget {
