@@ -24,6 +24,9 @@ class FakeJsonRpcRiftClient extends JsonRpcRiftClient {
   int? startPairingByEndpointPort;
   Object? startPairingError;
   Map<String, dynamic> deviceInfo = const {
+    'deviceId': 'rift-local-device',
+    'displayName': 'Local Device',
+    'platform': 'linux',
     'fingerprint': 'LOCAL-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF-GGGG-HHHH',
   };
   Map<String, dynamic>? startPairingResultOverride;
@@ -154,11 +157,18 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 3));
 
-    expect(find.textContaining('Windows Laptop', findRichText: true),
-        findsOneWidget);
-    expect(find.text('Compare fingerprints'), findsOneWidget);
-    expect(find.text('Approve'), findsOneWidget);
-    expect(find.text('WAITING...'), findsNothing);
+    expect(find.text('Windows Laptop'), findsOneWidget);
+    expect(
+        find.text('Verify both identities before trusting.'), findsOneWidget);
+    expect(find.text('Trust & Pair'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pairing-local-fingerprint')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-peer-fingerprint')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('PairingScreen outgoing flow shows the full fingerprint',
@@ -186,6 +196,12 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    expect(find.text('rift-local-device'), findsOneWidget);
+    expect(find.text('rift-peer'), findsOneWidget);
+    expect(
+      find.text('CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ'),
+      findsOneWidget,
+    );
     expect(
       find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
       findsOneWidget,
@@ -217,7 +233,101 @@ void main() {
       find.text('ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567'),
       findsOneWidget,
     );
-    expect(find.text('Security Fingerprint'), findsOneWidget);
+    expect(find.text('Fingerprint'), findsNWidgets(2));
+    expect(
+      find.byKey(const ValueKey('pairing-local-fingerprint')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-peer-fingerprint')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'PairingScreen keeps local loading separate from peer fingerprint',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..deviceInfo = const {
+        'deviceId': 'rift-local-device',
+        'displayName': 'Local Device',
+        'platform': 'linux',
+      };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen.incoming(
+            deviceId: 'rift-peer',
+            displayName: 'Peer Device',
+            fingerprint: 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+            expiresInMs: 120000,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('pairing-local-fingerprint')),
+          )
+          .data,
+      'Loading fingerprint…',
+    );
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('pairing-peer-fingerprint')),
+          )
+          .data,
+      'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567',
+    );
+  });
+
+  testWidgets(
+      'PairingScreen keeps peer loading separate from local fingerprint',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient()
+      ..startPairingResultOverride = {
+        'deviceId': 'rift-peer',
+        'fingerprint': 'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+        'expiresInMs': 120000,
+      };
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: const PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Peer Device',
+            autoStart: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('pairing-local-fingerprint')),
+          )
+          .data,
+      'CPGW-O6WE-FDKX-WXFU-GSVC-JBWJ-6MHP-4GFQ',
+    );
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('pairing-peer-fingerprint')),
+          )
+          .data,
+      'Loading fingerprint…',
+    );
   });
 
   testWidgets('PairingScreen ignores unrelated incoming pairing requests',
@@ -246,11 +356,8 @@ void main() {
     });
     await tester.pump();
 
-    expect(find.textContaining('Pixel 9', findRichText: true), findsOneWidget);
-    expect(
-      find.textContaining('Unrelated Laptop', findRichText: true),
-      findsNothing,
-    );
+    expect(find.text('Pixel 9'), findsOneWidget);
+    expect(find.text('Unrelated Laptop'), findsNothing);
   });
 
   testWidgets('PairingScreen auto-start populates fingerprints',
@@ -271,10 +378,21 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('Compare fingerprints'), findsOneWidget);
-    expect(find.text('Security Fingerprint'), findsOneWidget);
-    expect(find.textContaining('fingerprint'), findsWidgets);
-    expect(find.text('Waiting for peer...'), findsOneWidget);
+    expect(
+        find.text('Verify both identities before trusting.'), findsOneWidget);
+    expect(find.text('Fingerprint'), findsNWidgets(2));
+    expect(
+      find.byKey(const ValueKey('pairing-local-fingerprint')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-peer-fingerprint')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-waiting-for-peer')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('PairingScreen can auto-start from a manual endpoint',
@@ -298,8 +416,11 @@ void main() {
 
     expect(client.startPairingByEndpointAddress, '10.53.38.174');
     expect(client.startPairingByEndpointPort, 9140);
-    expect(find.textContaining('rift-manual-peer', findRichText: true),
-        findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pairing-peer-device-id')),
+      findsOneWidget,
+    );
+    expect(find.text('rift-manual-peer'), findsWidgets);
   });
 
   testWidgets(
@@ -330,10 +451,8 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.textContaining('Windows Laptop', findRichText: true),
-        findsOneWidget);
-    expect(find.textContaining('10.53.38.174:9140', findRichText: true),
-        findsNothing);
+    expect(find.text('Windows Laptop'), findsOneWidget);
+    expect(find.text('10.53.38.174:9140'), findsNothing);
   });
 
   testWidgets(
@@ -356,8 +475,20 @@ void main() {
       'expiresInMs': 120000,
     });
     await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Trust & Pair'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.byKey(const ValueKey('pairing-approval-delay')),
+      findsOneWidget,
+    );
     await tester.pump(const Duration(seconds: 3));
-    await tester.tap(find.text('Approve'));
+    await tester.tap(find.text('Trust & Pair'));
     await tester.pump();
     expect(client.approvedDeviceId, 'rift-peer');
     expect(client.approvedFingerprint,
@@ -390,7 +521,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     final approveButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Approve'),
+      find.widgetWithText(FilledButton, 'Trust & Pair'),
     );
     expect(approveButton.onPressed, isNull);
   });
@@ -419,7 +550,11 @@ void main() {
     });
     await tester.pump();
 
-    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Pair devices'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('pairing-verification-shell')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -486,6 +621,11 @@ void main() {
 
     expect(completedDeviceId, 'rift-peer');
     expect(closed, isFalse);
+    expect(
+      find.byKey(const ValueKey('pairing-verification-shell')),
+      findsOneWidget,
+    );
+    expect(find.text('Pairing complete'), findsOneWidget);
   });
 
   testWidgets('PairingScreen requester reject returns to previous screen',
@@ -562,7 +702,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     await tester.pump(const Duration(seconds: 3));
-    await tester.tap(find.text('Approve'));
+    await tester.tap(find.text('Trust & Pair'));
     await tester.pump(const Duration(milliseconds: 500));
 
     await client.emitTrustChanged({
@@ -601,7 +741,10 @@ void main() {
     });
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('WAITING...'), findsNothing);
+    final localFingerprint = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('pairing-local-fingerprint')),
+    );
+    expect(localFingerprint.data, isNot('Loading fingerprint…'));
   });
 
   testWidgets('PairingScreen reacts to pairing closed transition',

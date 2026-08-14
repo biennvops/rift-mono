@@ -910,7 +910,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Pair devices'), findsOneWidget);
   });
 
   testWidgets('desktop management keeps blocked peer controls available',
@@ -1396,7 +1396,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Pair devices'), findsOneWidget);
 
     client.trustedPeers = [
       {
@@ -1415,14 +1415,14 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('Pairing Request'), findsOneWidget);
+    expect(find.text('Pair devices'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(OutlinedButton, 'Cancel'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.rejectCalled, isTrue);
-    expect(find.text('Pairing Request'), findsNothing);
+    expect(find.text('Pair devices'), findsNothing);
     expect(
       find.byKey(const ValueKey('nearby-orbit-overview')),
       findsOneWidget,
@@ -1495,7 +1495,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Paired successfully'), findsOneWidget);
-    expect(find.text('Pairing Request'), findsNothing);
+    expect(find.text('Pair devices'), findsNothing);
 
     await tester.pump(const Duration(milliseconds: 799));
     expect(find.text('Paired successfully'), findsOneWidget);

@@ -1601,6 +1601,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                 key: ValueKey('pairing-$targetId'),
                 deviceId: deviceId,
                 displayName: titleText,
+                platform: peer['platform']?.toString(),
               )
             : PairingScreen.forEndpoint(
                 key: ValueKey('pairing-$targetId'),
@@ -2075,6 +2076,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
             key: ValueKey('nearby-pairing-$targetKey'),
             deviceId: deviceId,
             displayName: displayName,
+            platform: target['platform']?.toString(),
             onClose: _returnFromDesktopPairing,
             onCompleted: (pairedDeviceId) =>
                 unawaited(_completeDesktopPairing(pairedDeviceId)),
