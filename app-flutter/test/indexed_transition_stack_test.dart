@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rift/src/ui/indexed_transition_stack.dart';
 
@@ -99,6 +100,56 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('inactive child releases focus and ignores keyboard input',
+      (WidgetTester tester) async {
+    var index = 0;
+    var keyEvents = 0;
+    final focusNode = FocusNode();
+    final textController = TextEditingController();
+    addTearDown(focusNode.dispose);
+    addTearDown(textController.dispose);
+
+    Widget buildHarness() {
+      return MaterialApp(
+        home: Scaffold(
+          body: RiftIndexedTransitionStack(
+            index: index,
+            children: [
+              Focus(
+                onKeyEvent: (node, event) {
+                  if (event is KeyDownEvent) keyEvents++;
+                  return KeyEventResult.handled;
+                },
+                child: TextField(
+                  key: const ValueKey('focus-field-0'),
+                  focusNode: focusNode,
+                  controller: textController,
+                ),
+              ),
+              const SizedBox(key: ValueKey('focus-section-1')),
+            ],
+          ),
+        ),
+      );
+    }
+
+    await tester.pumpWidget(buildHarness());
+    await tester.tap(find.byKey(const ValueKey('focus-field-0')));
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.f1);
+    expect(keyEvents, 1);
+
+    index = 1;
+    await tester.pumpWidget(buildHarness());
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.f1);
+    expect(keyEvents, 1);
   });
 
   testWidgets('reduced motion switches without spatial transition',

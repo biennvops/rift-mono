@@ -156,15 +156,18 @@ class _RiftIndexedTransitionStackState extends State<RiftIndexedTransitionStack>
 
     return IgnorePointer(
       ignoring: !isActive,
-      child: ExcludeSemantics(
+      child: ExcludeFocus(
         excluding: !isActive,
-        child: Offstage(
-          offstage: !isVisible,
-          child: Opacity(
-            opacity: opacity,
-            child: Transform.translate(
-              offset: offset,
-              child: widget.children[index],
+        child: ExcludeSemantics(
+          excluding: !isActive,
+          child: Offstage(
+            offstage: !isVisible,
+            child: Opacity(
+              opacity: opacity,
+              child: Transform.translate(
+                offset: offset,
+                child: widget.children[index],
+              ),
             ),
           ),
         ),
