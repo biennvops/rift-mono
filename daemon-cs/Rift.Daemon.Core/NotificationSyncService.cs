@@ -35,6 +35,7 @@ public sealed class NotificationSyncService : INotificationSyncService
         "InvalidTransition"
     };
     private readonly Lock _gate = new();
+    private readonly Lock _windowsNotificationLifecycleGate = new();
     private readonly ITransport _transport;
     private readonly IPresenceService _presenceService;
     private readonly IIdentityManager _identityManager;
@@ -52,6 +53,7 @@ public sealed class NotificationSyncService : INotificationSyncService
     private readonly Dictionary<string, string> _pendingActionKeys = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingIncomingNotificationAction> _pendingIncomingActionsByRequestId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Timer> _pendingIncomingActionTimers = new(StringComparer.Ordinal);
+    private Task _windowsNotificationLifecycleQueue = Task.CompletedTask;
     private NotificationSyncPolicy _policy;
 
     public NotificationSyncService(
@@ -112,7 +114,30 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
-    public async Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+    public Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventAsync(
+        string eventType,
+        NotificationSyncRecord notification,
+        string? removedAt,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(notification.SourcePlatform, "windows", StringComparison.OrdinalIgnoreCase))
+        {
+            return EnqueueWindowsNotificationLifecycleAsync(
+                () => HandleLocalNotificationEventCoreAsync(
+                    eventType,
+                    notification,
+                    removedAt,
+                    cancellationToken));
+        }
+
+        return HandleLocalNotificationEventCoreAsync(
+            eventType,
+            notification,
+            removedAt,
+            cancellationToken);
+    }
+
+    private async Task<NotifyLocalNotificationEventResult> HandleLocalNotificationEventCoreAsync(
         string eventType,
         NotificationSyncRecord notification,
         string? removedAt,
@@ -748,7 +773,61 @@ public sealed class NotificationSyncService : INotificationSyncService
         }
     }
 
+    private Task<T> EnqueueWindowsNotificationLifecycleAsync<T>(Func<Task<T>> operation)
+    {
+        Task predecessor;
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_windowsNotificationLifecycleGate)
+        {
+            predecessor = _windowsNotificationLifecycleQueue;
+            _windowsNotificationLifecycleQueue = completion.Task;
+        }
+
+        _ = CompleteWindowsNotificationLifecycleAsync(predecessor, operation, completion);
+        return completion.Task;
+    }
+
+    private Task EnqueueWindowsNotificationLifecycleAsync(Func<Task> operation) =>
+        EnqueueWindowsNotificationLifecycleAsync<object?>(async () =>
+        {
+            await operation().ConfigureAwait(false);
+            return null;
+        });
+
+    private static async Task CompleteWindowsNotificationLifecycleAsync<T>(
+        Task predecessor,
+        Func<Task<T>> operation,
+        TaskCompletionSource<T> completion)
+    {
+        try
+        {
+            await predecessor.ConfigureAwait(false);
+        }
+        catch
+        {
+            // A failed event must not poison later Windows lifecycle transitions.
+        }
+
+        try
+        {
+            completion.TrySetResult(await operation().ConfigureAwait(false));
+        }
+        catch (OperationCanceledException ex)
+        {
+            completion.TrySetCanceled(ex.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            completion.TrySetException(ex);
+        }
+    }
+
     private void OnNotificationActionExecutorUnavailable(object? sender, EventArgs args)
+    {
+        _ = EnqueueWindowsNotificationLifecycleAsync(InvalidateNotificationActionCapabilitiesAsync);
+    }
+
+    private async Task InvalidateNotificationActionCapabilitiesAsync()
     {
         NotificationSyncRecord[] downgraded;
         var localDeviceId = _identityManager.GetDeviceId();
@@ -776,7 +855,7 @@ public sealed class NotificationSyncService : INotificationSyncService
 
         foreach (var notification in downgraded)
         {
-            _ = PublishExecutorCapabilityDowngradeAsync(notification);
+            await PublishExecutorCapabilityDowngradeAsync(notification).ConfigureAwait(false);
         }
     }
 

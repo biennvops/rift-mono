@@ -128,6 +128,66 @@ public sealed class NotificationSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecutorLossPublication_CompletesBeforeStandbyRestoresCapabilities()
+    {
+        var localDeviceId = _identityManager.GetDeviceId();
+        _presenceService.UpdatePeerPresence("rift-peer", "online", null, ["notification.sync"]);
+        _transport.ActivePeers.Add("rift-peer");
+        await _service.HandleLocalNotificationEventAsync(
+            "posted",
+            CreateNotification(
+                "windows:43",
+                sourceDeviceId: localDeviceId,
+                sourcePlatform: "windows",
+                isDismissible: true),
+            null,
+            CancellationToken.None);
+        _ipcNotificationService.Events.Clear();
+        _transport.Payloads.Clear();
+
+        var downgradeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseDowngrade = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blockDowngrade = 1;
+        _ipcNotificationService.BeforeNotifyAsync = async (method, payload) =>
+        {
+            if (string.Equals(method, "rift.onNotificationUpdated", StringComparison.Ordinal) &&
+                payload is NotificationSyncRecord record &&
+                !record.IsDismissible &&
+                Interlocked.Exchange(ref blockDowngrade, 0) == 1)
+            {
+                downgradeStarted.TrySetResult();
+                await releaseDowngrade.Task;
+            }
+        };
+
+        _ipcNotificationService.LoseExecutor();
+        await downgradeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        _ipcNotificationService.RestoreExecutor();
+        var restore = _service.HandleLocalNotificationEventAsync(
+            "updated",
+            CreateNotification(
+                "windows:43",
+                sourceDeviceId: localDeviceId,
+                sourcePlatform: "windows",
+                isDismissible: true),
+            null,
+            CancellationToken.None);
+
+        await Task.Yield();
+        Assert.False(restore.IsCompleted);
+        releaseDowngrade.TrySetResult();
+        await restore.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var peerCapabilities = _transport.Payloads
+            .Where(sent => sent.Type == "notification.updated")
+            .Select(sent => sent.Payload.GetProperty("isDismissible").GetBoolean())
+            .ToArray();
+        Assert.Equal([false, true], peerCapabilities);
+        var listed = await _service.ListNotificationsAsync(CancellationToken.None);
+        Assert.True(Assert.Single(listed.Notifications).IsDismissible);
+    }
+
+    [Fact]
     public async Task MalformedNotificationIcon_IsDroppedWithoutDroppingNotification()
     {
         var icon = CreateIcon();
@@ -1290,6 +1350,7 @@ public sealed class NotificationSyncServiceTests : IDisposable
         public bool HasClients { get; set; } = true;
         public bool HasExecutor => HasClients;
         public List<(string Method, object Payload)> Events { get; } = [];
+        public Func<string, object, Task>? BeforeNotifyAsync { get; set; }
 
         public event EventHandler? ExecutorUnavailable;
 
@@ -1299,10 +1360,13 @@ public sealed class NotificationSyncServiceTests : IDisposable
 
         public bool Release(JsonRpc jsonRpc) => true;
 
-        public Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
+        public async Task NotifyAsync(string method, object parameters, CancellationToken cancellationToken = default)
         {
+            if (BeforeNotifyAsync is not null)
+            {
+                await BeforeNotifyAsync(method, parameters);
+            }
             Events.Add((method, parameters));
-            return Task.CompletedTask;
         }
 
         public Task<bool> NotifyExecutorAsync(
@@ -1323,6 +1387,11 @@ public sealed class NotificationSyncServiceTests : IDisposable
         {
             HasClients = false;
             ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void RestoreExecutor()
+        {
+            HasClients = true;
         }
 
         private sealed class NullDisposable : IDisposable

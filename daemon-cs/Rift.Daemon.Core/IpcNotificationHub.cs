@@ -10,6 +10,7 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
     private readonly Lock _gate = new();
     private int _nextClientId;
     private int? _notificationActionExecutorClientId;
+    private bool _notificationActionExecutorTransitioning;
 
     public event EventHandler? ExecutorUnavailable;
 
@@ -19,7 +20,6 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
     {
         get
         {
-            var executorUnavailable = false;
             lock (_gate)
             {
                 if (_notificationActionExecutorClientId is not int clientId)
@@ -33,13 +33,10 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
                 }
 
                 _notificationActionExecutorClientId = null;
-                executorUnavailable = true;
+                _notificationActionExecutorTransitioning = true;
             }
 
-            if (executorUnavailable)
-            {
-                ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
-            }
+            NotifyExecutorUnavailable();
             return false;
         }
     }
@@ -60,7 +57,7 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
         lock (_gate)
         {
             var clientId = FindClientId(jsonRpc);
-            if (clientId is null)
+            if (clientId is null || _notificationActionExecutorTransitioning)
             {
                 return false;
             }
@@ -89,9 +86,10 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
             }
 
             _notificationActionExecutorClientId = null;
+            _notificationActionExecutorTransitioning = true;
         }
 
-        ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+        NotifyExecutorUnavailable();
         return true;
     }
 
@@ -135,6 +133,7 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
             if (!_clients.TryGetValue(clientId, out var jsonRpc))
             {
                 _notificationActionExecutorClientId = null;
+                _notificationActionExecutorTransitioning = true;
                 executorUnavailable = true;
                 executor = default;
             }
@@ -146,7 +145,7 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
 
         if (executorUnavailable)
         {
-            ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+            NotifyExecutorUnavailable();
             return false;
         }
 
@@ -184,13 +183,29 @@ public sealed class IpcNotificationHub : IIpcNotificationService, IIpcNotificati
             if (_notificationActionExecutorClientId == clientId)
             {
                 _notificationActionExecutorClientId = null;
+                _notificationActionExecutorTransitioning = true;
                 executorUnavailable = true;
             }
         }
 
         if (executorUnavailable)
         {
+            NotifyExecutorUnavailable();
+        }
+    }
+
+    private void NotifyExecutorUnavailable()
+    {
+        try
+        {
             ExecutorUnavailable?.Invoke(this, EventArgs.Empty);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _notificationActionExecutorTransitioning = false;
+            }
         }
     }
 

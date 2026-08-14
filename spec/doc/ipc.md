@@ -790,7 +790,7 @@ Action availability is controlled by the mirrored record's `isDismissible` and `
 
 #### `rift.acquireNotificationActionExecutor`
 
-Claims the connection-scoped local notification-action executor lease. The first connected client to claim the lease receives `rift.onNotificationActionRequest`; later clients receive `{ "acquired": false }` and MUST NOT advertise local notification actions. Repeated acquisition by the owner is idempotent. An otherwise eligible client that receives `{ "acquired": false }` SHOULD retry periodically, revalidating its native prerequisites before each attempt, so an already-connected standby can take over after the owner exits. The daemon releases the lease when that IPC connection closes and MUST invalidate action capabilities on local records that depended on the lost executor.
+Claims the connection-scoped local notification-action executor lease. The first connected client to claim the lease receives `rift.onNotificationActionRequest`; later clients receive `{ "acquired": false }` and MUST NOT advertise local notification actions. Repeated acquisition by the owner is idempotent. An otherwise eligible client that receives `{ "acquired": false }` SHOULD retry periodically, revalidating its native prerequisites before each attempt, so an already-connected standby can take over after the owner exits. The daemon releases the lease when that IPC connection closes and MUST invalidate action capabilities on local records that depended on the lost executor. Owner-loss invalidation and actionable local record updates from a successor MUST be serialized so a delayed downgrade cannot overwrite restored capability.
 
 **Params:** none.
 

@@ -19,7 +19,12 @@ public sealed class IpcNotificationHubTests
         using var firstRegistration = hub.RegisterClient(firstServer);
         using var secondRegistration = hub.RegisterClient(secondServer);
         var executorUnavailableCount = 0;
-        hub.ExecutorUnavailable += (_, _) => executorUnavailableCount++;
+        bool? acquiredDuringExecutorLoss = null;
+        hub.ExecutorUnavailable += (_, _) =>
+        {
+            executorUnavailableCount++;
+            acquiredDuringExecutorLoss = hub.TryAcquire(secondServer);
+        };
 
         Assert.True(hub.TryAcquire(firstServer));
         Assert.False(hub.TryAcquire(secondServer));
@@ -33,6 +38,7 @@ public sealed class IpcNotificationHubTests
 
         firstRegistration.Dispose();
         Assert.Equal(1, executorUnavailableCount);
+        Assert.False(acquiredDuringExecutorLoss);
         Assert.True(hub.TryAcquire(secondServer));
         Assert.True(await hub.NotifyExecutorAsync(
             "rift.onNotificationActionRequest",
