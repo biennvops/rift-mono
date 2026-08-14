@@ -240,7 +240,11 @@ void main() {
 
   testWidgets('TrustedDevicesScreen handles dense peer lists at target sizes',
       (WidgetTester tester) async {
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     final client = FakeJsonRpcRiftClient()
       ..trustedPeers = List<Map<String, dynamic>>.generate(
         8,
@@ -259,7 +263,7 @@ void main() {
       Size(800, 600),
       Size(1200, 800),
     ]) {
-      await tester.binding.setSurfaceSize(size);
+      tester.view.physicalSize = size;
       await tester.pumpWidget(
         MaterialApp(
           home: Provider<JsonRpcRiftClient>.value(
@@ -271,18 +275,33 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull, reason: 'viewport $size');
-      expect(find.text('8 Devices'), findsOneWidget);
       expect(find.text('Trusted Device 0'), findsOneWidget);
-      expect(
-        tester
-            .getSize(
-              find.byKey(
-                const ValueKey('trusted-peer-card-rift-trusted-0'),
-              ),
-            )
-            .height,
-        lessThanOrEqualTo(72),
-      );
+      if (size.width >= 1024) {
+        expect(
+            find.byKey(const ValueKey('desktop-device-hub')), findsOneWidget);
+        expect(
+          tester
+              .getSize(
+                find.byKey(
+                  const ValueKey('trusted-orbit-peer-rift-trusted-0'),
+                ),
+              )
+              .height,
+          lessThanOrEqualTo(126),
+        );
+      } else {
+        expect(find.text('8 Devices'), findsOneWidget);
+        expect(
+          tester
+              .getSize(
+                find.byKey(
+                  const ValueKey('trusted-peer-card-rift-trusted-0'),
+                ),
+              )
+              .height,
+          lessThanOrEqualTo(72),
+        );
+      }
     }
   });
 
@@ -407,7 +426,7 @@ void main() {
     );
   });
 
-  testWidgets('desktop keeps Find Device in the header',
+  testWidgets('desktop exposes Trusted and Nearby hub modes',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -426,9 +445,37 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const ValueKey('desktop-device-hub')), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('find-device-header-action')),
+      find.byKey(const ValueKey('device-hub-mode-trusted')),
       findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('device-hub-mode-nearby')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('device-hub-local-core')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-trusted')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-discovered')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('device-detail-empty')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('device-hub-local-core')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-discovered')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-trusted')),
+      findsNothing,
     );
     expect(
       find.byKey(const ValueKey('find-device-floating-action')),
@@ -436,7 +483,7 @@ void main() {
     );
   });
 
-  testWidgets('explicitly disabled discovery stays off until Find Device',
+  testWidgets('explicitly disabled discovery stays off until restarted',
       (WidgetTester tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.binding.setSurfaceSize(const Size(1200, 800));
@@ -455,18 +502,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final discoverySwitch = find.byType(Switch).first;
-    await tester.ensureVisible(discoverySwitch);
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+
+    final discoverySwitch =
+        find.byKey(const ValueKey('desktop-discovery-switch'));
     await tester.tap(discoverySwitch);
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.stopDiscoveryCallCount, 1);
     expect(client.startDiscoveryCallCount, 0);
+    expect(find.text('Discovery paused'), findsOneWidget);
 
-    final findDeviceAction =
-        find.byKey(const ValueKey('find-device-header-action'));
-    await tester.ensureVisible(findDeviceAction);
-    await tester.tap(findDeviceAction);
+    await tester.tap(find.byKey(const ValueKey('nearby-start-discovery')));
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(client.startDiscoveryCallCount, 1);
@@ -891,7 +939,14 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    final pairButton = find.widgetWithText(FilledButton, 'Pair');
+    await tester.tap(find.byKey(const ValueKey('device-hub-mode-nearby')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('nearby-orbit-peer-rift-discovered-peer')),
+    );
+    await tester.pumpAndSettle();
+
+    final pairButton = find.byKey(const ValueKey('nearby-pair-action'));
     expect(pairButton, findsOneWidget);
     await tester.tap(pairButton);
     await tester.pump();
@@ -999,7 +1054,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.tap(
-        find.byKey(const ValueKey('trusted-peer-card-rift-peer-focus')),
+        find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-focus')),
       );
       await tester.pumpAndSettle();
       await tester.tap(
@@ -1037,7 +1092,7 @@ void main() {
     }
   });
 
-  testWidgets('desktop split view switches focus between device cards',
+  testWidgets('desktop hub focuses trusted peers in place',
       (WidgetTester tester) async {
     tester.view.physicalSize = const Size(1400, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -1074,43 +1129,43 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Initially shows placeholder
+    expect(find.byKey(const ValueKey('device-hub-local-core')), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-detail-empty')), findsNothing);
     expect(
-        find.text('Select a device to view details or pair.'), findsOneWidget);
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-2')),
+      findsOneWidget,
+    );
 
-    // Tap Peer One
-    await tester.tap(find.text('Peer One'));
+    await tester.tap(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-1')),
+    );
     await tester.pumpAndSettle();
 
-    expect(find.text('Peer One'), findsWidgets);
-    expect(find.text('Select a device to view details or pair.'), findsNothing);
     expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
     expect(find.byKey(const ValueKey('device-focus-core')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('device-focus-node-security')),
       findsOneWidget,
     );
-    expect(find.text('Authorized Trusted Peer'), findsNothing);
+    expect(find.byKey(const ValueKey('desktop-device-hub')), findsOneWidget);
 
-    await tester.tap(
-      find.byKey(const ValueKey('device-focus-node-identity')),
-    );
+    await tester.tap(find.byKey(const ValueKey('device-focus-close')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('device-focus-view')), findsNothing);
     expect(
-      find.byKey(const ValueKey('device-focus-panel-identity')),
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-1')),
       findsOneWidget,
     );
 
-    // Tap Peer Two to switch focus
-    await tester.tap(find.text('Peer Two'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Peer Two'), findsWidgets);
-    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('device-focus-panel-identity')),
-      findsNothing,
+    await tester.tap(
+      find.byKey(const ValueKey('trusted-orbit-peer-rift-peer-2')),
     );
-    expect(find.text('Authorized Trusted Peer'), findsNothing);
+    await tester.pumpAndSettle();
+    expect(find.text('Peer Two'), findsOneWidget);
+    expect(find.byKey(const ValueKey('device-focus-view')), findsOneWidget);
   });
 }
