@@ -453,6 +453,41 @@ void main() {
     expect(closed, isTrue);
   });
 
+  testWidgets('PairingScreen reports embedded pairing completion',
+      (WidgetTester tester) async {
+    final client = FakeJsonRpcRiftClient();
+    var closed = false;
+    String? completedDeviceId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Provider<JsonRpcRiftClient>.value(
+          value: client,
+          child: PairingScreen(
+            initialDeviceId: 'rift-peer',
+            initialDisplayName: 'Pixel 9',
+            autoStart: true,
+            onClose: () {
+              closed = true;
+            },
+            onCompleted: (deviceId) {
+              completedDeviceId = deviceId;
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await client.emitTrustChanged({
+      'deviceId': 'rift-peer',
+      'newState': 'trusted',
+    });
+    await tester.pump();
+
+    expect(completedDeviceId, 'rift-peer');
+    expect(closed, isFalse);
+  });
+
   testWidgets('PairingScreen requester reject returns to previous screen',
       (WidgetTester tester) async {
     final client = FakeJsonRpcRiftClient();

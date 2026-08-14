@@ -17,6 +17,7 @@ class PairingScreen extends StatefulWidget {
   final String? initialStatus;
   final bool autoStart;
   final VoidCallback? onClose;
+  final ValueChanged<String>? onCompleted;
 
   const PairingScreen({
     super.key,
@@ -30,6 +31,7 @@ class PairingScreen extends StatefulWidget {
     this.initialStatus,
     this.autoStart = false,
     this.onClose,
+    this.onCompleted,
   });
 
   const PairingScreen.forDiscoveredPeer({
@@ -37,6 +39,7 @@ class PairingScreen extends StatefulWidget {
     required String deviceId,
     String? displayName,
     this.onClose,
+    this.onCompleted,
   })  : initialDeviceId = deviceId,
         initialEndpointAddress = null,
         initialEndpointPort = null,
@@ -53,6 +56,7 @@ class PairingScreen extends StatefulWidget {
     required int port,
     String? displayName,
     this.onClose,
+    this.onCompleted,
   })  : initialDeviceId = null,
         initialEndpointAddress = address,
         initialEndpointPort = port,
@@ -70,6 +74,7 @@ class PairingScreen extends StatefulWidget {
     String? displayName,
     int? expiresInMs,
     this.onClose,
+    this.onCompleted,
   })  : initialDeviceId = deviceId,
         initialEndpointAddress = null,
         initialEndpointPort = null,
@@ -259,6 +264,11 @@ class _PairingScreenState extends State<PairingScreen> {
   Future<void> _handlePairingCompleted() async {
     if (!mounted || _isClosingAfterCompletion) return;
     _isClosingAfterCompletion = true;
+    final deviceId = _deviceId;
+    if (deviceId != null && widget.onCompleted != null) {
+      widget.onCompleted!(deviceId);
+      return;
+    }
     _closeScreen();
   }
 
@@ -517,9 +527,8 @@ class _PairingScreenState extends State<PairingScreen> {
     const fingerprintLabel = 'Security Fingerprint';
 
     const title = 'Pairing Request';
-    final subtitlePrefix = _isRecipientFlow
-        ? 'Incoming request from '
-        : 'Outgoing request to ';
+    final subtitlePrefix =
+        _isRecipientFlow ? 'Incoming request from ' : 'Outgoing request to ';
 
     final route = ModalRoute.of(context);
     final isDialogOrEmbedded = route is PopupRoute || widget.onClose != null;
@@ -754,8 +763,7 @@ class _PairingScreenState extends State<PairingScreen> {
                         final rejectBtn = OutlinedButton(
                           onPressed: canReject ? _rejectPairing : null,
                           style: OutlinedButton.styleFrom(
-                            foregroundColor:
-                                theme.colorScheme.primaryContainer,
+                            foregroundColor: theme.colorScheme.primaryContainer,
                             side: BorderSide(
                                 color: theme.colorScheme.primaryContainer),
                             padding: const EdgeInsets.symmetric(
