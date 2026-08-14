@@ -57,7 +57,7 @@ class PairingVerificationView extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
-    final isMobile = MediaQuery.sizeOf(context).width < 900;
+    final isMobile = MediaQuery.sizeOf(context).width < 680;
     return Material(
       key: const ValueKey('pairing-verification-shell'),
       elevation: 12,
