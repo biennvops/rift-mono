@@ -52,6 +52,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   List<dynamic> _discoveredPeers = [];
   final Map<String, Map<String, dynamic>> _playbacksByKey =
       <String, Map<String, dynamic>>{};
+  final PlaybackArtworkCache _playbackArtworkCache = PlaybackArtworkCache();
   final Map<String, MediaArtwork> _artworkByPlaybackKey =
       <String, MediaArtwork>{};
   final Map<String, Color> _pendingAccentFallbackByPlaybackKey =
@@ -164,6 +165,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _artworkByPlaybackKey.isNotEmpty) {
         setState(() {
           _playbacksByKey.clear();
+          _playbackArtworkCache.clear();
           _artworkByPlaybackKey.clear();
           _pendingAccentFallbackByPlaybackKey.clear();
         });
@@ -300,9 +302,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       }
       final loadedArtwork = <String, MediaArtwork>{};
       for (final entry in loaded.entries) {
-        final artwork = MediaArtwork.tryParse(entry.value['artwork']);
+        final artwork =
+            _playbackArtworkCache.resolve(entry.key, entry.value['artwork']);
         if (artwork != null) loadedArtwork[entry.key] = artwork;
       }
+      _playbackArtworkCache.retainOnly(loaded.keys);
       setState(() {
         _playbacksByKey
           ..clear()
@@ -333,7 +337,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     final sourceDeviceId = playback['sourceDeviceId']?.toString() ?? '';
     final previousDeviceAccent =
         _mediaPlaybackForDevice(sourceDeviceId)?.accentColor;
-    final artwork = MediaArtwork.tryParse(playback['artwork']);
+    final artwork = _playbackArtworkCache.resolve(key, playback['artwork']);
     final resolvedAccent = artwork == null
         ? null
         : _artworkAccentCache.accentFor(artwork.identity);
@@ -361,6 +365,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     if (_isLoadingPlayback) {
       _playbackMutationsDuringLoad.add((removed: true, playback: playback));
     }
+    _playbackArtworkCache.remove(key);
     if (_playbacksByKey.containsKey(key) ||
         _artworkByPlaybackKey.containsKey(key) ||
         _pendingAccentFallbackByPlaybackKey.containsKey(key)) {

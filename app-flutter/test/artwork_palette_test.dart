@@ -93,6 +93,27 @@ void main() {
     );
   });
 
+  test('reuses parsed artwork across repeated playback updates', () async {
+    final bytes = await imageBytes((canvas) {
+      canvas.drawColor(const Color(0xFFD62828), BlendMode.src);
+    });
+    final payload = artworkPayload(bytes);
+    final parsedCache = PlaybackArtworkCache();
+    final accentCache = ArtworkAccentCache();
+
+    final first = parsedCache.resolve('peer:session', payload)!;
+    await accentCache.resolve(first);
+    final repeated = parsedCache.resolve(
+      'peer:session',
+      Map<String, Object?>.from(payload),
+    )!;
+    await accentCache.resolve(repeated);
+
+    expect(repeated, same(first));
+    expect(parsedCache.debugParseCount, 1);
+    expect(accentCache.debugExtractionCount, 1);
+  });
+
   test('accent extraction is cached and bounded', () async {
     final redBytes = await imageBytes((canvas) {
       canvas.drawColor(const Color(0xFFD62828), BlendMode.src);

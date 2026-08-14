@@ -61,6 +61,65 @@ class MediaArtwork {
   }
 }
 
+class PlaybackArtworkCache {
+  final Map<String, _PlaybackArtworkCacheEntry> _entries =
+      <String, _PlaybackArtworkCacheEntry>{};
+  int _parseCount = 0;
+
+  @visibleForTesting
+  int get debugParseCount => _parseCount;
+
+  MediaArtwork? resolve(String playbackKey, Object? value) {
+    if (value is! Map) {
+      _entries.remove(playbackKey);
+      return null;
+    }
+    final mediaType = value['mediaType']?.toString().toLowerCase();
+    final encoded = value['dataBase64'];
+    if (mediaType == null || encoded is! String) {
+      _entries.remove(playbackKey);
+      return null;
+    }
+
+    final existing = _entries[playbackKey];
+    if (existing != null &&
+        existing.mediaType == mediaType &&
+        existing.encoded == encoded) {
+      return existing.artwork;
+    }
+
+    _parseCount++;
+    final artwork = MediaArtwork.tryParse(value);
+    _entries[playbackKey] = _PlaybackArtworkCacheEntry(
+      mediaType: mediaType,
+      encoded: encoded,
+      artwork: artwork,
+    );
+    return artwork;
+  }
+
+  void remove(String playbackKey) => _entries.remove(playbackKey);
+
+  void retainOnly(Iterable<String> playbackKeys) {
+    final retained = playbackKeys.toSet();
+    _entries.removeWhere((key, _) => !retained.contains(key));
+  }
+
+  void clear() => _entries.clear();
+}
+
+class _PlaybackArtworkCacheEntry {
+  const _PlaybackArtworkCacheEntry({
+    required this.mediaType,
+    required this.encoded,
+    required this.artwork,
+  });
+
+  final String mediaType;
+  final String encoded;
+  final MediaArtwork? artwork;
+}
+
 class ArtworkAccentCache {
   ArtworkAccentCache({this.maxEntries = 16}) : assert(maxEntries > 0);
 
