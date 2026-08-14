@@ -1,0 +1,256 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
+import 'package:json_rpc_2/json_rpc_2.dart' as json_rpc;
+import 'package:rift/src/ipc/ipc_transport.dart';
+import 'package:rift/src/ipc/json_rpc_client.dart';
+import 'package:stream_channel/stream_channel.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  group('JsonRpcRiftClient connection lifecycle', () {
+    test('stale peer completion cannot tear down replacement', () {
+      fakeAsync((async) {
+        final transport = _LifecycleTransport();
+        final peers = <_ControlledPeer>[];
+        final client = JsonRpcRiftClient(
+          transport,
+          peerFactory: (_) {
+            final peer = _ControlledPeer();
+            peers.add(peer);
+            return peer;
+          },
+        );
+
+        client.connect();
+        async.flushMicrotasks();
+        expect(client.isConnected, isTrue);
+        expect(peers, hasLength(1));
+
+        client.disconnect();
+        async.flushMicrotasks();
+        client.connect();
+        async.flushMicrotasks();
+        expect(client.isConnected, isTrue);
+        expect(transport.connectionAttempts, 2);
+        expect(peers, hasLength(2));
+        final disconnectsBeforeStaleCompletion = transport.disconnectCalls;
+
+        peers.first.completeListen();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isTrue);
+        expect(transport.isConnected, isTrue);
+        expect(transport.disconnectCalls, disconnectsBeforeStaleCompletion);
+        expect(transport.connectionAttempts, 2);
+        expect(peers.last.closeCalls, 0);
+
+        client.dispose();
+        async.flushMicrotasks();
+        peers.last.completeListen();
+        async.flushMicrotasks();
+        transport.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('manual disconnect never schedules reconnect', () {
+      fakeAsync((async) {
+        final transport = _LifecycleTransport();
+        final peer = _ControlledPeer();
+        final client = JsonRpcRiftClient(
+          transport,
+          peerFactory: (_) => peer,
+        );
+
+        client.connect();
+        async.flushMicrotasks();
+        expect(client.isConnected, isTrue);
+        final attemptsBeforeDisconnect = transport.connectionAttempts;
+
+        client.disconnect();
+        async.flushMicrotasks();
+        peer.completeListen();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isFalse);
+        expect(transport.connectionAttempts, attemptsBeforeDisconnect);
+
+        client.dispose();
+        async.flushMicrotasks();
+        transport.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('dispose cannot resurrect the client', () {
+      fakeAsync((async) {
+        final transport = _LifecycleTransport();
+        final peer = _ControlledPeer();
+        final client = JsonRpcRiftClient(
+          transport,
+          peerFactory: (_) => peer,
+        );
+
+        client.connect();
+        async.flushMicrotasks();
+        final attemptsBeforeDispose = transport.connectionAttempts;
+
+        client.dispose();
+        async.flushMicrotasks();
+        peer.completeListen();
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 10));
+        async.flushMicrotasks();
+
+        expect(client.isConnected, isFalse);
+        expect(transport.connectionAttempts, attemptsBeforeDispose);
+        transport.dispose();
+        async.flushMicrotasks();
+      });
+    });
+
+    test('unexpected current peer completion reconnects normally', () {
+      fakeAsync((async) {
+        final transport = _LifecycleTransport();
+        final peers = <_ControlledPeer>[];
+        final client = JsonRpcRiftClient(
+          transport,
+          peerFactory: (_) {
+            final peer = _ControlledPeer();
+            peers.add(peer);
+            return peer;
+          },
+        );
+
+        client.connect();
+        async.flushMicrotasks();
+        expect(client.isConnected, isTrue);
+
+        peers.first.completeListen();
+        async.flushMicrotasks();
+        expect(client.isConnected, isFalse);
+        expect(transport.disconnectCalls, 1);
+
+        async.elapse(const Duration(seconds: 1));
+        async.flushMicrotasks();
+
+        expect(transport.connectionAttempts, 2);
+        expect(client.isConnected, isTrue);
+        expect(peers, hasLength(2));
+
+        client.dispose();
+        async.flushMicrotasks();
+        peers.last.completeListen();
+        async.flushMicrotasks();
+        transport.dispose();
+        async.flushMicrotasks();
+      });
+    });
+  });
+}
+
+class _LifecycleTransport implements IpcTransport {
+  final List<_TransportConnection> _connections = [];
+  _TransportConnection? _currentConnection;
+  int connectionAttempts = 0;
+  int disconnectCalls = 0;
+  bool isConnected = false;
+
+  @override
+  Future<StreamChannel<String>> connect() async {
+    connectionAttempts += 1;
+    final connection = _TransportConnection();
+    _connections.add(connection);
+    _currentConnection = connection;
+    isConnected = true;
+    return connection.channel;
+  }
+
+  @override
+  Future<void> disconnect() async {
+    disconnectCalls += 1;
+    isConnected = false;
+    final connection = _currentConnection;
+    _currentConnection = null;
+    await connection?.close();
+  }
+
+  Future<void> dispose() async {
+    for (final connection in _connections) {
+      await connection.close();
+    }
+  }
+}
+
+class _TransportConnection {
+  final incoming = StreamController<String>.broadcast();
+  final outgoing = StreamController<String>.broadcast();
+  late final StreamChannel<String> channel = StreamChannel<String>(
+    incoming.stream,
+    outgoing.sink,
+  );
+
+  Future<void> close() async {
+    if (!incoming.isClosed) {
+      await incoming.close();
+    }
+    if (!outgoing.isClosed) {
+      await outgoing.close();
+    }
+  }
+}
+
+class _ControlledPeer implements json_rpc.Peer {
+  final Completer<void> _listenCompleter = Completer<void>();
+  bool _isClosed = false;
+  int closeCalls = 0;
+
+  void completeListen() {
+    if (!_listenCompleter.isCompleted) {
+      _listenCompleter.complete();
+    }
+  }
+
+  @override
+  Future<void> listen() => _listenCompleter.future;
+
+  @override
+  Future<void> close() async {
+    closeCalls += 1;
+    _isClosed = true;
+  }
+
+  @override
+  Future<void> get done => _listenCompleter.future;
+
+  @override
+  bool get isClosed => _isClosed;
+
+  @override
+  json_rpc.ErrorCallback? get onUnhandledError => null;
+
+  @override
+  bool get strictProtocolChecks => true;
+
+  @override
+  void registerMethod(String name, Function callback) {}
+
+  @override
+  void registerFallback(void Function(json_rpc.Parameters) callback) {}
+
+  @override
+  Future<Object?> sendRequest(String method, [Object? parameters]) =>
+      throw UnimplementedError();
+
+  @override
+  void sendNotification(String method, [Object? parameters]) =>
+      throw UnimplementedError();
+
+  @override
+  void withBatch(void Function() callback) => callback();
+}
