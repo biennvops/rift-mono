@@ -194,6 +194,7 @@ file sealed class RecordingIpcNotificationService :
     public bool HasClients => true;
     public bool HasExecutor => true;
     public List<(string Method, object Payload)> Events { get; } = [];
+    public event EventHandler? ExecutorUnavailable;
     public IDisposable RegisterClient(JsonRpc jsonRpc) => NoOpDisposable.Instance;
     public bool TryAcquire(JsonRpc jsonRpc) => true;
     public bool Release(JsonRpc jsonRpc) => true;
