@@ -1,0 +1,30 @@
+{
+  "task": {
+    "rule_id": "EVAL-INVALID-SEVERITY",
+    "question": "Does this MUST section satisfy the content contract?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "rule_requirement": "MUST"
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-must-section",
+      "kind": "document_block",
+      "content": "Notification Sync.",
+      "report": "report3",
+      "section_path": "3.2 Notification Sync",
+      "source_path": "Report3.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "WARNING",
+    "confidence": "MEDIUM",
+    "summary": "The MUST section is weak.",
+    "reasoning_summary": "Only a label is supplied, but WARNING is not an allowed outcome for this rule.",
+    "evidence_refs": ["doc-must-section"],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "Add behavioral details."
+  }
+}

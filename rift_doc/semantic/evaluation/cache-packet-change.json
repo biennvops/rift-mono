@@ -1,0 +1,51 @@
+{
+  "task": {
+    "rule_id": "EVAL-CACHE-PACKET-CHANGE",
+    "question": "Does the test cover the current requirement?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"]
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-cache-requirement",
+      "kind": "trace_excerpt",
+      "content": "FE-09 requires encrypted clipboard transfer.",
+      "report": "report3",
+      "source_path": "Report3.docx"
+    },
+    {
+      "evidence_id": "doc-cache-test",
+      "kind": "trace_excerpt",
+      "content": "TC-090 transfers clipboard content over an authenticated encrypted session.",
+      "report": "report5",
+      "source_path": "Report5.xlsx"
+    }
+  ],
+  "variant_evidence": [
+    {
+      "evidence_id": "doc-cache-requirement",
+      "kind": "trace_excerpt",
+      "content": "FE-09 now requires encrypted clipboard transfer with a 1 MiB size limit.",
+      "report": "report3",
+      "source_path": "Report3.docx"
+    },
+    {
+      "evidence_id": "doc-cache-test",
+      "kind": "trace_excerpt",
+      "content": "TC-090 transfers clipboard content over an authenticated encrypted session.",
+      "report": "report5",
+      "source_path": "Report5.xlsx"
+    }
+  ],
+  "candidate_output": {
+    "status": "PASS",
+    "confidence": "HIGH",
+    "summary": "The base test evidence covers the base encrypted-transfer requirement.",
+    "reasoning_summary": "Both excerpts specify encrypted clipboard transfer over an authenticated encrypted session.",
+    "evidence_refs": ["doc-cache-requirement", "doc-cache-test"],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "Re-evaluate after any requirement or packet change."
+  }
+}

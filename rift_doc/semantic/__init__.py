@@ -7,6 +7,13 @@ from .audit import (
     SemanticTaskExecution,
 )
 from .cache import SemanticResultCache
+from .evaluation import (
+    SemanticEvaluationCase,
+    SemanticEvaluationHarness,
+    SemanticEvaluationMetrics,
+    SemanticEvaluationSet,
+    default_evaluation_set_path,
+)
 from .evidence import EvidencePacketBuilder
 from .model import (
     EvidencePacket,
@@ -48,6 +55,10 @@ __all__ = [
     "SemanticAuditReport",
     "SemanticAuditRunner",
     "SemanticConfidence",
+    "SemanticEvaluationCase",
+    "SemanticEvaluationHarness",
+    "SemanticEvaluationMetrics",
+    "SemanticEvaluationSet",
     "SemanticEvidence",
     "SemanticOutputError",
     "SemanticPlan",
@@ -58,6 +69,7 @@ __all__ = [
     "SemanticTaskExecution",
     "SemanticTaskType",
     "estimate_tokens",
+    "default_evaluation_set_path",
     "finding_reference",
     "validate_semantic_output",
 ]

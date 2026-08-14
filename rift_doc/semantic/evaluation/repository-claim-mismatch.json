@@ -1,0 +1,44 @@
+{
+  "task": {
+    "rule_id": "EVAL-REPOSITORY-MISMATCH",
+    "question": "Does targeted repository evidence support the complete-feature claim?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "requires_two_sided_contradiction": true
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-complete-claim",
+      "kind": "documentation_claim",
+      "content": "Notification Sync is complete on macOS, including remote dismissal.",
+      "report": "report7",
+      "section_path": "III. Functional Requirements",
+      "source_path": "Report7.docx"
+    },
+    {
+      "evidence_id": "repo-stub",
+      "group": "repository_evidence",
+      "kind": "repository_symbol",
+      "content": "Task DismissRemoteNotificationAsync(...) => throw new NotImplementedException();",
+      "source_path": "daemon-cs/Rift.Daemon.macOS/NotificationSync.cs",
+      "source_location": "daemon-cs/Rift.Daemon.macOS/NotificationSync.cs:88"
+    }
+  ],
+  "candidate_output": {
+    "status": "FAIL",
+    "confidence": "HIGH",
+    "summary": "The complete remote-dismissal claim conflicts with the targeted stub evidence.",
+    "reasoning_summary": "The document claims completion, while the supplied implementation signature explicitly throws NotImplementedException for that operation.",
+    "evidence_refs": ["doc-complete-claim", "repo-stub"],
+    "unsupported_claims": [],
+    "contradictions": [
+      {
+        "summary": "A complete feature claim conflicts with an explicitly unimplemented operation.",
+        "left_evidence_refs": ["doc-complete-claim"],
+        "right_evidence_refs": ["repo-stub"]
+      }
+    ],
+    "recommended_action": "Correct the completion claim or implement and verify the missing operation."
+  }
+}

@@ -303,6 +303,15 @@ and no bounded image bytes, the result is conservatively `REVIEW_REQUIRED`.
 Document and source text is always treated as untrusted evidence, never as
 instructions to the provider or the audit tool.
 
+The packaged `SemanticEvaluationHarness` loads a ten-case labeled set covering
+valid citation, two-sided contradiction, insufficient evidence, fabricated
+citation, forbidden status, Report 7 staleness, requirement/test mismatch,
+repository mismatch, ambiguous names, and cache invalidation. It can score
+recorded outputs or an explicitly supplied provider and reports status accuracy,
+output-validation accuracy, fabricated-citation rate, false-contradiction rate,
+required-citation coverage, and insufficient-evidence handling. Normal tests
+run it only with fixtures or `FakeLLMProvider`; they never call a live service.
+
 ## Tests
 
 The focused suite uses synthetic DOCX/XLSX fixtures for core behavior and uses

@@ -1,0 +1,82 @@
+{
+  "version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "valid-pass-with-citation",
+      "task_type": "CONTENT_SUFFICIENCY",
+      "packet_fixture": "valid-pass.json",
+      "expected_status": "PASS",
+      "required_evidence_refs": ["doc-r4-architecture"]
+    },
+    {
+      "case_id": "contradiction-two-reports",
+      "task_type": "CROSS_DOCUMENT_CONSISTENCY",
+      "packet_fixture": "contradiction-two-reports.json",
+      "expected_status": "FAIL",
+      "required_evidence_refs": ["doc-r3-requirement", "doc-r4-design"],
+      "contradiction_expected": true
+    },
+    {
+      "case_id": "insufficient-evidence-review-required",
+      "task_type": "CONTENT_SUFFICIENCY",
+      "packet_fixture": "insufficient-evidence.json",
+      "expected_status": "REVIEW_REQUIRED",
+      "required_evidence_refs": []
+    },
+    {
+      "case_id": "fabricated-citation-rejected",
+      "task_type": "CONTENT_SUFFICIENCY",
+      "packet_fixture": "fabricated-citation.json",
+      "expected_status": "PASS",
+      "required_evidence_refs": [],
+      "expected_output_valid": false,
+      "expected_error_category": "FABRICATED_CITATION"
+    },
+    {
+      "case_id": "invalid-severity-rejected",
+      "task_type": "CONTENT_SUFFICIENCY",
+      "packet_fixture": "invalid-severity.json",
+      "expected_status": "WARNING",
+      "required_evidence_refs": ["doc-must-section"],
+      "expected_output_valid": false,
+      "expected_error_category": "STATUS_POLICY_INVALID"
+    },
+    {
+      "case_id": "report7-semantic-staleness",
+      "task_type": "FINAL_REPORT_FRESHNESS",
+      "packet_fixture": "report7-stale.json",
+      "expected_status": "FAIL",
+      "required_evidence_refs": ["doc-r3-current", "doc-r7-stale"],
+      "contradiction_expected": true
+    },
+    {
+      "case_id": "requirement-test-mismatch",
+      "task_type": "REQUIREMENT_TEST_ALIGNMENT",
+      "packet_fixture": "requirement-test-mismatch.json",
+      "expected_status": "FAIL",
+      "required_evidence_refs": ["doc-requirement-dismiss", "doc-test-forward-only"]
+    },
+    {
+      "case_id": "repository-claim-mismatch",
+      "task_type": "CLAIM_REPOSITORY_ALIGNMENT",
+      "packet_fixture": "repository-claim-mismatch.json",
+      "expected_status": "FAIL",
+      "required_evidence_refs": ["doc-complete-claim", "repo-stub"],
+      "contradiction_expected": true
+    },
+    {
+      "case_id": "ambiguous-semantic-feature-name",
+      "task_type": "CROSS_DOCUMENT_CONSISTENCY",
+      "packet_fixture": "ambiguous-feature-name.json",
+      "expected_status": "REVIEW_REQUIRED",
+      "required_evidence_refs": ["doc-feature-a", "doc-feature-b"]
+    },
+    {
+      "case_id": "cache-invalidated-by-packet-change",
+      "task_type": "REQUIREMENT_TEST_ALIGNMENT",
+      "packet_fixture": "cache-packet-change.json",
+      "expected_status": "PASS",
+      "required_evidence_refs": ["doc-cache-requirement", "doc-cache-test"]
+    }
+  ]
+}

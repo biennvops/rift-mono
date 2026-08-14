@@ -1,0 +1,44 @@
+{
+  "task": {
+    "rule_id": "EVAL-R7-STALE",
+    "question": "Is the final report current relative to the selected SRS?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "requires_two_sided_contradiction": true
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-r3-current",
+      "kind": "trace_excerpt",
+      "content": "The current scope supports notification forwarding and remote dismissal.",
+      "report": "report3",
+      "section_path": "3.2 Notification Sync",
+      "source_path": "Report3-current.docx"
+    },
+    {
+      "evidence_id": "doc-r7-stale",
+      "kind": "trace_excerpt",
+      "content": "The final product forwards notifications; remote dismissal was removed from scope.",
+      "report": "report7",
+      "section_path": "III. Software Requirement Specification",
+      "source_path": "Report7.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "FAIL",
+    "confidence": "HIGH",
+    "summary": "Report 7 is semantically stale about remote dismissal.",
+    "reasoning_summary": "The selected Report 3 includes remote dismissal, while Report 7 says it was removed.",
+    "evidence_refs": ["doc-r3-current", "doc-r7-stale"],
+    "unsupported_claims": [],
+    "contradictions": [
+      {
+        "summary": "The current standalone scope includes behavior that Report 7 says is excluded.",
+        "left_evidence_refs": ["doc-r3-current"],
+        "right_evidence_refs": ["doc-r7-stale"]
+      }
+    ],
+    "recommended_action": "Update Report 7 from the latest selected Report 3 evidence."
+  }
+}

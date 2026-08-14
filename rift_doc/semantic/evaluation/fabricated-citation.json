@@ -1,0 +1,29 @@
+{
+  "task": {
+    "rule_id": "EVAL-FABRICATED-CITATION",
+    "question": "Is the supplied function detail sufficient?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"]
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-real-evidence",
+      "kind": "document_block",
+      "content": "The sender validates notification identifiers before forwarding.",
+      "report": "report3",
+      "section_path": "3.2 Notification Sync",
+      "source_path": "Report3.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "PASS",
+    "confidence": "HIGH",
+    "summary": "The function is sufficient.",
+    "reasoning_summary": "The function allegedly covers every required path.",
+    "evidence_refs": ["doc-evidence-that-does-not-exist"],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "None."
+  }
+}

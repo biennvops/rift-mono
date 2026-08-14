@@ -1,0 +1,38 @@
+{
+  "task": {
+    "rule_id": "EVAL-AMBIGUOUS-NAME",
+    "question": "Are Remote Notification Sync and Cross-device Notifications the same feature?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "requires_two_sided_contradiction": true
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-feature-a",
+      "kind": "trace_excerpt",
+      "content": "Remote Notification Sync lets a user work across devices.",
+      "report": "report1",
+      "section_path": "6.1 Major Features",
+      "source_path": "Report1.docx"
+    },
+    {
+      "evidence_id": "doc-feature-b",
+      "kind": "trace_excerpt",
+      "content": "Cross-device Notifications provides device continuity.",
+      "report": "report3",
+      "section_path": "3.2 Cross-device Notifications",
+      "source_path": "Report3.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "REVIEW_REQUIRED",
+    "confidence": "LOW",
+    "summary": "The names may overlap, but the bounded descriptions are too generic to establish equivalence.",
+    "reasoning_summary": "Both excerpts mention cross-device use without supplying matching behavior, identifiers, actors, or constraints.",
+    "evidence_refs": ["doc-feature-a", "doc-feature-b"],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "Provide feature behavior or an explicit trace identifier before accepting a semantic link."
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "task": {
+    "rule_id": "EVAL-INSUFFICIENT-VISUAL",
+    "question": "Does the sequence diagram show correct message ordering?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "requires_visual": true
+    }
+  },
+  "visual_evidence": {
+    "requested": true,
+    "selected": true,
+    "bytes_available": false
+  },
+  "evidence": [
+    {
+      "evidence_id": "image-sequence-reference",
+      "kind": "image_reference",
+      "content": "sequence-diagram.png (image bytes unavailable)",
+      "report": "report4",
+      "section_path": "3.2 Notification Sync Design",
+      "source_path": "Report4.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "REVIEW_REQUIRED",
+    "confidence": "LOW",
+    "summary": "The available packet cannot establish message ordering.",
+    "reasoning_summary": "Only an image reference is available; no visual content or explanatory ordering prose is supplied.",
+    "evidence_refs": [],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "Provide the bounded diagram image to a visual-capable reviewer or add explanatory prose."
+  }
+}

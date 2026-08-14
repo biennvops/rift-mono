@@ -1,0 +1,44 @@
+{
+  "task": {
+    "rule_id": "EVAL-CROSS-CONTRADICTION",
+    "question": "Does the design honor the requirement's offline behavior?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"],
+      "requires_two_sided_contradiction": true
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-r3-requirement",
+      "kind": "trace_excerpt",
+      "content": "FE-03 queues notifications while the peer is offline and sends them after reconnection.",
+      "report": "report3",
+      "section_path": "3.2 Notification Sync",
+      "source_path": "Report3.docx"
+    },
+    {
+      "evidence_id": "doc-r4-design",
+      "kind": "trace_excerpt",
+      "content": "The notification sender discards operations whenever no peer session is active.",
+      "report": "report4",
+      "section_path": "3.2 Notification Sync Design",
+      "source_path": "Report4.docx"
+    }
+  ],
+  "candidate_output": {
+    "status": "FAIL",
+    "confidence": "HIGH",
+    "summary": "The design contradicts the required offline queue behavior.",
+    "reasoning_summary": "Report 3 requires deferred delivery, while Report 4 explicitly discards the same operations.",
+    "evidence_refs": ["doc-r3-requirement", "doc-r4-design"],
+    "unsupported_claims": [],
+    "contradictions": [
+      {
+        "summary": "Queue-after-reconnection and discard-while-offline are incompatible behaviors.",
+        "left_evidence_refs": ["doc-r3-requirement"],
+        "right_evidence_refs": ["doc-r4-design"]
+      }
+    ],
+    "recommended_action": "Reconcile the design with the authoritative requirement."
+  }
+}

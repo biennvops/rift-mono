@@ -1,0 +1,30 @@
+{
+  "task": {
+    "rule_id": "EVAL-CONTENT-PASS",
+    "question": "Does the architecture prose explain the bounded components and relationship?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"]
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-r4-architecture",
+      "kind": "document_block",
+      "content": "The desktop daemon publishes operations through the synchronization service; mobile peers receive them over the authenticated transport.",
+      "report": "report4",
+      "section_path": "1.1 System Architecture",
+      "source_path": "Report4.docx",
+      "source_location": {"display": "paragraph 22"}
+    }
+  ],
+  "candidate_output": {
+    "status": "PASS",
+    "confidence": "HIGH",
+    "summary": "The prose identifies the components and explains their connection.",
+    "reasoning_summary": "The bounded excerpt names the daemon, synchronization service, mobile peers, and authenticated transport relationship.",
+    "evidence_refs": ["doc-r4-architecture"],
+    "unsupported_claims": [],
+    "contradictions": [],
+    "recommended_action": "Keep the explanation synchronized with the architecture diagram."
+  }
+}

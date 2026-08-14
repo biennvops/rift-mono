@@ -25,7 +25,7 @@ rift-doc = "rift_doc.cli:main"
 include = ["rift_doc*"]
 
 [tool.setuptools.package-data]
-rift_doc = ["prompts/*.txt"]
+rift_doc = ["prompts/*.txt", "semantic/evaluation/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/capstone_doc"]

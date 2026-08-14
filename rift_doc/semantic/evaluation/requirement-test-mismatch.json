@@ -1,0 +1,42 @@
+{
+  "task": {
+    "rule_id": "EVAL-REQ-TEST-MISMATCH",
+    "question": "Does TC-041 exercise every behavior in FE-03?",
+    "metadata": {
+      "allowed_statuses": ["PASS", "FAIL", "REVIEW_REQUIRED"]
+    }
+  },
+  "evidence": [
+    {
+      "evidence_id": "doc-requirement-dismiss",
+      "kind": "trace_excerpt",
+      "content": "FE-03 forwards a notification and propagates remote dismissal back to the source device.",
+      "report": "report3",
+      "section_path": "3.2 Notification Sync",
+      "source_path": "Report3.docx"
+    },
+    {
+      "evidence_id": "doc-test-forward-only",
+      "kind": "trace_excerpt",
+      "content": "TC-041: send a notification; expect it to appear on the peer device.",
+      "report": "report5",
+      "section_path": "Feature 3",
+      "source_path": "Report5.xlsx"
+    }
+  ],
+  "candidate_output": {
+    "status": "FAIL",
+    "confidence": "HIGH",
+    "summary": "The test covers forwarding but not remote dismissal.",
+    "reasoning_summary": "The requirement defines two behaviors, while the test procedure and expectation exercise only appearance on the peer.",
+    "evidence_refs": ["doc-requirement-dismiss", "doc-test-forward-only"],
+    "unsupported_claims": [
+      {
+        "claim": "TC-041 fully covers FE-03.",
+        "evidence_refs": ["doc-requirement-dismiss", "doc-test-forward-only"]
+      }
+    ],
+    "contradictions": [],
+    "recommended_action": "Add a traced dismissal action and expected source-device outcome."
+  }
+}
