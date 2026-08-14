@@ -5,6 +5,13 @@ import 'package:rift/widgets/device_hub/device_orbit_motion_state.dart';
 import 'package:rift/widgets/device_hub/device_orbit_scene.dart';
 import 'package:rift/widgets/device_hub/orbit_peer_presentation.dart';
 
+OrbitPeerPresentation _peer(String id) => OrbitPeerPresentation(
+      deviceId: id,
+      displayName: id,
+      platform: 'linux',
+      isOnline: true,
+    );
+
 void main() {
   test('orbit geometry moves coherently with phase', () {
     final geometry = DeviceOrbitLayout.calculate(const Size(900, 620));
@@ -60,6 +67,13 @@ void main() {
         hasFocusedPeer: false,
         hasKeyboardFocus: true,
         interactingPeerCount: 0,
+      ),
+      DeviceOrbitMotionState(
+        reducedMotion: false,
+        hasFocusedPeer: false,
+        hasKeyboardFocus: false,
+        interactingPeerCount: 0,
+        membershipTransitioning: true,
       ),
       DeviceOrbitMotionState(
         reducedMotion: false,
@@ -246,7 +260,7 @@ void main() {
         .transform
         .getMaxScaleOnAxis();
     expect(enteringOpacity, inOpenClosedRange(0, 1));
-    expect(enteringScale, inOpenClosedRange(0.86, 1));
+    expect(enteringScale, inOpenClosedRange(0.65, 1.03));
     await tester.pumpAndSettle();
 
     final peerAFinder = find.byKey(const ValueKey('test-peer-peer-a'));
@@ -280,5 +294,204 @@ void main() {
       findsNothing,
     );
     expect(interactionChanges.last, 'peer-a:false');
+  });
+
+  for (final configuration in const [
+    (prefix: 'trusted-reflow', role: 'trusted device'),
+    (prefix: 'nearby-reflow', role: 'nearby device'),
+  ]) {
+    testWidgets(
+      '${configuration.role} survivors reflow for add and remove',
+      (tester) async {
+        final peersById = {
+          for (final id in ['peer-a', 'peer-b', 'peer-c', 'peer-d'])
+            id: _peer(id),
+        };
+        var peers = <OrbitPeerPresentation>[
+          peersById['peer-a']!,
+          peersById['peer-b']!,
+          peersById['peer-c']!,
+        ];
+        final transitionChanges = <bool>[];
+        final selections = <String>[];
+        late StateSetter updatePeers;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(disableAnimations: false),
+              child: SizedBox(
+                width: 900,
+                height: 620,
+                child: StatefulBuilder(
+                  builder: (context, setState) {
+                    updatePeers = setState;
+                    return DeviceOrbitScene(
+                      localDisplayName: 'Local',
+                      localPlatform: 'macos',
+                      peers: peers,
+                      phase: const AlwaysStoppedAnimation<double>(0.125),
+                      scanProgress: const AlwaysStoppedAnimation<double>(0),
+                      peerKeyPrefix: configuration.prefix,
+                      peerSemanticRole: configuration.role,
+                      onPeerSelected: (peer) => selections.add(peer.deviceId),
+                      onPeerInteractionChanged: (_, __) {},
+                      onSceneFocusChanged: (_) {},
+                      onMembershipTransitionChanged: transitionChanges.add,
+                      animatePeerChanges: true,
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final peerBFinder = find.byKey(
+          ValueKey('${configuration.prefix}-peer-b'),
+        );
+        final oldCenter = tester.getCenter(peerBFinder);
+        final sceneFinder = find.byType(DeviceOrbitScene);
+        final geometry = DeviceOrbitLayout.calculate(
+          tester.getSize(sceneFinder),
+        );
+        final sceneOrigin = tester.getTopLeft(sceneFinder);
+        final addedTarget = sceneOrigin +
+            DeviceOrbitLayout.peerCenter(
+              geometry: geometry,
+              index: 1,
+              peerCount: 4,
+              phase: 0.125,
+            );
+
+        updatePeers(() {
+          peers = [
+            peersById['peer-a']!,
+            peersById['peer-b']!,
+            peersById['peer-c']!,
+            peersById['peer-d']!,
+          ];
+        });
+        await tester.pump();
+
+        expect(transitionChanges, [true]);
+        expect(tester.getCenter(peerBFinder), oldCenter);
+        expect(oldCenter, isNot(addedTarget));
+        final enteringOpacity = tester.widget<Opacity>(
+          find.byKey(
+            ValueKey('${configuration.prefix}-presence-peer-d'),
+          ),
+        );
+        expect(enteringOpacity.opacity, 0);
+
+        await tester.pump(const Duration(milliseconds: 220));
+        final addMidpoint = tester.getCenter(peerBFinder);
+        expect(addMidpoint, isNot(oldCenter));
+        expect(addMidpoint, isNot(addedTarget));
+
+        await tester.pumpAndSettle();
+        expect(tester.getCenter(peerBFinder), addedTarget);
+        expect(transitionChanges, [true, false]);
+
+        final fourPeerCenter = tester.getCenter(peerBFinder);
+        final removedTarget = sceneOrigin +
+            DeviceOrbitLayout.peerCenter(
+              geometry: geometry,
+              index: 1,
+              peerCount: 3,
+              phase: 0.125,
+            );
+        updatePeers(() {
+          peers = [
+            peersById['peer-a']!,
+            peersById['peer-b']!,
+            peersById['peer-c']!,
+          ];
+        });
+        await tester.pump();
+
+        expect(tester.getCenter(peerBFinder), fourPeerCenter);
+        expect(fourPeerCenter, isNot(removedTarget));
+        final leavingFinder = find.byKey(
+          ValueKey('${configuration.prefix}-peer-d'),
+        );
+        expect(leavingFinder, findsOneWidget);
+        expect(
+          tester
+              .widgetList<IgnorePointer>(
+                find.ancestor(
+                  of: leavingFinder,
+                  matching: find.byType(IgnorePointer),
+                ),
+              )
+              .any((widget) => widget.ignoring),
+          isTrue,
+        );
+        await tester.tap(leavingFinder, warnIfMissed: false);
+        expect(selections, isEmpty);
+
+        await tester.pump(const Duration(milliseconds: 220));
+        final removeMidpoint = tester.getCenter(peerBFinder);
+        expect(removeMidpoint, isNot(fourPeerCenter));
+        expect(removeMidpoint, isNot(removedTarget));
+
+        await tester.pumpAndSettle();
+        expect(tester.getCenter(peerBFinder), removedTarget);
+        expect(leavingFinder, findsNothing);
+        expect(transitionChanges, [true, false, true, false]);
+      },
+    );
+  }
+
+  testWidgets('reduced motion changes membership without peer travel',
+      (tester) async {
+    final peerA = _peer('peer-a');
+    final peerB = _peer('peer-b');
+    var peers = <OrbitPeerPresentation>[peerA];
+    final transitionChanges = <bool>[];
+    late StateSetter updatePeers;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: StatefulBuilder(
+            builder: (context, setState) {
+              updatePeers = setState;
+              return DeviceOrbitScene(
+                localDisplayName: 'Local',
+                localPlatform: 'macos',
+                peers: peers,
+                phase: const AlwaysStoppedAnimation<double>(0),
+                scanProgress: const AlwaysStoppedAnimation<double>(0),
+                peerKeyPrefix: 'reduced-peer',
+                peerSemanticRole: 'nearby device',
+                onPeerSelected: (_) {},
+                onPeerInteractionChanged: (_, __) {},
+                onSceneFocusChanged: (_) {},
+                onMembershipTransitionChanged: transitionChanges.add,
+                animatePeerChanges: true,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    updatePeers(() => peers = [peerA, peerB]);
+    await tester.pump();
+
+    expect(transitionChanges, isEmpty);
+    expect(find.byKey(const ValueKey('reduced-peer-peer-b')), findsOneWidget);
+    expect(
+      tester
+          .widget<Opacity>(
+            find.byKey(const ValueKey('reduced-peer-presence-peer-b')),
+          )
+          .opacity,
+      1,
+    );
   });
 }

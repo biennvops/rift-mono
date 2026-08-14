@@ -45,6 +45,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
   DeviceHubMode _hubMode = DeviceHubMode.trusted;
   final Set<String> _interactingOrbitPeers = <String>{};
   bool _orbitHasKeyboardFocus = false;
+  bool _orbitMembershipTransitioning = false;
   bool _reducedMotion = false;
   Map<String, dynamic>? _localDeviceInfo;
   bool _isDiscovering = false;
@@ -463,6 +464,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
           _desktopPairingTarget != null,
       hasKeyboardFocus: _orbitHasKeyboardFocus,
       interactingPeerCount: _interactingOrbitPeers.length,
+      membershipTransitioning: _orbitMembershipTransitioning,
     );
     final shouldAnimate =
         _enableContinuousOrbitAnimation && !motionState.isPaused;
@@ -489,6 +491,11 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
     _syncOrbitAnimation();
   }
 
+  void _handleOrbitMembershipTransitionChanged(bool transitioning) {
+    _orbitMembershipTransitioning = transitioning;
+    _syncOrbitAnimation();
+  }
+
   void _setHubMode(DeviceHubMode mode) {
     if (_hubMode == mode || _desktopPairingTarget != null) return;
     setState(() {
@@ -497,6 +504,7 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
       _selectedNearbyDeviceId = null;
       _interactingOrbitPeers.clear();
       _orbitHasKeyboardFocus = false;
+      _orbitMembershipTransitioning = false;
     });
     _syncOrbitAnimation();
   }
@@ -1867,9 +1875,12 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
               },
               onPeerInteractionChanged: _handleOrbitPeerInteraction,
               onSceneFocusChanged: _handleOrbitFocusChanged,
+              onMembershipTransitionChanged:
+                  _handleOrbitMembershipTransitionChanged,
               onLocalDeviceTap: _localDeviceInfo == null
                   ? null
                   : () => _showLocalDeviceDetails(_localDeviceInfo!),
+              animatePeerChanges: true,
               emptyMessage: 'No trusted devices yet.',
               recentlyPairedDeviceId: _recentlyPairedDeviceId,
               onRecentlyPairedAnimationCompleted:
@@ -1974,6 +1985,8 @@ class _TrustedDevicesScreenState extends State<TrustedDevicesScreen>
                   },
                   onPeerInteractionChanged: _handleOrbitPeerInteraction,
                   onSceneFocusChanged: _handleOrbitFocusChanged,
+                  onMembershipTransitionChanged:
+                      _handleOrbitMembershipTransitionChanged,
                   onLocalDeviceTap: _localDeviceInfo == null
                       ? null
                       : () => _showLocalDeviceDetails(_localDeviceInfo!),
