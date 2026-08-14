@@ -8,14 +8,20 @@ import sys
 from typing import Iterable
 
 from .engine import SUPPORTED_SUFFIXES, ValidationEngine
-from .output import render_json, render_text
+from .output import render_json, render_semantic_plan_json, render_semantic_plan_text, render_text
 from .repository import InventoryOptions, RepositoryClaimKind, RepositoryInventory, RepositoryMappingConfig
-from .results import Status, ValidationResult
+from .results import ValidationResult
+from .semantic import LLMProviderConfig, OpenAICompatibleProvider, SemanticAuditOptions, SemanticTaskType
 from .spec import CapstoneSpec, SpecError
 
 
+_SEMANTIC_TASK_CHOICES = tuple(
+    task_type.value.casefold().replace("_", "-") for task_type in SemanticTaskType
+)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="rift-doc", description="Deterministic Rift capstone document tooling")
+    parser = argparse.ArgumentParser(prog="rift-doc", description="Rift capstone document audit tooling")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     validate = subparsers.add_parser("validate", help="validate one document or a directory")
@@ -44,6 +50,41 @@ def build_parser() -> argparse.ArgumentParser:
     validate_set.add_argument("--show-graph", action="store_true", help="include a compact graph section in text output")
     validate_set.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
     _add_repository_arguments(validate_set, include_filters=True)
+    validate_set.add_argument("--semantic", action="store_true", help="append bounded semantic review")
+    _add_semantic_arguments(validate_set, execution=True, selector="--semantic-rule")
+
+    semantic = subparsers.add_parser(
+        "semantic",
+        help="run a targeted bounded semantic review with deterministic evidence",
+    )
+    semantic.add_argument("--manifest", required=True, type=Path, help="document-set YAML manifest")
+    semantic.add_argument(
+        "--spec",
+        type=Path,
+        default=Path("capstone-doc-spec.v0.1.yaml"),
+        help="capstone YAML contract (defaults to the repository contract)",
+    )
+    semantic.add_argument("--format", choices=("text", "json"), default="text")
+    semantic.add_argument("--entity", help="only review one entity ID or matching name")
+    semantic.add_argument("--strict", action="store_true", help="treat warnings and review-required findings as failures")
+    _add_repository_arguments(semantic, include_filters=False)
+    _add_semantic_arguments(semantic, execution=True, selector="--task")
+
+    semantic_plan = subparsers.add_parser(
+        "semantic-plan",
+        help="list bounded semantic tasks and evidence sizes without calling a model",
+    )
+    semantic_plan.add_argument("--manifest", required=True, type=Path, help="document-set YAML manifest")
+    semantic_plan.add_argument(
+        "--spec",
+        type=Path,
+        default=Path("capstone-doc-spec.v0.1.yaml"),
+        help="capstone YAML contract (defaults to the repository contract)",
+    )
+    semantic_plan.add_argument("--format", choices=("text", "json"), default="text")
+    semantic_plan.add_argument("--entity", help="only plan tasks for one entity ID or matching name")
+    _add_repository_arguments(semantic_plan, include_filters=False)
+    _add_semantic_arguments(semantic_plan, execution=False, selector="--task")
 
     evidence = subparsers.add_parser(
         "evidence",
@@ -97,6 +138,66 @@ def _add_repository_arguments(
         parser.add_argument("--claim", help="only evaluate an exact claim ID or name")
 
 
+def _add_semantic_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    execution: bool,
+    selector: str,
+) -> None:
+    parser.add_argument(
+        selector,
+        action="append",
+        choices=_SEMANTIC_TASK_CHOICES,
+        help="only plan or run one or more semantic task types",
+    )
+    parser.add_argument("--max-tasks", type=int, default=50, help="hard semantic task limit (default: 50)")
+    parser.add_argument(
+        "--max-input-tokens",
+        type=int,
+        default=12_000,
+        help="hard estimated input-token limit per task (default: 12000)",
+    )
+    parser.add_argument("--max-cost", type=float, help="optional estimated provider cost limit")
+    parser.add_argument(
+        "--semantic-exclude",
+        action="append",
+        default=[],
+        help="additional evidence path/glob to exclude",
+    )
+    if not execution:
+        return
+    parser.add_argument(
+        "--semantic-provider",
+        choices=("openai-compatible",),
+        help="provider adapter (or RIFT_DOC_LLM_PROVIDER)",
+    )
+    parser.add_argument("--semantic-model", help="provider model (or RIFT_DOC_LLM_MODEL)")
+    parser.add_argument("--semantic-endpoint", help="chat-completions endpoint (or RIFT_DOC_LLM_ENDPOINT)")
+    parser.add_argument("--semantic-temperature", type=float, help="review temperature (default/env: 0)")
+    parser.add_argument("--semantic-max-output", type=int, help="maximum output tokens")
+    parser.add_argument("--semantic-timeout", type=float, help="provider timeout in seconds")
+    parser.add_argument("--semantic-retries", type=int, help="bounded retry count")
+    parser.add_argument(
+        "--semantic-api-key-env",
+        help="name of the environment variable containing the API key",
+    )
+    parser.add_argument(
+        "--semantic-local-only",
+        action="store_true",
+        default=None,
+        help="reject non-local provider endpoints",
+    )
+    parser.add_argument("--semantic-input-cost-per-million", type=float, help="input-token pricing for --max-cost")
+    parser.add_argument("--semantic-output-cost-per-million", type=float, help="output-token pricing for --max-cost")
+    parser.add_argument("--no-cache", action="store_true", help="disable semantic result caching")
+    parser.add_argument(
+        "--semantic-cache",
+        type=Path,
+        default=Path(".rift-doc-cache/semantic"),
+        help="semantic cache directory",
+    )
+
+
 def main(argv: Iterable[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -105,6 +206,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             return _run_validate(args)
         if args.command in {"validate-set", "trace"}:
             return _run_validate_set(args)
+        if args.command == "semantic":
+            return _run_semantic(args)
+        if args.command == "semantic-plan":
+            return _run_semantic_plan(args)
         if args.command == "evidence":
             return _run_evidence(args)
         if args.command == "repo-inspect":
@@ -148,6 +253,7 @@ def _run_validate(args: argparse.Namespace) -> int:
 def _run_validate_set(args: argparse.Namespace) -> int:
     spec = CapstoneSpec.load(args.spec)
     engine = ValidationEngine(spec)
+    provider = _semantic_provider(args) if args.semantic else None
     result = engine.validate_set(
         args.manifest,
         repository=args.repo,
@@ -155,6 +261,8 @@ def _run_validate_set(args: argparse.Namespace) -> int:
         repository_mapping=args.mapping,
         repository_kinds=_repository_kinds(args.kind),
         repository_claim=args.claim,
+        semantic_provider=provider,
+        semantic_options=_semantic_options(args, selector_name="semantic_rule") if args.semantic else None,
     )
     has_errors = result.has_errors
     has_strict_issues = result.has_strict_issues
@@ -176,6 +284,35 @@ def _run_validate_set(args: argparse.Namespace) -> int:
     if args.strict:
         return 1 if has_strict_issues else 0
     return 1 if has_errors else 0
+
+
+def _run_semantic(args: argparse.Namespace) -> int:
+    spec = CapstoneSpec.load(args.spec)
+    result = ValidationEngine(spec).validate_set(
+        args.manifest,
+        repository=args.repo,
+        artifacts=args.artifacts,
+        repository_mapping=args.mapping,
+        semantic_provider=_semantic_provider(args),
+        semantic_options=_semantic_options(args, selector_name="task"),
+    )
+    print(render_json([result]) if args.format == "json" else render_text([result]))
+    if args.strict:
+        return 1 if result.has_strict_issues else 0
+    return 1 if result.has_errors else 0
+
+
+def _run_semantic_plan(args: argparse.Namespace) -> int:
+    spec = CapstoneSpec.load(args.spec)
+    plan = ValidationEngine(spec).plan_semantic(
+        args.manifest,
+        repository=args.repo,
+        artifacts=args.artifacts,
+        repository_mapping=args.mapping,
+        semantic_options=_semantic_options(args, selector_name="task"),
+    )
+    print(render_semantic_plan_json(plan) if args.format == "json" else render_semantic_plan_text(plan))
+    return 0
 
 
 def _run_evidence(args: argparse.Namespace) -> int:
@@ -220,6 +357,42 @@ def _repository_kinds(values: list[str] | None) -> list[RepositoryClaimKind] | N
         "deliverable": RepositoryClaimKind.DELIVERABLE_OR_PACKAGE,
     }
     return list(dict.fromkeys(aliases[value] for value in values))
+
+
+def _semantic_options(args: argparse.Namespace, *, selector_name: str) -> SemanticAuditOptions:
+    selected = getattr(args, selector_name, None)
+    task_types = (
+        tuple(SemanticTaskType(value.upper().replace("-", "_")) for value in selected)
+        if selected
+        else None
+    )
+    return SemanticAuditOptions(
+        max_tasks=args.max_tasks,
+        max_input_tokens=args.max_input_tokens,
+        max_cost=args.max_cost,
+        task_types=task_types,
+        entity_query=getattr(args, "entity", None),
+        excluded_paths=tuple(args.semantic_exclude),
+        cache_enabled=not getattr(args, "no_cache", False),
+        cache_directory=getattr(args, "semantic_cache", Path(".rift-doc-cache/semantic")),
+    )
+
+
+def _semantic_provider(args: argparse.Namespace) -> OpenAICompatibleProvider:
+    config = LLMProviderConfig.from_environment(
+        provider=args.semantic_provider,
+        model=args.semantic_model,
+        endpoint=args.semantic_endpoint,
+        temperature=args.semantic_temperature,
+        max_output_tokens=args.semantic_max_output,
+        timeout_seconds=args.semantic_timeout,
+        retry_attempts=args.semantic_retries,
+        api_key_environment=args.semantic_api_key_env,
+        local_only=args.semantic_local_only,
+        input_cost_per_million=args.semantic_input_cost_per_million,
+        output_cost_per_million=args.semantic_output_cost_per_million,
+    )
+    return OpenAICompatibleProvider(config)
 
 
 def _repository_inspect_text(snapshot: object) -> str:

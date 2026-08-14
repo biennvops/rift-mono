@@ -1,12 +1,14 @@
 # Capstone document validation
 
-Rift includes deterministic tooling for the FPT SEP490 capstone reports,
-tracking workbooks, cross-document traceability, and local repository evidence.
-Phase 1 performs structural extraction and contract checks, Phase 2 links claims
-across the document set, and Phase 3 checks selected claims against a local
-worktree and optional package artifacts. None of these phases uses a network or
-LLM service, runs repository builds/tests, or makes semantic claims about
-diagrams or implementation correctness.
+Rift includes audit tooling for the FPT SEP490 capstone reports, tracking
+workbooks, cross-document traceability, local repository evidence, and optional
+bounded semantic review. Phase 1 performs structural extraction and contract
+checks, Phase 2 links claims across the document set, and Phase 3 checks
+selected claims against a local worktree and optional package artifacts. These
+three deterministic phases do not use a network or LLM service, run repository
+builds/tests, or make semantic claims about diagrams or implementation
+correctness. Phase 4 is opt-in and reviews only bounded evidence produced by
+Phases 1–3; offline deterministic validation remains the default.
 
 ## Contract
 
@@ -229,6 +231,77 @@ existence likewise does not prove behavioral correctness.
 Human output includes document and repository locations. JSON also includes
 snapshot metadata, match methods, bounded excerpts, and compact evidence
 packets for later semantic review.
+
+## Bounded semantic review
+
+Phase 4 consumes normalized excerpts, trace entities, deterministic findings,
+and targeted Phase 3 repository evidence. It never reparses raw reports or asks
+a provider to inspect a complete repository. The contract's
+`semantic_review_extension` declares explicit task types, questions, source
+precedence, allowed statuses, and versioned prompts. Initial rules cover content
+sufficiency, cross-document consistency, requirement/test and
+design/requirement alignment, repository claims, Report 7 freshness, quality
+objectives, user workflows, and abnormal/error cases.
+
+Inspect the proposed work before configuring a provider:
+
+```bash
+rift-doc semantic-plan --manifest capstone.yaml --repo ../rift-mono
+rift-doc semantic-plan --manifest capstone.yaml \
+  --task requirement-test-alignment --entity FE-03 --format json
+```
+
+`semantic-plan` performs Phases 1–3, lists packet evidence counts and estimated
+input sizes, and never calls a provider. Every packet prioritizes the exact
+section, contract requirement, directly linked trace/repository evidence, and
+only then immediate context. `--max-tasks` and `--max-input-tokens` are hard
+limits; truncation and exclusions remain visible in packet metadata.
+
+The initial concrete adapter uses an OpenAI-compatible chat-completions
+endpoint. Configure credentials through an environment variable, never a CLI
+value or checked-in file:
+
+```bash
+export RIFT_DOC_LLM_MODEL='review-model'
+export RIFT_DOC_LLM_ENDPOINT='https://provider.example/v1/chat/completions'
+export RIFT_DOC_LLM_API_KEY='...'
+
+rift-doc validate-set --manifest capstone.yaml --repo ../rift-mono --semantic
+rift-doc semantic --manifest capstone.yaml \
+  --task requirement-test-alignment --entity FE-03
+```
+
+Provider settings also accept `RIFT_DOC_LLM_PROVIDER`,
+`RIFT_DOC_LLM_TEMPERATURE`, `RIFT_DOC_LLM_MAX_OUTPUT_TOKENS`,
+`RIFT_DOC_LLM_TIMEOUT`, `RIFT_DOC_LLM_RETRIES`, and
+`RIFT_DOC_LLM_API_KEY_ENV`. Matching CLI options override those values.
+`--semantic-local-only` rejects non-loopback endpoints. `--max-cost` requires
+input/output cost-per-million configuration; task/token limits remain available
+when provider pricing is unknown.
+
+Model output must satisfy `semantic-result.v1`. PASS/FAIL/WARNING results must
+cite packet evidence IDs, contradiction results must cite provenance-distinct
+evidence from both sides, and each rule constrains its allowed statuses. Invalid
+JSON/schema, fabricated citations, or forbidden status output is retried only up
+to the configured bound and then becomes an execution-level
+`REVIEW_REQUIRED`; the tool does not invent a semantic conclusion.
+
+Semantic findings use the `semantic_review` validator/domain and are appended
+after unmodified deterministic findings. Accepted same-concept links are
+recorded as lower-trust `LLM_SEMANTIC` metadata and never inserted into the
+deterministic trace graph. Human output renders a separate `SEMANTIC REVIEW`
+section; JSON records provider/model, prompt version/hash, packet hash,
+timestamp, tool/spec version, and repository commit.
+
+Successful schema-valid results are cached by provider, model, prompt version,
+and packet hash under `.rift-doc-cache/semantic`; use `--no-cache` or
+`--semantic-cache` as needed. Prompt/evidence changes invalidate the key.
+Default guardrails exclude `.env`, credentials, private-key classes, and
+configurable `--semantic-exclude` paths before external review. If required
+sensitive evidence is excluded, or a visual task has only an image reference
+and no bounded image bytes, the result is conservatively `REVIEW_REQUIRED`.
+Document and source text is always treated as untrusted evidence, never as
+instructions to the provider or the audit tool.
 
 ## Tests
 

@@ -9,7 +9,7 @@ from .extractors.docx import extract_docx
 from .extractors.spreadsheets import extract_workbook
 from .document_set import DocumentSet, DocumentSetLoader
 from .model import Document, NormalizedDocument, Workbook
-from .results import Finding, Status, ValidationResult
+from .results import Status, ValidationResult
 from .repository import (
     InventoryOptions,
     RepositoryClaimKind,
@@ -18,8 +18,10 @@ from .repository import (
     RepositoryMappingConfig,
     RepositorySnapshot,
 )
+from .semantic import LLMProvider, SemanticAuditOptions, SemanticAuditRunner, SemanticPlan
 from .spec import CapstoneSpec, SpecError
 from .trace_entities import TraceEntityExtractor
+from .trace_model import TraceGraph
 from .validators.cross_document import CrossDocumentValidator
 from .validators.structural import StructuralValidator
 from .validators.workbook import WorkbookValidator
@@ -92,7 +94,77 @@ class ValidationEngine:
         repository_mapping: str | Path | RepositoryMappingConfig | None = None,
         repository_kinds: list[RepositoryClaimKind | str] | None = None,
         repository_claim: str | None = None,
+        semantic_provider: LLMProvider | None = None,
+        semantic_options: SemanticAuditOptions | None = None,
     ) -> ValidationResult:
+        loaded, graph, result, snapshot = self._prepare_set_audit(
+            document_set,
+            repository=repository,
+            artifacts=artifacts,
+            repository_mapping=repository_mapping,
+            repository_kinds=repository_kinds,
+            repository_claim=repository_claim,
+        )
+        if semantic_provider is not None:
+            deterministic_finding_count = len(result.findings)
+            runner = SemanticAuditRunner(self.spec, options=semantic_options)
+            plan = runner.plan(
+                loaded,
+                graph,
+                result.findings,
+                repository_snapshot=snapshot,
+            )
+            semantic_report = runner.run(plan, semantic_provider)
+            result.findings.extend(semantic_report.findings)
+            result.metadata["semantic_review"] = semantic_report.to_dict()
+            result.metadata["semantic_review"]["deterministic_finding_count"] = deterministic_finding_count
+            result.metadata["semantic_review"]["semantic_finding_count"] = len(semantic_report.findings)
+        return result
+
+    def plan_semantic(
+        self,
+        document_set: DocumentSet | str | Path,
+        *,
+        repository: str | Path | None = None,
+        artifacts: str | Path | None = None,
+        repository_mapping: str | Path | RepositoryMappingConfig | None = None,
+        repository_kinds: list[RepositoryClaimKind | str] | None = None,
+        repository_claim: str | None = None,
+        semantic_options: SemanticAuditOptions | None = None,
+    ) -> SemanticPlan:
+        loaded, graph, result, snapshot = self._prepare_set_audit(
+            document_set,
+            repository=repository,
+            artifacts=artifacts,
+            repository_mapping=repository_mapping,
+            repository_kinds=repository_kinds,
+            repository_claim=repository_claim,
+        )
+        plan = SemanticAuditRunner(self.spec, options=semantic_options).plan(
+            loaded,
+            graph,
+            result.findings,
+            repository_snapshot=snapshot,
+        )
+        plan.metadata.update(
+            {
+                "deterministic_finding_count": len(result.findings),
+                "deterministic_counts": result.counts,
+                "repository_evidence_included": snapshot is not None,
+            }
+        )
+        return plan
+
+    def _prepare_set_audit(
+        self,
+        document_set: DocumentSet | str | Path,
+        *,
+        repository: str | Path | None,
+        artifacts: str | Path | None,
+        repository_mapping: str | Path | RepositoryMappingConfig | None,
+        repository_kinds: list[RepositoryClaimKind | str] | None,
+        repository_claim: str | None,
+    ) -> tuple[DocumentSet, TraceGraph, ValidationResult, RepositorySnapshot | None]:
         loaded = self.load_document_set(document_set) if isinstance(document_set, (str, Path)) else document_set
         graph = self.trace_entities.extract_document_set(loaded)
         result = self.cross_document.audit(loaded, graph=graph)
@@ -111,6 +183,7 @@ class ValidationEngine:
             ],
             "finding_count": len(phase1_findings),
         }
+        snapshot: RepositorySnapshot | None = None
         if repository is not None:
             mappings = self._repository_mappings(repository_mapping)
             snapshot = RepositoryInventory(
@@ -125,7 +198,7 @@ class ValidationEngine:
             )
             result.findings.extend(repository_result.findings)
             result.metadata["repository_evidence"] = repository_result.metadata
-        return result
+        return loaded, graph, result, snapshot
 
     @staticmethod
     def _repository_mappings(

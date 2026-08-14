@@ -157,6 +157,7 @@ class SemanticAuditRunner:
 
     def run(self, plan: SemanticPlan, provider: LLMProvider) -> SemanticAuditReport:
         provider.config.validate()
+        plan.metadata["dry_run"] = False
         if self.options.max_cost is not None and (
             provider.config.input_cost_per_million is None
             or provider.config.output_cost_per_million is None
@@ -206,6 +207,9 @@ class SemanticAuditRunner:
 
         counts = Counter(execution.result.status for execution in executions)
         execution_counts = Counter(execution.execution_status for execution in executions)
+        provider_called = any(execution.attempts > 0 for execution in executions)
+        plan.metadata["provider_called"] = provider_called
+        plan.metadata["network_access"] = provider.config.provider != "fake" and provider_called
         metadata = {
             "domain": "semantic_review",
             "provider": provider.config.audit_metadata(),
@@ -216,9 +220,7 @@ class SemanticAuditRunner:
             },
             "execution_status_counts": dict(sorted(execution_counts.items())),
             "estimated_cost": estimated_cost if _has_pricing(provider) else None,
-            "network_access": provider.config.provider != "fake" and any(
-                execution.attempts > 0 for execution in executions
-            ),
+            "network_access": provider.config.provider != "fake" and provider_called,
             "deterministic_findings_preserved": True,
             "semantic_links_are_deterministic_edges": False,
         }
@@ -395,7 +397,7 @@ def _semantic_finding(execution: SemanticTaskExecution) -> Finding:
         validator="semantic_review",
         source_entity={
             "entity_id": task.metadata.get("source_entity_id"),
-            "canonical_name": task.metadata.get("source_entity_name"),
+            "canonical_name": task.metadata.get("source_entity_name") or task.metadata.get("source_section"),
             "task_id": task.task_id,
         },
         target_domain=task.metadata.get("target_domain"),

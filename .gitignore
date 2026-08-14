@@ -69,6 +69,7 @@ spec/references/*
 tmp/
 temp/
 .cache/
+.rift-doc-cache/
 
 # IDE / project artifacts
 *.iml

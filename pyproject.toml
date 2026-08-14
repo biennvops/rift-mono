@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rift-capstone-doc-tooling"
 version = "0.1.0"
-description = "Deterministic extraction and structural validation for Rift SEP490 capstone documents"
+description = "Evidence-backed deterministic and bounded semantic audits for Rift SEP490 capstone documents"
 requires-python = ">=3.12"
 dependencies = [
   "PyYAML>=6.0",
