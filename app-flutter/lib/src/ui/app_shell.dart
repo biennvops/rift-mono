@@ -48,6 +48,16 @@ class AppShellState extends State<AppShell> {
     const SettingsScreen(),
   ];
 
+  List<Widget> _buildScreenStack() {
+    return List<Widget>.generate(
+      _screens.length,
+      (index) => TickerMode(
+        enabled: index == _currentIndex,
+        child: _screens[index],
+      ),
+    );
+  }
+
   void showHistoryRoute(String route) {
     setState(() {
       _currentIndex = 1;
@@ -292,7 +302,7 @@ class AppShellState extends State<AppShell> {
                   child: _buildMainSwipeArea(
                     IndexedStack(
                       index: _currentIndex,
-                      children: _screens,
+                      children: _buildScreenStack(),
                     ),
                   ),
                 ),
@@ -309,7 +319,7 @@ class AppShellState extends State<AppShell> {
           child: _buildMainSwipeArea(
             IndexedStack(
               index: _currentIndex,
-              children: _screens,
+              children: _buildScreenStack(),
             ),
           ),
         ),
