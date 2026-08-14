@@ -27,6 +27,10 @@ jobs:
         working-directory: daemon-cs
         run: dotnet build Rift.Daemon.Linux/Rift.Daemon.Linux.csproj -c Release
 
+      - name: Run C# Daemon Tests
+        working-directory: daemon-cs
+        run: dotnet test Rift.Daemon.Tests/Rift.Daemon.Tests.csproj -c Release
+
       - name: Build Dart Daemon
         working-directory: daemon-dart
         run: |
