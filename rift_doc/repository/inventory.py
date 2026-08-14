@@ -581,6 +581,33 @@ def _matches_ignore(path: str, rules: list[_PlainIgnoreRule], *, directory: bool
     return False
 
 
+def _git_path_pattern_matches(path: str, pattern: str) -> bool:
+    path_parts = PurePosixPath(path).parts
+    pattern_parts = PurePosixPath(pattern).parts
+    results: dict[tuple[int, int], bool] = {}
+
+    def match(path_index: int, pattern_index: int) -> bool:
+        key = (path_index, pattern_index)
+        if key in results:
+            return results[key]
+        if pattern_index == len(pattern_parts):
+            result = path_index == len(path_parts)
+        elif pattern_parts[pattern_index] == "**":
+            result = match(path_index, pattern_index + 1) or (
+                path_index < len(path_parts) and match(path_index + 1, pattern_index)
+            )
+        else:
+            result = (
+                path_index < len(path_parts)
+                and fnmatch.fnmatchcase(path_parts[path_index], pattern_parts[pattern_index])
+                and match(path_index + 1, pattern_index + 1)
+            )
+        results[key] = result
+        return result
+
+    return match(0, 0)
+
+
 def _ignore_rule_matches(path: str, rule: _PlainIgnoreRule, *, directory: bool) -> bool:
     base = rule.base_path.strip("/")
     if base and path != base and not path.startswith(base + "/"):
@@ -594,20 +621,13 @@ def _ignore_rule_matches(path: str, rule: _PlainIgnoreRule, *, directory: bool) 
             parts = PurePosixPath(relative).parts
             candidates = parts if directory else parts[:-1]
             return any(fnmatch.fnmatchcase(part, pattern) for part in candidates)
-        if directory:
-            return (
-                relative == pattern
-                or relative.startswith(pattern + "/")
-                or fnmatch.fnmatchcase(relative, pattern + "/*")
-            )
-        return relative.startswith(pattern + "/") or fnmatch.fnmatchcase(relative, pattern + "/*")
+        candidate = relative if directory else PurePosixPath(relative).parent.as_posix()
+        if candidate in {"", "."}:
+            return False
+        return _git_path_pattern_matches(candidate, pattern)
     if "/" not in pattern and not rule.anchored:
         return any(fnmatch.fnmatchcase(part, pattern) for part in PurePosixPath(relative).parts)
-    return (
-        relative == pattern
-        or relative.startswith(pattern + "/")
-        or fnmatch.fnmatchcase(relative, pattern)
-    )
+    return _git_path_pattern_matches(relative, pattern)
 
 
 def _matches_configured_exclusion(path: str, patterns: Iterable[str]) -> bool:

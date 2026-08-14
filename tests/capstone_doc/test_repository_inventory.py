@@ -133,6 +133,24 @@ def test_nested_gitignore_excludes_files_relative_to_its_directory(tmp_path: Pat
     assert any(item.path == "package/keep.dart" for item in snapshot.source_files)
 
 
+def test_plain_gitignore_supports_double_star_path_patterns(tmp_path: Path) -> None:
+    _write(tmp_path / ".gitignore", "**/.metadata\nfoo/**/bar.py\n")
+    _write(tmp_path / ".metadata", "root metadata")
+    _write(tmp_path / "package" / ".metadata", "package metadata")
+    _write(tmp_path / "foo" / "bar.py", "def direct_bar(): pass\n")
+    _write(tmp_path / "foo" / "a" / "b" / "bar.py", "def nested_bar(): pass\n")
+    _write(tmp_path / "foo" / "a" / "b" / "keep.py", "def keep(): pass\n")
+
+    paths, source = RepositoryInventory()._repository_paths(tmp_path)
+
+    assert source == "filesystem"
+    assert ".metadata" not in paths
+    assert "package/.metadata" not in paths
+    assert "foo/bar.py" not in paths
+    assert "foo/a/b/bar.py" not in paths
+    assert "foo/a/b/keep.py" in paths
+
+
 def test_git_metadata_and_gitignore_semantics_are_captured(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "test@example.invalid"], check=True)
